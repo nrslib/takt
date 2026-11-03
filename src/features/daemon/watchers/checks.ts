@@ -22,6 +22,13 @@ export interface InquiryWatchTarget extends WatchTarget {
   createdAt: string | null;
 }
 
+export interface GoalWatchTarget extends WatchTarget {
+  repositoryDirectory: string;
+  goalId: string;
+  active: boolean;
+  lastUpdatedAt: string;
+}
+
 /** 実行可能性・autoRun の解決は業務側が行い、見張りはその小さな結果だけを観測する。 */
 export interface LaunchWatchTarget extends WatchTarget {
   repositoryDirectory: string;
@@ -58,7 +65,7 @@ export class WatchChecks {
     private readonly observations: WatchObservations,
     private readonly now: () => number,
     private readonly onError: (target: WatchTarget, error: unknown) => void,
-    private readonly scope: 'process' | 'log' | 'pr' | 'inquiry' | 'launch',
+    private readonly scope: 'process' | 'log' | 'pr' | 'inquiry' | 'goal' | 'launch',
   ) {}
 
   retain(targets: readonly WatchTarget[]): void {
@@ -137,6 +144,14 @@ export class WatchChecks {
       ...this.observations.evidence(target), kind: 'inquiry_stalled', repositoryDirectory: target.repositoryDirectory,
       questionId: target.questionId, goalId: target.goalId,
     });
+  }
+
+  async goal(target: GoalWatchTarget): Promise<void> {
+    const updatedAt = Date.parse(target.lastUpdatedAt);
+    if (!Number.isFinite(updatedAt)) throw new Error('Goal update time is unknown');
+    if (!target.active || this.now() - updatedAt < WATCH_THRESHOLDS.inquiry) return this.observations.normal(target, 'goal_stalled');
+    await this.observations.abnormal(target, { ...this.observations.evidence(target), kind: 'goal_stalled',
+      repositoryDirectory: target.repositoryDirectory, goalId: target.goalId, lastUpdatedAt: target.lastUpdatedAt });
   }
 
   async launch(target: LaunchWatchTarget): Promise<void> {

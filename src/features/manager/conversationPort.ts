@@ -46,7 +46,7 @@ export interface SnapshotRead extends OutputVersion {
   cancel(): void;
 }
 export type Submission = { kind: 'accepted'; operationId: string; eventId?: string; acceptedSequence?: number; queuedMessageCount?: number }
-  | { kind: 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
+  | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'goal_registered'; goal: Goal }

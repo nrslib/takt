@@ -105,7 +105,7 @@ export async function harness() {
   const store = new MemoryEventStore();
   const runner = new ControlledTurnRunner();
   const applied = new Map<string, TurnResult>();
-  const owner: ConversationOwner = {
+  const owner: ConversationOwner = { inquiry: async () => {},
     apply: vi.fn(async (result) => { applied.set(result.operationId, result); }),
     progress: vi.fn(async () => {}),
     snapshot: vi.fn(async (conversationId) => ({

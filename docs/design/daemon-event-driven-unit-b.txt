@@ -1,0 +1,180 @@
+daemon 作り直し — 単位 B 引継ぎ
+
+作業場所: /Users/nrs/work/git/takt3-worktrees/daemon-B
+ブランチ: feat/daemon-ed-B
+HEAD: fc182feab（変更なし。コミットしていない）
+$coding の SKILL.md と指定された 6 つの規範、設計書の追加決定まで、replan、A・A′引継ぎ、core/daemon と dispatcher/mailbox/turnQueues を確認した。
+担当外の起動・業務・配送コード、共有の型と口、テストの共有設定は変更していない。
+
+作ったもの
+
+・src/infra/daemon/eventStore.ts、eventRecord.ts
+  FileEventStore は EventStore を実装する。eventId または conversationId/requestId で重複を照合する。
+  queued → running → settling → settled を一時ファイル・rename で保存する。
+  同一ターンの開始・結果・settled 更新は冪等。異なる世代・内容の結果は拒否する。
+  settled も重複照合と最終受付連番のために残し、restore.pending は未終了分だけを非同期に列挙する。
+  running を中断として扱う判断と、settling の結果だけを再反映する判断は既存 dispatcher が行う。
+  発言ごとの agentOverrides を全体として保存・復元・重複応答する。
+  名前変更後に応答だけ失敗した保存も、再送で照合できる。
+  既存 Goal の問い合わせで kind が省略された結果も、schema の正規化を揃えて再送・確定できる。
+
+・src/infra/daemon/conversationStateStore.ts
+  ConversationStateStore.read/create/save/apply を提供する。
+  既存 conversations/<id>.json を読み、daemonState がなければ保存版 0 として扱う。
+  元の会話レコードと daemonState（版、ターン、操作 ID、変更内容、保存済み版）を同じファイルに保存する。
+  同じ操作の再送は版照合より先に同じ結果を返す。別内容・別ターンでの操作 ID 再利用は拒否する。
+  同じ期待版で競合した保存は一方だけ成功する。
+  session・提案・承認と現在の assignment の整合は ConversationRecordSchema で検証する。
+  取消を公開前に確認し、一時ファイルとロックの後始末が済むまで返信しない。
+  apply は interrupted.change も反映でき、同じ結果の再反映で版を増やさない。
+
+・src/infra/daemon/privateFile.ts、lock.ts、io.ts
+  ファイル I/O は fs/promises。サイズを制限した記述子からの読取、同じディレクトリの一時ファイル、0600、rename、ファイルと親ディレクトリの同期を行う。
+  作成ディレクトリは 0700。Windows では POSIX のディレクトリ chmod/fsync を適用しない。
+  FileAsyncLock は AsyncLock を実装する。取得は排他的な wx、待機は取消可能な非同期処理。
+  処理の Promise と解放の完了まで保持し、両方の失敗は AggregateError にする。
+  期限を過ぎた実行中の処理も早期解放せず、処理・解放後に期限切れを返す。
+  死亡を確認できた旧所有者だけを回収し、unknown は死亡としない。
+
+・src/infra/daemon/command.ts、process.ts
+  AsyncCommand: shell:false、引数配列、期限・取消、stdout/stderr 合計のバイト上限、超過時の停止、終了確認。
+  AsyncProcess: 起動後に OS の開始時刻を取得。取得不能なら終了を確認して起動を失敗にする。
+  launch の期限は起動確認まで、signal は返したプロセスの寿命にも適用する。
+  launch の標準出力・標準エラーは破棄する。出力が必要な短い照会は AsyncCommand.run を使う。
+  Linux /proc、Darwin ps、Windows PowerShell を非同期で照会し、alive/dead/unknown を区別する。
+  既存の linux-start-v3、darwin-start-v2、Windows 時刻、tasks.yaml の ps 表示形式を扱う。
+
+・owner.ts、ipcEndpoint.ts、infra/slack/inquiryBindings.ts
+  owner・接続情報・Slack 問い合わせの既存保存形式を維持し、読書きと所有権処理を非同期化した。
+  Slack の競合する保存もロックで直列化する。
+  resolveDaemonConfigDirectory は設定ディレクトリを引数で受け取り、非同期で canonical path にする。
+  設定解決の同期モジュールは daemon 側に import しない。
+
+・src/infra/daemon/logger.ts、persistedFiles.ts
+  DaemonLogger は小さいログレコードを daemon-logs/*.json に原子的に保存する。
+  1 メッセージ 16 KiB、同時書込 32 件。close は未終了書込と失敗を確認する。
+  DaemonPersistedFiles は既存 .takt/goals/<id>/goal.json、.takt/tasks.yaml、manager-inbox/<project-hash>/*.json を非同期に読む。
+  goals/tasks/inbox の読取は各 256 KiB 以下に制限し、全件解析を追加していない。
+  tasks は保存形式を検証して全フィールドを保持する。業務 schema の値 import は同期 run 読取を呼び込むため使わない。
+  EventStore と会話ファイルは各 4 MiB の上限を設けた。上限を超えたファイルは黙って省略せず失敗する。
+
+・src/shared/utils/executable-path-async.ts と spawn.ts
+  spawn の System32 解決を fs/promises に変更し、同期 executable-path.ts への値依存を除去した。
+  taskkill 自身にも出力上限と期限を設け、close を待つ。
+  ManagedProcess.wait は spawn error の場合も close を確認してから reject する。
+  同期の実行ファイル解決は CLI・ターンの既存利用側のために独立した実装として残している。
+
+消したもの・同期利用側の変更
+
+・private-artifact-helper.ts、private-artifact-backend.ts、private-directory-backend.ts を削除した。
+・その helper 専用テスト 3 ファイルを削除した。
+・private-file.ts は子 Node を起動せず、直接一時ファイルを書いて公開する。
+  通常の置換は rename、新規限定の公開は hard link による no-replace、追記は O_APPEND を使う。
+  新規限定と追記は、競合時に他の書込を上書き・消失させないための方式である。
+・祖先の dev/ino 再照合と、それに専用のテストを削除した。
+  private-path-identity の既存呼出しはディレクトリ種別の確認だけにした。
+  DirectoryIdentity の型自体は担当外の operation-journal-store でも使われるため残している。
+・private-file-lock は backend のエラー型に依存しない直接 I/O に対応した。
+・Windows の長い cwd のテストから削除した helper のケースを取り除き、prepare-script のケースは残した。
+・src/infra/fs/file-lock.ts と infra/task の同期プロセス helper は CLI・ターン側の既存実装として変更していない。
+  新しい daemon 用部品はそれらに依存しない。
+
+禁止箇所の実測
+
+node scripts/daemon-reachability.mjs の実行結果:
+  作業前: reachable 1051 ファイル、禁止診断 193 ファイル / 707 件。
+  作業後: reachable 1059 ファイル、禁止診断 190 ファイル / 707 件。
+  B 割当: 11 ファイル / 35 件 → 8 ファイル / 35 件。診断数の純減は 0 件。
+  owner、ipcEndpoint、削除した helper の 4 件を除去した一方、CLI 用 private-file の直接 fs 操作で 4 件増えた。
+  残存 B 診断:
+    infra/fs/file-lock.ts 8、infra/task/process.ts 2、taskProcessIdentity.ts 1、windowsProcessIdentity.ts 1、
+    shared/utils/executable-path.ts 3、private-file-lock.ts 2、private-file.ts 15、private-path-identity.ts 3。
+  これらは未統合の旧 runDaemon・業務経路から引き続き到達している。
+
+B の非同期部品全体（infra/daemon、spawn.ts、executable-path-async.ts）を入口として同じ到達解析と禁止規則を実行:
+  推移依存 23 ファイル、解析課題 0、禁止規則と no-floating-promises の診断 0。
+  通常の opt-in lint は全体の未解消な解析課題で設定読込が失敗するため、同じ daemonRules をこの到達集合に適用して検証した。
+  全体の禁止 lint が通ったとは報告しない。
+
+つなぎ目への要望・最後の統合で行うこと
+
+1. runDaemon/CLI/lifecycle/IPC/readiness/manager client/director/Slack 側を新しい非同期 API に接続する。
+   resolveDaemonConfigDirectory(directory): Promise<string>
+   readDaemonOwner(directory): Promise<DaemonOwner|undefined>
+   writeDaemonOwner(directory, owner, signal?): Promise<void>
+   registerDaemonOwner(directory, owner, IoOptions): Promise<boolean>
+   removeDaemonOwner(directory, expected, IoOptions): Promise<void>
+   isDaemonOwnerRunning(owner, IoOptions): Promise<boolean>
+   readDaemonIpcState(directory): Promise<DaemonIpcState|undefined>
+   writeDaemonIpcState(directory, state, signal?): Promise<void>
+   SlackInquiryBindings.find/question/save は Promise を返す。
+   元の同期呼出しを残したまま使わない。await、IoOptions、境界での設定解決を追加する必要がある。
+
+2. dispatcher の EventStore に FileEventStore を接続する。
+   会話の apply は ConversationStateStore.apply へ、snapshot の turnState は同 store.read の state へ接続する。
+   save_conversation は store.save(turn, change, signal) へ接続する。
+   現在ターン・世代の認可は既存 dispatcher が所有する。B の Store に任意 path や assignment 全体の更新口は追加していない。
+   残り 3 種類の状態要求と配送は A′/D が組み立てる。
+
+3. 会話の唯一の書込主体を daemon にする。
+   新しい会話保存は元レコードに daemonState を加える。従来の strict ConversationRecordSchema にファイル全体を渡す旧 reader/writer は利用できない。
+   子は TurnStart.state と状態要求を使う。会話ファイルの read/create は ConversationStateStore 経由に統一する。
+   既存の bindings/directorMessages 等は record に保持しているが、旧キューからの配送への接続は最終統合側で行う。
+
+4. 共有テスト設定の削除・追加を反映する（担当外なので変更していない）。
+   scripts/test-classification.mjs: 削除した private-artifact-helper-error.test.ts の列挙を削除する。
+   tsconfig.tests.json: 削除した helper テスト 3 件を除き、daemon-io.test.ts と daemon-storage.integration.test.ts を追加する。
+   it-goal-mcp.test.ts: 削除した private-artifact-backend.js への mock/type import を取り除く。
+   resume-report-snapshot-unit.test.ts: PrivateDirectoryReadSnapshot の stub から削除済み ancestorIdentities を除く。
+   非同期 API の呼出しを使う既存テスト/helper の型と mock も更新する必要がある。
+
+5. 旧業務・起動経路から同期 Store/helper への値依存を除去した後、全体の到達解析・禁止 lint・build・型ゲート・release wiring を再実行する。
+   共有型と口の変更要求はない。保存 schema を公開する場合の共通化は統合時に判断できるが、今回は core/daemon を変更していない。
+   registry や inbox のイベントへの変換・固定 ID・既読化は E の責務。B は既存ファイルの非同期読取を提供する。
+
+検証結果
+
+・npm run build: 失敗（終了 2）。担当外の非同期 API 呼出し未対応で 74 診断。B の変更ファイルに型診断なし。
+・npm run lint: 成功。
+・npx tsc -p tsconfig.tests.json --noEmit: 失敗（終了 2）。build 完了後に単独再実行して 161 診断。
+  主に旧 API の同期呼出しと mock、削除した backend の import、削除した snapshot 属性の stub。
+・新規 2 テストを include した一時 tsconfig（元の tsconfig.tests.json を extends）での型検査: 成功。
+  コマンド: npx tsc -p /private/tmp/daemon-B-new-tests-tsconfig.json --noEmit
+・指定どおり npm test -- <file> を、追加・変更した 7 ファイルと releaseVerificationWiring の各ファイルで個別実行した。
+  全て test:types の終了 2 で停止し、Vitest 本体には進まなかった。
+  一覧: /private/tmp/daemon-B-npm-tests.json
+・そのため既存の分類済み npm ランナーを使い、各ファイルの本体を別途 1 ファイルずつ実行した。
+  npm run test:unit:parallel -- src/__tests__/daemon-io.test.ts                         11/11 成功
+  npm run test:it:heavy:parallel -- src/__tests__/daemon-storage.integration.test.ts    24/24 成功
+  npm run test:it -- src/__tests__/executable-path.test.ts                             18/18 成功
+  npm run test:it:heavy:parallel -- src/__tests__/private-file.test.ts                  14/14 成功
+  npm run test:it:heavy:parallel -- src/__tests__/private-file-lock-acquisition.test.ts  3/3 成功
+  npm run test:unit:parallel -- src/__tests__/slack-inquiry-bindings.test.ts              4/4 成功
+  npm run test:it:heavy:parallel -- src/__tests__/windows-long-cwd-helper-spawn.test.ts    Windows 専用 1 件をスキップ
+  追加・変更したテスト本体は 74 件成功、1 件スキップ。
+
+・追加の関連確認（全て単独実行）:
+  managed-spawn.test.ts              heavy runner、8/8 成功
+  spawn.test.ts                     unit runner、2/2 成功
+  file-lock.test.ts                 unit runner、26/26 成功
+  private-path-identity.test.ts      unit runner、1/1 成功
+  releaseVerificationWiring.test.ts heavy runner、61 成功 / 2 失敗（全 63 件）。
+  wiring の 2 失敗は共有設定に残る削除済みテスト名。上記の設定更新が必要。
+
+・git diff --check: 成功。未追跡 13 ファイルも空白と末尾改行を検査し問題なし。
+・実プロセス検証には Node の通常起動・標準出力パイプ・終了確認を使用した。provider は呼んでいない。
+・新規テストは Deferred、明示的な ready 通知、偽時計への期限入力で順序を制御し、sleep や経過時間を合否に使っていない。
+・今回の対象テストでは IPC socket の listen を行っておらず、IPC EPERM は観測していない。IPC 結線の成功を検証したものではない。
+・heavy IT 全体、light IT 全体、E2E、本物の provider は実行していない。
+
+主な記録
+  /private/tmp/daemon-B-build.log
+  /private/tmp/daemon-B-lint.log
+  /private/tmp/daemon-B-test-types.log
+  /private/tmp/daemon-B-new-test-types.log
+  /private/tmp/daemon-B-storage-tests.log
+  /private/tmp/daemon-B-io-tests.log
+  /private/tmp/daemon-B-release-wiring.log
+  /private/tmp/daemon-B-reach-before.json （拡張子に反して保存内容は CLI のテキスト出力）
+  /private/tmp/daemon-B-reach-after.txt
+  /private/tmp/daemon-B-async-reachability.log

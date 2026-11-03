@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { createConversationService } from '../../features/manager/conversationService.js';
+import { conversationDaemon } from './conversation-daemon.js';
+import { resolveCurrentManagerAssignment } from '../../features/manager/assignment.js';
 import { createTuiConversationPort } from '../../features/manager/tuiConversationPort.js';
 import { createManagerTurnExecutor } from '../../features/manager/turnExecutor.js';
 import type { ManagerConversationPlan } from '../../features/manager/conversationPlan.js';
@@ -26,7 +27,8 @@ export class ManagerServiceClient {
   private pendingOutputs: Array<{ output: Exclude<PortOutput, { kind: 'snapshot' }>; version?: OutputVersion }> = [];
   readonly results: OperationResult[] = [];
   private readonly actor = { namespace: 'local', id: 'operator' };
-  private readonly service;
+  private service!: Awaited<ReturnType<typeof conversationDaemon>>['input'];
+  private daemon!: Awaited<ReturnType<typeof conversationDaemon>>;
   private readonly delivery: ConversationDelivery;
   private readonly configDirectory = getGlobalConfigDir();
   readonly ready: Promise<void>;
@@ -55,13 +57,8 @@ export class ManagerServiceClient {
     const configDirectory = this.configDirectory;
     const plan = input.plan;
     let executor: ReturnType<typeof createManagerTurnExecutor> | undefined;
-    const service = createConversationService({ configDirectory,
-      owner: { pid: process.pid, identity: { startTime: 'ui-test' }, version: 'test', cliPath: import.meta.filename },
-      runtime: { resolve: async () => ({ provider: plan.ctx.providerType, model: plan.ctx.model ?? null,
-        language: plan.ctx.lang, contextKey: 'ui-test', executor: executor ??= createManagerTurnExecutor(input.cwd, plan) }), close: async () => {} },
-      onDomainChange() {},
-    });
-    this.service = service;
+    const daemon = conversationDaemon(configDirectory, { resolve: async () => ({ provider: plan.ctx.providerType, model: plan.ctx.model ?? null,
+      language: plan.ctx.lang, contextKey: 'ui-test', executor: executor ??= createManagerTurnExecutor(input.cwd, plan) }), close: async () => {} });
     this.delivery = { deliver: async (_id: string, output: PortOutput, version: OutputVersion) => {
       if (this.closed) return { kind: 'unavailable' as const, reason: 'closed' };
       if (output.kind === 'snapshot') await this.read(() => Promise.resolve(output.read));
@@ -70,7 +67,7 @@ export class ManagerServiceClient {
       }
       return { kind: 'delivered' as const };
     } };
-    this.ready = this.open();
+    this.ready = daemon.then(async (value) => { this.daemon = value; this.service = value.input; await this.open(); });
     void this.ready.catch((error: unknown) => this.update({ connection: 'disconnected', readStatus: 'incomplete',
       error: error instanceof Error ? error.message : String(error) }));
   }
@@ -81,8 +78,9 @@ export class ManagerServiceClient {
     this.attachmentId = undefined;
     this.update({ connection: 'connecting', readStatus: 'reading' });
     const { cwd, assignment, plan } = this.options;
-    const resolved = await createTuiConversationPort(this.configDirectory, this.delivery).resolve(assignment
-      ?? { kind: 'repository', repositoryDirectory: cwd });
+    const selected = assignment ?? { kind: 'repository' as const, repositoryDirectory: cwd };
+    const resolved = await createTuiConversationPort(this.configDirectory, this.delivery).resolve(selected.kind === 'daemon' ? selected
+      : await resolveCurrentManagerAssignment(selected, this.configDirectory));
     if (this.closed || generation !== this.readGeneration) return;
     if (this.view.state?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
@@ -184,7 +182,7 @@ export class ManagerServiceClient {
   }
   async dispose(): Promise<void> {
     this.close();
-    await this.service.close();
+    await this.daemon.close();
   }
 }
 

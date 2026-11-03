@@ -95,14 +95,14 @@ it('delivers a result emitted before admission returns exactly once and detaches
   expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply');
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
 });
-it.each(['open', 'submit'] as const)('reports busy from %s without resubmitting the message', async (stage) => {
+it.each(['open', 'submit'] as const)('reports queue capacity rejection from %s without resubmitting the message', async (stage) => {
   const { port, input, client } = fixture();
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
-  if (stage === 'open') vi.mocked(input.open).mockRejectedValue(new ConversationError('busy'));
-  else vi.mocked(input.submit).mockResolvedValue({ kind: 'busy', operationId: 'other' });
+  if (stage === 'open') vi.mocked(input.open).mockRejectedValue(new ConversationError('queue_full'));
+  else vi.mocked(input.submit).mockResolvedValue({ kind: 'error', code: 'queue_full', message: 'manager.conversation.queue_full' });
   await port.receive(endpoint, 'rejected');
   await port.close();
-  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'manager.conversation.busy');
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'manager.conversation.queue_full');
   expect(input.submit).toHaveBeenCalledTimes(stage === 'open' ? 0 : 1);
 });
 it('stops receiving and releases accepted attachments on close without posting notices', async () => {

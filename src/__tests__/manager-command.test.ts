@@ -6,8 +6,7 @@ const doubles = vi.hoisted(() => ({
   manager: vi.fn(), director: vi.fn(), assistant: vi.fn(), list: vi.fn(), initialize: vi.fn(), resolveConfigValue: vi.fn(),
 }));
 const daemon = vi.hoisted(() => ({ run: vi.fn(), stop: vi.fn() }));
-vi.mock('../features/daemon/runDaemon.js', () => ({ runDaemon: daemon.run }));
-vi.mock('../features/daemon/lifecycle.js', () => ({ stopDaemon: daemon.stop }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ stopDaemon: daemon.stop, runDaemonForeground: daemon.run }));
 vi.mock('../features/manager/runManager.js', () => ({ runManager: doubles.manager }));
 vi.mock('../features/director/runDirector.js', () => ({ runDirector: doubles.director }));
 vi.mock('../features/tasks/list/index.js', () => ({ listTasks: doubles.list }));

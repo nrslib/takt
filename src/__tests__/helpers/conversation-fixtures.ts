@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { conversationId, conversationIdentity } from '../../infra/conversations/identity.js';
 import { ConversationAssignmentSchema, ConversationRecordSchema, type ConversationRecord } from '../../infra/conversations/schema.js';
 
@@ -21,4 +23,10 @@ export function directorConversationRecord(): ConversationRecord {
     bindings: [{ port: 'tui', key: JSON.stringify(conversationIdentity(assignment)), counterpart: actor }],
     revision: 0, pending: null, approval: null, running: null,
   });
+}
+
+export function writeLegacyConversation(directory: string, record: ConversationRecord): void {
+  const root = join(directory, 'conversations');
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  writeFileSync(join(root, `${record.id}.json`), JSON.stringify(ConversationRecordSchema.parse(record)), { mode: 0o600 });
 }

@@ -469,7 +469,7 @@ describe('fs.watchと限定照合', () => {
 it('組立済みの見張りは各周期で観測し、停止後には再開しない', async () => {
   const h = harness();
   const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
-    inquiries: vi.fn().mockResolvedValue([]), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
+    inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
     ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
   await watchers.drain();
@@ -489,7 +489,7 @@ it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だ
   const h = harness();
   filesystem.stat.mockResolvedValue({ dev: 1, ino: 1, size: 2, mtimeMs: Date.now(), ctimeMs: Date.now(), isFile: () => true });
   const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
-    pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]),
+    pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]),
     launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const errors = vi.fn();
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn().mockResolvedValue({ kind: 'dead' }) },
@@ -502,4 +502,17 @@ it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だ
   expect(h.accepted.size).toBe(1);
   expect(errors).not.toHaveBeenCalled();
   await watchers.close();
+});
+
+it('ゴールの長期停滞は保存時刻から判定し、同じ状態ではイベントを増やさない', async () => {
+  const h = harness();
+  const target = { ...base, repositoryDirectory: '/repo', goalId: 'goal-1', active: true, lastUpdatedAt: new Date().toISOString() };
+  await h.checks.goal(target);
+  expect(h.accept).not.toHaveBeenCalled();
+  vi.setSystemTime(Date.now() + WATCH_THRESHOLDS.inquiry);
+  await h.checks.goal(target); await h.checks.goal(target);
+  expect(observedKinds(h.accepted)).toEqual(['goal_stalled']);
+  await h.checks.goal({ ...target, active: false });
+  await h.checks.goal(target);
+  expect(observedKinds(h.accepted)).toEqual(['goal_stalled', 'goal_stalled']);
 });

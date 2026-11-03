@@ -188,7 +188,7 @@ export function createSlackConversationPort(options: {
         attachmentId = undefined;
         await options.client.postThreadMessage(endpoint, options.language === 'ja' ? '受け付けて保存しました。' : 'Accepted and saved.');
       } else {
-        const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
+        const message = submission.message;
         await options.client.postThreadMessage(endpoint, message);
       }
     } catch (error) {

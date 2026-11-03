@@ -560,9 +560,9 @@ export TAKT_SLACK_BOT_TOKEN='xoxb-...'
 takt manager
 ```
 
-`TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. There is no automatic startup mechanism; start the daemon with one of the commands above.
+`TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. `takt manager` and `takt director` start the dedicated daemon when needed. After changing tokens or Slack settings, stop it with `takt daemon stop` and start it again.
 
-When a repository has Slack configured and both tokens are present, the daemon keeps listening even when there is no work. If Slack is not configured or either token is missing, it retains its usual behavior of exiting when idle. If two repositories configure the same channel, Slack is disabled for both, and the reason is written to `~/.takt/logs/daemon.log`.
+The daemon stays running regardless of pending work or Slack connectivity, until `takt daemon stop` or a signal stops it. TUI admission and observation continue without Slack configuration or tokens. If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
 
 ### Conversations and inquiries
 

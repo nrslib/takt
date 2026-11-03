@@ -1,6 +1,6 @@
 import type { CommandPort, ProcessPort } from '../../../core/daemon/io.js';
 import type { DaemonIngress, DaemonResources } from '../../../core/daemon/ports.js';
-import { boundWatchTargets, readLogStamp, WatchChecks, type InquiryWatchTarget, type LaunchWatchTarget, type RunWatchTarget } from './checks.js';
+import { boundWatchTargets, readLogStamp, WatchChecks, type GoalWatchTarget, type InquiryWatchTarget, type LaunchWatchTarget, type RunWatchTarget } from './checks.js';
 import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange } from './directories.js';
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './loop.js';
 import { WatchObservations, type WatchRecordStore, type WatchTarget } from './observations.js';
@@ -12,6 +12,7 @@ export interface DaemonWatchSource {
   run(targetId: string): Promise<RunWatchTarget | undefined>;
   pullRequests(): Promise<readonly PullRequestWatchTarget[]>;
   inquiries(): Promise<readonly InquiryWatchTarget[]>;
+  goals(): Promise<readonly GoalWatchTarget[]>;
   launches(): Promise<readonly LaunchWatchTarget[]>;
   directories(): Promise<readonly DirectoryWatchTarget[]>;
 }
@@ -34,7 +35,7 @@ export function startDaemonWatchers(dependencies: {
 }): DaemonWatchers {
   const observations = new WatchObservations(dependencies.records, dependencies.ingress, dependencies.now);
   const loops: WatchLoop[] = [];
-  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'pr' | 'inquiry' | 'launch', interval: number, read: () => Promise<readonly T[]>,
+  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'pr' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
     observe: (checks: WatchChecks, target: T, signal: AbortSignal) => Promise<void>): void => {
     const checks = new WatchChecks(observations, dependencies.now, dependencies.onError, scope);
     loops.push(startWatchLoop(interval, async (signal) => {
@@ -56,6 +57,7 @@ export function startDaemonWatchers(dependencies: {
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   register('inquiry', WATCH_INTERVALS.long, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));
+  register('goal', WATCH_INTERVALS.long, () => dependencies.source.goals(), (checks, target) => checks.goal(target));
   register('launch', WATCH_INTERVALS.launch, () => dependencies.source.launches(), (checks, target) => checks.launch(target));
   loops.push(startDirectoryWatcher({ targets: () => dependencies.source.directories(), changed: dependencies.filesChanged,
     onError: (error) => dependencies.onError(null, error) }));

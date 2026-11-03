@@ -1,5 +1,6 @@
 import type { ConversationAssignment, ConversationRecord } from '../../infra/conversations/schema.js';
-import type { OperationResult, SnapshotRead } from '../../features/manager/conversationPort.js';
+import type { OperationResult, SnapshotRead, SnapshotItem, QuestionTarget } from '../../features/manager/conversationPort.js';
+import type { GoalQuestion } from '../../infra/goals/schema.js';
 import type { AcceptedEvent } from './events.js';
 
 export interface TurnIdentity {
@@ -57,8 +58,16 @@ export type RuntimeMessage =
   | { kind: 'turn_progress'; turn: TurnIdentity; message: string }
   | { kind: 'turn_finished'; turn: TurnIdentity; outcome: TurnOutcome };
 
+export interface InquiryNotice {
+  conversationId: string;
+  target: QuestionTarget;
+  question: GoalQuestion;
+}
+
 /** items は遅延生成する。ターン開始の読取は turnState を取得して cancel する。 */
 export interface ConversationSnapshot extends SnapshotRead {
+  items: AsyncIterable<SnapshotItem & { recordedAt?: string }>;
+  queuedMessageCount?: number;
   generation: number | null;
   turnState: ConversationTurnState;
 }

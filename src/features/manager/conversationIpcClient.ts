@@ -1,3 +1,4 @@
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { resolveCurrentManagerAssignment } from './assignment.js';
 import { createConnection, type Socket } from 'node:net';
@@ -20,7 +21,6 @@ const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal
   .refine((response) => Object.hasOwn(response, 'result') !== (response.error !== undefined));
 const submissionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('accepted'), operationId: z.uuid(), eventId: z.string().min(1).max(128).optional(), acceptedSequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), queuedMessageCount: z.number().int().positive().optional() }).strict(),
-  z.object({ kind: z.literal('busy'), operationId: z.uuid() }).strict(),
   z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict(),
 ]);
 export interface ConversationClientSnapshot {
@@ -121,7 +121,7 @@ export class ConversationIpcClient {
 
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
-    const configDirectory = await resolveDaemonConfigDirectory();
+    const configDirectory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
     const port = this.options?.port ?? createTuiConversationPort(configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
     const selected = this.options?.port !== undefined || this.assignment.kind === 'daemon' ? this.assignment
       : await resolveCurrentManagerAssignment(this.assignment.kind === 'repository'
@@ -133,7 +133,7 @@ export class ConversationIpcClient {
     if (this.closed) return;
     const owner = await readDaemonOwner(configDirectory);
     const state = await readDaemonIpcState(configDirectory);
-    if (owner === undefined || state === undefined || !await isDaemonOwnerRunning(owner) || !ipcStateMatchesOwner(state, owner)
+    if (owner === undefined || state === undefined || !await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 }) || !ipcStateMatchesOwner(state, owner)
       || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();

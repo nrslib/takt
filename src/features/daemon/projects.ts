@@ -1,13 +1,11 @@
 import { createHash } from 'node:crypto';
 import { access, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod/v4';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
 import { listWatchEntries, readSmallJson, MAX_WATCH_ENTRIES } from './watchers/files.js';
-import { readWatchGoals, readWatchTasks } from './watchers/state.js';
 
 const RegistrationSchema = z.object({
   version: z.literal(2), locationId: z.string().regex(/^[a-f0-9]{64}$/u), stateId: z.uuid(),
@@ -79,25 +77,4 @@ export async function readDaemonProjectRoutes(globalConfigDirectory: string,
     }
   }
   return [...routes.values()].sort((left, right) => left.repositoryDirectory.localeCompare(right.repositoryDirectory));
-}
-
-export async function listDaemonProjects(globalConfigDirectory: string): Promise<readonly string[]> {
-  return (await readDaemonProjectRoutes(globalConfigDirectory)).map((route) => route.repositoryDirectory);
-}
-
-export async function hasDaemonProjectWork(cwd: string, onReadError?: (error: unknown) => void): Promise<boolean> {
-  const report = onReadError ?? reportProjectReadError;
-  const goals = await readWatchGoals(cwd, report);
-  const hasGoalWork = goals.some((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted');
-  const directory = await realpath(cwd);
-  const configDirectory = process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
-  const inbox = join(configDirectory, 'manager-inbox', projectLocation(directory));
-  const hasEventWork = (await listWatchEntries(inbox)).some((entry) => entry.isFile() && entry.name.endsWith('.json'));
-  try {
-    const tasks = await readWatchTasks(cwd);
-    return hasGoalWork || hasEventWork || tasks.some((task) => task.status === 'pending' || task.status === 'running');
-  } catch (error) {
-    report(error);
-    return hasGoalWork || hasEventWork;
-  }
 }

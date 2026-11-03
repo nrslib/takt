@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
-import { GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
+import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
 import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from './events.js';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
@@ -46,6 +46,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),
@@ -80,7 +81,7 @@ const stateRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('get_delivery'), conversationId: id }).strict(),
 ]);
 const admission = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('accepted'), eventId: id, operationId: id, acceptedSequence: version.refine((v) => v > 0) }).strict(),
+  z.object({ kind: z.literal('accepted'), eventId: id, operationId: id, acceptedSequence: version.refine((v) => v > 0), queuedMessageCount: version.refine((v) => v > 0).optional() }).strict(),
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [

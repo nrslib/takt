@@ -556,9 +556,9 @@ export TAKT_SLACK_BOT_TOKEN='xoxb-...'
 takt manager
 ```
 
-`TAKT_SLACK_APP_TOKEN` は `connections:write` を持つ App-Level Token、`TAKT_SLACK_BOT_TOKEN` はボット用トークンです。daemon は読み取った後に両変数を自身の環境から削除し、provider やツールの子プロセスに渡らないようにします。自動起動の仕組みはないため、上記のどちらかのコマンドで daemon を起動してください。
+`TAKT_SLACK_APP_TOKEN` は `connections:write` を持つ App-Level Token、`TAKT_SLACK_BOT_TOKEN` はボット用トークンです。daemon は読み取った後に両変数を自身の環境から削除し、provider やツールの子プロセスに渡らないようにします。`takt manager`・`takt director` は必要に応じて専用の daemon を起動します。トークンや Slack 設定を変更した場合は、`takt daemon stop` で停止してから起動し直してください。
 
-Slack を設定したリポジトリがあり、両方のトークンがそろっていれば、仕事がなくても daemon は止まらず待ち受けます。Slack の設定がない場合や、どちらかのトークンがない場合は、従来どおり仕事がないときに終了します。同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にし、理由を `~/.takt/logs/daemon.log` に記録します。
+daemon は仕事や Slack 接続の有無にかかわらず常駐し、`takt daemon stop` またはシグナルで停止します。Slack の設定やトークンがない場合も TUI の受付と監視を続けます。同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にします。起動・停止・診断は `~/.takt/daemon-logs/*.json` に非同期で保存します。
 
 ### 会話と問い合わせへの回答
 

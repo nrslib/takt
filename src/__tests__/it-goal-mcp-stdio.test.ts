@@ -17,7 +17,7 @@ import { createManagerConversationPlan } from '../features/manager/conversationP
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { ManagerServiceClient } from './helpers/manager-service-client.js';
-import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
@@ -397,10 +397,10 @@ describe('manager goal execution tools through MCP', () => {
   it.each([false, true])('transfers goal execution exposure to the actual MCP child: %s', async (enableGoalExecutionTools) => {
     const connect: (
       cwd: string,
-      assignment: Parameters<typeof connectManagerMcp>[1],
-      servers: Parameters<typeof connectManagerMcp>[2],
+      assignment: Parameters<typeof connectTestManagerMcp>[1],
+      servers: Parameters<typeof connectTestManagerMcp>[2],
       options: { enableGoalExecutionTools: boolean },
-    ) => ReturnType<typeof connectManagerMcp> = connectManagerMcp;
+    ) => ReturnType<typeof connectTestManagerMcp> = connectTestManagerMcp;
     const connection = await connect(cwd, undefined, undefined, { enableGoalExecutionTools });
     try {
       const tools = (await connection.client.listTools()).tools.map(({ name }) => name);
@@ -617,7 +617,7 @@ describe('manager questions, answers and notifications through production bounda
   let responseStatus: number;
   let session: ManagerServiceClient | undefined;
   let app: ReturnType<typeof render> | undefined;
-  let connection: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
+  let connection: Awaited<ReturnType<typeof connectTestManagerMcp>> | undefined;
 
   function git(args: string[], input?: string): string {
     return execFileSync('git', args, { cwd, input, encoding: 'utf8', stdio: 'pipe', env: {
@@ -741,7 +741,7 @@ describe('manager questions, answers and notifications through production bounda
   }
 
   async function mountManager(): Promise<void> {
-    connection = await connectManagerMcp(cwd);
+    connection = await connectTestManagerMcp(cwd);
     const plan = createManagerConversationPlan(cwd, {});
     session = new ManagerServiceClient({ cwd,
       plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });

@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { opendir } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
@@ -6,7 +7,7 @@ import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { ConversationChangeSchema, StoredTurnSchema } from './eventRecord.js';
 import { ConversationIdSchema, ConversationRecordSchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
-import { readPrivateFile, writePrivateFile } from './privateFile.js';
+import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
 
 const MAX_CONVERSATION_BYTES = 4 * 1024 * 1024;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -59,6 +60,26 @@ export class ConversationStateStore {
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
   }
 
+  async *iterate(): AsyncGenerator<ConversationRecord> {
+    await ensurePrivateDirectory(this.directory);
+    for await (const entry of await opendir(this.directory)) {
+      if (!entry.name.endsWith('.json')) continue;
+      const stored = await this.load(ConversationIdSchema.parse(entry.name.slice(0, -5)));
+      if (stored === undefined) throw new Error('Conversation disappeared during recovery');
+      yield stored.record;
+    }
+  }
+
+  async retireLegacy(id: string, operationId: string | null): Promise<void> {
+    await this.lock.exclusive(`${this.path(id)}.lock`, async () => {
+      const stored = await this.load(id);
+      if (stored === undefined) throw new Error('Unknown legacy conversation');
+      stored.record = { ...stored.record, running: null, directorMessages: operationId === null ? stored.record.directorMessages
+        : stored.record.directorMessages?.filter((message) => message.operationId !== operationId) };
+      await this.write(stored);
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
+  }
+
   async create(input: ConversationRecord): Promise<ConversationTurnState> {
     const record = ConversationRecordSchema.parse(input);
     return this.lock.exclusive(`${this.path(record.id)}.lock`, async () => {
@@ -78,31 +99,38 @@ export class ConversationStateStore {
 
   async save(turn: TurnIdentity, input: ConversationChange, signal: AbortSignal): Promise<DaemonStateReply> {
     const identity = StoredTurnSchema.parse(turn);
-    const change = ConversationChangeSchema.parse(input);
-    return this.lock.exclusive(`${this.path(identity.conversationId)}.lock`, async () => {
-      signal.throwIfAborted();
-      const stored = await this.load(identity.conversationId);
-      if (stored === undefined) return { kind: 'error', code: 'forbidden', message: 'Unknown conversation' };
-      const previous = stored.metadata.receipts.find((entry) => entry.change.operationId === change.operationId);
-      if (previous !== undefined) {
-        if (!isDeepStrictEqual(previous.change, change) || !isDeepStrictEqual(previous.turn, identity)) {
-          return { kind: 'error', code: 'forbidden', message: 'Operation ID was reused with different content or turn' };
+    const change = ConversationChangeSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
+    let committed: Extract<DaemonStateReply, { kind: 'state_saved' }> | undefined;
+    try {
+      return await this.lock.exclusive(`${this.path(identity.conversationId)}.lock`, async () => {
+        signal.throwIfAborted();
+        const stored = await this.load(identity.conversationId);
+        if (stored === undefined) return { kind: 'error', code: 'forbidden', message: 'Unknown conversation' };
+        const previous = stored.metadata.receipts.find((entry) => entry.change.operationId === change.operationId);
+        if (previous !== undefined) {
+          if (!isDeepStrictEqual(previous.change, change) || !isDeepStrictEqual(previous.turn, identity)) {
+            return { kind: 'error', code: 'forbidden', message: 'Operation ID was reused with different content or turn' };
+          }
+          return committed = { kind: 'state_saved', version: previous.version, duplicate: true };
         }
-        return { kind: 'state_saved', version: previous.version, duplicate: true };
-      }
-      if (change.expectedVersion !== stored.metadata.version) return { kind: 'error', code: 'version_conflict', message: 'Conversation version changed' };
-      const checked = ConversationRecordSchema.safeParse({ ...stored.record,
-        ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId }),
-        ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
-        ...(change.approval === undefined ? {} : { approval: change.approval }),
-      });
-      if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
-      const nextVersion = stored.metadata.version + 1;
-      if (!Number.isSafeInteger(nextVersion)) throw new Error('Conversation version exhausted');
-      await this.write({ record: checked.data, metadata: { version: nextVersion,
-        receipts: [...stored.metadata.receipts, { turn: identity, change, version: nextVersion }] } }, signal);
-      return { kind: 'state_saved', version: nextVersion, duplicate: false };
-    }, { signal, timeoutMs: 5000 });
+        if (change.expectedVersion !== stored.metadata.version) return { kind: 'error', code: 'version_conflict', message: 'Conversation version changed' };
+        const checked = ConversationRecordSchema.safeParse({ ...stored.record,
+          ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId }),
+          ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
+          ...(change.approval === undefined ? {} : { approval: change.approval }),
+        });
+        if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
+        const nextVersion = stored.metadata.version + 1;
+        if (!Number.isSafeInteger(nextVersion)) throw new Error('Conversation version exhausted');
+        await this.write({ record: checked.data, metadata: { version: nextVersion,
+          receipts: [...stored.metadata.receipts, { turn: identity, change, version: nextVersion }] } }, signal);
+        return committed = { kind: 'state_saved', version: nextVersion, duplicate: false };
+      }, { signal, timeoutMs: 5000 });
+    } catch (error) {
+      // 公開が完了した保存を、その後の取消によって未確定へ戻さない。
+      if (committed !== undefined && signal.aborted && error === signal.reason) return committed;
+      throw error;
+    }
   }
 
   async apply(result: TurnResult): Promise<void> {

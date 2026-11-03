@@ -1,4 +1,5 @@
 import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { ConversationIpcClient } from '../manager/conversationIpcClient.js';
@@ -7,7 +8,7 @@ import { DirectorView } from './DirectorView.js';
 
 export async function runDirector(_input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('takt director requires an interactive terminal');
-  const configDirectory = resolveDaemonConfigDirectory();
+  const configDirectory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
   const client = new ConversationIpcClient({ kind: 'daemon' }, _input.agentOverrides);
   try {
     await client.connect();

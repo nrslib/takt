@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
-import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { createTaktMcpServer,type TaktMcpToolSet } from '../features/mcp/server.js';
 import { attemptAutoRequeueTask,requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
@@ -20,8 +20,6 @@ import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValu
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
 import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
-import { ConversationStore } from '../infra/conversations/store.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { isGoalContentIncluded } from '../infra/goals/git-command.js';
 import { GoalSchema } from '../infra/goals/schema.js';
@@ -59,7 +57,6 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
 }));
-vi.mock('../shared/utils/private-artifact-backend.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-artifact-backend.js')>() }));
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -398,11 +395,11 @@ describe('manager goal task enqueue', () => {
   });
 
   it('preserves both goal updates from independent MCP server processes', async () => {
-    const connections: Awaited<ReturnType<typeof connectManagerMcp>>[] = [];
+    const connections: Awaited<ReturnType<typeof connectTestManagerMcp>>[] = [];
     try {
       // 両サーバーを起動してから同じゴールへ同時に書き込む。
       const started = await Promise.allSettled([
-        connectManagerMcp(cwd), connectManagerMcp(cwd),
+        connectTestManagerMcp(cwd), connectTestManagerMcp(cwd),
       ]);
       for (const result of started) {
         if (result.status === 'fulfilled') connections.push(result.value);
@@ -446,9 +443,9 @@ describe('manager goal task enqueue', () => {
       '    instruction: Implement self-contained work', '    rules:',
       '      - condition: when(true)', '        next: COMPLETE',
     ].join('\n'));
-    let connection: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
+    let connection: Awaited<ReturnType<typeof connectTestManagerMcp>> | undefined;
     try {
-      connection = await connectManagerMcp(cwd);
+      connection = await connectTestManagerMcp(cwd);
       const result = await connection.client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
@@ -1649,10 +1646,8 @@ describe('goal PR publication and merge through manager MCP', () => {
   const operationId = '550e8400-e29b-41d4-a716-446655440002';
 
   async function withMerge(action: (client: Client) => Promise<void>) {
-    new ConversationStore(getGlobalConfigDir()).write({ ...conversationRecord(cwd),
-      lastSpeaker: { namespace: 'agent', id: 'director' },
-      running: { kind: 'message', operationId, owner: { pid: process.pid, identity: { startTime: 'merge-test' } } } });
     await withServer(cwd, 'manager', async (client) => {
+      currentTurns.set(client, { operationId, directorMessage: true });
       expect((await client.listTools()).tools.map(({ name }) => name)).toContain(mergeTool);
       await saveWaitingGoal();
       await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, pullRequest }));
@@ -2006,13 +2001,9 @@ describe('goal PR publication and merge through manager MCP', () => {
     'rejects merging in a %s without spawning takt merge', async (turn) => {
       const spawn = captureMergeProcess(0);
       await withMerge(async (client) => {
-        const store = new ConversationStore(getGlobalConfigDir());
-        const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
-        const initial = conversationRecord(cwd);
-        const record = store.read(initial.id, assignment)!;
-        if (turn === 'human') store.write({ ...record, lastSpeaker: { namespace: 'local', id: 'operator' } });
-        else if (turn === 'finished director turn') store.write({ ...record, running: null });
-        else if (turn === 'stale turn') store.write({ ...record, running: { ...record.running!, operationId: '550e8400-e29b-41d4-a716-446655440003' } });
+        if (turn === 'human') currentTurns.set(client, { operationId, directorMessage: false });
+        else if (turn === 'finished director turn') currentTurns.delete(client);
+        else if (turn === 'stale turn') currentTurns.set(client, { operationId: '550e8400-e29b-41d4-a716-446655440003', directorMessage: true });
         const before = await new GoalStore(cwd).get(goalId);
         if (turn === 'event during director turn') {
           await withServer(cwd, 'manager', async (eventClient) => { expect((await merge(eventClient, { conversationOperationId: undefined })).isError).toBe(true); });
@@ -2027,14 +2018,11 @@ describe('goal PR publication and merge through manager MCP', () => {
     const spawn = captureMergeProcess(0);
     await withMerge(async (client) => {
       expect((await merge(client)).isError).toBeUndefined();
-      const store = new ConversationStore(getGlobalConfigDir());
-      const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
-      const record = store.read(conversationRecord(cwd).id, assignment)!;
       const nextOperationId = '550e8400-e29b-41d4-a716-446655440003';
-      store.write({ ...record, running: { ...record.running!, operationId: nextOperationId } });
+      currentTurns.set(client, { operationId: nextOperationId, directorMessage: true });
       expect((await merge(client)).isError).toBe(true);
       expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBeUndefined();
-      store.write({ ...record, running: null });
+      currentTurns.delete(client);
       expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBe(true);
       expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toHaveLength(2);
     });
@@ -2253,14 +2241,16 @@ describe('task integration status through MCP with real Git', () => {
   });
 });
 
+const currentTurns = new WeakMap<Client, { operationId: string; directorMessage: boolean }>();
+
 async function withServer<T>(
   cwd: string,
   toolSet: 'all' | 'read-only' | 'manager',
   action: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet };
-  const server = createTaktMcpServer({}, options);
   const client = new Client({ name: 'goal-test-client', version: '1.0.0' });
+  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet, conversationTurn: () => currentTurns.get(client) };
+  const server = createTaktMcpServer({}, options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await server.connect(serverTransport);

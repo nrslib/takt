@@ -13,7 +13,14 @@ import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-si
 import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
-import { createRunEventManager } from '../features/manager/runEventManager.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import { receiveInboxChange } from '../features/daemon/inbox.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { deferred } from './helpers/controlledDaemon.js';
+import type { TurnEvent } from '../core/daemon/events.js';
 import { ManagerEventSchema, type ManagerEvent } from '../infra/goals/events.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -580,13 +587,15 @@ describe('goal task retry through manager MCP and persistent task execution', ()
   async function runAndMerge(expectedPersona: 'planner' | 'reviewer', expectedOrder: string, expectedNote?: string) {
     const originalSetup = MockProvider.prototype.setup;
     const started: string[] = [];
-    const processed: ManagerEvent[] = [];
+    const processed: TurnEvent[] = [];
     vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'run-fixture', version: '1' }), servers: {}, dispose: async () => {} });
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = originalSetup.call(this, config);
       return { call: async (prompt, options) => {
         if (config.name === 'manager') {
-          processed.push(ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event));
+          const payload = prompt.split('\n\n').find((part) => part.startsWith('{\"event\":'));
+          if (payload === undefined) throw new Error('Manager event payload was not sent');
+          processed.push((JSON.parse(payload) as { event: TurnEvent }).event);
           return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'Retry result inspected', summary: null }, sessionId: 'run-manager' };
         }
         started.push(config.name);
@@ -614,15 +623,30 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     ]);
     expect(processed).toEqual([]);
     expect((await store.get(goalId)).workLog.filter(({ summary }) => summary === 'Retry result inspected')).toEqual([]);
-    const manager = createRunEventManager(cwd);
+    const directory = getGlobalConfigDir();
+    const daemon = await conversationDaemon(directory, createConversationRuntime(directory));
+    const files = new DaemonPersistedFiles(directory);
+    const done = deferred<void>();
+    let applied = 0;
+    const outcomes: unknown[] = [];
+    const apply = daemon.conversations.apply.bind(daemon.conversations);
+    vi.spyOn(daemon.conversations, 'apply').mockImplementation(async (result) => {
+      outcomes.push(result.outcome);
+      await apply(result); if (++applied === saved.length) done.resolve();
+    });
     try {
-      expect(await manager.processPending(new AbortController().signal, 10)).toBe(true);
-    } finally { await manager.close(); }
-    expect(processed).toEqual(saved);
-    const event = processed.find((event) => event.kind === 'completion' && event.runSlug === completed.runSlug);
+      const inbox = await files.inboxDirectory(cwd);
+      for (const record of readManagerEvents(cwd)) await receiveInboxChange({ target: { targetId: cwd, generation: 'inbox',
+        conversationId: conversationId({ kind: 'repository', repositoryDirectory: cwd }), kind: 'inbox', directory: inbox },
+        path: record.filePath, generation: record.event.createdAt, value: record.event, removed: false }, files, daemon.conversations, daemon.dispatcher);
+      await done.promise; await daemon.dispatcher.drain();
+    } finally { await daemon.close(); }
+    expect(outcomes).toEqual(saved.map(() => expect.objectContaining({ kind: 'completed', result: { kind: 'reply', message: 'Retry result inspected' } })));
+    expect(processed.map((event) => event.kind)).toEqual(['goal_registered', 'task_completed']);
+    const event = processed.find((event) => event.kind === 'task_completed');
     expect(readManagerEvents(cwd)).toEqual([]);
     expect((await store.get(goalId)).workLog).toContainEqual(expect.objectContaining({ summary: 'Retry result inspected' }));
-    expect(event).toMatchObject({ taskName, runSlug: completed.runSlug, result: { success: true, branch } });
+    expect(event).toMatchObject({ task: { taskName, runSlug: completed.runSlug }, result: { success: true, branch } });
     const stagedOrder = join(clone, '.takt', 'runs', completed.runSlug!, 'context', 'task', 'order.md');
     expect(readFileSync(stagedOrder, 'utf8')).toBe(expectedOrder);
     const merged = await withClient((client) => client.callTool({ name: 'takt_merge_goal_task', arguments: {

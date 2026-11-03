@@ -58,6 +58,7 @@ export async function createDaemonDispatcher(dependencies: DispatcherDependencie
 }
 
 export class DaemonDispatcher implements DaemonIngress, DaemonBus {
+  get activeTurnCount(): number { return this.active.size; }
   private readonly queues = createTurnQueues();
   private readonly active = new Map<string, ActiveTurn>();
   private readonly blocked = new Set<string>();
@@ -111,6 +112,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const response = reply<ConversationSnapshot>();
     this.send({ kind: 'snapshot', conversationId, reply: response });
     return response.promise;
+  }
+
+  inquiry(notice: import('../../core/daemon/messages.js').InquiryNotice): Promise<void> {
+    return this.dependencies.conversations.inquiry(notice);
   }
 
   control(event: ControlEvent): Promise<ControlReceipt> {
@@ -197,7 +202,9 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         if (!notice.result.ok) notice.reply.reject(notice.result.error);
         else {
           const active = this.active.get(notice.conversationId);
-          notice.reply.resolve({ ...notice.result.value, operationId: active?.turn.operationId ?? null, generation: active?.turn.generation ?? null });
+          const running = active?.phase === 'settling' ? undefined : active;
+          notice.reply.resolve({ ...notice.result.value, operationId: running?.turn.operationId ?? null, generation: running?.turn.generation ?? null,
+            queuedMessageCount: this.queues.pending(notice.conversationId).filter((event) => event.lane === 'human' && event.operationId !== active?.turn.operationId).length });
         }
         break;
       }
@@ -257,7 +264,12 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   }
 
   private receipt(event: AcceptedEvent): Extract<Admission, { kind: 'accepted' }> {
-    return { kind: 'accepted', eventId: event.eventId, operationId: event.operationId, acceptedSequence: event.acceptedSequence };
+    const active = this.active.get(event.conversationId);
+    const count = this.queues.pending(event.conversationId).filter((pending) => pending.lane === 'human'
+      && (active === undefined ? pending.acceptedSequence < event.acceptedSequence
+        : pending.operationId !== active.turn.operationId && pending.acceptedSequence <= event.acceptedSequence)).length;
+    return { kind: 'accepted', eventId: event.eventId, operationId: event.operationId, acceptedSequence: event.acceptedSequence,
+      ...(count === 0 ? {} : { queuedMessageCount: count }) };
   }
 
   private requestKey(input: EventInput): string { return JSON.stringify([input.conversationId, input.requestId]); }

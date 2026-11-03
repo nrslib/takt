@@ -7,8 +7,6 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { listDirectorManagers, resolveDirectorManager } from '../features/director/managers.js';
 import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME } from '../features/director/mcp.js';
-import { createDirectorPatrol } from '../features/director/patrol.js';
-import { listDaemonProjects } from '../features/daemon/projects.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
@@ -22,7 +20,6 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
-import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 
 const faults = vi.hoisted(() => ({ directory: undefined as string | undefined,
   operation: 'realpath' as 'realpath' | 'stat' | 'readdir', code: 'EACCES' as 'EACCES' | 'EIO' }));
@@ -62,7 +59,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   faults.directory = undefined;
-  resetDebugLogger();
   vi.restoreAllMocks();
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
@@ -93,7 +89,7 @@ async function projectsWithNonGitDirectory() {
 }
 
 async function withMcp(action: (client: Client) => Promise<void>): Promise<void> {
-  const server = createDirectorMcpServer(directory, { notify: vi.fn() }, new AbortController().signal);
+  const server = createDirectorMcpServer(directory, { tellManager: vi.fn(), notifyHuman: vi.fn() }, new AbortController().signal);
   const client = new Client({ name: 'unreadable-project-test', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
@@ -136,57 +132,6 @@ it('returns both readable managers and the non-Git project reason through MCP pa
     expect(managers).toHaveLength(2);
     expect(managers).toEqual(expect.arrayContaining(expected));
   });
-});
-
-it.each([false, true])('finishes a patrol after reading every healthy manager with a non-Git project present=%s', async (includeBroken) => {
-  const projects = await projectsWithNonGitDirectory();
-  if (!includeBroken) {
-    execFileSync('git', ['init', '-b', 'main', projects.broken], { stdio: 'pipe' });
-  }
-  const paths = includeBroken ? [projects.first, projects.last] : [projects.first, projects.broken, projects.last];
-  for (const path of paths) await new GoalStore(path).create({ ...goalRecord(), objective: path });
-  let observedPage: ManagerPage | undefined;
-  const reads: Array<{ cwd: string; response: Awaited<ReturnType<Client['callTool']>> }> = [];
-  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
-    const config = options.mcpServers?.[DIRECTOR_MCP_SERVER_NAME];
-    if (config === undefined || config.type !== 'http') throw new Error('HTTP director MCP required');
-    const client = new Client({ name: 'patrol-provider', version: '1' });
-    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
-    try {
-      await client.connect(transport);
-      const response = await client.callTool({ name: 'takt_list_managers', arguments: {} });
-      if (response.isError) throw new Error(firstTextContent(response.content));
-      observedPage = decoded<ManagerPage>(response);
-      for (const manager of observedPage.managers) {
-        for (const cwd of manager.assignment.repositoryDirectories) {
-          reads.push({ cwd, response: await client.callTool({ name: 'takt_list_goals', arguments: { managerId: manager.id, cwd } }) });
-        }
-      }
-      return { persona: 'director', status: 'done', content: 'Patrol finished', timestamp: new Date() };
-    } finally {
-      await client.close();
-      await transport.close();
-    }
-  });
-  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
-    supportedMcpTransports: new Set(['http']), setup: () => ({ call }) }));
-  const patrol = createDirectorPatrol(directory, { notify: vi.fn() }, 600, 'en');
-
-  patrol.poll(new AbortController().signal);
-  await patrol.close();
-
-  expect(call).toHaveBeenCalledOnce();
-  expect(call.mock.settledResults[0]?.type).toBe('fulfilled');
-  expect(patrol.running).toBe(false);
-  expect(observedPage).toMatchObject({ totalCount: paths.length });
-  if (includeBroken) {
-    expect(observedPage).toMatchObject({ errors: [{ repositoryDirectory: projects.broken, reason: expect.stringMatching(/not a git repository/i) }] });
-  }
-  expect(reads.map((read) => read.cwd).sort()).toEqual([...paths].sort());
-  for (const read of reads) {
-    expect(read.response.isError, firstTextContent(read.response.content)).not.toBe(true);
-    expect(decoded(read.response)).toMatchObject({ goals: [expect.objectContaining({ id: goalRecord().id, objective: read.cwd })] });
-  }
 });
 
 it.each(['registered', 'workspace'] as const)('reports a missing %s project without discarding the healthy manager', async (source) => {
@@ -232,7 +177,6 @@ it('does not attach a replacement Git directory to its unavailable registration'
   repository('b-replaced');
 
   expectListing(await listDirectorManagers(directory), [assignment(healthy)], replaced, /\S/);
-  expect(await listDaemonProjects(directory)).toEqual([healthy]);
 });
 
 it('keeps a workspace assignment once and reports its non-Git member alongside a healthy repository manager', async () => {
@@ -263,39 +207,4 @@ it('propagates a registry-wide read failure instead of returning an empty succes
   writeFileSync(join(directory, 'projects'), 'not a directory');
 
   await expect(listDirectorManagers(directory)).rejects.toThrow();
-});
-
-it.each(['realpath', 'stat'] as const)('continues daemon enumeration after workspace %s EACCES but propagates EIO', async (operation) => {
-  const first = repository('a-good');
-  const denied = repository('b-denied');
-  const last = repository('c-good');
-  await register(first);
-  await register(last);
-  await createWorkspace({ globalConfigDirectory: directory, name: 'workspace only', repositoryDirectories: [denied] });
-  const logFile = join(directory, 'daemon-projects.log');
-  initDebugLogger({ enabled: true, logFile });
-  await expect(listDaemonProjects(directory)).resolves.toEqual([first, denied, last]);
-
-  faults.directory = denied;
-  faults.operation = operation;
-
-  await expect(listDaemonProjects(directory)).resolves.toEqual([first, last]);
-  const log = readFileSync(logFile, 'utf8');
-  expect(log).toContain(denied);
-  expect(log).toContain('EACCES');
-  expect(log).toContain(operation);
-
-  faults.code = 'EIO';
-  await expect(listDaemonProjects(directory)).rejects.toMatchObject({ code: 'EIO', syscall: operation, path: denied });
-});
-
-it.each(['projects', 'workspaces'])('propagates EACCES while reading the entire %s registry', async (registry) => {
-  const healthy = repository('a-good');
-  await register(healthy);
-  await createWorkspace({ globalConfigDirectory: directory, name: 'workspace', repositoryDirectories: [healthy] });
-  await expect(listDaemonProjects(directory)).resolves.toEqual([healthy]);
-  faults.directory = join(directory, registry);
-  faults.operation = 'readdir';
-
-  await expect(listDaemonProjects(directory)).rejects.toMatchObject({ code: 'EACCES', syscall: 'readdir', path: faults.directory });
 });

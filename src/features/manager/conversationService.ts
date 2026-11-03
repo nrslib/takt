@@ -39,7 +39,7 @@ function identityOf(assignment: ConversationDisplayAssignment): ConversationAssi
 function eventReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
-    case 'goal_registered': case 'goal_resumed': return event;
+    case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
     case 'watch_observation': {
       const observation = event.observation;
       switch (observation.kind) {

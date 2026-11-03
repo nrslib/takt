@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import type { ConversationDelivery } from '../manager/conversationPort.js';
 import { createSlackClient, type SlackClient, type SlackEvent } from '../../infra/slack/client.js';
-import { createLogger } from '../../shared/utils/debug.js';
+import { reportDaemonError } from '../../infra/daemon/diagnostics.js';
 import { createSlackConversationPort, SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS } from '../manager/slackConversationPort.js';
 import type { ConversationInput } from '../manager/conversationPort.js';
 import { SLACK_PERMISSION_BLOCK, SLACK_PERMISSION_INPUT, SLACK_PERMISSION_CALLBACK } from '../manager/slackInquiryBlocks.js';
@@ -11,7 +11,7 @@ import type { DirectorNotificationDelivery } from '../director/notificationDeliv
 import type { GlobalConfig } from '../../core/models/config-types.js';
 import type { Language } from '../../core/models/types.js';
 
-const log = createLogger('slack');
+
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
 interface RepositoryPort { allowedUserIds: readonly string[];
   port: Pick<SlackPort, 'receive' | 'isInquiryThread' | 'receiveAction' | 'modalEndpoint' | 'receiveModal'> }
@@ -139,7 +139,7 @@ export async function createDaemonSlackPorts(options: {
     }
     for (const [channelId, group] of candidates) {
       if (group.length > 1) {
-        log.error('Slack channel is configured by multiple repositories; all are disabled', { channelId });
+        reportDaemonError(`Slack channel is configured by multiple repositories: ${channelId} (${group.map((config) => config.repositoryDirectory).join(', ')})`);
         continue;
       }
       const config = group[0]!;
@@ -159,7 +159,7 @@ export async function createDaemonSlackPorts(options: {
         listening = !stopped;
         if (stopped) await close();
       } catch {
-        log.error('Cannot start Slack listener');
+        reportDaemonError('Cannot start Slack listener');
         await close();
       }
     }

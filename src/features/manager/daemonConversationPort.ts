@@ -6,23 +6,39 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { ConversationError } from './conversationErrors.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
 import type { ConversationDelivery, ConversationInput, ConversationOpen, OutputVersion, PortOutput, SnapshotRead } from './conversationPort.js';
+import { SnapshotChanges } from './snapshotChanges.js';
 
 /** 配送先の解決は登録済みの routing 情報で行い、業務 Store を読まない。 */
 export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
-  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery }>();
+  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void> }>();
   let accepting = true;
   const attached = (id: string) => {
     const attachment = attachments.get(id);
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const read = async (id: string): Promise<SnapshotRead> => {
+  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): Promise<SnapshotRead> => {
     const snapshot = await options.ingress.snapshot(id);
     if (snapshot.conversationId !== id) { snapshot.cancel(); throw new ConversationError('invalid_assignment'); }
-    return screenSnapshot(snapshot);
+    const screen = screenSnapshot(snapshot);
+    let exhausted = false;
+    const projected = attachment.changes.read(screen, (async function* () {
+      try {
+        for await (const item of screen.items) {
+          if (item.kind === 'remove') throw new Error('Conversation owner must provide a complete projection');
+          if (item.kind === 'display_event') {
+            if (attachment.input.assignment.kind !== 'daemon' && item.recordedAt !== undefined && Date.parse(item.recordedAt) < attachment.startedAt) continue;
+            yield { kind: 'display_event' as const, event: item.event };
+          } else yield item;
+        }
+        exhausted = true;
+      } finally { if (!exhausted) screen.cancel(); }
+    })());
+    return { ...projected, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
+      cancel() { projected.cancel(); screen.cancel(); } };
   };
   const input: ConversationInput = {
     async open(request, delivery) {
@@ -31,10 +47,11 @@ export function createDaemonConversationInput(options: {
       if (!['tui', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
       const assignment = await options.resolveAssignment(request.assignment);
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
-      const snapshot = await read(request.conversationId);
+      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve() };
+      const snapshot = await read(request.conversationId, attachment);
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
-      attachments.set(attachmentId, { input: { ...request, assignment, agentOverrides: request.agentOverrides && { ...request.agentOverrides } }, delivery });
+      attachments.set(attachmentId, attachment);
       return { attachmentId, read: snapshot };
     },
     async submit(request) {
@@ -45,30 +62,61 @@ export function createDaemonConversationInput(options: {
       }
       const command = ConversationCommandSchema.parse(request.command);
       const id = attachment.input.conversationId;
-      if (command.kind === 'abort_turn') {
-        const snapshot = await options.ingress.snapshot(id);
-        try {
-          if (command.generation === undefined || snapshot.operationId !== command.operationId || snapshot.generation !== command.generation) {
-            throw new ConversationError('invalid_input');
-          }
-          await options.ingress.control({ kind: 'interrupt', conversationId: id, operationId: command.operationId, generation: command.generation });
-          return { kind: 'accepted', operationId: command.operationId };
-        } finally { snapshot.cancel(); }
+      let finishValidation = (): void => {};
+      if (command.kind !== 'abort_turn') {
+        const previous = attachment.validation;
+        attachment.validation = new Promise<void>((resolve) => { finishValidation = resolve; });
+        await previous;
       }
-      if (attachment.input.assignment.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
-      const admission = await options.ingress.accept({ eventId: randomUUID(), requestId: request.requestId, conversationId: id,
-        source: attachment.input.binding.port === 'tui' ? 'tui' : 'slack', occurredAt: new Date().toISOString(),
-        event: command.kind === 'answer_question' ? { kind: 'inquiry_answer', command }
-          : { kind: 'human_command', command, speaker: attachment.input.speaker,
-            ...(attachment.input.agentOverrides === undefined ? {} : { agentOverrides: attachment.input.agentOverrides }) } });
-      if (admission.kind === 'accepted') return admission;
-      const codes = { capacity: 'queue_full', storage: 'storage_error', stopping: 'shutting_down' } as const;
-      return { kind: 'error', code: codes[admission.reason], message: `Event rejected: ${admission.reason}` };
+      try {
+        if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== attachment.input.conversationId) {
+          return { kind: 'error', code: 'invalid_assignment', message: 'Conversation assignment changed' };
+        }
+        if (!accepting) return { kind: 'error', code: 'shutting_down', message: 'Daemon is stopping' };
+        if (command.kind === 'abort_turn') {
+          const snapshot = await options.ingress.snapshot(id);
+          try {
+            if (command.generation === undefined || snapshot.operationId !== command.operationId || snapshot.generation !== command.generation) {
+              throw new ConversationError('invalid_input');
+            }
+            await options.ingress.control({ kind: 'interrupt', conversationId: id, operationId: command.operationId, generation: command.generation });
+            return { kind: 'accepted', operationId: command.operationId };
+          } finally { snapshot.cancel(); }
+        }
+        if (attachment.input.assignment.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
+        if (command.kind === 'approve_summary' || command.kind === 'dismiss_summary') {
+          const snapshot = await options.ingress.snapshot(id);
+          try {
+            const state = snapshot.turnState;
+            const registered = command.kind === 'approve_summary' && !command.requirePending
+              && state.approval?.revision === command.revision && state.approval.state === 'registered';
+            if (!registered && (state.revision !== command.revision || state.pending?.revision !== command.revision)) {
+              return { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' };
+            }
+          } finally { snapshot.cancel(); }
+        }
+        const accepted = options.ingress.accept({ eventId: randomUUID(), requestId: request.requestId, conversationId: id,
+          source: attachment.input.binding.port === 'tui' ? 'tui' : 'slack', occurredAt: new Date().toISOString(),
+          event: command.kind === 'answer_question' ? { kind: 'inquiry_answer', command }
+            : { kind: 'human_command', command, speaker: attachment.input.speaker,
+              ...(attachment.input.agentOverrides === undefined ? {} : { agentOverrides: attachment.input.agentOverrides }) } });
+        // 同じ画面の入力順を保つ。保存の完了待ちは、次の入力の検証を止めない。
+        finishValidation();
+        const admission = await accepted;
+        if (admission.kind === 'accepted') return admission;
+        const codes = { capacity: 'queue_full', storage: 'storage_error', stopping: 'shutting_down' } as const;
+        return { kind: 'error', code: codes[admission.reason], message: `Event rejected: ${admission.reason}` };
+      } finally { finishValidation(); }
     },
-    snapshot(attachmentId) { return read(attached(attachmentId).input.conversationId); },
+    async snapshot(attachmentId) {
+      const attachment = attached(attachmentId);
+      if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== attachment.input.conversationId) throw new ConversationError('invalid_assignment');
+      return read(attachment.input.conversationId, attachment);
+    },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };
   return { ...input,
+    get attachmentCount() { return attachments.size; },
     connectedPorts(id: string): string[] {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },
@@ -76,7 +124,7 @@ export function createDaemonConversationInput(options: {
       const recipients = [...attachments.values()].filter(({ input }) => input.conversationId === id);
       if (output.kind === 'snapshot') {
         output.read.cancel();
-        await Promise.all(recipients.map(async ({ delivery }) => delivery.deliver(id, { kind: 'snapshot', read: await read(id) }, version)));
+        await Promise.all(recipients.map(async (attachment) => attachment.delivery.deliver(id, { kind: 'snapshot', read: await read(id, attachment) }, version)));
         return;
       }
       if ((output.kind === 'pending' || output.kind === 'running') && output.state.running !== null) {
@@ -94,12 +142,12 @@ export function createDaemonConversationInput(options: {
   };
 }
 
-function screenSnapshot(snapshot: ConversationSnapshot): SnapshotRead {
+function screenSnapshot(snapshot: ConversationSnapshot) {
   const items = snapshot.items;
   return { ...snapshot, items: (async function* () {
     for await (const item of items) {
       if (item.kind !== 'state') { yield item; continue; }
-      yield { ...item, state: { ...item.state, running: snapshot.operationId === null || snapshot.generation === null ? null
+      yield { ...item, state: { ...item.state, queuedMessageCount: snapshot.queuedMessageCount, running: snapshot.operationId === null || snapshot.generation === null ? null
         : { operationId: snapshot.operationId, kind: 'turn', generation: snapshot.generation } } };
     }
   })() };

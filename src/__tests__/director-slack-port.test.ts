@@ -107,11 +107,11 @@ it('rejects results from another conversation or operation and delivers admitted
   await port.close();
 });
 
-it.each(['busy', 'error', 'open failure', 'submit failure'] as const)('does not resubmit after %s and releases any attachment', async (outcome) => {
+it.each(['capacity', 'error', 'open failure', 'submit failure'] as const)('does not resubmit after %s and releases any attachment', async (outcome) => {
   const { port, input, client } = fixture();
-  if (outcome === 'busy') input.submit.mockResolvedValueOnce({ kind: 'busy', operationId: 'other' });
+  if (outcome === 'capacity') input.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: 'Queue full' });
   if (outcome === 'error') input.submit.mockResolvedValueOnce({ kind: 'error', code: 'storage_error', message: 'Cannot save' });
-  if (outcome === 'open failure') input.open.mockRejectedValueOnce(new ConversationError('busy'));
+  if (outcome === 'open failure') input.open.mockRejectedValueOnce(new ConversationError('queue_full'));
   if (outcome === 'submit failure') input.submit.mockRejectedValueOnce(new Error('xapp-private xoxb-private'));
   await port.receive(endpoint, 'status');
   expect(input.submit).toHaveBeenCalledTimes(outcome === 'open failure' ? 0 : 1);

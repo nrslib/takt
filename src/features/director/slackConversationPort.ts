@@ -3,13 +3,13 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import type { SlackClient, SlackThread } from '../../infra/slack/client.js';
 import type { Language } from '../../core/models/types.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { createLogger } from '../../shared/utils/debug.js';
+import { reportDaemonError } from '../../infra/daemon/diagnostics.js';
 import { ConversationError } from '../manager/conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, ConversationPort } from '../manager/conversationPort.js';
 import type { DirectorNotificationDelivery } from './notificationDelivery.js';
 
 interface DirectorSlackEndpoint extends SlackThread { teamId: string; userId: string }
-const log = createLogger('director-slack');
+
 
 export function createDirectorSlackConversationPort(options: {
   channelId: string; input: ConversationInput; client: SlackClient; language: Language;
@@ -84,7 +84,7 @@ export function createDirectorSlackConversationPort(options: {
         attachmentId = undefined;
         await postReply(endpoint, options.language === 'ja' ? '受け付けて保存しました。' : 'Accepted and saved.');
       } else {
-        const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
+        const message = submission.message;
         await postReply(endpoint, message);
       }
     } catch (error) {
@@ -101,7 +101,7 @@ export function createDirectorSlackConversationPort(options: {
       const text = [getLabel('director.slackNotifications', options.language), ...batch.map((notice) => notice.message)].join('\n\n');
       const sending = (async () => {
         const result = await options.client.postMessage(options.channelId, text, []);
-        if (result.kind === 'unavailable') log.error('Cannot post director Slack notifications');
+        if (result.kind === 'unavailable') reportDaemonError('Cannot post director Slack notifications');
       })();
       postings.add(sending);
       try { await sending; }

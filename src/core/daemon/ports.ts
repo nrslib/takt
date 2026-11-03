@@ -40,6 +40,7 @@ export interface TurnQueues {
 
 /** daemon の保存所有者。apply は turn と change.operationId で冪等にする。 */
 export interface ConversationOwner {
+  inquiry(notice: import('./messages.js').InquiryNotice): Promise<void>;
   apply(result: TurnResult): Promise<void>;
   progress(turn: TurnIdentity, message: string): Promise<void>;
   // 実行中ターンの識別情報は、それを所有する dispatcher が付ける。

@@ -4,14 +4,14 @@ import { Socket } from 'node:net';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Client } from './helpers/conversation-ipc-client.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
-import { createConversationService } from '../features/manager/conversationService.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../features/daemon/conversationFrames.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
-import { ConversationStore } from '../infra/conversations/store.js';
-import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import { writeLegacyConversation, conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 import { ConversationRecordSchema } from '../infra/conversations/schema.js';
 import type { ConversationOpen, PortOutput } from '../features/manager/conversationPort.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
@@ -39,7 +39,8 @@ const owner = { pid: process.pid, identity: { startTime: 'ipc-test-owner' }, ver
 let directory: string;
 let repository: string;
 let selected: ConversationOpen;
-let service: ReturnType<typeof createConversationService>;
+let fixture: Awaited<ReturnType<typeof conversationDaemon>>;
+let service: Awaited<ReturnType<typeof conversationDaemon>>['input'];
 let server: Awaited<ReturnType<typeof createConversationIpcServer>>;
 let clients: Client[];
 const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: 'reply', summary: null,
@@ -49,7 +50,7 @@ let release: (() => void) | undefined;
 function client() { const value = new Client(server.endpoint); clients.push(value); return value; }
 async function authenticated() {
   const value = client();
-  await value.request('hello', { capability: readDaemonIpcState(directory)!.capability });
+  await value.request('hello', { capability: (await readDaemonIpcState(directory))!.capability });
   return value;
 }
 async function opened(value: Client) { return (await value.request('open', selected)).result!; }
@@ -63,21 +64,22 @@ beforeEach(async () => {
   repository = join(directory, 'repository'); mkdirSync(repository, { recursive: true });
   const assignment: ManagerAssignment = { kind: 'repository', repositoryDirectory: repository, repositoryDirectories: [repository] };
   doubles.assignment.mockReset().mockResolvedValue(assignment);
-  execute.mockClear();
+  execute.mockReset().mockImplementation(async (input: ManagerTurnInput) => ({ message: 'reply', summary: null, sessionId: 'session', assignment: input.assignment }));
   clients = []; release = undefined;
   const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
   selected = await createTuiConversationPort(directory, delivery).resolve({ kind: 'repository', repositoryDirectory: repository });
   const record = conversationRecord(repository); record.bindings = [selected.binding];
-  new ConversationStore(directory).write(record);
-  service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(), runtime: {
-    resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'context', executor: { execute } }), close: async () => {} } });
+  writeLegacyConversation(directory, record);
+  fixture = await conversationDaemon(directory, { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'context', executor: { execute } }), close: async () => {} });
+  service = fixture.input;
   server = await createConversationIpcServer(directory, owner, service);
 });
 afterEach(async () => {
   release?.();
   for (const value of clients) value.socket.destroy();
-  await service.close();
+  await fixture.close();
   await server.close();
+  vi.restoreAllMocks();
 });
 
 it('finishes each output transfer before newer state on both attachments', async () => {
@@ -164,7 +166,7 @@ it('admits a second large request but bounds further pending frames', async () =
   const gate = new Promise<void>((resolve) => { resume = resolve; });
   const submitting = vi.spyOn(service, 'submit').mockImplementation(async () => {
     await gate;
-    return { kind: 'busy', operationId: '650e8400-e29b-41d4-a716-446655440001' };
+    return { kind: 'error', code: 'queue_full', message: 'Queue capacity reached' };
   });
   const frames = Array.from({ length: 3 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
     requestId: `large-pending-${index}`, method: 'submit', params: { attachmentId: initial.attachmentId,
@@ -182,11 +184,11 @@ it('admits a second large request but bounds further pending frames', async () =
 
 it('continues the daemon-owned director session over IPC after detach without changing the manager record', async () => {
   const manager = { ...conversationRecord(repository), sessionId: 'manager-session', bindings: [selected.binding] };
-  new ConversationStore(directory).write(manager);
+  writeLegacyConversation(directory, manager);
   const managerPath = join(directory, 'conversations', `${selected.conversationId}.json`);
   const priorManager = readFileSync(managerPath);
   const director = directorConversationRecord();
-  new ConversationStore(directory).write(director);
+  writeLegacyConversation(directory, director);
   selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
   const first = await authenticated();
   const initial = await opened(first);
@@ -198,7 +200,8 @@ it('continues the daemon-owned director session over IPC after detach without ch
   const accepted = (await first.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
     command: { kind: 'message', text: 'manager の状況を確認してください' } })).result!;
   expect(accepted.kind).toBe('accepted');
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
   await vi.waitFor(async () => {
     const replies: unknown[] = [];
     for (const frame of first.frames) {
@@ -211,7 +214,7 @@ it('continues the daemon-owned director session over IPC after detach without ch
   });
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].sessionId).toBeUndefined();
-  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+  expect((await new ConversationStateStore(directory).read(director.id))?.record).toMatchObject({
     agent: 'director', sessionId: 'session', running: null,
   });
   await first.request('detach', { attachmentId: initial.attachmentId });
@@ -225,7 +228,8 @@ it('continues the daemon-owned director session over IPC after detach without ch
   const next = (await second.request('submit', { attachmentId: reopened.attachmentId, speaker: selected.speaker,
     command: { kind: 'message', text: '続けてください' } })).result!;
   expect(next.kind).toBe('accepted');
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
 
   expect(execute).toHaveBeenCalledTimes(2);
   expect(execute.mock.calls[1]![0].sessionId).toBe('session');
@@ -236,8 +240,7 @@ it('opens one director conversation independently of repository and workspace ma
   const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
   const port = createTuiConversationPort(directory, delivery);
   const director = directorConversationRecord();
-  const store = new ConversationStore(directory);
-  store.write(director);
+  writeLegacyConversation(directory, director);
   const repositoryManager = await port.resolve({ kind: 'repository', repositoryDirectory: repository });
   const first = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
   const firstOpen = await service.open(first, delivery);
@@ -249,7 +252,7 @@ it('opens one director conversation independently of repository and workspace ma
     name: 'workspace', repositoryDirectories: [repository, join(directory, 'second-repository')] };
   doubles.assignment.mockResolvedValue(workspace);
   const workspaceManager = await port.resolve({ kind: 'workspace', workspaceId: workspace.workspaceId });
-  store.write(ConversationRecordSchema.parse({ ...conversationRecord(repository), agent: 'manager',
+  writeLegacyConversation(directory, ConversationRecordSchema.parse({ ...conversationRecord(repository), agent: 'manager',
     id: workspaceManager.conversationId, assignment: workspaceManager.assignment, bindings: [workspaceManager.binding], pending: null }));
   const secondOpen = await service.open(first, delivery);
   const secondItems = secondOpen.read.items[Symbol.asyncIterator]();
@@ -262,13 +265,13 @@ it('opens one director conversation independently of repository and workspace ma
   expect(secondOpen.read.conversationId).toBe(firstOpen.read.conversationId);
   expect(secondOpen.read.conversationId).not.toBe(repositoryManager.conversationId);
   expect(secondOpen.read.conversationId).not.toBe(workspaceManager.conversationId);
-  expect(store.read(secondOpen.read.conversationId, director.assignment)?.agent).toBe('director');
+  expect((await fixture.store.read(secondOpen.read.conversationId))?.record.agent).toBe('director');
   expect(execute).not.toHaveBeenCalled();
 });
 
 it('keeps an accepted director turn alive after its last TUI disconnects', async () => {
   const director = directorConversationRecord();
-  new ConversationStore(directory).write(director);
+  writeLegacyConversation(directory, director);
   selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
   const value = await authenticated();
   const initial = await opened(value);
@@ -284,13 +287,14 @@ it('keeps an accepted director turn alive after its last TUI disconnects', async
   await vi.waitFor(() => expect(release).toBeTypeOf('function'));
   value.socket.destroy();
   await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
-  expect(service.activeOperationCount).toBe(1);
+  expect(fixture.activeOperationCount).toBe(1);
 
   release!();
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
 
   expect(execute).toHaveBeenCalledOnce();
-  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+  expect((await new ConversationStateStore(directory).read(director.id))?.record).toMatchObject({
     agent: 'director', sessionId: 'director-finished', running: null,
   });
 });
@@ -312,7 +316,7 @@ it('closes an unauthenticated submit without side effects and preserves the auth
   const path = join(directory, 'conversations', `${selected.conversationId}.json`);
   const saved = readFileSync(path);
   expect(service.attachmentCount).toBe(1);
-  expect(service.activeOperationCount).toBe(0);
+  expect(fixture.activeOperationCount).toBe(0);
   const params = { attachmentId: first.attachmentId, speaker: selected.speaker,
     command: { kind: 'message', text: 'authenticated message' } };
   const unauthorized = client();
@@ -323,13 +327,14 @@ it('closes an unauthenticated submit without side effects and preserves the auth
   await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce());
   expect(unauthorized.frames).toEqual([]);
   expect(execute).not.toHaveBeenCalled();
-  expect(service.activeOperationCount).toBe(0);
+  expect(fixture.activeOperationCount).toBe(0);
   expect(readFileSync(path)).toEqual(saved);
   expect(service.attachmentCount).toBe(1);
   expect(authorized.socket.destroyed).toBe(false);
 
   const accepted = (await authorized.request('submit', params)).result!;
   expect(accepted.kind).toBe('accepted');
+  await fixture.settled();
   await vi.waitFor(async () => {
     const completed = authorized.frames.filter(({ output }) => output?.kind === 'transfer_start'
       && output.purpose === 'output' && output.operationId === accepted.operationId
@@ -340,17 +345,18 @@ it('closes an unauthenticated submit without side effects and preserves the auth
   });
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].prompt).toBe(params.command.text);
-  expect(service.activeOperationCount).toBe(0);
+  await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
   expect(service.attachmentCount).toBe(1);
   expect(authorized.socket.destroyed).toBe(false);
-  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toMatchObject({
+  expect((await new ConversationStateStore(directory).read(selected.conversationId))?.record).toMatchObject({
     revision: 5, pending: null, running: null, sessionId: 'session', lastSpeaker: selected.speaker,
   });
 });
 
 it.each(['bad-capability', 'version', 'json', 'utf8', 'oversize'] as const)('closes %s input without conversation side effects', async (invalid) => {
   const value = client();
-  const capability = readDaemonIpcState(directory)!.capability;
+  const capability = (await readDaemonIpcState(directory))!.capability;
   const wrong = `${capability[0] === 'a' ? 'b' : 'a'}${capability.slice(1)}`;
   const bytes = invalid === 'json' ? Buffer.from('{broken}\n')
     : invalid === 'utf8' ? Buffer.from([0xc3, 0x28, 10])
@@ -364,7 +370,7 @@ it.each(['bad-capability', 'version', 'json', 'utf8', 'oversize'] as const)('clo
 it.each([7, 9])('transfers the complete pending summary with %i large constraints under the physical frame bound', async (count) => {
   const record = conversationRecord(repository); record.bindings = [selected.binding];
   record.pending!.summary.constraints = Array.from({ length: count }, (_, index) => `${index}:`.padEnd(128 * 1024, 'a'));
-  new ConversationStore(directory).write(record);
+  writeLegacyConversation(directory, record);
   const value = await authenticated();
   const result = await opened(value);
   const items = await value.items(result.read.transferId);
@@ -432,13 +438,14 @@ it('queues a simultaneous message and completes both operations after both clien
     command: { kind: 'message', text: 'queued' } })).result).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
   first.socket.destroy(); second.socket.destroy();
   await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
-  expect(input!.abortSignal.aborted).toBe(false); expect(service.activeOperationCount).toBe(1);
-  release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  expect(input!.abortSignal.aborted).toBe(false); expect(fixture.activeOperationCount).toBe(1);
+  release!(); await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
   expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
   expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
-  const saved = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
-  expect(saved.sessionId).toBe('session');
+  const saved = (await new ConversationStateStore(directory).read(selected.conversationId))?.record;
+  expect(saved!.sessionId).toBe('session');
 });
 
 it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2, delayed: true }, { count: 3, delayed: true }])('keeps all responses to $count simultaneous messages on the same connection (delayed writer: $delayed)', async ({ count, delayed }) => {
@@ -480,13 +487,15 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
     value.socket.write(Buffer.concat(requestIds.map((requestId) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
       requestId, method: 'submit', params: { attachmentId: first.attachmentId, speaker: selected.speaker,
         command: { kind: 'message', text: requestId } } }))));
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    await fixture.executing(1);
+    expect(execute).toHaveBeenCalledOnce();
     if (delayed) {
       await vi.waitFor(() => expect(submitted).toHaveBeenCalledTimes(count));
       expect(writing).toHaveBeenCalledOnce();
       expect(written).not.toHaveBeenCalled();
       release!();
-      await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+      await fixture.settled();
+      expect(fixture.activeOperationCount).toBe(0);
       expect(execute).toHaveBeenCalledTimes(count);
       finishWrite();
     }
@@ -497,9 +506,10 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
     expect(value.socket.destroyed).toBe(false);
     expect(written).toHaveBeenCalledTimes(count);
     expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
-    release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+    release!(); await fixture.settled();
+    expect(fixture.activeOperationCount).toBe(0);
     expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(requestIds);
-    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })))
+    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })).sort((a, b) => requestIds.indexOf(a.id) - requestIds.indexOf(b.id)))
       .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
 });
@@ -521,9 +531,11 @@ it('accepts a complete message spanning input batches and queues concurrent mess
   const accepted = value.frames.find((frame) => frame.requestId === 'large-burst-0')!.result!;
   expect(accepted.kind).toBe('accepted');
   for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
-  await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+  await fixture.executing(1);
+    expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].prompt).toBe(text);
-  release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  release!(); await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
   expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
@@ -542,7 +554,7 @@ it('returns assignment-change rejection without waiting for a notice behind that
   doubles.assignment.mockResolvedValue({ kind: 'workspace', workspaceId: '11111111-1111-4111-8111-111111111111', name: 'Workspace', repositoryDirectories: [repository] });
   expect((await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
     command: { kind: 'message', text: 'old assignment' } })).result).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
-  expect(execute).not.toHaveBeenCalled(); expect(service.activeOperationCount).toBe(0);
+  expect(execute).not.toHaveBeenCalled(); expect(fixture.activeOperationCount).toBe(0);
 });
 
 it('reports a failed display read as incomplete and permits a complete refresh after repair', async () => {
@@ -562,7 +574,8 @@ it('reports a failed display read as incomplete and permits a complete refresh a
 it('delivers an accepted response before its terminal result and keeps a responsive client attached', async () => {
   const value = await authenticated(); const first = await opened(value); await value.items(first.read.transferId);
   const accepted = await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: 'hello' } });
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await fixture.settled();
+  expect(fixture.activeOperationCount).toBe(0);
   await vi.waitFor(() => expect(value.frames.filter(({ output }) => output?.purpose === 'output').length).toBeGreaterThanOrEqual(2));
   const start = value.frames.findIndex((frame) => frame === accepted);
   const transfers = value.frames.slice(start + 1).filter(({ output }) => output?.kind === 'transfer_start');
@@ -622,6 +635,7 @@ it.each(['complete', 'replace'] as const)('delivers newer state while an older r
     await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, pending: { revision: 4 } }));
     expect((await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
       command: { kind: 'message', text: 'revision five' } })).result!.kind).toBe('accepted');
+    await fixture.settled();
     await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 5, pending: null, running: null }));
     expect(value.frames.some(({ output }) => output?.kind === 'transfer_end' && output.transferId === first.read.transferId)).toBe(false);
     let replacementId: string | undefined;

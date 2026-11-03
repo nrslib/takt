@@ -111,7 +111,7 @@ export class FileEventStore implements EventStore {
   }
 
   async saveResult(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(input);
+    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       this.assertResult(record.event, result);
@@ -125,7 +125,7 @@ export class FileEventStore implements EventStore {
   }
 
   async markSettled(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(input);
+    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       if (record.state !== 'settling' && record.state !== 'settled' || !isDeepStrictEqual(record.result, result)) throw new Error('Result was not saved before settlement');

@@ -67,6 +67,10 @@ it('rejects forged speakers, stale generations and attachments after detach', as
 });
 it('admits approval with its revision and routes inquiry answers to the human queue', async () => {
   const f = await fixture();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  snapshot.turnState.pending = { revision: 3, repositoryDirectory: '/repo',
+    summary: { objective: 'Current proposal', outOfScope: [], acceptanceCriteria: ['Ready'], constraints: [] } };
+  vi.mocked(f.ingress.snapshot).mockResolvedValueOnce(snapshot);
   await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'approval', speaker: f.selected.speaker,
     command: { kind: 'approve_summary', revision: 3, requirePending: true } });
   expect(f.ingress.accept).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'human_command',
@@ -75,6 +79,16 @@ it('admits approval with its revision and routes inquiry answers to the human qu
     command: { kind: 'answer_question', questionId: '11111111-1111-4111-8111-111111111111',
       target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/repo' } }, answer: { text: 'answer' } } });
   expect(f.ingress.accept).toHaveBeenLastCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'inquiry_answer' }) }));
+});
+
+it('rejects a withdrawn or replaced proposal before durable admission', async () => {
+  const f = await fixture();
+  for (const command of [{ kind: 'approve_summary' as const, revision: 3, requirePending: true },
+    { kind: 'dismiss_summary' as const, revision: 2 }]) {
+    expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: command.kind,
+      speaker: f.selected.speaker, command })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  }
+  expect(f.ingress.accept).not.toHaveBeenCalled();
 });
 
 it('admits director messages through the bus and waits for durable admission without self IPC', async () => {

@@ -77,7 +77,6 @@ export function DirectorView({ client, lang, onExit }: {
       append(text, 'user');
       void client.submit({ kind: 'message', text }, (id) => { displayedMessages.current.add(id); }).then((result) => {
         if (result.kind === 'error') append(result.message);
-        else if (result.kind === 'busy') append(getLabel('manager.conversation.busy', lang));
         else if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
       }).catch((error: unknown) => append(getErrorMessage(error)));
       return;

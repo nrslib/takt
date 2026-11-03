@@ -4,7 +4,7 @@ const syncFs = Object.keys(fs).filter((name) => name.endsWith('Sync'));
 const syncProcess = ['spawnSync', 'execFileSync', 'execSync'];
 const modulePattern = '/^(node:)?(fs|child_process|module)$/';
 
-/** 同じ規則を ESLint の opt-in override と棚卸し・規則テストが使う。 */
+/** 同じ規則を 通常 ESLint の override と棚卸し・規則テストが使う。 */
 export const daemonRules = {
   '@typescript-eslint/no-restricted-imports': ['error', {
     paths: [

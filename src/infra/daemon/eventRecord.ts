@@ -1,9 +1,9 @@
 import { z } from 'zod/v4';
 import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
-import { GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { MAX_PROCESS_MESSAGE_BYTES } from '../../core/daemon/processProtocol.js';
-import type { AcceptedEvent } from '../../core/daemon/events.js';
+import type { AcceptedEvent, EventInput } from '../../core/daemon/events.js';
 import type { ConversationChange, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 
 const id = z.string().min(1).max(128);
@@ -22,6 +22,7 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
 ]);
 const event = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
@@ -30,10 +31,12 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
 ]);
-export const AcceptedEventSchema = z.object({
+export const EventInputSchema = z.object({
   eventId: id, requestId: id, conversationId: id, source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']),
-  occurredAt: z.iso.datetime(), event, operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']),
-}).strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) as z.ZodType<AcceptedEvent>;
+  occurredAt: z.iso.datetime(), event,
+}).strict() satisfies z.ZodType<EventInput>;
+export const AcceptedEventSchema = EventInputSchema.extend({ operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']) })
+  .strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) as z.ZodType<AcceptedEvent>;
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);

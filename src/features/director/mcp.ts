@@ -5,7 +5,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { listPendingInquiries } from '../../infra/goals/pending-inquiries.js';
-import type { DirectorNotificationSubject } from '../../infra/conversations/directorNotifications.js';
+import type { DirectorNotificationSubject } from '../../infra/daemon/notifications.js';
 import { listTaktGoals, getTaktGoal, errorResult } from '../mcp/operations.js';
 import { getGoalInputSchema, listGoalsInputSchema } from '../mcp/schemas.js';
 import { jsonResult, pagedResult } from '../mcp/response.js';

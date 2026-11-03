@@ -175,6 +175,16 @@ describe('daemon transitive reachability', () => {
       .toEqual([join(root, 'src/features/daemonTurn/runtime.ts')]);
   });
 
+  it('enforces blocking API and unobserved promise errors through the normal repository ESLint configuration', async () => {
+    const eslint = new ESLint({ cwd: process.cwd() });
+    const results = await eslint.lintText("import { readFileSync } from 'node:fs'; readFileSync('file'); Promise.resolve();", {
+      filePath: join(process.cwd(), 'src/features/daemon/runDaemon.ts'),
+    });
+    expect(results[0]!.messages.map((message) => message.ruleId)).toEqual(expect.arrayContaining([
+      '@typescript-eslint/no-restricted-imports', '@typescript-eslint/no-floating-promises',
+    ]));
+  });
+
   it('does not trust relative cwd paths, arbitrary URL bases, or Worker aliases as turn process boundaries', async () => {
     const root = await fixture({
       'src/features/daemon/host.ts': "import { fork, spawn } from 'node:child_process'; import { Worker as W } from 'node:worker_threads'; fork(new URL('../../app/daemon-turn/index.js', arbitraryBase)); spawn(process.execPath, ['../../app/daemon-turn/index.js']); new W(new URL('../../app/daemon-turn/index.js', import.meta.url));",

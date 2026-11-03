@@ -138,7 +138,7 @@ export async function daemonReachability({ root, entries }) {
   return { files: [...files].map((file) => relative(root, file).replaceAll('\\', '/')).sort(), issues, boundaries };
 }
 
-/** 現段階では棚卸しのみ。--check を明示したときだけ禁止箇所で失敗する。 */
+/** 棚卸し CLI。通常 lint も同じ到達解析を実行し、解析課題で失敗する。 */
 async function main() {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const graph = await daemonReachability({ root, entries: await daemonEntries(root) });

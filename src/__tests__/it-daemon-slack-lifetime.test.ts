@@ -1,5 +1,6 @@
+import { tmpdir } from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it, vi } from 'vitest';
@@ -10,7 +11,7 @@ import { captureOwnedChild, terminateOwnedProcess } from './helpers/owned-proces
 
 it.each((['director', 'manager'] as const).flatMap((agent) =>
   (['connected', 'failed', 'stopped'] as const).map((outcome) => ({ agent, outcome }))))(
-  'serves IPC while $agent Slack is pending beyond the startup deadline and then $outcome', async ({ agent, outcome }) => {
+  'serves IPC while $agent Slack is pending and then $outcome', async ({ agent, outcome }) => {
     const directory = process.env.TAKT_CONFIG_DIR!;
     const repository = join(directory, 'repository');
     mkdirSync(join(repository, '.takt'), { recursive: true });
@@ -73,15 +74,12 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
     const owned = await captureOwnedChild(child);
     try {
       await vi.waitFor(() => expect(stdout, stderr).toContain('slack-pending\n'), { timeout: 5_000 });
-      const owner = readDaemonOwner(directory)!;
+      const owner = (await readDaemonOwner(directory))!;
       expect(owner.pid).toBe(child.pid);
       await vi.waitFor(async () => expect(await isConversationIpcReady(directory, owner)).toBe(true), { timeout: 4_000 });
       await vi.waitFor(() => expect(stdout, stderr).toContain('ipc-ready\n'), { timeout: 4_000 });
-      // この経過時間が、既存の5秒の起動確認期限を超える遅延接続条件になる。
-      const pendingUntil = Date.now() + 5_200;
-      await vi.waitFor(() => expect(Date.now()).toBeGreaterThanOrEqual(pendingUntil), { timeout: 7_000, interval: 50 });
       expect(child.exitCode, stderr).toBeNull();
-      expect(readDaemonOwner(directory)?.pid).toBe(owner.pid);
+      expect((await readDaemonOwner(directory))?.pid).toBe(owner.pid);
       expect(await isConversationIpcReady(directory, owner)).toBe(true);
       expect(stdout).not.toContain('slack-connected\n');
       expect(stdout).not.toContain('slack-closed\n');
@@ -89,15 +87,13 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
       else {
         child.stdin.end('finish\n');
         await vi.waitFor(() => expect(stdout, stderr).toContain(`slack-${outcome}\n`), { timeout: 5_000 });
-        if (outcome === 'connected') {
-          expect(await isConversationIpcReady(directory, owner)).toBe(true);
-          child.kill('SIGTERM');
-        }
+        expect(await isConversationIpcReady(directory, owner)).toBe(true);
+        child.kill('SIGTERM');
       }
       await vi.waitFor(() => expect(child.exitCode, `${stdout}\n${stderr}`).toBe(0), { timeout: 15_000 });
       expect(stdout).toContain('finished\n');
       expect(stdout).toContain('slack-closed\n');
-      expect(readDaemonOwner(directory)).toBeUndefined();
+      expect((await readDaemonOwner(directory))).toBeUndefined();
       expect(await isConversationIpcReady(directory, owner)).toBe(false);
     } finally {
       if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
@@ -147,16 +143,20 @@ it.each(['manager', 'director'] as const)('keeps Slack credentials out of %s pro
         }, stopAccepting() {}, async close() {}
       };
     }`;
-  const script = `import { registerHooks } from 'node:module';
+  const preloadDirectory = mkdtempSync(join(tmpdir(), 'takt-slack-probe-'));
+  const preload = join(preloadDirectory, 'hooks.mjs');
+  writeFileSync(preload, `import { registerHooks } from 'node:module';
     registerHooks({ load(url, context, next) {
       if (url === ${JSON.stringify(moduleUrl('infra/slack/client.js'))}) return { format: 'module', shortCircuit: true, source: ${JSON.stringify(fakeClient)} };
       if (url === ${JSON.stringify(moduleUrl(`features/${agent}/conversationPlan.js`))}) return { format: 'module', shortCircuit: true, source: ${JSON.stringify(fakePlan)} };
       return next(url, context);
     } });
-    const { runDaemon } = await import(${JSON.stringify(moduleUrl('features/daemon/runDaemon.js'))});
+    `, { mode: 0o600 });
+  const script = `const { runDaemon } = await import(${JSON.stringify(moduleUrl('features/daemon/runDaemon.js'))});
     await runDaemon();`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-    cwd: repository, env: { ...process.env, TAKT_SLACK_APP_TOKEN: 'xapp-test-1', TAKT_SLACK_BOT_TOKEN: 'xoxb-test-2', PROVIDER_CANARY: 'kept' },
+    cwd: repository, env: { ...process.env, TAKT_SLACK_APP_TOKEN: 'xapp-test-1', TAKT_SLACK_BOT_TOKEN: 'xoxb-test-2', PROVIDER_CANARY: 'kept',
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = ''; let stderr = '';
@@ -164,19 +164,23 @@ it.each(['manager', 'director'] as const)('keeps Slack credentials out of %s pro
   child.stderr.on('data', (chunk) => { stderr += String(chunk); });
   const owner = await captureOwnedChild(child);
   try {
-    await vi.waitFor(() => expect(stdout, stderr).toContain('reply-sent\n'), { timeout: 15_000 });
+    await vi.waitFor(() => {
+      const replies = existsSync(posted) ? readFileSync(posted, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { text: string }) : [];
+      expect(replies.some(({ text }) => text.startsWith('{')), stderr).toBe(true);
+    }, { timeout: 30_000 });
     child.kill('SIGTERM');
     await vi.waitFor(() => expect(child.exitCode, stderr).toBe(0), { timeout: 15_000 });
     const posts = readFileSync(posted, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as {
       thread: { channelId: string; parentTs: string }; text: string;
     });
-    expect(posts).toHaveLength(1);
-    expect(posts[0]!.thread).toMatchObject({ channelId: 'C0123', parentTs: '1700000000.000001' });
-    expect(JSON.parse(posts[0]!.text)).toEqual({
+    expect(posts).toHaveLength(2);
+    expect(posts[0]!.text).toBe('受け付けて保存しました。');
+    expect(posts[1]!.thread).toMatchObject({ channelId: 'C0123', parentTs: '1700000000.000001' });
+    expect(JSON.parse(posts[1]!.text)).toEqual({
       credentials: ['TAKT_SLACK_APP_TOKEN', 'TAKT_SLACK_BOT_TOKEN'].map((key) => ({ key, present: false, encoded: null })), canary: 'kept',
     });
     const files = readdirSync(directory, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
-    expect(files.some(({ name }) => name === 'daemon.log')).toBe(true);
+    expect(files.some(({ parentPath, name }) => parentPath.endsWith('/daemon-logs') && name.endsWith('.json'))).toBe(true);
     expect(files.some(({ name }) => name.startsWith(`${agent}-`) && name.endsWith('.json'))).toBe(true);
     const outputs = [stdout, stderr, ...files.map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8'))];
     for (const output of outputs) for (const token of ['xapp-test-1', 'xoxb-test-2']) {
@@ -184,7 +188,8 @@ it.each(['manager', 'director'] as const)('keeps Slack credentials out of %s pro
       expect(output).not.toContain(Buffer.from(token).toString('base64'));
     }
   } finally {
-    if (owner !== undefined) await terminateOwnedProcess(owner, () => child.exitCode !== null || child.signalCode !== null);
+    try { if (owner !== undefined) await terminateOwnedProcess(owner, () => child.exitCode !== null || child.signalCode !== null); }
+    finally { rmSync(preloadDirectory, { recursive: true, force: true }); }
   }
 });
 
@@ -207,7 +212,7 @@ it.each(['enabled', 'no configuration', 'no app token', 'no bot token', 'duplica
     }
     const slackUrl = pathToFileURL(join(process.cwd(), 'dist/infra/slack/client.js')).href;
     const daemonUrl = pathToFileURL(join(process.cwd(), 'dist/features/daemon/runDaemon.js')).href;
-    // Replace only the network client; owner election, polling, configuration and shutdown remain real.
+    // Replace only the network client; owner election, configuration and shutdown remain real.
     const fakeClient = `export function createSlackClient() { return {
       async start() { process.stdout.write('slack-open\\n'); },
       async postThreadMessage() { throw new Error('Unexpected Slack post'); },
@@ -232,24 +237,24 @@ it.each(['enabled', 'no configuration', 'no app token', 'no bot token', 'duplica
     const exited = new Promise<number | null>((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
     const owner = await captureOwnedChild(child);
     try {
-      const logPath = join(directory, 'logs', 'daemon.log');
-      if (mode === 'enabled') {
-        await vi.waitFor(() => {
-          expect(stdout, stderr).toContain('slack-open\n');
-          expect(readFileSync(logPath, 'utf-8').split('Daemon projects').length).toBeGreaterThanOrEqual(4);
-        }, { timeout: 15_000 });
-        expect(child.exitCode).toBeNull();
-        expect(readDaemonOwner(directory)?.pid).toBe(child.pid);
-        expect(existsSync(join(directory, 'conversations'))).toBe(false);
-        child.kill('SIGTERM');
-      }
+      let started = await readDaemonOwner(directory);
+      await vi.waitFor(async () => {
+        started = await readDaemonOwner(directory);
+        expect(started).toBeDefined();
+        expect(await isConversationIpcReady(directory, started!)).toBe(true);
+      }, { timeout: 15_000 });
+      if (mode === 'enabled') await vi.waitFor(() => expect(stdout, stderr).toContain('slack-open\n'));
+      if (mode === 'duplicate channel') await vi.waitFor(() => expect(stderr).toContain('C0123'), { timeout: 15_000 });
+      expect(child.exitCode).toBeNull();
+      expect(started?.pid).toBe(child.pid);
+      child.kill('SIGTERM');
       await vi.waitFor(() => expect(child.exitCode, stderr).toBe(0), { timeout: 15_000 });
       expect(await exited).toBe(0);
-      expect(readDaemonOwner(directory)).toBeUndefined();
+      expect((await readDaemonOwner(directory))).toBeUndefined();
       expect(stdout.trim().split('\n')).toEqual(mode === 'enabled' ? ['slack-open', 'slack-close', 'finished'] : ['finished']);
-      const log = readFileSync(logPath, 'utf-8');
+      const log = readdirSync(join(directory, 'daemon-logs')).map((name) => readFileSync(join(directory, 'daemon-logs', name), 'utf8')).join('\n');
       if (mode === 'duplicate channel') {
-        expect(log).toContain('C0123'); expect(log).toContain(repository); expect(log).toContain(second!);
+        expect(stderr).toContain('C0123'); expect(stderr).toContain(repository); expect(stderr).toContain(second!);
       }
       for (const output of [stdout, stderr, log]) for (const token of ['xapp-test-1', 'xoxb-test-2']) expect(output).not.toContain(token);
     } finally {

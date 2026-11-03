@@ -6,7 +6,9 @@ export function createTuiConversationPort(_configDirectory: string, delivery: Co
   return {
     delivery,
     async resolve(selected) {
-      const assignment = selected;
+      const assignment: ConversationAssignment = selected.kind === 'daemon' ? { kind: 'daemon' }
+        : selected.kind === 'workspace' ? { kind: 'workspace', workspaceId: selected.workspaceId }
+          : { kind: 'repository', repositoryDirectory: selected.repositoryDirectory };
       const actor = { namespace: 'local', id: 'operator' };
       return { conversationId: conversationId(assignment), assignment, speaker: actor,
         binding: { port: 'tui', key: JSON.stringify(conversationIdentity(assignment)), counterpart: actor } };

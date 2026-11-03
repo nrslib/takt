@@ -23,7 +23,7 @@ import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
-const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, renameFailure: false, afterRenameFailure: false }));
+const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
@@ -39,6 +39,7 @@ vi.mock('node:fs/promises', async (original) => {
     rename: async (...args: Parameters<typeof fs.rename>) => {
       if (injection.renameFailure) { injection.renameFailure = false; throw Object.assign(new Error('rename failed'), { code: 'EIO' }); }
       await fs.rename(...args);
+      injection.afterRename?.();
       if (injection.afterRenameFailure) { injection.afterRenameFailure = false; throw Object.assign(new Error('commit acknowledgement failed'), { code: 'EIO' }); }
     },
   };
@@ -71,7 +72,7 @@ function record() {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  injection.beforeSync = undefined; injection.renameFailure = false; injection.afterRenameFailure = false;
+  injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false;
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
@@ -219,6 +220,18 @@ describe('conditional conversation state persistence', () => {
       approval: { revision: 1, goalId, repositoryDirectory: '/other', state: 'reserved' } }, signal());
     expect(reply).toMatchObject({ kind: 'error', code: 'forbidden' });
     expect((await store.read(id))?.state.version).toBe(0);
+  });
+
+  it('acknowledges a committed version when cancellation arrives after atomic publication', async () => {
+    const directory = await root();
+    const store = new ConversationStateStore(directory);
+    await store.create(record());
+    const abort = new AbortController();
+    injection.afterRename = () => abort.abort();
+    expect(await store.save(turn, { operationId: 'committed-before-abort', expectedVersion: 0,
+      session: { provider: 'codex', model: null, sessionId: 'kept' } }, abort.signal)).toEqual({ kind: 'state_saved', version: 1, duplicate: false });
+    expect((await store.read(id))?.state.session.sessionId).toBe('kept');
+    expect((await readdir(join(directory, 'conversations'))).sort()).toEqual([`${id}.json`]);
   });
 
   it('waits for cancellation cleanup before replying, without publishing a version', async () => {

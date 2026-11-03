@@ -22,7 +22,7 @@ export interface WatchTarget {
 }
 
 export function watchKey(target: WatchTarget, kind: WatchObservation['kind']): string {
-  return createHash('sha256').update(JSON.stringify([target.targetId, target.generation, kind])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([target.conversationId, target.targetId, target.generation, kind])).digest('hex');
 }
 
 /** 同じキーへの呼出しは観測ループが直列化する。受付前に入力自体を保存し、応答喪失でも同じ ID を再送する。 */

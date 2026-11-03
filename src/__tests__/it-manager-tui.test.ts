@@ -210,13 +210,13 @@ it.each([ENTER, ESC, '修正', '/g', '\x1b[13;2u', '\x1b[13;3u'])('immediately w
 it('restores the authoritative proposal when immediate withdrawal is refused', async () => {
   const context = mount();
   await showProposal(context);
-  context.client.submit.mockResolvedValueOnce({ kind: 'busy', operationId: randomUUID() });
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', 'en') });
   context.app.stdin.write(ESC);
   await waitFor(() => {
     expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
     expect(context.app.lastFrame()).toContain(summaryA.objective);
     expect(context.app.lastFrame()).toContain('Approve registration');
-    expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en'));
+    expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, ''));
   });
 });
 

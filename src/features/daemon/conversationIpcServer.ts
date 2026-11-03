@@ -38,7 +38,7 @@ async function prepareEndpoint(configDirectory: string, endpoint: string, owner:
   if (!socket.isSocket() || socket.uid !== process.getuid!()) throw new Error('Existing IPC endpoint is not an owned socket');
   const previous = await readDaemonIpcState(configDirectory);
   if (previous === undefined || previous.endpoint !== endpoint || previous.owner.pid === owner.pid
-    && previous.owner.identity.startTime === owner.identity.startTime || await isDaemonOwnerRunning(previous.owner)
+    && previous.owner.identity.startTime === owner.identity.startTime || await isDaemonOwnerRunning(previous.owner, { signal: new AbortController().signal, timeoutMs: 5000 })
     || await endpointIsListening(endpoint)) throw new Error('Existing IPC endpoint cannot be safely removed');
   await unlink(endpoint);
 }

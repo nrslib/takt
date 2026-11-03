@@ -10,7 +10,8 @@ import { createElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { resolveAssignedProjectRoot,resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
 import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
-import { connectManagerMcp,TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
+import {TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createWorkspaceManagerContext,resolveManagerStartup,type ManagerAssignment } from '../features/manager/startupResolution.js';
 import { addManagerRepository,removeManagerRepository,renameManagerWorkspace } from '../features/manager/workspaceOperations.js';
@@ -343,7 +344,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
   it.each([false, true])('retains the workspace when removing the original repository in the same turn=%s', async (sameTurn) => {
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, assignment);
+    const mcp = await connectTestManagerMcp(repositoryA, assignment);
     const provider = new MockProvider();
     const originalSetup = provider.setup.bind(provider);
     vi.spyOn(provider, 'setup').mockImplementation((config) => {
@@ -396,7 +397,7 @@ describe('manager workspace storage and repository boundaries', () => {
   it('keeps the standalone assignment after failed additions of missing, non-Git and already assigned repositories', async () => {
     const other = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '別の担当', repositoryDirectories: [repositoryB] });
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, assignment);
+    const mcp = await connectTestManagerMcp(repositoryA, assignment);
     const executor = createManagerTurnExecutor(repositoryA, {
       ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
       strategy: { systemPrompt: 'manager fixture' } });
@@ -531,7 +532,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
   it('transfers assignment to the real manager MCP child and restricts its operations', async () => {
     const workspace = await addManagerRepository(single(), repositoryB, globalDirectory);
-    const mcp = await connectManagerMcp(repositoryA, { kind: 'workspace', workspaceId: workspace!.id });
+    const mcp = await connectTestManagerMcp(repositoryA, { kind: 'workspace', workspaceId: workspace!.id });
     try {
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryB } })).isError).not.toBe(true);
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryC } })).isError).toBe(true);

@@ -1,6 +1,6 @@
 import { getLabel } from '../../shared/i18n/index.js';
 
-export type ConversationErrorCode = 'busy' | 'queue_full' | 'message_too_large' | 'stale_summary' | 'invalid_assignment' | 'unavailable_attachment'
+export type ConversationErrorCode = 'queue_full' | 'message_too_large' | 'stale_summary' | 'invalid_assignment' | 'unavailable_attachment'
   | 'registration_recovery' | 'storage_error' | 'shutting_down' | 'invalid_input' | 'operation_failed';
 
 export class ConversationError extends Error {

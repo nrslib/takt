@@ -1,3 +1,4 @@
+import { tellDirectorManager } from '../director/tellManager.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { resolveCurrentManagerAssignment } from '../manager/assignment.js';
@@ -17,16 +18,13 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
   let current: { input: TurnStart; io: TurnIo } | undefined;
   const runtime = createDaemonConversationRuntime(configDirectory, {
     async tellManager(managerId, text) {
-      if (current === undefined || current.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
-      const reply = await current.io.request({ kind: 'get_delivery', conversationId: managerId });
+      const turn = current;
+      if (turn === undefined || turn.input.state.assignment.kind !== 'daemon') throw new Error('Director turn required');
+      const reply = await turn.io.request({ kind: 'get_delivery', conversationId: managerId });
       if (reply.kind !== 'delivery' || reply.conversationId !== managerId || reply.assignment.kind === 'daemon'
         || conversationId(reply.assignment) !== managerId) throw new Error('Unknown manager delivery');
-      const id = randomUUID();
-      const accepted = await current.io.request({ kind: 'accept_director_message', eventId: id, requestId: id,
-        conversationId: managerId, occurredAt: new Date().toISOString(), text });
-      if (accepted.kind !== 'event_accepted') throw new Error('Director message was not accepted');
-      return accepted.admission.kind === 'accepted'
-        ? { ...accepted.admission, managerId } : accepted.admission;
+      return tellDirectorManager({ turn: turn.input.turn,
+        bus: { request: (_turn, request, _signal) => turn.io.request(request) } }, managerId, text, turn.io.signal);
     },
     async notifyHuman(message, subject) {
       if (current === undefined) throw new Error('Active turn required');

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SnapshotItem, SnapshotRead, SnapshotValue } from './conversationPort.js';
-import { compareInquiries } from '../../infra/goals/pending-inquiries.js';
+import { compareInquiries } from '../../infra/goals/inquiry-order.js';
 
 export type SnapshotDisplayItem = Exclude<SnapshotValue, { kind: 'state' }>;
 
