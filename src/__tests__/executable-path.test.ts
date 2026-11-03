@@ -7,6 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -155,8 +156,8 @@ describe('asynchronous System32 executable resolution', () => {
     const powershell = createExecutable(powershellDirectory, 'powershell.exe');
     process.env.SystemRoot = root;
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
-    expect(await resolveSystem32ExecutablePathAsync('taskkill.exe')).toBe(realpathSync(taskkill));
-    expect(await resolveWindowsPowerShellExecutablePathAsync()).toBe(realpathSync(powershell));
+    expect(await resolveSystem32ExecutablePathAsync('taskkill.exe')).toBe(await realpath(taskkill));
+    expect(await resolveWindowsPowerShellExecutablePathAsync()).toBe(await realpath(powershell));
     await expect(resolveSystem32ExecutablePathAsync('../taskkill.exe')).rejects.toThrow();
     await expect(resolveSystem32ExecutablePathAsync('missing.exe')).rejects.toThrow();
   });

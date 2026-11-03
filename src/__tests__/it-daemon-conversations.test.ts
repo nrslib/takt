@@ -311,6 +311,7 @@ it('keeps the queued /make-goal proposal unregistered until explicit approval on
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Prepare the proposal while this turn is active');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) }), { timeout: 30000 });
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1), { timeout: 30000 });
     const current = (await fixture.state())!;
     const operationId = current.turn!.operationId;
     await tui.ready(operationId);

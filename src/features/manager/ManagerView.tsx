@@ -61,6 +61,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
+  const savingAnswer = useRef(false);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
   const { stdout } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
@@ -122,6 +123,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   });
   const display = { questions, goals };
   useEffect(() => {
+    if (snapshot.connection !== 'connected' || snapshot.readStatus === 'complete') savingAnswer.current = false;
+  }, [snapshot.connection, snapshot.readStatus]);
+  useEffect(() => {
+    if (snapshot.connection !== 'connected' || snapshot.readStatus !== 'complete' || answerTarget === null) return;
+    if (!questions.some(({ question }) => question.id === answerTarget.pending.question.id)) {
+      clearAnswer(answerTarget.pending.question.id);
+      editAnswer(createEditorState(''));
+    }
+  }, [snapshot.connection, snapshot.readStatus, snapshot.items]);
+  useEffect(() => {
     setPending(state?.pending ?? null);
     resetChoice();
   }, [state?.revision, state?.pending]);
@@ -162,6 +173,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
+    if (answer !== undefined) savingAnswer.current = false;
     if ('answerSaved' in result && result.answerSaved && answer !== undefined) {
       if (clearAnswer(answer.questionId)) editAnswer(createEditorState(''));
       setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(answer.text) }]);
@@ -224,10 +236,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     } else void changeGoal(target.kind, target.target);
   };
   const saveAnswer: SaveManagerAnswer = async (target, answer, permission) => {
-    await send({ kind: 'answer_question', target: target.goalId === null
+    if (savingAnswer.current) return;
+    savingAnswer.current = true;
+    const operationId = await send({ kind: 'answer_question', target: target.goalId === null
       ? { goalId: null, owner: target.owner } : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory },
       questionId: target.question.id, answer, ...(permission === undefined ? {} : { permission }) },
     (id) => { pendingAnswers.current.set(id, { text: answer.text ?? '', questionId: target.question.id }); });
+    if (operationId === null) savingAnswer.current = false;
   };
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
@@ -250,7 +265,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const hintSeparator = selectingSummary ? ' / ' : '  ';
   const hintItems = inputHint.split(hintSeparator);
   useManagerInput({
-    exiting, active, registering, editorRef: answerTarget === null ? editorRef : answerEditorRef,
+    exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
     abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }); },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,

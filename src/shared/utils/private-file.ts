@@ -148,7 +148,16 @@ function writeAtomic(path: string, initialContent: string | Buffer, mode: number
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PrivateArtifactPublicationConflictError(`Private artifact file already exists: ${absolute}`, { cause: error });
         throw error;
       }
-    } else renameSync(temporary, absolute);
+    } else {
+      // Windows refuses to replace a destination with the read-only attribute.
+      const readOnly = process.platform === 'win32' && current !== undefined && (current.mode & 0o200) === 0;
+      if (readOnly) chmodSync(absolute, 0o600);
+      try { renameSync(temporary, absolute); }
+      catch (error) {
+        if (readOnly) chmodSync(absolute, current.mode);
+        throw error;
+      }
+    }
     published = true;
   }, () => {
     if (created) {

@@ -58,6 +58,7 @@ describe('direct private file persistence', () => {
   it('retains an explicitly requested file mode and replaces read-only content', () => {
     const { path } = fixture();
     writePrivateFileWithMode(path, 'first', 0o400);
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o400);
     writePrivateFileWithMode(path, 'second', 0o600);
     expect(readFileSync(path, 'utf8')).toBe('second');
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -70,6 +71,22 @@ describe('direct private file persistence', () => {
     appendPrivateFile(path, 'b');
     expect(readFileSync(path, 'utf8')).toBe('ab');
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('restores a read-only destination when Windows publication fails', () => {
+    const { directory, path } = fixture();
+    writePrivateFileWithMode(path, 'original', 0o400);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    try {
+      failures.rename = true;
+      expect(() => writePrivateFile(path, 'lost')).toThrow();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+    expect(readFileSync(path, 'utf8')).toBe('original');
+    expect(statSync(path).mode & 0o200).toBe(0);
+    expect(readdirSync(directory)).toEqual(['data.json']);
   });
 
   it('rejects an existing file when creating a new private file', () => {

@@ -138,7 +138,7 @@ it('sends the selected target and structured answer, then closes the saved answe
   });
 });
 
-it.each([false, true])('preserves another question draft when queued answer results arrive (second answer submitted: %s)', async (submitted) => {
+it.each([false, true])('preserves another question draft after reconnect when delayed answer results arrive (second answer submitted: %s)', async (submitted) => {
   const first = question(1), second = question(2);
   const context = mounted([first, second]);
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: 'active-turn', kind: 'message' } } });
@@ -154,6 +154,10 @@ it.each([false, true])('preserves another question draft when queued answer resu
   context.app.stdin.write(ENTER);
   await waitFor(() => expect(context.client.commands()).toHaveLength(1));
   const firstOperation = await context.client.operation();
+  context.client.change({ connection: 'disconnected', readStatus: 'incomplete' });
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.disconnected', 'en')));
+  context.client.change({ connection: 'connected', readStatus: 'complete', items: [...context.client.getSnapshot().items] });
+  await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.disconnected', 'en')));
   await open(true);
   context.app.stdin.write('Second draft');
   await waitFor(() => expect(promptFrame(context)).toContain('Second draft'));

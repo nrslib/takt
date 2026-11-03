@@ -11,7 +11,7 @@ const key: Key = { upArrow: false, downArrow: false, leftArrow: false, rightArro
 function fixture() {
   hooks.input.mockClear(); hooks.paste.mockClear();
   const options: Parameters<typeof useManagerInput>[0] = {
-    exiting: { current: false }, active: { current: true }, registering: { current: false }, editorRef: { current: createEditorState('answer') },
+    exiting: { current: false }, active: { current: true }, registering: { current: false }, savingAnswer: { current: false }, editorRef: { current: createEditorState('answer') },
     edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), contentWidth: 80, canApprove: true,
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),

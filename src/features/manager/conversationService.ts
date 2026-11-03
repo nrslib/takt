@@ -183,7 +183,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         }
         return { kind: 'completed', result: conversationErrorResult(error, language) };
       } finally {
-        if (assignment.kind !== 'daemon') {
+        if (assignment.kind !== 'daemon' && command.kind === 'message') {
           for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);
         }
       }

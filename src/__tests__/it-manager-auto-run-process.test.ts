@@ -273,8 +273,10 @@ await ensureManagerRun(cwd);
     children.push({ child: daemon, owned: daemonOwned });
     let daemonErrors = '';
     daemon.stderr!.on('data', (chunk) => { daemonErrors += String(chunk); });
-    await vi.waitFor(() => expect(readManagerEvents(cwd), daemonErrors).toEqual([]), { timeout: 15000 });
-    expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
+    await vi.waitFor(async () => {
+      expect(readManagerEvents(cwd), daemonErrors).toEqual([]);
+      expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
+    }, { timeout: 15000 });
   } catch (error) {
     errors.push(error);
   } finally {
