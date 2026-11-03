@@ -194,7 +194,7 @@ assistant:
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3` |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.5` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -725,7 +725,7 @@ workflow 的 `promotion` 只能推进 `runtime.yaml` 选择的 target ladder，�
 
 ### OpenCode v1/v2 选择
 
-OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到该服务；仅配置 API key 不足以运行。默认使用 v2（`@opencode/client` 和 `@opencode/plugin` 2.0.18）。如需使用 v1（`@opencode-ai/sdk` 1.18.28），请显式设置 `TAKT_OPENCODE_VERSION=v1`。已验证的 CLI 版本分别为 v1 1.18.2 和 v2 2.0.18；TAKT 会在启动前拒绝与所选版本不匹配的 CLI。`TAKT_OPENCODE_PATH` 可指定 CLI 命令名或路径，未设置时使用 `PATH` 中的 `opencode`。版本和路径设置适用于整个 TAKT 进程；切换版本后请启动新的 run。
+OpenCode provider 会启动外部 `opencode serve` CLI，并通过 SDK 连接到该服务；仅配置 API key 不足以运行。默认使用 v2（`@opencode/client` 和 `@opencode/plugin` 2.2.5）。如需使用 v1（`@opencode-ai/sdk` 1.18.28），请显式设置 `TAKT_OPENCODE_VERSION=v1`。已验证的 CLI 版本分别为 v1 1.18.2 和 v2 2.0.18，并已验证 client/plugin 2.2.5 与 v2 CLI 2.0.18 组合下的服务器启动和基本 prompt/tool 调用；TAKT 会在启动前拒绝与所选版本不匹配的 CLI。`TAKT_OPENCODE_PATH` 可指定 CLI 命令名或路径，未设置时使用 `PATH` 中的 `opencode`。版本和路径设置适用于整个 TAKT 进程；切换版本后请启动新的 run。
 
 ```sh
 TAKT_OPENCODE_VERSION=v1 TAKT_OPENCODE_PATH=/path/to/opencode-v1 takt run

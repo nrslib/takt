@@ -96,7 +96,7 @@ export function selectNpmTestRuns(args, unitShardCount) {
     const resolvedUnitShardCount = unitShardCount
       ?? resolveLocalUnitShardCount(availableParallelism());
     return createUnitShardRuns(resolvedUnitShardCount).map((shard) => ({
-      npmArgs: ['run', 'test:unit:parallel', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
+      npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
     }));
   }
 
@@ -125,7 +125,7 @@ function createUnitShardRuns(unitShardCount) {
 
 function buildDefaultRuns(shared) {
   const separator = shared.length > 0 ? ['--', ...shared] : [];
-  return [{ npmArgs: ['run', 'test:unit:parallel', ...separator] }];
+  return [{ npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', ...separator] }];
 }
 
 function hasExplicitTargets(targets) {
@@ -180,7 +180,10 @@ function buildTargetedRun(script, shared, targets) {
   if (targets.length === 0) {
     return undefined;
   }
-  return { npmArgs: ['run', script, '--', ...shared, ...targets] };
+  const scriptArgs = script === 'test:unit:parallel'
+    ? ['run', script, '--ignore-scripts']
+    : ['run', script];
+  return { npmArgs: [...scriptArgs, '--', ...shared, ...targets] };
 }
 
 function isRequiredValueOption(arg) {

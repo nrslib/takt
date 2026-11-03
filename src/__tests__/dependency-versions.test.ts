@@ -144,11 +144,8 @@ describe('dependency versions', () => {
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
-      const copies = Object.entries(packageLock.packages ?? {})
+      const taktProcessCopies = Object.entries(packageLock.packages ?? {})
         .filter(([packagePath]) => packagePath.endsWith(`node_modules/${packageName}`));
-      const taktProcessCopies = copies.filter(([packagePath]) => (
-        !packagePath.includes('node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules/')
-      ));
 
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       expect(manifest.devDependencies?.[packageName]).toBe('1.4.0');
@@ -279,7 +276,7 @@ describe('managed provider distribution', () => {
   });
 
   it('omits SDKs and provider CLI binaries from the production lock dependency graph', () => {
-    const forbidden = /node_modules\/(?:@anthropic-ai\/claude-(?:agent-sdk|code)(?:-[^/]+)?|@openai\/codex(?:-sdk|-[^/]+)?|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent))$/u;
+    const forbidden = /node_modules\/(?:@anthropic-ai\/claude-(?:agent-sdk|code)(?:-[^/]+)?|@openai\/codex(?:-sdk|-[^/]+)?|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent)|@deepseek-ai\/[^/]+)$/u;
     const productionPackages = Object.entries(readPackageLock().packages ?? {})
       .filter(([path, record]) => forbidden.test(path) && record.dev !== true)
       .map(([path]) => path);
@@ -395,7 +392,7 @@ describe('managed provider public boundary', () => {
   it.each(['public API', 'takt', 'takt-cli', 'takt-acp', 'takt-mcp'])('starts %s without provider SDK packages', (entrypoint) => {
     const hookPath = join(generatedRoot, 'without-provider-sdks.mjs');
     writeFileSync(hookPath, `import { registerHooks } from 'node:module';
-const packages = ['@anthropic-ai/claude-agent-sdk', '@openai/codex-sdk', '@opencode-ai/sdk', '@opencode/client', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'];
+const packages = ['@anthropic-ai/claude-agent-sdk', '@openai/codex-sdk', '@opencode-ai/sdk', '@opencode/client', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@deepseek-ai/dsh-sdk-client', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh'];
 registerHooks({ resolve(specifier, context, next) {
   if (packages.some(name => specifier === name || specifier.startsWith(name + '/'))) {
     throw new Error('Provider SDK is unavailable: ' + specifier);
@@ -439,7 +436,7 @@ void engine;
     };
     const host = ts.createCompilerHost(options);
     const fileExists = host.fileExists.bind(host);
-    const unavailable = /node_modules\/(?:@anthropic-ai\/claude-agent-sdk|@openai\/codex-sdk|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent))(?:\/|$)/u;
+    const unavailable = /node_modules\/(?:@anthropic-ai\/claude-agent-sdk|@openai\/codex-sdk|@opencode-ai\/sdk|@opencode\/client|@earendil-works\/pi-(?:ai|coding-agent)|@deepseek-ai\/[^/]+)(?:\/|$)/u;
     host.fileExists = (path) => !unavailable.test(path.replaceAll('\\', '/')) && fileExists(path);
     const program = ts.createProgram([source], options, host);
     const diagnostics = ts.getPreEmitDiagnostics(program);

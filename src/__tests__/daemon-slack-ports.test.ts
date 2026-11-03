@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonSlackPorts, dispatchSlackEvent, loadSlackRepositoryConfig } from '../features/daemon/slackPorts.js';
 import type { SlackClient, SlackEvent } from '../infra/slack/client.js';
 import type { ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
+import type { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
 import { withInquiryLock } from '../infra/goals/inquiry-lock.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 
@@ -27,8 +28,15 @@ beforeEach(() => {
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repo', repositoryDirectories: ['/repo'] });
   doubles.pending.mockImplementation(async function* () {});
 });
+type SlackPort = ReturnType<typeof createSlackConversationPort>;
 function mockPort(receive: ReturnType<typeof vi.fn>) {
-  return { receive, isInquiryThread: vi.fn().mockReturnValue(false), receiveAction: vi.fn(), modalEndpoint: vi.fn(), receiveModal: vi.fn() };
+  return {
+    receive: receive as SlackPort['receive'],
+    isInquiryThread: vi.fn<SlackPort['isInquiryThread']>().mockReturnValue(false),
+    receiveAction: vi.fn<SlackPort['receiveAction']>(),
+    modalEndpoint: vi.fn<SlackPort['modalEndpoint']>(),
+    receiveModal: vi.fn<SlackPort['receiveModal']>(),
+  };
 }
 function message(overrides: Record<string, unknown> = {}): SlackEvent {
   return { type: 'events_api', body: { team_id: 'T1', event: {

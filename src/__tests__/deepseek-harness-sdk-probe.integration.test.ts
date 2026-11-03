@@ -74,7 +74,7 @@ interface LocalApiMock {
   close(): Promise<void>;
 }
 
-const SDK_VERSION = '0.2.1-rc.3';
+const SDK_VERSION = '0.2.1-rc.5';
 const STDERR_SENTINEL = 'TAKT_DSH_PROBE_STDERR_SENTINEL';
 const isSupportedDshRuntimePlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -94,10 +94,10 @@ const activeClients: Array<{ close(): Promise<void> }> = [];
 const localMocks: LocalApiMock[] = [];
 const processGroupFiles: string[] = [];
 
-/** Choose the consumer package root when configured, otherwise resolve packages from the checkout. */
+/** Choose the consumer package root when configured, otherwise resolve packages from the managed checkout. */
 function packageRequireBase(): string {
   const configuredRoot = process.env.TAKT_DSH_SDK_PROBE_PACKAGE_ROOT;
-  return configuredRoot === undefined ? process.cwd() : configuredRoot;
+  return configuredRoot ?? fileURLToPath(new URL('../../managed/deepseek-harness/', import.meta.url));
 }
 
 /** Read a package manifest for SDK/runtime version and distribution assertions. */

@@ -22,7 +22,7 @@ function createFixture() {
   };
 }
 
-const SDK_VERSION = '0.2.1-rc.3';
+const SDK_VERSION = '0.2.1-rc.5';
 const CORDIS_VERSION = '4.0.5';
 const STALE_VERSION = '0.0.0-stale';
 const sdkDependencies = {
@@ -36,7 +36,7 @@ const sdkDependencies = {
   '@deepseek-ai/dsh-subagent': SDK_VERSION,
 };
 
-/** Build a consistent pinned SDK graph with independent root/managed lock entries for stale-version tests. */
+/** Build a consistent managed SDK graph with a DeepSeek-free root manifest and lock. */
 function createDeepSeekFixture(): {
   root: Parameters<typeof verifyDeepSeekManagedLock>[0];
   rootLock: Parameters<typeof verifyDeepSeekManagedLock>[1];
@@ -44,10 +44,6 @@ function createDeepSeekFixture(): {
   lock: Parameters<typeof verifyDeepSeekManagedLock>[3];
   constants: string;
 } {
-  const rootLockPackages = Object.fromEntries(Object.entries(sdkDependencies).map(([name, version]) => [
-    `node_modules/${name}`,
-    { version },
-  ]));
   const managedDependencies = {
     ...sdkDependencies,
     '@deepseek-ai/cordis-plugin-group': '1.0.5',
@@ -64,24 +60,24 @@ function createDeepSeekFixture(): {
     root: {
       dependencies: {},
       bundleDependencies: [],
-      devDependencies: { ...sdkDependencies },
+      devDependencies: {},
       files: ['managed/deepseek-harness/'],
     },
     rootLock: {
       packages: {
-        '': { devDependencies: { ...sdkDependencies } },
-        ...rootLockPackages,
+        '': { dependencies: {}, devDependencies: {} },
       },
     },
     managed: {
       dependencies: managedDependencies,
-      overrides: { fflate: '0.8.3' },
+      overrides: { fflate: '0.8.3', '@earendil-works/pi-ai': '1.4.0' },
     },
     lock: {
       packages: {
         '': { dependencies: { ...managedDependencies } },
         ...managedLockPackages,
         'node_modules/fflate': { version: '0.8.3' },
+        'node_modules/@earendil-works/pi-ai': { version: '1.4.0' },
         'node_modules/@deepseek-ai/dsh-sdk-client': {
           version: SDK_VERSION,
           peerDependencies: {
@@ -179,11 +175,11 @@ describe('managed DeepSeek npm dependency graph', () => {
         fixture.managed,
         fixture.lock,
         fixture.constants,
-      )).toThrow('without production DeepSeek dependencies');
+      )).toThrow('without root DeepSeek dependencies');
     },
   );
 
-  it('accepts unrelated optional dependencies while keeping DeepSeek development-only', () => {
+  it('accepts unrelated optional dependencies while keeping DeepSeek managed-only', () => {
     const fixture = createDeepSeekFixture();
     fixture.root.optionalDependencies = { fflate: '0.8.3' };
 
@@ -196,12 +192,9 @@ describe('managed DeepSeek npm dependency graph', () => {
     )).not.toThrow();
   });
 
-  it('rejects a Cordis pin other than 4.0.5 in the root and managed SDK graphs', () => {
+  it('rejects a Cordis pin other than 4.0.5 in the managed SDK graph', () => {
     const fixture = createDeepSeekFixture();
     const staleVersion = '4.0.5-alpha.1';
-    fixture.root.devDependencies['@deepseek-ai/cordis'] = staleVersion;
-    fixture.rootLock.packages['']!.devDependencies!['@deepseek-ai/cordis'] = staleVersion;
-    fixture.rootLock.packages['node_modules/@deepseek-ai/cordis']!.version = staleVersion;
     fixture.managed.dependencies['@deepseek-ai/cordis'] = staleVersion;
     fixture.lock.packages['']!.dependencies!['@deepseek-ai/cordis'] = staleVersion;
     fixture.lock.packages['node_modules/@deepseek-ai/cordis']!.version = staleVersion;
@@ -212,7 +205,7 @@ describe('managed DeepSeek npm dependency graph', () => {
       fixture.managed,
       fixture.lock,
       fixture.constants,
-    )).toThrow('@deepseek-ai/cordis must be pinned in the root and managed SDK dependency graphs');
+    )).toThrow('The managed npm project must pin Cordis');
   });
 
   it('rejects a managed DSH direct pin outside the pinned SDK version', () => {
@@ -227,7 +220,7 @@ describe('managed DeepSeek npm dependency graph', () => {
       fixture.managed,
       fixture.lock,
       fixture.constants,
-    )).toThrow('@deepseek-ai/dsh-sandbox must be pinned to 0.2.1-rc.3');
+    )).toThrow('@deepseek-ai/dsh-sandbox must be pinned to 0.2.1-rc.5');
   });
 
   it('rejects a managed dependency lock with a peer outside the declared range', () => {
@@ -317,13 +310,39 @@ describe('managed DeepSeek npm dependency graph', () => {
   });
 
   it.each([
+    ['manifest override', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
+      fixture.managed.overrides!['@earendil-works/pi-ai'] = '1.5.0';
+    }],
+    ['managed lock resolution', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
+      fixture.lock.packages['node_modules/@earendil-works/pi-ai']!.version = '1.5.0';
+    }],
+  ])('rejects a transitive Pi AI 1.5.0 %s', (_description, makeInvalid) => {
+    const fixture = createDeepSeekFixture();
+    makeInvalid(fixture);
+
+    expect(() => verifyDeepSeekManagedLock(
+      fixture.root,
+      fixture.rootLock,
+      fixture.managed,
+      fixture.lock,
+      fixture.constants,
+    )).toThrow('transitive Pi AI dependency to 1.4.0');
+  });
+
+  it.each([
+    ['root development declaration', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
+      fixture.root.devDependencies['@deepseek-ai/dsh-sdk-client'] = STALE_VERSION;
+    }],
     ['root lock manifest entry', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
       fixture.rootLock.packages['']!.devDependencies!['@deepseek-ai/dsh-sdk-client'] = STALE_VERSION;
     }],
     ['root lock package resolution', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
-      fixture.rootLock.packages['node_modules/@deepseek-ai/dsh-sdk-client']!.version = STALE_VERSION;
+      fixture.rootLock.packages['node_modules/@deepseek-ai/dsh-sdk-client'] = { version: STALE_VERSION };
     }],
-  ])('rejects a stale %s', (_description, makeStale) => {
+    ['root DeepSeek override', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
+      fixture.root.overrides = { '@deepseek-ai/dsh-http-proxy': STALE_VERSION };
+    }],
+  ])('rejects DeepSeek reintroduced through a %s', (_description, makeInvalid) => {
     const fixture = createDeepSeekFixture();
     const verify = (): void => verifyDeepSeekManagedLock(
       fixture.root,
@@ -334,7 +353,7 @@ describe('managed DeepSeek npm dependency graph', () => {
     );
 
     expect(verify).not.toThrow();
-    makeStale(fixture);
-    expect(verify).toThrow();
+    makeInvalid(fixture);
+    expect(verify).toThrow('without root DeepSeek dependencies');
   });
 });

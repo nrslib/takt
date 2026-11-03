@@ -95,7 +95,7 @@ vi.mock('../core/workflow/instruction/InstructionBuilder.js', async (importOrigi
   const actual = await importOriginal<typeof import('../core/workflow/instruction/InstructionBuilder.js')>();
   return {
     ...actual,
-    InstructionBuilder: mockInstructionBuilder.mockImplementation((step, context) => {
+    InstructionBuilder: mockInstructionBuilder.mockImplementation(function (step, context) {
       const builder = new actual.InstructionBuilder(step, context);
       return {
         build: () => {
@@ -109,15 +109,15 @@ vi.mock('../core/workflow/instruction/InstructionBuilder.js', async (importOrigi
 });
 
 vi.mock('../core/workflow/instruction/ReportInstructionBuilder.js', () => ({
-  ReportInstructionBuilder: vi.fn().mockImplementation(() => ({
-    build: mockReportBuild,
-  })),
+  ReportInstructionBuilder: vi.fn().mockImplementation(function () {
+    return { build: mockReportBuild };
+  }),
 }));
 
 vi.mock('../core/workflow/instruction/StatusJudgmentBuilder.js', () => ({
-  StatusJudgmentBuilder: vi.fn().mockImplementation(() => ({
-    build: mockJudgmentBuild,
-  })),
+  StatusJudgmentBuilder: vi.fn().mockImplementation(function () {
+    return { build: mockJudgmentBuild };
+  }),
 }));
 
 vi.mock('../core/workflow/index.js', () => ({

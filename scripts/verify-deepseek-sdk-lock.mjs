@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import process from 'node:process';
 import { satisfies } from 'semver';
 
-const sdkVersion = '0.2.1-rc.3';
+const sdkVersion = '0.2.1-rc.5';
 const managedBase = 'managed/deepseek-harness/';
 
 /** Resolve a peer at the declaring package's placement level, then at ancestor levels. */
@@ -21,37 +21,27 @@ function resolvePeerEntry(packages, packagePath, peerName) {
 }
 
 /**
- * Verify pinned SDK/runtime versions across development and managed dependency graphs.
- * Also enforce managed-only shipping, required SDK peers, and the fflate safety override.
+ * Verify the managed SDK/runtime graph and keep every DeepSeek package out of the root graph.
+ * Also enforce required SDK peers and safety overrides.
  * @throws {Error} If a manifest, lock entry, version constant, or packaging contract is inconsistent.
  */
 export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constants) {
-  if (Object.keys(root.dependencies).some((name) => name.startsWith('@deepseek-ai/'))
-    || Object.keys(root.optionalDependencies ?? {}).some((name) => name.startsWith('@deepseek-ai/'))
+  const hasDeepSeekPackage = (dependencies) => Object.keys(dependencies ?? {})
+    .some((name) => name.startsWith('@deepseek-ai/'));
+  if (hasDeepSeekPackage(root.dependencies)
+    || hasDeepSeekPackage(root.devDependencies)
+    || hasDeepSeekPackage(root.optionalDependencies)
+    || hasDeepSeekPackage(root.overrides)
     || root.bundleDependencies?.some((name) => name.startsWith('@deepseek-ai/'))
+    || hasDeepSeekPackage(rootLock.packages?.['']?.dependencies)
+    || hasDeepSeekPackage(rootLock.packages?.['']?.devDependencies)
+    || Object.keys(rootLock.packages ?? {}).some((path) => path.includes('node_modules/@deepseek-ai/'))
     || !(root.files.includes(managedBase) || root.files.includes('managed/'))) {
-    throw new Error('The TAKT package must ship the managed assets without production DeepSeek dependencies');
+    throw new Error('The TAKT package must ship the managed assets without root DeepSeek dependencies');
   }
   for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-sdk-client']) {
-    if (managed.dependencies[name] !== sdkVersion || root.devDependencies[name] !== sdkVersion
-      || rootLock.packages?.['']?.devDependencies?.[name] !== sdkVersion
-      || rootLock.packages?.[`node_modules/${name}`]?.version !== sdkVersion) {
-      throw new Error(`${name} must be pinned for managed runtime and development types`);
-    }
-  }
-  for (const [name, version] of Object.entries({
-    '@deepseek-ai/cordis': '4.0.5',
-    '@deepseek-ai/dsh-llm': sdkVersion,
-    '@deepseek-ai/dsh-scope': sdkVersion,
-    '@deepseek-ai/dsh-session': sdkVersion,
-    '@deepseek-ai/dsh-sdk-protocol': sdkVersion,
-    '@deepseek-ai/dsh-subagent': sdkVersion,
-  })) {
-    if (root.devDependencies[name] !== version
-      || rootLock.packages?.['']?.devDependencies?.[name] !== version
-      || rootLock.packages?.[`node_modules/${name}`]?.version !== version
-      || managed.dependencies[name] !== version) {
-      throw new Error(`${name} must be pinned in the root and managed SDK dependency graphs`);
+    if (managed.dependencies[name] !== sdkVersion) {
+      throw new Error(`${name} must be pinned for the managed runtime and SDK boundary`);
     }
   }
   if (managed.dependencies['@deepseek-ai/cordis'] !== '4.0.5'
@@ -70,6 +60,10 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
   if (managed.overrides?.fflate !== '0.8.3'
     || lock.packages?.['node_modules/fflate']?.version !== '0.8.3') {
     throw new Error('The managed npm project must resolve fflate 0.8.3');
+  }
+  if (managed.overrides?.['@earendil-works/pi-ai'] !== '1.4.0'
+    || lock.packages?.['node_modules/@earendil-works/pi-ai']?.version !== '1.4.0') {
+    throw new Error('The managed npm project must resolve the transitive Pi AI dependency to 1.4.0');
   }
   if (managed.dependencies['@deepseek-ai/libreoffice-kit'] !== '0.1.5') {
     throw new Error('The managed npm project must pin libreoffice-kit 0.1.5');

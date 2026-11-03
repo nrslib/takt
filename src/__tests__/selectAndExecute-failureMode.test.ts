@@ -57,9 +57,9 @@ vi.mock('../infra/task/index.js', () => ({
   summarizeTaskName: vi.fn(),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
   buildTaskInstruction: vi.fn((_taskDir: string, orderFile: string) => `Primary spec: \`${orderFile}\`.`),
-  TaskRunner: vi.fn(() => ({
-    addTask: (...args: AddTaskArgs) => mockAddTask(...args),
-  })),
+  TaskRunner: vi.fn(function () {
+    return { addTask: (...args: AddTaskArgs) => mockAddTask(...args) };
+  }),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

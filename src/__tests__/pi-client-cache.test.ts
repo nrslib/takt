@@ -177,7 +177,7 @@ const mocks = vi.hoisted(() => {
       registerProvider: vi.fn(),
       registerNativeProvider: vi.fn(),
     })),
-    resourceLoader: vi.fn((options: unknown) => {
+    resourceLoader: vi.fn(function (options: unknown) {
       loadedExtensions = extensionsFromLoaderOptions(options);
       return {
         reload: vi.fn(async () => undefined),
@@ -191,14 +191,16 @@ const mocks = vi.hoisted(() => {
         })),
       };
     }),
-    packageManagerConstructor: vi.fn(() => ({
-      resolveExtensionSources: vi.fn(async (sources: readonly string[]) => ({
-        extensions: sources.map((source) => ({ enabled: true, path: source })),
-        skills: [],
-        prompts: [],
-        themes: [],
-      })),
-    })),
+    packageManagerConstructor: vi.fn(function () {
+      return {
+        resolveExtensionSources: vi.fn(async (sources: readonly string[]) => ({
+          extensions: sources.map((source) => ({ enabled: true, path: source })),
+          skills: [],
+          prompts: [],
+          themes: [],
+        })),
+      };
+    }),
     sessionManager: {
       inMemory: vi.fn((_cwd: string, options?: { id?: string }) => ({ requestedId: options?.id })),
     },

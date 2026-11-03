@@ -201,7 +201,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3`) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.5`) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -789,7 +789,7 @@ tool, network, sandbox, or skill abilities without choosing the runtime.
 
 ### OpenCode v1/v2 selection
 
-The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default is v2 with `@opencode/client` and `@opencode/plugin` 2.0.18. Explicit v1 selection uses `@opencode-ai/sdk` 1.18.28. Tested CLIs are v1 1.18.2 and v2 2.0.18; these are tested versions, not a guarantee of the earliest supported release. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. A v1-only installation now fails unless you explicitly select v1. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
+The OpenCode provider starts the external `opencode serve` CLI and connects to its private server through an SDK. An API key alone is insufficient. The default is v2 with `@opencode/client` and `@opencode/plugin` 2.2.5. Explicit v1 selection uses `@opencode-ai/sdk` 1.18.28. Tested CLIs are v1 1.18.2 and v2 2.0.18. Server startup and basic prompt/tool calls were verified with v2 CLI 2.0.18 and client/plugin 2.2.5; these are tested versions, not a guarantee of the earliest supported release. TAKT rejects a CLI whose major version differs from the selected transport before starting a server. A v1-only installation now fails unless you explicitly select v1. OpenCode v2 replaces the same `opencode` command, so TAKT never automatically switches generations or updates your CLI.
 
 ```sh
 # Install v2 separately, preserving your existing CLI

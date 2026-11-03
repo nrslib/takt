@@ -104,9 +104,9 @@ vi.mock('../features/interactive/index.js', () => ({
 const mockListAllTaskItems = vi.fn();
 const mockIsStaleRunningTask = vi.fn();
 vi.mock('../infra/task/index.js', () => ({
-  TaskRunner: vi.fn(() => ({
-    listAllTaskItems: mockListAllTaskItems,
-  })),
+  TaskRunner: vi.fn(function () {
+    return { listAllTaskItems: mockListAllTaskItems };
+  }),
   isStaleRunningTask: (task: unknown) => mockIsStaleRunningTask(task),
 }));
 

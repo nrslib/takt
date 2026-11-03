@@ -17,6 +17,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import { isVerboseConsole, resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import type { WorkflowExecutionEventSink } from '../features/tasks/execute/types.js';
 import { MAX_TERMINAL_OUTPUT_BYTES, sanitizeTerminalText } from '../shared/utils/text.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamDisplay } from '../shared/ui/index.js';
@@ -44,7 +45,7 @@ function createBridgeHarness(options?: {
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
   traceDiscovery?: { queries: string[] };
-  eventSink?: ReturnType<typeof vi.fn>;
+  eventSink?: WorkflowExecutionEventSink;
   shouldNotifyRateLimit?: boolean;
   display?: { flush: ReturnType<typeof vi.fn> };
   engine?: TestEngine;

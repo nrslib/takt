@@ -211,7 +211,7 @@ describe('TUI confirmation to conversation routes through the real runner', () =
 });
 
 describe('TUI /go action menu through the real selector', () => {
-  async function openTaskMenu(dispatch: ReturnType<typeof vi.fn>) {
+  async function openTaskMenu(dispatch: NonNullable<Parameters<typeof runTui>[0]['dispatch']>) {
     const capture = fixture.provider([{ content: 'Agreed task' }, { content: 'Continued answer' }]);
     const run = runTui({
       cwd: fixture.cwd, lang: 'en', workflowId: 'menu-workflow',

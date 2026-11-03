@@ -26,6 +26,7 @@ import {
   DEEPSEEK_HARNESS_RUNTIME_VERSION,
   DEEPSEEK_HARNESS_SDK_VERSION,
 } from './constants.js';
+import type { ManagedDeepSeekLlm, ManagedDeepSeekSdk } from './sdk-types.js';
 
 const MANAGED_DIRECTORY = 'deepseek-harness';
 const CURRENT_LINK = 'sdk';
@@ -315,8 +316,8 @@ export async function getReadyDeepSeekHarnessPackageDirectory(): Promise<string>
 export interface ManagedDeepSeekHarnessModules {
   directory: string;
   stale?: boolean;
-  sdk: typeof import('@deepseek-ai/dsh-sdk-client');
-  llm: typeof import('@deepseek-ai/dsh-llm');
+  sdk: ManagedDeepSeekSdk;
+  llm: ManagedDeepSeekLlm;
 }
 
 async function isStaleInstallation(directory: string): Promise<boolean> {

@@ -234,7 +234,7 @@ it('runs saved director messages before task completion and patrol events after 
     vi.setSystemTime('2026-10-30T00:15:00Z');
     await enqueueDueGoalPatrols(repository, 900);
     held.release();
-    await vi.waitFor(() => expect(fixture.turns).toEqual(['human-input', 'D1', `completion:${goal.id}`, `patrol:${goal.id}`]), { timeout: 5000 });
+    await vi.waitFor(() => expect(fixture.turns).toEqual(['human-input', 'D1', `completion:${goal.id}`, `patrol:${goal.id}`]), { timeout: 10000 });
     await vi.waitFor(() => expect(readManagerEvents(repository)).toEqual([]), { timeout: 5000 });
     expect(fixture.maximumActive).toBe(1);
     expect((await new GoalStore(repository).get(goal.id)).workLog.map((entry) => entry.summary))

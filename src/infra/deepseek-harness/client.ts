@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DeepSeekHarness, HarnessNotification } from '@deepseek-ai/dsh-sdk-client';
+import type { DeepSeekHarness, HarnessNotification } from './sdk-types.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import {
   getNestedObservabilityEnvFingerprint,

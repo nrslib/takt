@@ -66,6 +66,7 @@ function createAbortOnlyStream(
     next: vi.fn(() => waitForAbort(signal)),
     return: returnIterator,
     throw: vi.fn((error?: unknown) => Promise.reject(error)),
+    [Symbol.asyncDispose]: vi.fn(async () => undefined),
   } satisfies AsyncGenerator<MockStreamEvent, void, unknown>;
 }
 
@@ -91,6 +92,7 @@ function createPermissionEventAtDeadlineStream(): AsyncGenerator<MockStreamEvent
     })),
     return: vi.fn(async () => ({ done: true as const, value: undefined })),
     throw: vi.fn((error?: unknown) => Promise.reject(error)),
+    [Symbol.asyncDispose]: vi.fn(async () => undefined),
   } satisfies AsyncGenerator<MockStreamEvent, void, unknown>;
 }
 
@@ -151,6 +153,10 @@ class MockEventStream implements AsyncGenerator<MockStreamEvent, void, unknown> 
 
   async throw(error?: unknown): Promise<IteratorResult<MockStreamEvent, void>> {
     throw error;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.return();
   }
 }
 
@@ -724,6 +730,7 @@ describe('OpenCodeClient retry', () => {
             }),
             return: vi.fn(async () => ({ done: true as const, value: undefined })),
             throw: vi.fn((error?: unknown) => Promise.reject(error)),
+    [Symbol.asyncDispose]: vi.fn(async () => undefined),
           };
         } },
         successfulRetryPlan(),

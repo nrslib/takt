@@ -53,7 +53,9 @@ vi.mock('../infra/claude/cli-capability.js', () => ({
 }));
 
 vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
-  TmuxTerminalBackend: vi.fn(() => defaultTerminalBackend),
+  TmuxTerminalBackend: vi.fn(function () {
+    return defaultTerminalBackend;
+  }),
 }));
 
 async function wait(ms: number): Promise<void> {
