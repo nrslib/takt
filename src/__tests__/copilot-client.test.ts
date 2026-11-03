@@ -68,6 +68,7 @@ function mockSpawnWithScenario(scenarios: SpawnScenario | SpawnScenario[]): void
       if (scenario.error) {
         const error = Object.assign(new Error(scenario.error.message), scenario.error);
         child.emit('error', error);
+        child.emit('close', null, null);
         return;
       }
 

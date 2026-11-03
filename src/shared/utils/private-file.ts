@@ -1,769 +1,219 @@
 import {
-  appendFileSync,
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  ftruncateSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  statSync,
-  type Stats,
-  unlinkSync,
-  writeFileSync,
+  appendFileSync, chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync,
+  linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync, type Stats,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import {
-  createPrivateArtifact as createPrivateArtifactAtBoundary,
-  PrivateArtifactCreationConflictError,
-  publishPrivateArtifact as publishPrivateArtifactAtBoundary,
-  PrivateArtifactPublicationConflictError,
-} from './private-artifact-backend.js';
-import {
-  publishPrivateDirectoryBackend as publishPrivateDirectoryAtBoundary,
-  removePrivateDirectoryBackend as removePrivateDirectoryAtBoundary,
-} from './private-directory-backend.js';
-import {
-  artifactBoundary,
-  assertAncestorIdentities,
-  assertSafePath,
-  hasMatchingDirectoryIdentity,
-  hasMatchingIdentity,
-  inspectPrivateArtifactPath,
-  lstatOrUndefined,
-  PrivateArtifactAncestorIdentityMismatchError,
-  type DirectoryIdentity,
-} from './private-path-identity.js';
+import { hasMatchingDirectoryIdentity, hasMatchingIdentity, lstatOrUndefined } from './private-path-identity.js';
 
-const PRIVATE_DIRECTORY_MODE = 0o700;
-const PRIVATE_FILE_MODE = 0o600;
-const NO_FOLLOW_FLAG = constants.O_NOFOLLOW ?? 0;
-const DIRECTORY_FLAG = constants.O_DIRECTORY ?? 0;
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
-interface ExistingFilePreparation {
-  descriptor: number;
-  originalMode: number;
+export class PrivateArtifactPublicationConflictError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PrivateArtifactPublicationConflictError';
+  }
 }
-
-export { PrivateArtifactPublicationConflictError };
 
 export class PrivateArtifactContentWriteFailedError extends Error {
   readonly code = 'ENOSPC';
-
-  constructor(message: string, readonly errno: number | undefined, options: ErrorOptions) {
-    super(message, options);
-  }
+  constructor(message: string, readonly errno: number | undefined, options: ErrorOptions) { super(message, options); }
 }
 
 export interface PrivateDirectoryReadSnapshot {
   readonly path: string;
   readonly stat: Stats;
-  readonly ancestorIdentities: readonly DirectoryIdentity[];
 }
 
 export type PrivateFileState =
-  | {
-      readonly path: string;
-      readonly exists: false;
-    }
-  | {
-      readonly path: string;
-      readonly exists: true;
-      readonly stat: Stats;
-      readonly contentSha256: string;
-    };
-
+  | { readonly path: string; readonly exists: false }
+  | { readonly path: string; readonly exists: true; readonly stat: Stats; readonly contentSha256: string };
 export type PrivateFileReadSnapshot =
-  | {
-      readonly state: Extract<PrivateFileState, { exists: false }>;
-    }
-  | {
-      readonly state: Extract<PrivateFileState, { exists: true }>;
-      readonly content: Buffer;
-    };
-
-function createPrivateArtifact(
-  parentPath: string,
-  targetPath: string,
-  parentStat: Stats,
-  kind: 'directory' | 'file',
-  mode: number,
-): Stats {
-  const identity = createPrivateArtifactAtBoundary(parentPath, targetPath, parentStat, kind, mode);
-  const createdStat = lstatSync(targetPath) as Stats;
-  const expectedKind = kind === 'directory' ? createdStat.isDirectory() : createdStat.isFile();
-  if (!expectedKind || String(createdStat.dev) !== identity.dev || String(createdStat.ino) !== identity.ino) {
-    throw new Error(`Private artifact identity changed after creation: ${targetPath}`);
-  }
-  return createdStat;
-}
-
-
-export function ensurePrivateDirectory(directoryPath: string): void {
-  const { targetPath: absolute, trustedRoot } = artifactBoundary(directoryPath);
-  assertSafePath(absolute, true);
-  let current = trustedRoot;
-  for (const component of relative(trustedRoot, absolute).split(sep).filter(Boolean)) {
-    const parentPath = current;
-    const parentStat = current === trustedRoot ? statSync(current) as Stats : lstatSync(current) as Stats;
-    current = join(parentPath, component);
-    if (lstatOrUndefined(current) === undefined) {
-      try {
-        createPrivateArtifact(parentPath, current, parentStat, 'directory', PRIVATE_DIRECTORY_MODE);
-      } catch (error) {
-        if (!(error instanceof PrivateArtifactCreationConflictError)) {
-          throw error;
-        }
-      }
-    }
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error(`Private artifact directory is unsafe: ${current}`);
-    }
-  }
-  setPrivateDirectoryMode(absolute);
-}
-
-export function repairPrivateDirectory(directoryPath: string): void {
-  const absolute = resolve(directoryPath);
-  setPrivateDirectoryMode(absolute);
-}
-
-function setPrivateDirectoryMode(directoryPath: string): void {
-  const { ancestorIdentities, expectedStat } = inspectPrivateArtifactPath(directoryPath, 'directory');
-  if (expectedStat === undefined) {
-    throw new Error(`Private artifact path is not a directory: ${directoryPath}`);
-  }
-  // Windows はディレクトリ記述子への fchmod を持たず EPERM になる。
-  // private-directory-backend の openDirectory と同じく、記述子を開かずに
-  // lstat の同一性確認だけを行い、POSIX モードは適用しない。
-  if (process.platform === 'win32') {
-    const current = lstatSync(directoryPath) as Stats;
-    if (!current.isDirectory() || !hasMatchingDirectoryIdentity(expectedStat, current)) {
-      throw new Error(`Private artifact directory identity changed while opening: ${directoryPath}`);
-    }
-    assertAncestorIdentities(ancestorIdentities);
-    return;
-  }
-  const descriptor = openSync(
-    directoryPath,
-    constants.O_RDONLY | NO_FOLLOW_FLAG | DIRECTORY_FLAG,
-  );
-  try {
-    const openedStat = fstatSync(descriptor);
-    if (!openedStat.isDirectory() || !hasMatchingDirectoryIdentity(expectedStat, openedStat)) {
-      throw new Error(`Private artifact directory identity changed while opening: ${directoryPath}`);
-    }
-    assertAncestorIdentities(ancestorIdentities);
-    fchmodSync(descriptor, PRIVATE_DIRECTORY_MODE);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function openPrivateFileForAppend(
-  filePath: string,
-  mode: number,
-): number {
-  const absolute = resolve(filePath);
-  const inspection = inspectPrivateArtifactPath(absolute, 'file');
-  let expectedStat = inspection.expectedStat;
-  let createdStat: Stats | undefined;
-  if (expectedStat === undefined) {
-    const parentIdentity = inspection.ancestorIdentities.at(-1);
-    if (parentIdentity === undefined) {
-      throw new Error(`Private artifact parent identity is missing: ${absolute}`);
-    }
-    createdStat = createPrivateArtifact(
-      dirname(absolute),
-      absolute,
-      parentIdentity.stat,
-      'file',
-      mode,
-    );
-    expectedStat = createdStat;
-    assertAncestorIdentities(inspection.ancestorIdentities);
-  }
-  const existingFile = inspection.expectedStat === undefined
-    ? undefined
-    : prepareExistingFileForWrite(absolute, inspection.expectedStat, inspection.ancestorIdentities, mode);
-  let descriptor: number;
-  try {
-    descriptor = openSync(
-      absolute,
-      constants.O_WRONLY | constants.O_APPEND | NO_FOLLOW_FLAG,
-      mode,
-    );
-  } catch (error) {
-    if (existingFile !== undefined) {
-      restoreAndCloseExistingFile(existingFile);
-    }
-    if (createdStat !== undefined) {
-      throw new Error(`Private artifact file identity changed while opening: ${absolute}`, { cause: error });
-    }
-    throw error;
-  }
-  try {
-    assertOpenedFileIdentity(descriptor, absolute, expectedStat);
-    assertAncestorIdentities(inspection.ancestorIdentities);
-    fchmodSync(descriptor, mode);
-  } catch (error) {
-    restoreExistingFileAndCloseDescriptors(existingFile, descriptor);
-    throw error;
-  }
-  closeExistingFilePreparation(existingFile, descriptor);
-  return descriptor;
-}
-
-function prepareExistingFileForWrite(
-  path: string,
-  expectedStat: Stats,
-  ancestorIdentities: readonly DirectoryIdentity[],
-  mode: number,
-): ExistingFilePreparation {
-  const descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW_FLAG);
-  const originalMode = expectedStat.mode & 0o7777;
-  let permissionMayHaveChanged = false;
-  try {
-    assertOpenedFileIdentity(descriptor, path, expectedStat);
-    assertAncestorIdentities(ancestorIdentities);
-    permissionMayHaveChanged = true;
-    fchmodSync(descriptor, mode | 0o200);
-    return { descriptor, originalMode };
-  } catch (error) {
-    try {
-      if (permissionMayHaveChanged) {
-        fchmodSync(descriptor, originalMode);
-      }
-    } finally {
-      closeSync(descriptor);
-    }
-    throw error;
-  }
-}
-
-function restoreAndCloseExistingFile(existingFile: ExistingFilePreparation): void {
-  try {
-    fchmodSync(existingFile.descriptor, existingFile.originalMode);
-  } finally {
-    closeSync(existingFile.descriptor);
-  }
-}
-
-function restoreExistingFileAndCloseDescriptors(
-  existingFile: ExistingFilePreparation | undefined,
-  writeDescriptor: number,
-): void {
-  try {
-    if (existingFile !== undefined) {
-      fchmodSync(existingFile.descriptor, existingFile.originalMode);
-    }
-  } finally {
-    try {
-      closeSync(writeDescriptor);
-    } finally {
-      if (existingFile !== undefined) {
-        closeSync(existingFile.descriptor);
-      }
-    }
-  }
-}
-
-function closeExistingFilePreparation(
-  existingFile: ExistingFilePreparation | undefined,
-  writeDescriptor: number,
-): void {
-  if (existingFile === undefined) {
-    return;
-  }
-  try {
-    closeSync(existingFile.descriptor);
-  } catch (error) {
-    try {
-      fchmodSync(writeDescriptor, existingFile.originalMode);
-    } finally {
-      closeSync(writeDescriptor);
-    }
-    throw error;
-  }
-}
-
-function assertOpenedFileIdentity(descriptor: number, path: string, expectedStat: Stats | undefined): void {
-  const openedStat = fstatSync(descriptor);
-  if (!openedStat.isFile() || (expectedStat !== undefined && !hasMatchingIdentity(expectedStat, openedStat))) {
-    throw new Error(`Private artifact file identity changed while opening: ${path}`);
-  }
-}
-
-function assertPublicationTargetIdentity(path: string, expectedStat: Stats | undefined): void {
-  const actualStat = lstatOrUndefined(path);
-  if (expectedStat === undefined) {
-    if (actualStat !== undefined) {
-      throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
-    }
-    return;
-  }
-  if (actualStat === undefined || !actualStat.isFile() || !hasMatchingIdentity(expectedStat, actualStat)) {
-    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
-  }
-}
-
-function assertTemporaryFileIdentity(path: string, expectedStat: Stats): void {
-  const actualStat = lstatOrUndefined(path);
-  if (actualStat === undefined || !actualStat.isFile() || !hasMatchingIdentity(expectedStat, actualStat)) {
-    throw new Error(`Private artifact temporary file identity changed before publication: ${path}`);
-  }
-}
-
-function contentSha256(content: string | Buffer): string {
-  return createHash('sha256').update(content).digest('hex');
-}
-
-function publicationConflict(message: string): PrivateArtifactPublicationConflictError {
-  return new PrivateArtifactPublicationConflictError(message);
-}
-
-function assertExpectedPrivateFileState(
-  path: string,
-  expected: PrivateFileState,
-  actualStat: Stats | undefined,
-  ancestorIdentities: readonly DirectoryIdentity[],
-): void {
-  if (expected.path !== path) {
-    throw new Error(`Private artifact expected state belongs to another path: ${expected.path}`);
-  }
-  if (!expected.exists) {
-    if (actualStat !== undefined) {
-      throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
-    }
-    return;
-  }
-  if (actualStat === undefined || !actualStat.isFile() || !hasMatchingIdentity(expected.stat, actualStat)) {
-    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
-  }
-  const actualContent = readRegularFileNoFollow(path, actualStat);
-  assertAncestorIdentities(ancestorIdentities);
-  const verifiedStat = lstatOrUndefined(path);
-  if (verifiedStat === undefined || !hasMatchingIdentity(actualStat, verifiedStat)) {
-    throw publicationConflict(`Private artifact file identity changed before publication: ${path}`);
-  }
-  if (contentSha256(actualContent) !== expected.contentSha256) {
-    throw publicationConflict(`Private artifact file content changed before publication: ${path}`);
-  }
-}
-
-function verifyExistingPublicationTarget(
-  path: string,
-  expectedStat: Stats,
-  ancestorIdentities: readonly DirectoryIdentity[],
-): void {
-  let descriptor: number;
-  try {
-    descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW_FLAG);
-  } catch (error) {
-    assertAncestorIdentities(ancestorIdentities);
-    throw error;
-  }
-  try {
-    assertOpenedFileIdentity(descriptor, path, expectedStat);
-    assertAncestorIdentities(ancestorIdentities);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function openTemporaryPrivateFile(
-  path: string,
-  ancestorIdentities: readonly DirectoryIdentity[],
-): number {
-  try {
-    return openSync(path, constants.O_WRONLY | NO_FOLLOW_FLAG);
-  } catch (error) {
-    assertAncestorIdentities(ancestorIdentities);
-    throw error;
-  }
-}
-
-function removeTemporaryFile(
-  path: string,
-  expectedStat: Stats,
-  ancestorIdentities: readonly DirectoryIdentity[],
-): void {
-  const actualStat = lstatOrUndefined(path);
-  if (actualStat === undefined) {
-    return;
-  }
-  assertAncestorIdentities(ancestorIdentities);
-  if (!actualStat.isFile() || !hasMatchingIdentity(expectedStat, actualStat)) {
-    throw new Error(`Private artifact temporary file identity changed before cleanup: ${path}`);
-  }
-  unlinkSync(path);
-}
-
-function executeWithCleanup(action: () => void, cleanup: () => void, aggregateMessage: string): void {
-  let actionFailed = false;
-  let actionError: unknown;
-  try {
-    action();
-  } catch (error) {
-    actionFailed = true;
-    actionError = error;
-  }
-  let cleanupFailed = false;
-  let cleanupError: unknown;
-  try {
-    cleanup();
-  } catch (error) {
-    cleanupFailed = true;
-    cleanupError = error;
-  }
-  if (actionFailed && cleanupFailed) {
-    throw new AggregateError([actionError, cleanupError], aggregateMessage);
-  }
-  if (actionFailed) {
-    throw actionError;
-  }
-  if (cleanupFailed) {
-    throw cleanupError;
-  }
-}
-
+  | { readonly state: Extract<PrivateFileState, { exists: false }> }
+  | { readonly state: Extract<PrivateFileState, { exists: true }>; readonly content: Buffer };
 type PublicationGuardResult = boolean | { publish: boolean; content: string | Buffer };
 
-interface PrivateFileWriteResult {
-  published: boolean;
-  publishedStat?: Stats;
-}
-
-function rethrowContentWriteFailure(error: unknown): never {
-  const filesystemError = error as NodeJS.ErrnoException;
-  if (error instanceof Error && filesystemError.code === 'ENOSPC') {
-    throw new PrivateArtifactContentWriteFailedError(
-      filesystemError.message, filesystemError.errno, { cause: error },
-    );
-  }
-  throw error;
-}
-
-function writeTemporaryPrivateFileContent(
-  temporaryPath: string,
-  temporaryStat: Stats,
-  ancestorIdentities: readonly DirectoryIdentity[],
-  content: string | Buffer,
-  mode: number,
-): void {
-  let descriptor: number;
-  try {
-    descriptor = openTemporaryPrivateFile(temporaryPath, ancestorIdentities);
-  } catch (error) {
-    rethrowContentWriteFailure(error);
-  }
-  executeWithCleanup(
-    () => {
-      assertOpenedFileIdentity(descriptor, temporaryPath, temporaryStat);
-      assertAncestorIdentities(ancestorIdentities);
-      try {
-        fchmodSync(descriptor, mode);
-        ftruncateSync(descriptor, 0);
-        writeFileSync(descriptor, content, { encoding: 'utf-8' });
-      } catch (error) {
-        rethrowContentWriteFailure(error);
+export function ensurePrivateDirectory(path: string): void {
+  const absolute = resolve(path);
+  const firstCreated = mkdirSync(absolute, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    if (firstCreated !== undefined) {
+      let current = firstCreated;
+      chmodSync(current, 0o700);
+      for (const component of relative(firstCreated, absolute).split(sep).filter(Boolean)) {
+        current = join(current, component);
+        chmodSync(current, 0o700);
       }
-    },
-    () => closeSync(descriptor),
-    `Private artifact write and descriptor cleanup both failed: ${temporaryPath}`,
-  );
-}
-
-function writePrivateFileAtomically(
-  filePath: string,
-  content: string | Buffer,
-  mode: number,
-  rejectExisting: boolean,
-  publicationGuard?: () => PublicationGuardResult,
-  expectedState?: PrivateFileState,
-): PrivateFileWriteResult {
-  const absolute = resolve(filePath);
-  const inspection = inspectPrivateArtifactPath(absolute, 'file');
-  if (expectedState !== undefined) {
-    assertExpectedPrivateFileState(
-      absolute,
-      expectedState,
-      inspection.expectedStat,
-      inspection.ancestorIdentities,
-    );
-  }
-  if (rejectExisting && inspection.expectedStat !== undefined) {
-    throw new Error(`Private artifact file already exists: ${absolute}`);
-  }
-  const parentIdentity = inspection.ancestorIdentities.at(-1);
-  if (parentIdentity === undefined) {
-    throw new Error(`Private artifact parent identity is missing: ${absolute}`);
-  }
-  const temporaryPath = join(
-    dirname(absolute),
-    `.${basename(absolute)}.${process.pid}.${randomUUID()}.tmp`,
-  );
-  let temporaryStat: Stats | undefined;
-  let published = false;
-  executeWithCleanup(
-    () => {
-      if (inspection.expectedStat !== undefined) {
-        verifyExistingPublicationTarget(
-          absolute,
-          inspection.expectedStat,
-          inspection.ancestorIdentities,
-        );
-      }
-      const createdStat = createPrivateArtifact(
-        dirname(absolute),
-        temporaryPath,
-        parentIdentity.stat,
-        'file',
-        mode,
-      );
-      temporaryStat = createdStat;
-      writeTemporaryPrivateFileContent(
-        temporaryPath,
-        createdStat,
-        inspection.ancestorIdentities,
-        content,
-        mode,
-      );
-
-      assertAncestorIdentities(inspection.ancestorIdentities);
-      assertPublicationTargetIdentity(absolute, inspection.expectedStat);
-      assertTemporaryFileIdentity(temporaryPath, createdStat);
-      if (publicationGuard !== undefined) {
-        const guardResult = publicationGuard();
-        if (!guardResult || (typeof guardResult === 'object' && !guardResult.publish)) {
-          return;
-        }
-        if (typeof guardResult === 'object') {
-          writeTemporaryPrivateFileContent(
-            temporaryPath,
-            createdStat,
-            inspection.ancestorIdentities,
-            guardResult.content,
-            mode,
-          );
-          assertAncestorIdentities(inspection.ancestorIdentities);
-          assertTemporaryFileIdentity(temporaryPath, createdStat);
-        }
-      }
-      if (expectedState !== undefined) {
-        assertExpectedPrivateFileState(
-          absolute,
-          expectedState,
-          lstatOrUndefined(absolute),
-          inspection.ancestorIdentities,
-        );
-      }
-      publishPrivateArtifactAtBoundary(
-        dirname(absolute),
-        temporaryPath,
-        absolute,
-        parentIdentity.stat,
-        createdStat,
-        inspection.expectedStat,
-        mode,
-      );
-      published = true;
-    },
-    () => {
-      if (!published && temporaryStat !== undefined) {
-        removeTemporaryFile(temporaryPath, temporaryStat, inspection.ancestorIdentities);
-      }
-    },
-    `Private artifact write and temporary-file cleanup both failed: ${absolute}`,
-  );
-  return {
-    published,
-    ...(published && temporaryStat !== undefined
-      ? { publishedStat: temporaryStat }
-      : {}),
-  };
-}
-
-export function readRegularFileNoFollow(filePath: string, expectedStat: Stats): Buffer {
-  const absolute = resolve(filePath);
-  let descriptor: number;
-  try {
-    descriptor = openSync(absolute, constants.O_RDONLY | NO_FOLLOW_FLAG);
-  } catch (error) {
-    const currentStat = lstatOrUndefined(absolute);
-    if (currentStat === undefined || !hasMatchingIdentity(expectedStat, currentStat)) {
-      throw new PrivateArtifactPublicationConflictError(
-        `Private artifact file identity changed while opening: ${absolute}`,
-        { cause: error },
-      );
     }
+    repairPrivateDirectory(absolute);
+  }
+}
+
+export function repairPrivateDirectory(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Private artifact path is not a directory: ${path}`);
+  if (process.platform !== 'win32') chmodSync(path, 0o700);
+}
+
+function fileStat(path: string): Stats | undefined {
+  const stat = lstatOrUndefined(path);
+  if (stat !== undefined && !stat.isFile()) throw new Error(`Private artifact path is not a regular file: ${path}`);
+  return stat;
+}
+
+function sha256(content: string | Buffer): string { return createHash('sha256').update(content).digest('hex'); }
+
+export function readRegularFileNoFollow(path: string, expected: Stats): Buffer {
+  const descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || !hasMatchingIdentity(expected, stat)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${path}`);
+    return readFileSync(descriptor);
+  } finally { closeSync(descriptor); }
+}
+
+export function readPrivateFileState(path: string): PrivateFileReadSnapshot {
+  const absolute = resolve(path);
+  const stat = fileStat(absolute);
+  if (stat === undefined) return { state: { path: absolute, exists: false } };
+  const content = readRegularFileNoFollow(absolute, stat);
+  const current = fileStat(absolute);
+  if (current === undefined || !hasMatchingIdentity(stat, current)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${absolute}`);
+  return { state: { path: absolute, exists: true, stat: current, contentSha256: sha256(content) }, content };
+}
+
+function assertExpected(path: string, expected: PrivateFileState): void {
+  if (expected.path !== path) throw new Error('Expected file state belongs to another path');
+  const actual = readPrivateFileState(path);
+  if (expected.exists !== actual.state.exists || expected.exists && actual.state.exists
+    && (!hasMatchingIdentity(expected.stat, actual.state.stat) || expected.contentSha256 !== actual.state.contentSha256)) {
+    throw new PrivateArtifactPublicationConflictError(`Private file changed before publication: ${path}`);
+  }
+}
+
+function withCleanup(action: () => void, cleanup: () => void): void {
+  let failed = false;
+  let failure: unknown;
+  try { action(); } catch (error) { failed = true; failure = error; }
+  try { cleanup(); } catch (error) {
+    if (failed) throw new AggregateError([failure, error], 'Private file operation and cleanup failed');
     throw error;
   }
-  try {
-    const openedStat = fstatSync(descriptor);
-    if (!openedStat.isFile() || !hasMatchingIdentity(expectedStat, openedStat)) {
-      throw publicationConflict(`Private artifact file identity changed while opening: ${absolute}`);
+  if (failed) throw failure;
+}
+
+function writeAtomic(path: string, initialContent: string | Buffer, mode: number, rejectExisting: boolean,
+  guard?: () => PublicationGuardResult, expected?: PrivateFileState): { published: boolean; stat?: Stats } {
+  const absolute = resolve(path);
+  const original = fileStat(absolute);
+  if (expected !== undefined) assertExpected(absolute, expected);
+  const temporary = join(dirname(absolute), `.${basename(absolute)}.${randomUUID()}.tmp`);
+  let created = false;
+  let published = false;
+  let stat: Stats | undefined;
+  withCleanup(() => {
+    let content = initialContent;
+    const descriptor = openSync(temporary, 'wx', mode);
+    created = true;
+    withCleanup(() => {
+      try {
+        fchmodSync(descriptor, mode);
+        writeFileSync(descriptor, content);
+        const decision = guard?.();
+        if (decision === false || typeof decision === 'object' && !decision.publish) return;
+        if (typeof decision === 'object') {
+          content = decision.content;
+          const replacement = openSync(temporary, 'w');
+          try { writeFileSync(replacement, content); } finally { closeSync(replacement); }
+        }
+        fsyncSync(descriptor);
+        stat = fstatSync(descriptor);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOSPC') {
+          throw new PrivateArtifactContentWriteFailedError(error instanceof Error ? error.message : String(error), (error as NodeJS.ErrnoException).errno, { cause: error });
+        }
+        throw error;
+      }
+    }, () => closeSync(descriptor));
+    if (stat === undefined) return;
+    if (expected !== undefined) assertExpected(absolute, expected);
+    const current = fileStat(absolute);
+    if (original === undefined ? current !== undefined : current === undefined || !hasMatchingIdentity(original, current)) {
+      throw new PrivateArtifactPublicationConflictError(`Private file changed before publication: ${absolute}`);
     }
-    return readFileSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-export function readPrivateFileState(filePath: string): PrivateFileReadSnapshot {
-  const absolute = resolve(filePath);
-  const inspection = inspectPrivateArtifactPath(absolute, 'file');
-  if (inspection.expectedStat === undefined) {
-    return { state: { path: absolute, exists: false } };
-  }
-  const content = readRegularFileNoFollow(absolute, inspection.expectedStat);
-  try {
-    assertAncestorIdentities(inspection.ancestorIdentities);
-  } catch (error) {
-    if (!(error instanceof PrivateArtifactAncestorIdentityMismatchError)) {
-      throw error;
+    const temporaryStat = fileStat(temporary);
+    if (temporaryStat === undefined || !hasMatchingIdentity(stat, temporaryStat)) throw new PrivateArtifactPublicationConflictError(`Temporary private file changed: ${temporary}`);
+    if (rejectExisting) {
+      try { linkSync(temporary, absolute); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PrivateArtifactPublicationConflictError(`Private artifact file already exists: ${absolute}`, { cause: error });
+        throw error;
+      }
+    } else {
+      // Windows refuses to replace a destination with the read-only attribute.
+      const readOnly = process.platform === 'win32' && current !== undefined && (current.mode & 0o200) === 0;
+      if (readOnly) chmodSync(absolute, 0o600);
+      try { renameSync(temporary, absolute); }
+      catch (error) {
+        if (readOnly) chmodSync(absolute, current.mode);
+        throw error;
+      }
     }
-    throw new PrivateArtifactPublicationConflictError(
-      `Private artifact ancestor identity changed while reading: ${absolute}`,
-      { cause: error },
-    );
-  }
-  const verifiedStat = lstatOrUndefined(absolute);
-  if (verifiedStat === undefined || !hasMatchingIdentity(inspection.expectedStat, verifiedStat)) {
-    throw publicationConflict(`Private artifact file identity changed while reading: ${absolute}`);
-  }
-  const state = {
-    path: absolute,
-    exists: true as const,
-    stat: verifiedStat,
-    contentSha256: contentSha256(content),
-  };
-  return { state, content };
+    published = true;
+  }, () => {
+    if (created) {
+      try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+  });
+  return { published, stat };
 }
 
-export function capturePrivateDirectoryReadSnapshot(directoryPath: string): PrivateDirectoryReadSnapshot {
-  const absolute = resolve(directoryPath);
-  const inspection = inspectPrivateArtifactPath(absolute, 'directory');
-  if (inspection.expectedStat === undefined) {
-    throw new Error(`Private artifact path is not a directory: ${absolute}`);
-  }
-  return {
-    path: absolute,
-    stat: inspection.expectedStat,
-    ancestorIdentities: inspection.ancestorIdentities,
-  };
+export function appendPrivateFile(path: string, content: string): void {
+  fileStat(path);
+  const descriptor = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NO_FOLLOW, 0o600);
+  try { fchmodSync(descriptor, 0o600); appendFileSync(descriptor, content, 'utf8'); }
+  finally { closeSync(descriptor); }
 }
 
+export function writePrivateFile(path: string, content: string): void { writePrivateFileWithMode(path, content, 0o600); }
+export function writePrivateFileWithMode(path: string, content: string | Buffer, mode: number): void { writeAtomic(path, content, mode, false); }
+export function writePrivateFileWithModeGuarded(path: string, content: string | Buffer, mode: number, guard: () => PublicationGuardResult): boolean {
+  return writeAtomic(path, content, mode, false, guard).published;
+}
+export function writePrivateFileWithModeExpected(path: string, content: string | Buffer, mode: number, expected: PrivateFileState): void {
+  writeAtomic(path, content, mode, false, undefined, expected);
+}
+export function publishPrivateFileWithModeExpected(path: string, content: string | Buffer, mode: number, expected: PrivateFileState): Stats {
+  const result = writeAtomic(path, content, mode, false, undefined, expected);
+  if (result.stat === undefined || !result.published) throw new Error('Private file was not published');
+  return result.stat;
+}
+export function writePrivateFileWithModeExpectedGuarded(path: string, content: string | Buffer, mode: number,
+  expected: PrivateFileState, guard: () => PublicationGuardResult): boolean {
+  return writeAtomic(path, content, mode, false, guard, expected).published;
+}
+export function writeNewPrivateFileWithMode(path: string, content: string | Buffer, mode: number): void { writeAtomic(path, content, mode, true); }
+
+export function capturePrivateDirectoryReadSnapshot(path: string): PrivateDirectoryReadSnapshot {
+  const absolute = resolve(path);
+  const stat = lstatSync(absolute);
+  if (!stat.isDirectory()) throw new Error(`Private artifact path is not a directory: ${absolute}`);
+  return { path: absolute, stat };
+}
 export function assertPrivateDirectoryReadSnapshot(snapshot: PrivateDirectoryReadSnapshot): void {
-  assertAncestorIdentities(snapshot.ancestorIdentities);
-  const current = lstatSync(snapshot.path) as Stats;
-  if (!current.isDirectory() || !hasMatchingDirectoryIdentity(snapshot.stat, current)) {
-    throw new Error(`Private artifact directory identity changed during traversal: ${snapshot.path}`);
-  }
+  const stat = lstatSync(snapshot.path);
+  if (!hasMatchingDirectoryIdentity(snapshot.stat, stat)) throw new Error('Private directory changed during traversal');
 }
-
-export function publishPrivateDirectory(
-  parentPath: string,
-  stagingPath: string,
-  targetPath: string,
-  parentStat: Stats,
-  stagingStat: Stats,
-  targetStat: Stats | undefined,
-): void {
-  publishPrivateDirectoryAtBoundary(
-    parentPath,
-    stagingPath,
-    targetPath,
-    parentStat,
-    stagingStat,
-    targetStat,
-  );
+export function publishPrivateDirectory(parentPath: string, staging: string, target: string, _parentStat: Stats, stagingStat: Stats, targetStat: Stats | undefined): void {
+  if (dirname(resolve(staging)) !== resolve(parentPath) || dirname(resolve(target)) !== resolve(parentPath)) throw new Error('Private directory must be an immediate child');
+  if (!hasMatchingDirectoryIdentity(stagingStat, lstatSync(staging))) throw new Error('Staging directory changed');
+  const current = lstatOrUndefined(target);
+  if (targetStat === undefined ? current !== undefined : current === undefined || !hasMatchingDirectoryIdentity(targetStat, current)) throw new Error('Publication directory changed');
+  renameSync(staging, target);
 }
-
-export function removePrivateDirectory(
-  parentPath: string,
-  stagingPath: string,
-  parentStat: Stats,
-  stagingStat: Stats,
-): void {
-  removePrivateDirectoryAtBoundary(parentPath, stagingPath, parentStat, stagingStat);
-}
-
-export function appendPrivateFile(filePath: string, content: string): void {
-  const descriptor = openPrivateFileForAppend(filePath, PRIVATE_FILE_MODE);
-  try {
-    appendFileSync(descriptor, content, { encoding: 'utf-8' });
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-export function writePrivateFile(filePath: string, content: string): void {
-  writePrivateFileWithMode(filePath, content, PRIVATE_FILE_MODE);
-}
-
-export function writePrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {
-  writePrivateFileAtomically(filePath, content, mode, false);
-}
-
-export function writePrivateFileWithModeGuarded(
-  filePath: string,
-  content: string | Buffer,
-  mode: number,
-  publicationGuard: () => PublicationGuardResult,
-): boolean {
-  return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard).published;
-}
-
-export function writePrivateFileWithModeExpected(
-  filePath: string,
-  content: string | Buffer,
-  mode: number,
-  expectedState: PrivateFileState,
-): void {
-  writePrivateFileAtomically(filePath, content, mode, false, undefined, expectedState);
-}
-
-export function publishPrivateFileWithModeExpected(
-  filePath: string,
-  content: string | Buffer,
-  mode: number,
-  expectedState: PrivateFileState,
-): Stats {
-  const result = writePrivateFileAtomically(
-    filePath,
-    content,
-    mode,
-    false,
-    undefined,
-    expectedState,
-  );
-  if (!result.published || result.publishedStat === undefined) {
-    throw new Error(`Private artifact was not published: ${resolve(filePath)}`);
-  }
-  return result.publishedStat;
-}
-
-export function writePrivateFileWithModeExpectedGuarded(
-  filePath: string,
-  content: string | Buffer,
-  mode: number,
-  expectedState: PrivateFileState,
-  publicationGuard: () => PublicationGuardResult,
-): boolean {
-  return writePrivateFileAtomically(
-    filePath,
-    content,
-    mode,
-    false,
-    publicationGuard,
-    expectedState,
-  ).published;
-}
-
-export function writeNewPrivateFileWithMode(filePath: string, content: string | Buffer, mode: number): void {
-  writePrivateFileAtomically(filePath, content, mode, true);
+export function removePrivateDirectory(parentPath: string, staging: string, _parentStat: Stats, stagingStat: Stats): void {
+  if (dirname(resolve(staging)) !== resolve(parentPath)) throw new Error('Private directory must be an immediate child');
+  const current = lstatOrUndefined(staging);
+  if (current === undefined) return;
+  if (!hasMatchingDirectoryIdentity(stagingStat, current)) throw new Error('Staging directory changed');
+  rmSync(staging, { recursive: true });
 }

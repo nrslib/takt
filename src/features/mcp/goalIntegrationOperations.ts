@@ -2,8 +2,6 @@ import { checkGoalCompletion, completeGoal, integrateGoalTask, reopenGoal } from
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { mergeGoalPr } from '../manager/mergeGoalPr.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { ConversationStore } from '../../infra/conversations/store.js';
-import { conversationId } from '../../infra/conversations/identity.js';
 import type { McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
 import { integrationSummary } from './goalResponse.js';
@@ -29,9 +27,8 @@ export function mergeTaktGoalPr(input: MergeGoalPrInput, deps: McpOperationDepen
     const goal = await new GoalStore(input.cwd).get(input.goalId);
     if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a merge');
     if (goal.pullRequest?.number !== input.prNumber) throw new Error('PR number does not match the saved goal PR');
-    const record = new ConversationStore(conversation.configDirectory).read(conversationId(conversation.assignment), conversation.assignment);
-    if (record?.running?.kind !== 'message' || record.running.operationId !== input.conversationOperationId
-      || record.lastSpeaker?.namespace !== 'agent' || record.lastSpeaker.id !== 'director') {
+    const turn = conversation.getTurn?.();
+    if (turn?.operationId !== input.conversationOperationId || !turn.directorMessage) {
       throw new Error('Goal PR merge requires an active message from the director');
     }
     signal.throwIfAborted();

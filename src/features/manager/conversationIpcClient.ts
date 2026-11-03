@@ -1,3 +1,6 @@
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
+import { resolveCurrentManagerAssignment } from './assignment.js';
 import { createConnection, type Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
@@ -17,8 +20,7 @@ const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
   .refine((response) => Object.hasOwn(response, 'result') !== (response.error !== undefined));
 const submissionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('accepted'), operationId: z.uuid(), queuedMessageCount: z.number().int().positive().optional() }).strict(),
-  z.object({ kind: z.literal('busy'), operationId: z.uuid() }).strict(),
+  z.object({ kind: z.literal('accepted'), operationId: z.uuid(), eventId: z.string().min(1).max(128).optional(), acceptedSequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), queuedMessageCount: z.number().int().positive().optional() }).strict(),
   z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict(),
 ]);
 export interface ConversationClientSnapshot {
@@ -49,7 +51,6 @@ export class ConversationIpcClient {
   private readItems = new Map<string, SnapshotDisplayItem>();
   private removed = new Set<string>();
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
-  private configDirectory = resolveDaemonConfigDirectory();
 
   constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides,
     private readonly options?: { port: ConversationPort<ConversationAssignment>; reconnect: boolean }) {}
@@ -120,15 +121,20 @@ export class ConversationIpcClient {
 
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
-    const port = this.options?.port ?? createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
-    const resolved = await port.resolve(this.assignment);
+    const configDirectory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
+    const port = this.options?.port ?? createTuiConversationPort(configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
+    const selected = this.options?.port !== undefined || this.assignment.kind === 'daemon' ? this.assignment
+      : await resolveCurrentManagerAssignment(this.assignment.kind === 'repository'
+        ? { kind: 'repository', repositoryDirectory: await resolveGitRepositoryDirectory(this.assignment.repositoryDirectory) }
+        : this.assignment, configDirectory);
+    const resolved = await port.resolve(selected);
     if (this.closed) return;
     await ensureDaemon();
     if (this.closed) return;
-    const owner = readDaemonOwner(this.configDirectory);
-    const state = readDaemonIpcState(this.configDirectory);
-    if (owner === undefined || state === undefined || !isDaemonOwnerRunning(owner) || !ipcStateMatchesOwner(state, owner)
-      || state.endpoint !== conversationIpcEndpoint(this.configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
+    const owner = await readDaemonOwner(configDirectory);
+    const state = await readDaemonIpcState(configDirectory);
+    if (owner === undefined || state === undefined || !await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 }) || !ipcStateMatchesOwner(state, owner)
+      || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
       this.items.clear();

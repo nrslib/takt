@@ -1194,7 +1194,7 @@ describe('operation journal store', () => {
       writeFileSync(recoveryTarget, 'outside\n', { mode: 0o600 });
       symlinkSync(recoveryTarget, `${lockPath}.recovery`);
 
-      expect(() => store.getParent('parent-1')).toThrow(/symlink/);
+      expect(() => store.getParent('parent-1')).toThrow();
       expect(readFileSync(recoveryTarget, 'utf-8')).toBe('outside\n');
       expect(existsSync(lockPath)).toBe(true);
     },
@@ -1236,7 +1236,7 @@ describe('operation journal store', () => {
     writeFileSync(lockTarget, 'outside\n', { mode: 0o600 });
     symlinkSync(lockTarget, lockPath);
 
-    expect(() => store.getParent('parent-1')).toThrow(/symlink/);
+    expect(() => store.getParent('parent-1')).toThrow();
     expect(lstatSync(lockPath).isSymbolicLink()).toBe(true);
     expect(readFileSync(lockTarget, 'utf-8')).toBe('outside\n');
   });

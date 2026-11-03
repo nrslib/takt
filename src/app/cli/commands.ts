@@ -61,8 +61,8 @@ program
   .command('daemon')
   .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
   .action(async () => {
-    const { runDaemon } = await import('../../features/daemon/runDaemon.js');
-    await runDaemon();
+    const { runDaemonForeground } = await import('../../features/daemon/lifecycle.js');
+    await runDaemonForeground();
   })
   .command('stop')
   .description('Stop the manager daemon')

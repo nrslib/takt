@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { isAbsolute } from 'node:path';
 import { GoalStore } from '../../infra/goals/store.js';
 import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
-import type { DirectorNotificationSubject } from '../../infra/conversations/directorNotifications.js';
+import type { DirectorNotificationSubject } from '../../infra/daemon/notifications.js';
 import { resolveDirectorManager } from './managers.js';
 
 const managerId = z.string().regex(/^manager-[a-f0-9]{64}$/);

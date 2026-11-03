@@ -410,7 +410,7 @@ export async function resolveTaskExecution(
     ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
     : undefined;
   const resolvedReportDirName = reportDirName
-    ?? (resumeSource?.sourceRunSlug === undefined
+    ?? (resumeSource === undefined
       ? generateReportDir(task.content)
       : generateExecutionReportDir(execCwd, task.content));
   const retryResume = resolveRetryResume(

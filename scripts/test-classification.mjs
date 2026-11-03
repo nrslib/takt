@@ -11,6 +11,8 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-process.test.ts',
+  'src/__tests__/daemon-storage.integration.test.ts',
+  'src/__tests__/daemon-turn-process.integration.test.ts',
   'src/__tests__/it-daemon-conversations.test.ts',
   'src/__tests__/it-conversation-goal-registration.test.ts',
   'src/__tests__/projectLocalTaktSync.test.ts',
@@ -150,7 +152,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/otelFoundation.test.ts',
   'src/__tests__/parallel-runner-terminal-status.test.ts',
   'src/__tests__/phase-runner-report-history.test.ts',
-  'src/__tests__/private-artifact-helper-error.test.ts',
   'src/__tests__/private-file-lock-acquisition.test.ts',
   'src/__tests__/private-file.test.ts',
   'src/__tests__/project-provider-profiles.test.ts',
@@ -380,6 +381,8 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/daemon-dispatcher.integration.test.ts',
+  'src/__tests__/daemon-reachability.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 
@@ -388,7 +391,6 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
-  'src/__tests__/conversation-store.integration.test.ts',
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
@@ -412,7 +414,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-live-intervention-task-spec.test.ts',
   'src/__tests__/it-manager-compact-display.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
-  'src/__tests__/it-manager-patrol.test.ts',
   'src/__tests__/it-mcp-task-cleanup.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-opencode-v2-assistant-mcp.test.ts',

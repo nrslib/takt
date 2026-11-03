@@ -46,6 +46,7 @@ import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-p
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
 import { DebugLogger } from '../shared/utils/debug.js';
+import * as reportDirectory from '../shared/utils/reportDir.js';
 import { buildResumeReportConsumerKeyFromStack } from '../core/workflow/run/resume-report-consumer.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 
@@ -657,6 +658,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
 
   if (mode === 'retry') {
     it.each([[1, 'delegate', true], [2, 'delegate', true], [2, 'COMPLETE', true], [2, 'COMPLETE', false]] as const)('retries the saved invocation %s with next %s and source run slug %s', async (stopAt, next, useSourceRunSlug) => {
+      vi.spyOn(reportDirectory, 'generateReportDir').mockReturnValue('20261103-195058-repeated-call-retry');
       environment = createEnvironment();
       process.env.TAKT_CONFIG_DIR = environment.globalDir;
       invalidateGlobalConfigCache();

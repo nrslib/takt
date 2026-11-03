@@ -9,7 +9,79 @@ import type { ConversationState } from '../features/manager/conversationPort.js'
 import { getLabel } from '../shared/i18n/index.js';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
+import { createInquiry } from '../infra/goals/inquiry.js';
+import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, QUESTION_MENU, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
+
+it.each(['disconnected', 'answered', 'pending', 'snapshot'] as const)(
+  'recovers answer input after a missed result on %s recovery', async (recovery) => {
+    const client = new ManagerClientDouble();
+    const assignment = client.getSnapshot().items[0]!;
+    const question = createInquiry({ body: 'Answer recovery question' });
+    const target = { goalId: null, owner: { kind: 'repository' as const, repositoryDirectory: cwd } } as const;
+    const inquiry = { kind: 'inquiry' as const, inquiry: { target, question } };
+    client.change({ items: [assignment, inquiry] });
+    const context = mount('en', client);
+    await waitFor(() => expect(context.app.lastFrame()).toContain('Pending 1'));
+    context.app.stdin.write(QUESTION_MENU);
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+    await typeAndSubmit(context, 'draft');
+    await waitFor(() => expect(client.commands()).toEqual([
+      { kind: 'answer_question', target, questionId: question.id, answer: { text: 'draft' } },
+    ]));
+    await client.operation();
+
+    if (recovery === 'snapshot') {
+      client.change({ readStatus: 'reading' });
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en')));
+      client.change({ readStatus: 'complete', items: [assignment, inquiry] });
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en')));
+    } else {
+      client.change({ connection: 'disconnected', readStatus: 'incomplete' });
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.disconnected', 'en')));
+    }
+    if (recovery === 'answered' || recovery === 'pending') {
+      client.change({ connection: 'connecting', readStatus: 'reading', items: [assignment] });
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en'));
+        expect(context.app.lastFrame()).toContain(question.body);
+        expect(promptFrame(context)).toContain('draft');
+      });
+      client.change({ connection: 'connected', readStatus: 'complete',
+        items: recovery === 'answered' ? [assignment] : [assignment, inquiry] });
+    }
+
+    if (recovery === 'answered') {
+      await waitFor(() => {
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(context.app.lastFrame()).not.toContain(question.body);
+      });
+      await typeAndSubmit(context, 'next message');
+      await waitFor(() => expect(client.commands().at(-1)).toEqual({ kind: 'message', text: 'next message' }));
+    } else {
+      context.app.stdin.write(' edited');
+      await waitFor(() => expect(promptFrame(context)).toContain('draft edited'));
+      context.app.stdin.write('\x1b[200~ pasted\x1b[201~');
+      await waitFor(() => expect(promptFrame(context)).toContain('draft edited pasted'));
+      if (recovery !== 'disconnected') {
+        expect(context.app.lastFrame()).toContain(question.body);
+        context.app.stdin.write(ENTER);
+        await waitFor(() => expect(client.commands()).toEqual([
+          { kind: 'answer_question', target, questionId: question.id, answer: { text: 'draft' } },
+          { kind: 'answer_question', target, questionId: question.id, answer: { text: 'draft edited pasted' } },
+        ]));
+      } else {
+        context.app.stdin.write(ESC);
+        await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+        context.app.stdin.write(ESC);
+        await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+        context.app.stdin.write(QUESTION_MENU);
+        await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+        expect(client.commands()).toHaveLength(1);
+      }
+    }
+  });
 
 it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方送信して受付と待機件数を表示する', async () => {
   const context = mount('ja');
@@ -210,13 +282,13 @@ it.each([ENTER, ESC, '修正', '/g', '\x1b[13;2u', '\x1b[13;3u'])('immediately w
 it('restores the authoritative proposal when immediate withdrawal is refused', async () => {
   const context = mount();
   await showProposal(context);
-  context.client.submit.mockResolvedValueOnce({ kind: 'busy', operationId: randomUUID() });
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', 'en') });
   context.app.stdin.write(ESC);
   await waitFor(() => {
     expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
     expect(context.app.lastFrame()).toContain(summaryA.objective);
     expect(context.app.lastFrame()).toContain('Approve registration');
-    expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en'));
+    expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, ''));
   });
 });
 

@@ -40,7 +40,8 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
-  managerConversation?: { configDirectory: string; assignment: ManagerAssignmentIdentity };
+  managerConversation?: { configDirectory: string; assignment: ManagerAssignmentIdentity;
+    getTurn?: () => { operationId: string; directorMessage: boolean } | undefined };
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;

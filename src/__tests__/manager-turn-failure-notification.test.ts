@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -71,11 +72,21 @@ describe('notifyManagerTurnFailure', () => {
   });
 
   it('notifies each failed attempt even when its sanitized reason is repeated', async () => {
-    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-a'));
-    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-b'));
+    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-a'), randomUUID());
+    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted api_key=fixture-secret-b'), randomUUID());
     expect(goal.notifications).toHaveLength(2);
     expect(doubles.send).toHaveBeenCalledTimes(2);
     expect(goal.notifications![0]!.body).toBe(goal.notifications![1]!.body);
+  });
+
+  it('saves and delivers only one notification for the same operation', async () => {
+    const operationId = randomUUID();
+    await notifyManagerTurnFailure('/project', goal.id, new Error('provider failed'), operationId);
+    const notification = goal.notifications![0];
+    await notifyManagerTurnFailure('/project', goal.id, new Error('process exited'), operationId);
+    expect(goal.notifications).toEqual([notification]);
+    expect(notification).toMatchObject({ id: operationId, kind: 'blocked', severity: 'error' });
+    expect(doubles.send).toHaveBeenCalledOnce();
   });
 
   it('does not save or send when blocked notifications are disabled', async () => {

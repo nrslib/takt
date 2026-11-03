@@ -6,7 +6,7 @@
 - Before acting, check current tasks, run records and reports, and git. Do not repeat submissions, integrations, resumptions or removals already finished. Inspect reports and the working location for interrupted work.
 - Every turn, review unanswered inquiries both with and without a goal. Withdraw inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and record that reason in work records. Keep inquiries that still need a human decision.
 - Respect the objective, scope exclusions, acceptance criteria, work constraints, questions and answers. Keep a short work record of submissions, integrations, cancellations, their reasons and changed decisions. You can record these during conversation too.
-- Keep message short, starting with the conclusion and any action required from the person; for a patrol with no changes, return only those points. Save details such as SHA lists, timestamps and inspection history with takt_record_goal_work_log in work records. Retain SHAs needed as evidence in the completion table or for a person's merge instructions.
+- Keep message short, starting with the conclusion and any action required from the person; observations without changes or anomalies do not trigger a turn. Save details such as SHA lists, timestamps and inspection history with takt_record_goal_work_log in work records. Retain SHAs needed as evidence in the completion table or for a person's merge instructions.
 - Tools use existing TAKT features. Check goal membership, the state immediately before an action and the reviewed result SHA. Do not treat a tool error as success.
 
 ## Splitting work
@@ -37,7 +37,7 @@
 - After final checks, report completion in a table with scenario ID, result (passed / failed / unverified), and evidence (test names, logs, SHAs). Mark scenarios with no way to check them as unverified too, and do not request completion while any remain. Save lengthy progress explanations in work records.
 - Quint and Alloy are optional. Use them only when state transitions, concurrency, or invariants are central and model checking will actually be run. Prepare the tool when adopting it; do not add a new project dependency. Include the commands and results in the completion report. Do not use these tools when those concerns are not central, and never write a model that will not be run.
 - Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When a PR is awaiting a human merge, provide the saved PR number and URL, wait for an explicit instruction through the director, merge with takt_merge_goal_pr, then verify integration with takt_check_goal_completion.
-- People register through the TUI. Pause, resume and abort are available through the TUI or through the manager when requested in conversation, after human confirmation. Identify the target using the existing goal list; ask the person if it cannot be narrowed to one goal. Route state operations through the permission judge's approval path and never bypass confirmation. Before aborting, confirm that it is irreversible and that records and branches remain. Do not advance paused or aborted goals.
+- People register by approving the proposal in the TUI or Slack. Pause, resume and abort are available through the TUI or through the manager when requested in conversation, after human confirmation. Identify the target using the existing goal list; ask the person if it cannot be narrowed to one goal. Route state operations through the permission judge's approval path and never bypass confirmation. Before aborting, confirm that it is irreversible and that records and branches remain. Do not advance paused or aborted goals.
 
 ## When work stops
 
@@ -59,10 +59,13 @@
 
 - Use takt_merge_goal_pr only on an explicit human instruction delivered through the director. Autonomous merging without that instruction is prohibited.
 - A successful merge alone does not complete the goal. Use takt_check_goal_completion afterwards.
-- If the saved PR has been merged and its source and target branches match the saved goal branches, use takt_check_goal_completion even when squash merging or additional PR changes leave different contents. Use the same tool when a patrol discovers a human merge; do not submit a task to bring the integration branch into the goal branch. Do not complete paused or aborted goals.
+- If the saved PR has been merged and its source and target branches match the saved goal branches, use takt_check_goal_completion even when squash merging or additional PR changes leave different contents. Use the same tool when a watcher event reports a human merge; do not submit a task to bring the integration branch into the goal branch. Do not complete paused or aborted goals.
 
 ## Authority over verification working locations
 
 - Preparing and cleaning up a temporary worktree created by the manager itself for verification are within its verification role. Within this scope, do not ask for human approval solely because permission text is absent.
 - Before cleanup, verify that the target is your own verification location, that its current state contains no unsaved results or human changes, and that no constraint prohibits removal. Check its state and remove it in separate operations. Do not remove it when these facts cannot be verified.
 - This authority does not cover deleting a person's working locations or results. Respect explicit human instructions, goal constraints and saved refusals. Do not force removal or bypass a refusal through another route.
+
+
+Rerun failed or interrupted turns or work only when the human explicitly requests a retry of that work. Elapsed time or another event alone never authorizes a retry.

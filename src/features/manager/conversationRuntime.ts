@@ -1,8 +1,10 @@
+import { TurnToolScope } from '../daemonTurn/toolScope.js';
 import { createHash } from 'node:crypto';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
+import type { ManagerConversationTurn } from './managerMcpConnection.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 import { getManagerOutputSchema } from './turnResponse.js';
@@ -45,16 +47,29 @@ export function createConversationRuntime(configDirectory: string): Conversation
       const existing = entries.get(id);
       if (existing?.contextKey === contextKey) return existing;
       if (existing !== undefined) { await existing.dispose(); entries.delete(id); }
+      const turnScope = new TurnToolScope();
+      let activeTurn: (ManagerConversationTurn & { signal: AbortSignal }) | undefined;
       const mcp = await connectManagerMcp(cwd, identity, plan.ctx.mcpServers, {
+        turnScope,
         enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
+        conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined
+          : { operationId: activeTurn.operationId, directorMessage: activeTurn.directorMessage },
       });
       try {
         await plan.ctx.provider.preflight?.({
           cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
           permissionMode: 'full', mcpServers: mcp.servers, outputSchema: getManagerOutputSchema(plan.ctx.providerType),
         });
+        const executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
-          contextKey, executor: createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } }), dispose: mcp.dispose };
+          contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
+            turnScope.begin(turn.abortSignal);
+            activeTurn = turn.conversationOperationId === undefined ? undefined : {
+              operationId: turn.conversationOperationId, directorMessage: turn.directorMessage === true, signal: turn.abortSignal,
+            };
+            try { return await executor.execute(turn); }
+            finally { await turnScope.end(); activeTurn = undefined; }
+          } }, dispose: mcp.dispose };
         entries.set(id, entry);
         return entry;
       } catch (error) { await mcp.dispose(); throw error; }

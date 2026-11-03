@@ -8,7 +8,8 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { MANAGER_ASSIGNMENT_HEADER, withManagerAssignment } from '../features/manager/assignment.js';
 import { readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
@@ -67,7 +68,7 @@ describe('manager MCP connection confirmation', () => {
 
   it.each(operations)('executes $name over the owned HTTP server using the provider configuration', async ({ name, executionStatus, expected }) => {
     await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
-    const connection = await connectManagerMcp(cwd, undefined, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, undefined, undefined, { enableGoalExecutionTools: true });
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const reader = new Client({ name: 'provider-manager-test', version: '1' });
@@ -132,7 +133,7 @@ describe('manager MCP connection confirmation', () => {
     initializeGitFixture(other, []);
     const otherStore = new GoalStore(other);
     await otherStore.create(goalRecord());
-    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { enableGoalExecutionTools: true });
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const readers: { client: Client; transport: StreamableHTTPClientTransport }[] = [];
@@ -172,7 +173,7 @@ describe('manager MCP connection confirmation', () => {
 
   it('restores the assignment changed in the provider turn into the next turn HTTP configuration', async () => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
-    const connection = await connectManagerMcp(cwd, assignment, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, assignment, undefined, { enableGoalExecutionTools: true });
     const other = join(cwd, '担当B');
     mkdirSync(other); initializeGitFixture(other, []);
     const observed: ManagerAssignmentIdentity[] = [];

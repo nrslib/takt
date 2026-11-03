@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ensureDaemon, stopDaemon } from '../features/daemon/lifecycle.js';
+import { daemonEntryPath, ensureDaemon, stopDaemon } from '../features/daemon/lifecycle.js';
 import type { DaemonOwner } from '../infra/daemon/owner.js';
 import { packageVersion } from '../shared/package-info.js';
 
@@ -15,13 +15,13 @@ vi.mock('../infra/daemon/owner.js', () => ({
   readDaemonOwner: doubles.read, isDaemonOwnerRunning: doubles.running, removeDaemonOwner: doubles.remove,
 }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
-vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: doubles.open, closeSync: doubles.close }));
+vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(), open: doubles.open }));
 vi.mock('node:timers/promises', () => ({ setTimeout: doubles.delay }));
-vi.mock('../shared/utils/private-file.js', () => ({ ensurePrivateDirectory: doubles.directory }));
-vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: '/test/cli.js', args: ['/test/cli.js', 'daemon'] }) }));
+vi.mock('../infra/daemon/privateFile.js', () => ({ ensurePrivateDirectory: doubles.directory }));
+vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: daemonEntryPath(), args: [daemonEntryPath()] }) }));
 
 const owner: DaemonOwner = {
-  pid: 4321, identity: { startTime: 'darwin-start-v2:12345' }, version: packageVersion, cliPath: '/test/cli.js',
+  pid: 4321, identity: { startTime: 'darwin-start-v2:12345' }, version: packageVersion, cliPath: daemonEntryPath(),
 };
 afterEach(() => { vi.restoreAllMocks(); });
 let child: EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; unref: ReturnType<typeof vi.fn> };
@@ -32,7 +32,7 @@ beforeEach(() => {
   doubles.read.mockReset().mockReturnValue(undefined);
   doubles.running.mockReset().mockReturnValue(true);
   doubles.ready.mockReset().mockResolvedValue(true);
-  doubles.open.mockReturnValue(42);
+  doubles.open.mockResolvedValue({ fd: 42, close: doubles.close });
   doubles.delay.mockReset().mockResolvedValue(undefined);
   child = Object.assign(new EventEmitter(), { pid: owner.pid, exitCode: null, signalCode: null, unref: vi.fn() });
   doubles.spawn.mockReset().mockImplementation(() => {
@@ -66,15 +66,15 @@ it('starts detached and confirms its own owner record before returning', async (
   });
   doubles.delay.mockImplementation(async () => { recorded = true; });
   await ensureDaemon();
-  expect(doubles.spawn).toHaveBeenCalledWith(process.execPath, ['/test/cli.js', 'daemon'], {
+  expect(doubles.spawn).toHaveBeenCalledWith(process.execPath, [daemonEntryPath()], {
     cwd: process.env.TAKT_CONFIG_DIR,
     detached: true, shell: false, stdio: ['ignore', 42, 42],
     env: expect.objectContaining({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR }),
   });
   expect(doubles.delay).toHaveBeenCalled();
-  expect(doubles.running).toHaveBeenCalledWith(owner);
+  expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
   expect(child.unref).toHaveBeenCalledOnce();
-  expect(doubles.close).toHaveBeenCalledWith(42);
+  expect(doubles.close).toHaveBeenCalledWith();
 });
 
 it('waits for IPC readiness after its newly spawned daemon has published the owner', async () => {
@@ -86,7 +86,7 @@ it('waits for IPC readiness after its newly spawned daemon has published the own
   const starting = ensureDaemon().then(() => { returned = true; });
   try {
     await vi.waitFor(() => expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner));
-    expect(doubles.running).toHaveBeenCalledWith(owner);
+    expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
     expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
     expect(returned).toBe(false);
     doubles.ready.mockResolvedValue(true);
@@ -119,7 +119,7 @@ it('waits for the winning daemon IPC after its own child loses the startup race'
   expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
   expect(doubles.spawn).toHaveBeenCalledOnce();
   expect(doubles.remove).not.toHaveBeenCalled();
-  expect(doubles.close).toHaveBeenCalledExactlyOnceWith(42);
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith();
 });
 
 it('bounds IPC readiness waiting for the winning daemon after its own child exits', async () => {
@@ -143,7 +143,7 @@ it('bounds IPC readiness waiting for the winning daemon after its own child exit
   expect(doubles.ready).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, winner);
   expect(doubles.spawn).toHaveBeenCalledOnce();
   expect(doubles.remove).not.toHaveBeenCalled();
-  expect(doubles.close).toHaveBeenCalledExactlyOnceWith(42);
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith();
 });
 
 it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old daemon before replacing a differing owner: %j', async (difference) => {
@@ -155,7 +155,7 @@ it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old
   await ensureDaemon();
   expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
   expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
-  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old);
+  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old, expect.objectContaining({ timeoutMs: 5000 }));
   expect(doubles.spawn).toHaveBeenCalledOnce();
 });
 
@@ -188,7 +188,7 @@ it('propagates spawn failure and closes the log descriptor', async () => {
     return child;
   });
   await expect(ensureDaemon()).rejects.toBe(failure);
-  expect(doubles.close).toHaveBeenCalledWith(42);
+  expect(doubles.close).toHaveBeenCalledWith();
 });
 
 it('rejects startup when the child exits without an owner record', async () => {
@@ -197,7 +197,7 @@ it('rejects startup when the child exits without an owner record', async () => {
     return child;
   });
   await expect(ensureDaemon()).rejects.toThrow();
-  expect(doubles.close).toHaveBeenCalledWith(42);
+  expect(doubles.close).toHaveBeenCalledWith();
 });
 
 it.each(['start', 'stop'] as const)('keeps waiting bounded when %s cannot be confirmed', async (operation) => {
@@ -208,12 +208,24 @@ it.each(['start', 'stop'] as const)('keeps waiting bounded when %s cannot be con
   if (operation === 'start') {
     doubles.spawn.mockImplementation(() => { queueMicrotask(() => child.emit('spawn')); return child; });
     await expect(ensureDaemon()).rejects.toThrow();
-    expect(doubles.close).toHaveBeenCalledWith(42);
+    expect(doubles.close).toHaveBeenCalledWith();
   } else {
     doubles.read.mockReturnValue(owner);
     await expect(stopDaemon()).rejects.toThrow();
     expect(kill).toHaveBeenCalledOnce();
     expect(doubles.remove).not.toHaveBeenCalled();
   }
-  expect(now).toBe(5_000);
+  expect(now).toBe(operation === 'start' ? 5_000 : 30_000);
+});
+
+it('allows child shutdown grace, forced termination and cleanup before confirming stop', async () => {
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.read.mockReturnValue(owner);
+  doubles.running.mockImplementation(() => now < 12_000);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  await stopDaemon();
+  expect(now).toBe(12_000);
+  expect(doubles.remove).toHaveBeenCalledOnce();
 });
