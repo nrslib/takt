@@ -30,14 +30,14 @@ export interface EventStore {
   restore(): Promise<{ lastAcceptedSequence: number; pending: AsyncIterable<StoredEvent> }>;
 }
 
-/** A のキュー実装を dispatcher が使う。add は保存前の順序予約、confirm は永続化完了。pending は未終了分（実行中も含む）。 */
+/** A のキュー実装を dispatcher が使う。add は保存前の順序予約、confirm は永続化完了。pending は保留以外の未終了分（実行中も含む）。 */
 export interface TurnQueues {
   add(event: AcceptedEvent): void;
   confirm(eventId: string): void;
   peekNext(canStart: (conversationId: string) => boolean): AcceptedEvent | undefined;
   markStarted(eventId: string): void;
   defer(eventId: string): void;
-  resumeGoal(repositoryDirectory: string, goalId: string): void;
+  resumeGoal(target: { repositoryDirectory: string; goalId: string } | { conversationId: string; goalId: string }): void;
   remove(eventId: string): void;
   pending(conversationId: string): readonly AcceptedEvent[];
 }

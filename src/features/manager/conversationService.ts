@@ -73,10 +73,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' }) };
       let result: OperationResult;
+      let reference: ReturnType<typeof eventReference>;
       try {
         io.signal.throwIfAborted();
-        const reference = eventReference(event);
-        if (reference !== undefined && !assignment.repositoryDirectories.includes(reference.repositoryDirectory)) throw new ConversationError('invalid_assignment');
+        const candidate = eventReference(event);
+        if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
+        reference = candidate;
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
           reconcileLostRun(event.observation, io.signal);
           return { kind: 'completed', result: { kind: 'reply', message: '' } };
@@ -192,7 +194,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           return { kind: 'interrupted', change: state.change({ session: { ...state.current.session, sessionId: null } }) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
-          const notice = await notifyManagerTurnFailure(cwd, undefined, error);
+          const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error);
           if (notice !== undefined) io.progress(notice);
         }
         return { kind: 'completed', result: conversationErrorResult(error, language) };

@@ -60,11 +60,12 @@ describe('daemon turn queues', () => {
     queue.add(resumed); queue.confirm(resumed.eventId);
     expect(queue.peekNext(() => true)).toEqual(resumed);
     queue.remove(resumed.eventId);
-    queue.resumeGoal('/repo', 'goal');
+    expect(queue.pending('a')).toEqual([]);
+    queue.resumeGoal({ repositoryDirectory: '/repo', goalId: 'goal' });
     expect(queue.peekNext(() => true)).toEqual(tasks[0]);
     queue.remove('1');
     expect(queue.peekNext(() => true)).toBeUndefined();
-    expect(queue.pending('a')).toEqual([tasks[1], tasks[2]]);
+    expect(queue.pending('a')).toEqual([]);
   });
 
   it('keeps waiting messages when only the active event is removed', () => {

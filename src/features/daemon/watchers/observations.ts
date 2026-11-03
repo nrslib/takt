@@ -42,7 +42,10 @@ export class WatchObservations {
   async abnormal(target: WatchTarget, observation: WatchObservation): Promise<void> {
     const key = watchKey(target, observation.kind);
     let record = await this.records.read(key);
-    if (!record?.active) {
+    const previous = record?.input?.event;
+    const prChanged = observation.kind === 'pr_changed' && previous?.kind === 'watch_observation'
+      && previous.observation.kind === 'pr_changed' && previous.observation.state !== observation.state;
+    if (!record?.active || prChanged) {
       const episode = record === undefined ? 1 : record.episode + 1;
       const id = `watch-${key}-${episode}`;
       record = { episode, active: true, accepted: false, input: {

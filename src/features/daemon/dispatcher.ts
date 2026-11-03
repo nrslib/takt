@@ -57,6 +57,7 @@ export async function createDaemonDispatcher(dependencies: DispatcherDependencie
 
 export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   get activeTurnCount(): number { return this.active.size; }
+  get hasPendingEvents(): boolean { return this.eventAdmissions.size > 0; }
   private readonly queues = createTurnQueues();
   private readonly active = new Map<string, ActiveTurn>();
   private readonly admissions = new Map<string, PendingAdmission>();
@@ -347,7 +348,12 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         this.indexAdmission(admission);
       }
     }
-    admission.reply.resolve(this.receipt(saved.kind === 'stored' ? admission.event : saved.event));
+    const accepted = saved.kind === 'stored' ? admission.event : saved.event;
+    const observed = accepted.event;
+    if (observed.kind === 'watch_observation' && observed.observation.kind === 'director_state_changed' && observed.observation.goalId !== null) {
+      this.queues.resumeGoal({ repositoryDirectory: observed.observation.repositoryDirectory, goalId: observed.observation.goalId });
+    }
+    admission.reply.resolve(this.receipt(accepted));
   }
 
   private newTurn(event: AcceptedEvent, turn: TurnIdentity): ActiveTurn {
@@ -479,7 +485,11 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         if (result.outcome.kind === 'deferred') this.queues.defer(event.eventId);
         else {
           this.queues.remove(event.eventId);
-          if (event.event.kind === 'goal_resumed') this.queues.resumeGoal(event.event.repositoryDirectory, event.event.goalId);
+          if (event.event.kind === 'goal_resumed') this.queues.resumeGoal(event.event);
+          if (event.event.kind === 'human_command' && event.event.command.kind === 'abort_goal') {
+            // 中止済みの結果も再読取し、通常の保存経路で終端化する。
+            this.queues.resumeGoal({ conversationId: event.conversationId, goalId: event.event.command.goalId });
+          }
           this.forgetAdmission(event);
         }
         this.active.delete(event.conversationId);

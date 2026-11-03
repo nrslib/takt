@@ -26,6 +26,7 @@ import { DaemonConversations } from './conversationState.js';
 import { DaemonRouting, routeAssignment } from './routing.js';
 import { createDaemonStateRequests } from './stateRequests.js';
 import { startDaemonWatchers } from './watchers/index.js';
+import { startWatchLoop, type WatchLoop } from './watchers/loop.js';
 import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
@@ -48,10 +49,13 @@ export async function startDaemon(options: {
   let resolveSlack!: (value: typeof slack) => void;
   const slackReady = new Promise<typeof slack>((resolve) => { resolveSlack = resolve; });
   let watchers: ReturnType<typeof startDaemonWatchers> | undefined;
+  let idleCheck: WatchLoop | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
   const startupFinished = new Promise<void>((resolve) => { finishStartup = resolve; });
+  let markStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => { markStopped = resolve; });
   const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version) => {
     await input.deliver(id, output, version);
     if (output.kind === 'inquiry') await (await slackReady)?.delivery.deliver(id, output, version);
@@ -68,7 +72,7 @@ export async function startDaemon(options: {
   const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
   const resources = { async close() {
     await startupFinished;
-    const results = await Promise.allSettled([watchers?.close(), slack?.close(), ipc?.close()]);
+    const results = await Promise.allSettled([idleCheck?.close(), watchers?.close(), slack?.close(), ipc?.close()]);
     const delivery = await Promise.allSettled([conversations.close()]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -96,6 +100,7 @@ export async function startDaemon(options: {
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     stopping = true; clearTimeout(storageRetry);
+    markStopped();
     input.stopAccepting(); ipc?.stopAccepting(); slack?.stopAccepting();
     closing ??= dispatcher.control({ kind: 'stop' }).then(() => undefined);
     return closing;
@@ -131,8 +136,9 @@ export async function startDaemon(options: {
     options.signal.throwIfAborted();
     const files = new DaemonPersistedFiles(directory);
     const records = new FileWatchRecords(directory);
-    watchers = startDaemonWatchers({ source: new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
-      new WatchObservations(records, dispatcher, Date.now)),
+    const source = new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
+      new WatchObservations(records, dispatcher, Date.now));
+    watchers = startDaemonWatchers({ source,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {
         if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
@@ -146,7 +152,16 @@ export async function startDaemon(options: {
         : { channelId: global.director.slack.channel_id, allowedUserIds: global.director.slack.allowed_user_ids } } });
     resolveSlack(slack);
     options.signal.throwIfAborted();
-    return { dispatcher, input, conversations, watchers, close };
+    const idle = (): boolean => !stopping && !slack?.listening && input.attachmentCount === 0
+      && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents;
+    // 起動元が接続する猶予は旧 daemon と同じ500msにする。
+    const idleAfter = Date.now() + 500;
+    idleCheck = startWatchLoop(500, async () => {
+      if (Date.now() < idleAfter || !idle()) return;
+      await watchers?.drain();
+      if (!await source.hasWork(files) && idle()) void close().catch(reportDaemonError);
+    }, reportDaemonError);
+    return { dispatcher, input, conversations, watchers, stopped, close };
   } catch (error) {
     resolveSlack(undefined);
     finishStartup();
@@ -181,7 +196,7 @@ export async function runDaemon(): Promise<void> {
   try {
     daemon = await startDaemon({ configDirectory: directory, owner, tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
     await logger.write('info', `Daemon started (${process.pid})`);
-    await stopped;
+    await Promise.race([stopped, daemon.stopped]);
   } catch (error) {
     if (error !== controller.signal.reason) { reportDaemonError(error); failures.push(error); }
   } finally {

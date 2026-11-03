@@ -121,5 +121,10 @@ export function useManagerQuestionAnswer(bodyWidth: number) {
   const rows = answerTarget === null ? [] : getBodyRows(answerTarget.pending.question.body, bodyWidth);
   const start = Math.min(answerTarget?.bodyOffset ?? 0, Math.max(0, rows.length - BODY_VIEW_ROWS));
   const bodyText = rows.slice(start, start + BODY_VIEW_ROWS).join('\n');
-  return { answerTarget, bodyText, clearAnswer: () => update(null), beginAnswer, switchToFreeText, handleNavigation, handleInput };
+  const clearAnswer = (questionId?: string): boolean => {
+    if (questionId !== undefined && current.current?.pending.question.id !== questionId) return false;
+    update(null);
+    return true;
+  };
+  return { answerTarget, bodyText, clearAnswer, beginAnswer, switchToFreeText, handleNavigation, handleInput };
 }

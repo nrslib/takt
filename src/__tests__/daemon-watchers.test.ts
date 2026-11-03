@@ -307,6 +307,18 @@ function commandWith(response: object, patch: Partial<CommandResult> = {}) {
 const prResponse = (state = 'MERGED') => ({ number: 9, url: pr.url, state, headRefName: 'goal', baseRefName: 'main' });
 
 describe('保存済みPRの照会', () => {
+  it('OPENを観測せずCLOSEDからMERGEDになっても、再起動後に別の変化として一度だけ通知する', async () => {
+    const h = harness();
+    await observePullRequest(pr, commandWith(prResponse('CLOSED')), h.observations, options());
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, commandWith(prResponse('MERGED')), restarted, options());
+    await observePullRequest(pr, commandWith(prResponse('MERGED')), restarted, options());
+    expect([...h.accepted.values()].map((input) => input.event)).toMatchObject([
+      { kind: 'watch_observation', observation: { kind: 'pr_changed', state: 'CLOSED' } },
+      { kind: 'watch_observation', observation: { kind: 'pr_changed', state: 'MERGED' } },
+    ]);
+  });
+
   it.each(['MERGED', 'CLOSED'])('初回から%sのPRを照合して一度だけ通知する', async (state) => {
     const h = harness();
     const command = commandWith(prResponse(state));

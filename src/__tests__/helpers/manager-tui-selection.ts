@@ -138,6 +138,50 @@ it('sends the selected target and structured answer, then closes the saved answe
   });
 });
 
+it.each([false, true])('preserves another question draft when queued answer results arrive (second answer submitted: %s)', async (submitted) => {
+  const first = question(1), second = question(2);
+  const context = mounted([first, second]);
+  context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: 'active-turn', kind: 'message' } } });
+  const open = async (secondQuestion: boolean) => {
+    context.app.stdin.write(QUESTION_MENU);
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+    if (secondQuestion) context.app.stdin.write(DOWN);
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.app.lastFrame()).toContain(secondQuestion ? 'Choose output 2' : 'Choose output 1'));
+  };
+  await waitFor(() => expect(context.app.lastFrame()).toContain('Pending 2'));
+  await open(false);
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toHaveLength(1));
+  const firstOperation = await context.client.operation();
+  await open(true);
+  context.app.stdin.write('Second draft');
+  await waitFor(() => expect(promptFrame(context)).toContain('Second draft'));
+  if (submitted) {
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toHaveLength(2));
+  }
+  context.client.output({ kind: 'result', operationId: firstOperation,
+    result: { kind: 'answer_saved', answerSaved: true, message: 'First saved' } });
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain('First saved');
+    expect(context.app.lastFrame()).toContain('Choose output 2');
+    expect(promptFrame(context)).toContain('Second draft');
+  });
+  context.client.output({ kind: 'result', operationId: 'unrelated-operation',
+    result: { kind: 'answer_saved', answerSaved: true, message: 'Unrelated saved' } });
+  await waitFor(() => expect(context.app.lastFrame()).toContain('Unrelated saved'));
+  expect(promptFrame(context)).toContain('Second draft');
+  if (!submitted) {
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toHaveLength(2));
+  }
+  const secondOperation = await context.client.operation();
+  context.client.output({ kind: 'result', operationId: secondOperation,
+    result: { kind: 'answer_saved', answerSaved: true, message: 'Second saved' } });
+  await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+});
+
 it('sends /make-goal as a free-text inquiry answer without requesting a goal proposal', async () => {
   const item = question();
   const context = mounted([item]);

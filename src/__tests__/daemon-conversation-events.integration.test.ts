@@ -37,7 +37,10 @@ import { WatchChecks } from '../features/daemon/watchers/checks.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
 
-vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({ stopAccepting() {}, async close() {} }) }));
+const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
+vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
+  get initializingCount() { return ipc.initializingCount; }, stopAccepting() {}, async close() {},
+}) }));
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
 
@@ -82,6 +85,119 @@ it('persists H1 and H2 during a stopped turn and schedules both human messages b
     expect(call.input.event.eventId).toBe(name);
     await f.runner.finish(call);
   }
+});
+
+it.each(['command', 'observation'] as const)('accepts human input after 32 deferred results and durably settles an aborted goal via %s', async (abortVia) => {
+  const goal = { ...goalRecord(), executionStatus: 'paused' as const };
+  const f = await fixture();
+  const goalPath = join(f.repository, '.takt', 'goals', goal.id);
+  await mkdir(goalPath, { recursive: true });
+  await writeFile(join(goalPath, 'goal.json'), JSON.stringify(goal));
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>();
+  const resolve = vi.fn(async () => ({ provider: 'mock' as const, model: null, language: 'en' as const,
+    contextKey: 'fixture', executor: { execute } }));
+  const service = createConversationTurnService(f.directory, { resolve, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>) => {
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+  for (let index = 1; index <= 32; index++) {
+    accepted(await f.dispatcher.accept({ ...input(`deferred-${index}`, f.id, 'other'), event: { kind: 'task_completed',
+      task: { repositoryDirectory: f.repository, goalId: goal.id, taskName: `task-${index}` }, result: { success: true, interrupted: false } } }));
+    expect(await perform(await f.runner.started(index))).toEqual({ kind: 'deferred' });
+  }
+  accepted(await f.post('human'));
+  await f.runner.finish(await f.runner.started(33));
+  let next = 34;
+  if (abortVia === 'command') {
+    accepted(await f.dispatcher.accept({ ...input('abort', f.id), event: { kind: 'human_command',
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'abort_goal', goalId: goal.id } } }));
+    expect(await perform(await f.runner.started(next++))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  } else {
+    await writeFile(join(goalPath, 'goal.json'), JSON.stringify({ ...goal, executionStatus: 'aborted' }));
+    accepted(await f.dispatcher.accept({ ...input('observed-abort', conversationId({ kind: 'daemon' }), 'other'),
+      event: { kind: 'watch_observation', observation: { kind: 'director_state_changed', repositoryDirectory: f.repository, goalId: goal.id,
+        managerConversationId: f.id, state: JSON.stringify({ executionStatus: 'aborted' }), targetId: 'goal', generation: 'aborted',
+        observedAt: '2026-11-03T00:00:00Z' } } }));
+  }
+  for (let index = next; index <= 66; index++) {
+    const call = await f.runner.started(index);
+    if (call.input.event.event.kind === 'watch_observation') await f.runner.finish(call);
+    else expect(await perform(call)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  }
+  expect(resolve).not.toHaveBeenCalled();
+  const pending = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) pending.push(record);
+  expect(pending).toEqual([]);
+});
+
+it('persists a blocked notification for a goal event when the provider fails without a TUI attachment', async () => {
+  const f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const goal = goalRecord();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, JSON.stringify(goal));
+  f.input.detach(f.opened.attachmentId);
+  const service = createConversationTurnService(f.directory, { async resolve() { throw new Error('provider failed'); }, async close() {} });
+  accepted(await f.dispatcher.accept({ ...input('failed-completion', f.id, 'other'), event: { kind: 'task_completed',
+    task: { repositoryDirectory: f.repository, goalId: goal.id, taskName: 'task' }, result: { success: true, interrupted: false } } }));
+  const call = await f.runner.started(1);
+  const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+    request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  await f.runner.finish(call, outcome);
+  const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
+  expect(saved.notifications).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'blocked', severity: 'error' })]));
+});
+
+it('waits for attachments, accepted turns and initializing IPC, then closes the runner when idle', async () => {
+  const f = await fixture();
+  accepted(await f.post('pending-turn'));
+  const turn = await f.runner.started(1);
+  f.input.detach(f.opened.attachmentId);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  expect(f.runner.closed).toBe(false);
+  ipc.initializingCount = 1;
+  try {
+    await f.runner.finish(turn);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(f.runner.closed).toBe(false);
+  } finally { ipc.initializingCount = 0; }
+  await vi.waitFor(() => expect(f.runner.closed).toBe(true), { timeout: 3000 });
+  await f.stopped;
+  await f.close();
+});
+
+it.each(['paused-goal', 'pending-task', 'running-task', 'slack'] as const)('keeps an unattached daemon while %s remains and exits after it ends', async (kind) => {
+  const slack = { listening: kind === 'slack', notifications: { async deliver() {} },
+    delivery: { async deliver() { return { kind: 'delivered' as const }; } }, stopAccepting() {}, async close() {} };
+  vi.spyOn(slackPorts, 'createDaemonSlackPorts').mockResolvedValue(slack);
+  const goal = { ...goalRecord(), executionStatus: 'paused' as const };
+  let workPath = '';
+  const f = await fixture();
+  const repository = f.repository;
+  if (kind === 'paused-goal') {
+    const path = join(repository, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    workPath = join(path, 'goal.json');
+    await writeFile(workPath, JSON.stringify(goal));
+  } else if (kind !== 'slack') {
+    workPath = join(repository, '.takt', 'tasks.yaml');
+    await writeFile(workPath, JSON.stringify({ tasks: [{ name: 'task', status: kind === 'pending-task' ? 'pending' : 'running',
+      created_at: '2026-11-03T00:00:00Z', started_at: null, completed_at: null }] }));
+  }
+  f.input.detach(f.opened.attachmentId);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  expect(f.runner.closed).toBe(false);
+  if (kind === 'paused-goal') await writeFile(workPath, JSON.stringify({ ...goal, executionStatus: 'aborted' }));
+  else if (kind === 'slack') slack.listening = false;
+  else await writeFile(workPath, '{"tasks":[]}');
+  await vi.waitFor(() => expect(f.runner.closed).toBe(true), { timeout: 3000 });
+  await f.close();
 });
 
 it.each([true, false])('defers a paused task result across restart and handles it once after resume (success: %s)', async (success) => {

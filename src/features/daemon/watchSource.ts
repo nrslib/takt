@@ -16,6 +16,7 @@ import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } fro
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
+import type { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const safeName = (name: string): string => {
@@ -37,6 +38,19 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       await this.conversations.ensure(assignment);
       yield { ...route, assignment, conversationId: conversationId(assignment) };
     }
+  }
+
+  async hasWork(files: DaemonPersistedFiles): Promise<boolean> {
+    for await (const project of this.projects()) {
+      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+        if (goal.status !== 'completed' && goal.executionStatus !== 'aborted') return true;
+      }
+      if ((await listWatchEntries(await files.inboxDirectory(project.repositoryDirectory))).some((entry) => entry.isFile() && entry.name.endsWith('.json'))) return true;
+      try {
+        if ((await readWatchTasks(project.repositoryDirectory)).some((task) => task.status === 'pending' || task.status === 'running')) return true;
+      } catch (error) { this.onError(error); }
+    }
+    return false;
   }
 
   async runs(): Promise<readonly RunWatchTarget[]> {

@@ -14,7 +14,7 @@ function fixture() {
     exiting: { current: false }, active: { current: true }, registering: { current: false }, editorRef: { current: createEditorState('answer') },
     edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), contentWidth: 80, canApprove: true,
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },
-    questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
+    questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
     selection: { selection: null, open: vi.fn(() => true), refresh: vi.fn(), handleInput: vi.fn() },

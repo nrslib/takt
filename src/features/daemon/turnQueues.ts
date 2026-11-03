@@ -37,11 +37,12 @@ export function createTurnQueues(): TurnQueues {
     },
     markStarted(eventId) { get(eventId).state = 'running'; },
     defer(eventId) { get(eventId).state = 'deferred'; },
-    resumeGoal(repositoryDirectory, goalId) {
+    resumeGoal(target) {
       for (const entry of other) {
         const event = entry.event.event;
         if (entry.state === 'deferred' && (event.kind === 'task_completed' || event.kind === 'task_failed')
-          && event.task.repositoryDirectory === repositoryDirectory && event.task.goalId === goalId) entry.state = 'queued';
+          && event.task.goalId === target.goalId && ('repositoryDirectory' in target
+            ? event.task.repositoryDirectory === target.repositoryDirectory : entry.event.conversationId === target.conversationId)) entry.state = 'queued';
       }
     },
     remove(eventId) {
@@ -50,7 +51,7 @@ export function createTurnQueues(): TurnQueues {
       lane.splice(lane.indexOf(entry), 1);
     },
     pending(conversationId) {
-      return entries().filter(({ event }) => event.conversationId === conversationId).map(({ event }) => event);
+      return entries().filter(({ event, state }) => event.conversationId === conversationId && state !== 'deferred').map(({ event }) => event);
     },
   };
 }

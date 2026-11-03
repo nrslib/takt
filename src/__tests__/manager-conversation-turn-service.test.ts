@@ -117,6 +117,23 @@ it('rejects an event outside the assignment before invoking AI', async () => {
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
   expect(f.execute).not.toHaveBeenCalled(); expect(f.resolve).not.toHaveBeenCalled();
 });
+it.each(['task_completed', 'pr_changed'] as const)('notifies the event repository and goal when a workspace %s turn fails', async (kind) => {
+  const f = fixture();
+  f.input.state.assignment = { kind: 'workspace', workspaceId: randomUUID() };
+  const { conversationId } = await import('../infra/conversations/identity.js');
+  const id = conversationId(f.input.state.assignment);
+  f.input.turn.conversationId = id; f.input.event.conversationId = id;
+  doubles.assignment.mockResolvedValue({ ...f.input.state.assignment, name: 'Workspace', repositoryDirectories: ['/repository', '/second'] });
+  const goalId = goalRecord().id;
+  f.input.event.event = kind === 'task_completed'
+    ? { kind, task: { repositoryDirectory: '/second', goalId, taskName: 'task' }, result: { success: true, interrupted: false } }
+    : { kind: 'watch_observation', observation: { kind, repositoryDirectory: '/second', goalId, state: 'MERGED',
+      url: 'https://github.com/test/repo/pull/1', targetId: 'pr', generation: 'generation', observedAt: '2026-11-03T00:00:00Z' } };
+  const failure = new Error('provider failed');
+  f.execute.mockRejectedValue(failure);
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure);
+});
 it('does not turn an event response into a human registration proposal', async () => {
   const f = fixture(); f.input.event.lane = 'other';
   f.input.event.event = { kind: 'director_message', directorConversationId: 'director', text: 'check goals' };
