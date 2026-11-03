@@ -306,7 +306,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 
 Manager conversations run in the daemon; the TUI sends requests and displays results. Once a turn is accepted, it continues in the daemon even if you close the TUI. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. Any goal proposal awaiting approval is shown again and can be registered by selecting Approve and pressing `Enter`.
 
-Previous messages and replies are not redisplayed when you reopen the TUI. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending goal summaries and goal records are saved separately.
+Previous messages and replies are not redisplayed when you reopen the TUI. Conversation history is managed by the provider's session. TAKT saves message text and full results in `daemon-events` and retains them after completion. These records are not automatically deleted. Pending goal summaries and goal records are saved separately.
 
 The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed work is retried only on an explicit human request.
 

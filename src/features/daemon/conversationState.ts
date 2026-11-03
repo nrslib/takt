@@ -75,9 +75,9 @@ export class DaemonConversations implements ConversationOwner {
     const message = outcome.kind === 'completed' && 'message' in outcome.result ? outcome.result.message
       : outcome.kind === 'failed' ? outcome.message : outcome.kind === 'interrupted' ? 'Manager turn interrupted' : 'Manager operation completed';
     const id = `result-${result.operationId}`;
-    if (await this.notifications.save({ id, message: `${result.conversationId}: ${message}` }, new AbortController().signal)) {
+    if (await this.notifications.save({ id, message: `${result.conversationId} (${result.operationId}): ${message}` }, new AbortController().signal)) {
       const directorId = conversationId({ kind: 'daemon' });
-      this.send(directorId, { kind: 'notice', id, message: `${result.conversationId}: ${message}` }, this.version(directorId, 0, null));
+      this.send(directorId, { kind: 'notice', id, message: `${result.conversationId} (${result.operationId}): ${message}` }, this.version(directorId, 0, null));
     }
   }
 

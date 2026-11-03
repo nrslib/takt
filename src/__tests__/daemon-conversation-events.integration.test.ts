@@ -18,7 +18,9 @@ import { readWatchTasks } from '../features/daemon/watchers/state.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
-import { receiveInboxChange } from '../features/daemon/inbox.js';
+import { receiveInboxChange, restoreLegacyConversations } from '../features/daemon/inbox.js';
+import type { TurnOutcome } from '../core/daemon/messages.js';
+import { projectKey } from '../features/daemon/routing.js';
 import { ControlledTurnRunner, deferred, input, accepted } from './helpers/controlledDaemon.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -96,7 +98,11 @@ it('saves state requests independently of the pending model turn and rejects sta
   expect((await f.conversations.store.read(f.id))!.state.session.sessionId).toBe('kept');
 });
 
-it('accepts director messages through the bus and saves one result notification without self IPC', async () => {
+it.each<TurnOutcome>([
+  { kind: 'completed', result: { kind: 'reply', message: 'checked' } },
+  { kind: 'failed', message: 'failed' },
+  { kind: 'interrupted' },
+])('includes the operation ID in the director result notification: $kind', async (outcome) => {
   const f = await fixture();
   const director = conversationId({ kind: 'daemon' });
   accepted(await f.dispatcher.accept(input('director-turn', director)));
@@ -105,11 +111,11 @@ it('accepts director messages through the bus and saves one result notification 
   const request = { kind: 'accept_director_message' as const, conversationId: f.id, eventId: 'director-input', requestId: 'director-input', text: 'inspect', occurredAt: '2026-11-03T00:00:00Z' };
   expect(await f.dispatcher.request(call.turn, request, call.signal)).toMatchObject({ kind: 'event_accepted', admission: { kind: 'accepted' } });
   const manager = await f.runner.started(2);
-  await f.runner.finish(manager, { kind: 'completed', result: { kind: 'reply', message: 'checked' } });
+  await f.runner.finish(manager, outcome);
   const saved = [];
   for await (const notice of f.conversations.notifications.iterate()) saved.push(notice);
-  expect(saved).toMatchObject([{ id: `result-${manager.turn.operationId}`, message: expect.stringContaining('checked') }]);
-  await f.conversations.apply({ ...manager.turn, event: manager.input.event, outcome: { kind: 'completed', result: { kind: 'reply', message: 'checked' } } });
+  expect(saved).toMatchObject([{ id: `result-${manager.turn.operationId}`, message: expect.stringContaining(manager.turn.operationId) }]);
+  await f.conversations.apply({ ...manager.turn, event: manager.input.event, outcome });
   const repeated = [];
   for await (const notice of f.conversations.notifications.iterate()) repeated.push(notice);
   expect(repeated).toEqual(saved);
@@ -366,4 +372,106 @@ it('preserves another conversation final result while a slow attachment fills it
       outcome: { kind: 'completed', result: { kind: 'reply', message: 'final reply' } } });
     expect(outputs).toContainEqual({ kind: 'result', operationId, result: { kind: 'reply', message: 'final reply' } });
   } finally { stalled.resolve(); await f.conversations.close(); }
+});
+
+it.each([
+  { kind: 'reply' as const, message: 'completed before restart' },
+  { kind: 'error' as const, code: 'operation_failed', message: 'failed before restart' },
+  { kind: 'error' as const, code: 'interrupted', message: 'interrupted before restart' },
+])('reuses a saved legacy director result before retiring running: $kind', async (savedResult) => {
+  const operationId = randomUUID();
+  const directorConversationId = conversationId({ kind: 'daemon' });
+  const f = await fixture(async (directory, repository) => {
+    const record = conversationRecord(repository);
+    record.lastSpeaker = { namespace: 'agent', id: 'director' };
+    record.running = { operationId, kind: 'message', directorConversationId,
+      owner: { pid: 123, identity: { startTime: 'old' } } };
+    await mkdir(join(directory, 'conversations'), { recursive: true });
+    await writeFile(join(directory, 'conversations', `${record.id}.json`), JSON.stringify(record));
+    await mkdir(join(directory, 'director-message-results'), { recursive: true });
+    await writeFile(join(directory, 'director-message-results', `${operationId}.json`), JSON.stringify({
+      operationId, conversationId: record.id, directorConversationId, result: savedResult,
+    }));
+  });
+  expect(f.runner.calls).toHaveLength(0);
+  expect((await f.conversations.store.read(f.id))?.record.running).toBeNull();
+  const names = await readdir(join(f.directory, 'daemon-events'));
+  const records = await Promise.all(names.filter((name) => name.endsWith('.json')).map(async (name) =>
+    JSON.parse(await readFile(join(f.directory, 'daemon-events', name), 'utf8')) as unknown));
+  expect(records).toContainEqual(expect.objectContaining({ state: 'settled', result: expect.objectContaining({
+    operationId, outcome: { kind: 'completed', result: savedResult },
+  }) }));
+  await restoreLegacyConversations(f.conversations, new FileEventStore(f.directory));
+  const notices = []; for await (const notice of f.conversations.notifications.iterate()) notices.push(notice);
+  expect(notices).toEqual([{ id: `result-${operationId}`, message: expect.stringContaining(savedResult.message) }]);
+  expect(notices[0]?.message).toContain(operationId);
+});
+
+it('seeds existing goal and standalone inquiries without publishing and publishes only subsequent changes', async () => {
+  const f = await fixture();
+  const question = { id: randomUUID(), body: 'existing', status: 'pending', recipient: 'human' };
+  const goal = { ...goalRecord(), questions: [question] };
+  const goalPath = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(goalPath, '..'), { recursive: true });
+  await writeFile(goalPath, JSON.stringify(goal));
+  const inquiryDirectory = join(f.directory, 'projects', projectKey(f.repository), 'inquiries');
+  await mkdir(inquiryDirectory, { recursive: true });
+  const standalone = { ...question, id: randomUUID() };
+  await writeFile(join(inquiryDirectory, `${standalone.id}.json`), JSON.stringify(standalone));
+  const publish = vi.fn(async () => {});
+  const source = new FileDaemonWatchSource(f.conversations, publish, (error) => { throw error; });
+  expect(await source.inquiries()).toHaveLength(2);
+  await source.inquiries();
+  expect(publish).not.toHaveBeenCalled();
+  const next = { ...question, id: randomUUID(), body: 'new' };
+  await writeFile(goalPath, JSON.stringify({ ...goal, questions: [question, next] }));
+  await source.inquiries();
+  expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ question: expect.objectContaining({ id: next.id }) }));
+  await source.inquiries();
+  await new FileDaemonWatchSource(f.conversations, publish, (error) => { throw error; }).inquiries();
+  expect(publish).toHaveBeenCalledOnce();
+});
+
+it('observes tasks and goals above 256 KiB without excluding runs, PRs or inquiries', async () => {
+  const f = await fixture();
+  const timestamp = '2026-11-03T00:00:00Z';
+  const question = { id: randomUUID(), body: 'pending', status: 'pending', recipient: 'human' };
+  const goal = { ...goalRecord(), status: 'awaiting_merge', questions: [question], createdAt: timestamp,
+    pullRequest: { number: 42, url: 'https://github.com/example/project/pull/42' },
+    completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+    workLog: Array.from({ length: 3 }, () => ({ id: randomUUID(), kind: 'patrol', summary: 'x'.repeat(100_000), recordedAt: timestamp })),
+  };
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{
+    name: 'running', content: 'x'.repeat(300_000), status: 'running', goal_id: goal.id, run_slug: 'run',
+    created_at: timestamp, started_at: timestamp, completed_at: null,
+  }] }));
+  const errors = vi.fn();
+  const source = new FileDaemonWatchSource(f.conversations, async () => {}, errors);
+  expect(await source.runs()).toMatchObject([{ task: { goalId: goal.id } }]);
+  expect(await source.pullRequests()).toMatchObject([{ goalId: goal.id }]);
+  expect(await source.inquiries()).toMatchObject([{ questionId: question.id }]);
+  expect(await source.goals()).toMatchObject([{ goalId: goal.id }]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('continues monitoring later repositories after an unreadable tasks file', async () => {
+  const f = await fixture(); const other = join(f.directory, 'z-other');
+  await mkdir(join(other, '.takt'), { recursive: true });
+  await registerProject({ globalConfigDirectory: f.directory, projectDirectory: other, command: 'manager', managerUsed: true });
+  const timestamp = '2026-11-03T00:00:00Z';
+  const goal = { ...goalRecord(), createdAt: timestamp };
+  const path = join(other, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), 'tasks: [broken');
+  const tasks = ['running', 'pending'].map((status) => ({ name: status, status, goal_id: goal.id,
+    ...(status === 'running' ? { run_slug: 'run' } : {}), created_at: timestamp, started_at: null, completed_at: null }));
+  await writeFile(join(other, '.takt', 'tasks.yaml'), JSON.stringify({ tasks }));
+  const errors = vi.fn(); const source = new FileDaemonWatchSource(f.conversations, async () => {}, errors);
+  expect(await source.runs()).toMatchObject([{ task: { repositoryDirectory: other } }]);
+  expect(await source.goals()).toMatchObject([{ repositoryDirectory: other }]);
+  expect(await source.launches()).toMatchObject([{ repositoryDirectory: other }]);
+  expect(errors).toHaveBeenCalledTimes(3);
 });

@@ -14,6 +14,8 @@ import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js'
 import { isConversationIpcReady } from './conversationReadiness.js';
 
 const PROCESS_WAIT_MS = 5_000;
+// 子の終了猶予（5秒）に加え、強制終了・保存・watcher/IPC の後片付けを待つ。
+const STOP_WAIT_MS = 30_000;
 const PROCESS_POLL_MS = 50;
 const log = createLogger('daemon');
 const io = () => ({ signal: new AbortController().signal, timeoutMs: PROCESS_WAIT_MS });
@@ -28,7 +30,7 @@ export async function stopDaemon(): Promise<void> {
     catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
     }
-    const deadline = Date.now() + PROCESS_WAIT_MS;
+    const deadline = Date.now() + STOP_WAIT_MS;
     while (await isDaemonOwnerRunning(owner, io())) {
       if (Date.now() >= deadline) throw new Error(`Daemon did not stop (PID ${owner.pid})`);
       await delay(PROCESS_POLL_MS);

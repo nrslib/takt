@@ -1,8 +1,9 @@
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
 import { GoalQuestionSchema, GoalSchema, type Goal, type GoalQuestion } from '../../../infra/goals/schema.js';
-import { isMissing, listWatchEntries, readSmallJson, readSmallText } from './files.js';
+import { isMissing, listWatchEntries, readSmallJson } from './files.js';
 
 export const GOAL_FILE_NAME = 'goal.json';
 export const TASKS_FILE_NAME = 'tasks.yaml';
@@ -19,7 +20,7 @@ export type WatchTask = z.infer<typeof WatchTaskSchema>;
 
 export async function readWatchTasks(cwd: string): Promise<readonly WatchTask[]> {
   let text;
-  try { text = await readSmallText(join(cwd, '.takt', TASKS_FILE_NAME)); }
+  try { text = await readFile(join(cwd, '.takt', TASKS_FILE_NAME), 'utf8'); }
   catch (error) {
     if (isMissing(error)) return [];
     throw error;
@@ -30,7 +31,7 @@ export async function readWatchTasks(cwd: string): Promise<readonly WatchTask[]>
 }
 
 export async function readWatchGoal(cwd: string, id: string): Promise<Goal> {
-  const goal = GoalSchema.parse(await readSmallJson(join(cwd, '.takt', 'goals', z.uuid().parse(id), GOAL_FILE_NAME)));
+  const goal = GoalSchema.parse(JSON.parse(await readFile(join(cwd, '.takt', 'goals', z.uuid().parse(id), GOAL_FILE_NAME), 'utf8')) as unknown);
   if (goal.id !== id) throw new Error('Goal ID differs from its directory');
   return goal;
 }

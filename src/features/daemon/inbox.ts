@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { unlink } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import type { EventInput, TurnEvent } from '../../core/daemon/events.js';
 import type { DaemonIngress, EventStore } from '../../core/daemon/ports.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
@@ -10,6 +10,8 @@ import type { WatchFileChange } from './watchers/directories.js';
 import { hasCode } from '../../infra/daemon/privateFile.js';
 import { listWatchEntries, readSmallJson } from './watchers/files.js';
 import { z } from 'zod/v4';
+import { ConversationIdSchema } from '../../infra/conversations/schema.js';
+import type { TurnOutcome } from '../../core/daemon/messages.js';
 
 /** 以前の登録がなくても、残った巡回は起動時にモデルを使わず退役させる。 */
 export async function retireLegacyPatrols(directory: string): Promise<void> {
@@ -51,6 +53,25 @@ export async function receiveInboxChange(change: WatchFileChange, files: DaemonP
   await unlink(change.path).catch((error: unknown) => { if (!hasCode(error, 'ENOENT')) throw error; });
 }
 
+const legacyResultSchema = z.object({
+  operationId: z.uuid(), conversationId: ConversationIdSchema, directorConversationId: ConversationIdSchema,
+  result: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
+    z.object({ kind: z.literal('error'), code: z.string().min(1), message: z.string() }).strict(),
+  ]),
+}).strict();
+
+async function legacyOutcome(directory: string, id: string, operationId: string, directorId: string | undefined): Promise<TurnOutcome> {
+  const content = await readFile(join(directory, 'director-message-results', `${z.uuid().parse(operationId)}.json`), 'utf8')
+    .catch((error: unknown) => { if (hasCode(error, 'ENOENT')) return undefined; throw error; });
+  if (content === undefined) return { kind: 'interrupted' };
+  const saved = legacyResultSchema.parse(JSON.parse(content) as unknown);
+  if (saved.operationId !== operationId || saved.conversationId !== id || saved.directorConversationId !== directorId) {
+    throw new Error('Legacy director result identity mismatch');
+  }
+  return { kind: 'completed', result: saved.result };
+}
+
 export async function restoreLegacyConversations(conversations: DaemonConversations, store: EventStore): Promise<void> {
   let sequence = (await store.restore()).lastAcceptedSequence;
   for await (const record of conversations.store.iterate()) {
@@ -76,7 +97,8 @@ export async function restoreLegacyConversations(conversations: DaemonConversati
       // 再起動が移行中に止まっても、保存済みのイベント・結果を使い直す。
       const admission = await store.accept(event);
       const canonical = admission.kind === 'stored' ? event : admission.event;
-      const result = { conversationId: record.id, operationId: running.operationId, generation: 1, event: canonical, outcome: { kind: 'interrupted' as const } };
+      const outcome = await legacyOutcome(conversations.routing.directory, record.id, running.operationId, running.directorConversationId);
+      const result = { conversationId: record.id, operationId: running.operationId, generation: 1, event: canonical, outcome };
       await store.markStarted(id, result);
       await store.saveResult(id, result);
       await conversations.apply(result);

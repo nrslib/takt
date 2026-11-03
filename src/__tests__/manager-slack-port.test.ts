@@ -159,7 +159,6 @@ it('opens a permission modal but submits only after the originating user confirm
   const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/canonical' };
   inquiries.find.mockReturnValue({ channelId: endpoint.channelId, parentTs: endpoint.parentTs, questionId: question.id, target });
   vi.mocked(input.open).mockImplementation(async () => ({ attachmentId: 'read-attachment', read: read([{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }]) }));
-  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read([{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }]) });
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   await port.receiveAction(endpoint, 'takt_inquiry_answer_allow_project', 'allow_project', 'trigger');
   expect(input.submit).not.toHaveBeenCalled();

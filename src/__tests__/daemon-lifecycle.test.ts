@@ -215,5 +215,17 @@ it.each(['start', 'stop'] as const)('keeps waiting bounded when %s cannot be con
     expect(kill).toHaveBeenCalledOnce();
     expect(doubles.remove).not.toHaveBeenCalled();
   }
-  expect(now).toBe(5_000);
+  expect(now).toBe(operation === 'start' ? 5_000 : 30_000);
+});
+
+it('allows child shutdown grace, forced termination and cleanup before confirming stop', async () => {
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.read.mockReturnValue(owner);
+  doubles.running.mockImplementation(() => now < 12_000);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  await stopDaemon();
+  expect(now).toBe(12_000);
+  expect(doubles.remove).toHaveBeenCalledOnce();
 });

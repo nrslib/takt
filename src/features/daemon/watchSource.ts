@@ -23,9 +23,10 @@ const safeName = (name: string): string => {
   return name;
 };
 
-/** 小さい保存ファイルから、上限付きの観測対象だけを組み立てる。 */
+/** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
   private readonly inquiriesSeen = new Map<string, string>();
+  private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations) {}
@@ -41,27 +42,29 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async runs(): Promise<readonly RunWatchTarget[]> {
     const targets: RunWatchTarget[] = [];
     for await (const project of this.projects()) {
-      for (const task of await readWatchTasks(project.repositoryDirectory)) {
-        if (task.status !== 'running' || task.goal_id === undefined || task.run_slug === undefined) continue;
-        let goal;
-        try { goal = await readWatchGoal(project.repositoryDirectory, task.goal_id); }
-        catch (error) { this.onError(error); }
-        const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
-        let logPath: string | null = null;
-        let modified = -1;
-        for (const entry of await listWatchEntries(logDirectory)) {
-          if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-          const path = join(logDirectory, entry.name);
-          const stamp = await stat(path);
-          if (stamp.mtimeMs > modified) { logPath = path; modified = stamp.mtimeMs; }
+      try {
+        for (const task of await readWatchTasks(project.repositoryDirectory)) {
+          if (task.status !== 'running' || task.goal_id === undefined || task.run_slug === undefined) continue;
+          let goal;
+          try { goal = await readWatchGoal(project.repositoryDirectory, task.goal_id); }
+          catch (error) { this.onError(error); }
+          const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
+          let logPath: string | null = null;
+          let modified = -1;
+          for (const entry of await listWatchEntries(logDirectory)) {
+            if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+            const path = join(logDirectory, entry.name);
+            const stamp = await stat(path);
+            if (stamp.mtimeMs > modified) { logPath = path; modified = stamp.mtimeMs; }
+          }
+          targets.push({ targetId: digest([project.repositoryDirectory, task.name]),
+            generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
+            task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name, runSlug: task.run_slug,
+              ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
+            owner: task.owner_pid == null || task.owner_start_time == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time },
+            running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });
         }
-        targets.push({ targetId: digest([project.repositoryDirectory, task.name]),
-          generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
-          task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name, runSlug: task.run_slug,
-            ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
-          owner: task.owner_pid == null || task.owner_start_time == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time },
-          running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });
-      }
+      } catch (error) { this.onError(error); }
     }
     return targets;
   }
@@ -71,12 +74,14 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async pullRequests(): Promise<readonly PullRequestWatchTarget[]> {
     const targets: PullRequestWatchTarget[] = [];
     for await (const project of this.projects()) {
-      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
-        if (goal.pullRequest === undefined || goal.status !== 'awaiting_merge' || goal.executionStatus !== 'active') continue;
-        targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest(goal.pullRequest), conversationId: project.conversationId,
-          repositoryDirectory: project.repositoryDirectory, goalId: goal.id, awaitingMerge: true,
-          ...goal.pullRequest, headBranch: goal.branch, baseBranch: goal.integrationBranch });
-      }
+      try {
+        for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+          if (goal.pullRequest === undefined || goal.status !== 'awaiting_merge' || goal.executionStatus !== 'active') continue;
+          targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest(goal.pullRequest), conversationId: project.conversationId,
+            repositoryDirectory: project.repositoryDirectory, goalId: goal.id, awaitingMerge: true,
+            ...goal.pullRequest, headBranch: goal.branch, baseBranch: goal.integrationBranch });
+        }
+      } catch (error) { this.onError(error); }
     }
     return targets;
   }
@@ -89,7 +94,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       present.add(key);
       const version = digest(notice.question);
       if (this.inquiriesSeen.get(key) !== version) {
-        await this.publish(notice);
+        if (this.inquiriesInitialized) await this.publish(notice);
         this.inquiriesSeen.set(key, version);
       }
       const directory = notice.target.goalId !== null ? notice.target.repositoryDirectory
@@ -100,6 +105,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         repositoryDirectory: directory,
         questionId: notice.question.id, goalId: notice.target.goalId, pending: notice.question.status === 'pending', createdAt: notice.question.createdAt ?? null });
     }
+    this.inquiriesInitialized = true;
     for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
     return targets;
   }
@@ -107,18 +113,20 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async goals(): Promise<readonly GoalWatchTarget[]> {
     const targets: GoalWatchTarget[] = [];
     for await (const project of this.projects()) {
-      const tasks = await readWatchTasks(project.repositoryDirectory);
-      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
-        const dates = [goal.createdAt, ...goal.workLog.filter((entry) => entry.kind !== 'patrol').map((entry) => entry.recordedAt),
-          ...(goal.questions ?? []).flatMap((question) => [question.createdAt, question.answer?.answeredAt, question.withdrawnAt])]
-          .filter((date): date is string => date !== undefined).sort((left, right) => Date.parse(left) - Date.parse(right));
-        if (dates.length === 0) continue;
-        const lastUpdatedAt = dates.at(-1)!;
-        targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest([goal.id, lastUpdatedAt]), conversationId: project.conversationId,
-          repositoryDirectory: project.repositoryDirectory, goalId: goal.id, active: goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge'
-            && !goal.questions?.some((question) => question.status === 'pending' && question.recipient === 'human')
-            && !tasks.some((task) => task.goal_id === goal.id && task.status === 'running'), lastUpdatedAt });
-      }
+      try {
+        const tasks = await readWatchTasks(project.repositoryDirectory);
+        for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+          const dates = [goal.createdAt, ...goal.workLog.filter((entry) => entry.kind !== 'patrol').map((entry) => entry.recordedAt),
+            ...(goal.questions ?? []).flatMap((question) => [question.createdAt, question.answer?.answeredAt, question.withdrawnAt])]
+            .filter((date): date is string => date !== undefined).sort((left, right) => Date.parse(left) - Date.parse(right));
+          if (dates.length === 0) continue;
+          const lastUpdatedAt = dates.at(-1)!;
+          targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest([goal.id, lastUpdatedAt]), conversationId: project.conversationId,
+            repositoryDirectory: project.repositoryDirectory, goalId: goal.id, active: goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge'
+              && !goal.questions?.some((question) => question.status === 'pending' && question.recipient === 'human')
+              && !tasks.some((task) => task.goal_id === goal.id && task.status === 'running'), lastUpdatedAt });
+        }
+      } catch (error) { this.onError(error); }
     }
     return targets;
   }
@@ -131,20 +139,24 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       assignments.set(project.conversationId, { assignment, directory: assignment.kind === 'workspace'
         ? join(this.conversations.routing.directory, 'workspaces', assignment.workspaceId, 'inquiries')
         : join(this.conversations.routing.directory, 'projects', projectKey(project.repositoryDirectory), 'inquiries') });
-      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
-        await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
-          pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() });
-        for (const question of goal.questions ?? []) {
-          yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
+      try {
+        for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+          await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
+            pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() });
+          for (const question of goal.questions ?? []) {
+            yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
+          }
         }
-      }
+      } catch (error) { this.onError(error); }
     }
     for (const [id, { assignment, directory }] of assignments) {
       const pendingInquiries: string[] = [];
-      for await (const question of readWatchInquiries(directory)) {
-        if (question.status === 'pending' && question.recipient === 'human') pendingInquiries.push(question.id);
-        yield { conversationId: id, target: { goalId: null, owner: assignment }, question };
-      }
+      try {
+        for await (const question of readWatchInquiries(directory)) {
+          if (question.status === 'pending' && question.recipient === 'human') pendingInquiries.push(question.id);
+          yield { conversationId: id, target: { goalId: null, owner: assignment }, question };
+        }
+      } catch (error) { this.onError(error); }
       const repositories = await this.conversations.routing.display(assignment);
       const repository = repositories.repositoryDirectories[0];
       if (repository !== undefined && pendingInquiries.length > 0) await this.directorChanged(id, repository, null, { pendingInquiries: pendingInquiries.sort() });
@@ -162,32 +174,34 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     const targets: LaunchWatchTarget[] = [];
     const global = await globalDaemonConfiguration(this.conversations.routing.directory);
     for await (const project of this.projects()) {
-      const tasks = await readWatchTasks(project.repositoryDirectory);
-      const pending = [];
-      for (const task of tasks) {
-        if (task.status !== 'pending' || task.goal_id === undefined) continue;
-        try {
-          const goal = await readWatchGoal(project.repositoryDirectory, task.goal_id);
-          if (goal.status === 'created' && goal.executionStatus === 'active') pending.push(task);
-        } catch (error) { this.onError(error); }
-      }
-      if (pending.length === 0) continue;
-      const projectConfig = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));
-      const owners = (await listWatchEntries(join(project.repositoryDirectory, '.takt', 'execution.lock'))).filter((entry) => entry.name.startsWith('owner-') && entry.name.endsWith('.json'));
-      let owner: LaunchWatchTarget['owner'] = 'absent';
-      let launching: boolean | null = false;
-      for (const entry of owners) {
-        const bytes = await readPrivateFile(join(project.repositoryDirectory, '.takt', 'execution.lock', entry.name), 16 * 1024);
-        if (bytes === undefined) { owner = 'unknown'; launching = null; continue; }
-        const saved = z.object({ pid: z.number().int().positive(), processIdentity: z.object({ startTime: z.string().min(1) }), state: z.enum(['starting', 'running', 'stopping']) }).parse(JSON.parse(bytes.toString('utf8')) as unknown);
-        const observed = await new AsyncProcess().inspect({ pid: saved.pid, startTime: saved.processIdentity.startTime }, { signal: new AbortController().signal, timeoutMs: 5000 });
-        owner = observed.kind === 'alive' ? 'present' : observed.kind === 'dead' ? owner : 'unknown';
-        launching = observed.kind === 'unknown' ? null : observed.kind === 'alive' && saved.state === 'starting';
-      }
-      targets.push({ targetId: projectKey(project.repositoryDirectory), generation: digest(pending.map((task) => [task.name, task.created_at])),
-        conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
-        autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
-        pendingSince: pending.map((task) => task.created_at).sort()[0]! });
+      try {
+        const tasks = await readWatchTasks(project.repositoryDirectory);
+        const pending = [];
+        for (const task of tasks) {
+          if (task.status !== 'pending' || task.goal_id === undefined) continue;
+          try {
+            const goal = await readWatchGoal(project.repositoryDirectory, task.goal_id);
+            if (goal.status === 'created' && goal.executionStatus === 'active') pending.push(task);
+          } catch (error) { this.onError(error); }
+        }
+        if (pending.length === 0) continue;
+        const projectConfig = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));
+        const owners = (await listWatchEntries(join(project.repositoryDirectory, '.takt', 'execution.lock'))).filter((entry) => entry.name.startsWith('owner-') && entry.name.endsWith('.json'));
+        let owner: LaunchWatchTarget['owner'] = 'absent';
+        let launching: boolean | null = false;
+        for (const entry of owners) {
+          const bytes = await readPrivateFile(join(project.repositoryDirectory, '.takt', 'execution.lock', entry.name), 16 * 1024);
+          if (bytes === undefined) { owner = 'unknown'; launching = null; continue; }
+          const saved = z.object({ pid: z.number().int().positive(), processIdentity: z.object({ startTime: z.string().min(1) }), state: z.enum(['starting', 'running', 'stopping']) }).parse(JSON.parse(bytes.toString('utf8')) as unknown);
+          const observed = await new AsyncProcess().inspect({ pid: saved.pid, startTime: saved.processIdentity.startTime }, { signal: new AbortController().signal, timeoutMs: 5000 });
+          owner = observed.kind === 'alive' ? 'present' : observed.kind === 'dead' ? owner : 'unknown';
+          launching = observed.kind === 'unknown' ? null : observed.kind === 'alive' && saved.state === 'starting';
+        }
+        targets.push({ targetId: projectKey(project.repositoryDirectory), generation: digest(pending.map((task) => [task.name, task.created_at])),
+          conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
+          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
+          pendingSince: pending.map((task) => task.created_at).sort()[0]! });
+      } catch (error) { this.onError(error); }
     }
     return targets;
   }
