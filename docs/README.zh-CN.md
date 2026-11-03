@@ -296,7 +296,7 @@ manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮
 
 重新打开 TUI 时，不会重新显示之前的发言和回复。对话历史由 provider 的会话管理。等待中的发言正文由 TAKT 保存到开始执行为止。等待批准的目标摘要和目标记录会单独保存。
 
-巡检、事件或对话正在处理时，人的发言仍会保存并接受，界面会显示接受通知和等待数量。当前处理结束后按保存顺序执行。中断只影响当前对话轮次，不会删除等待中的发言。daemon 重启后仍会处理等待中的发言，原先正在执行的轮次则视为中断。总结批准等非发言操作在处理期间仍会被拒绝。
+daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮优先处理人工输入，每条队列按接受顺序执行。发言、批准和询问回答在处理期间仍可持久化接受；accepted 表示已保存，不表示完成。读取界面和中断不进入模型队列。中断只影响当前轮次，等待输入会保留。人工输入和事件共用一个对话与会话。失败的工作只在人明确要求时重试。
 
 只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
 
@@ -373,13 +373,13 @@ takt director
 takt director --help
 ```
 
-对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和定期巡检都会调用 provider 并产生费用。
+对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和事件处理都会调用 provider 并产生费用。
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
 
-通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和巡检会说明无法读取的 project 及其原因，并继续处理其余 manager。
+通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和状态确认会说明无法读取的 project 及其原因，并继续处理其余 manager。
 
-在全局 `~/.takt/config.yaml` 中设置 `director.patrol_interval`（秒，默认 `900`）和 `director.slack.channel_id` / `director.slack.allowed_user_ids`。参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
+在全局 `~/.takt/config.yaml` 中设置 `director.slack.channel_id` 和 `director.slack.allowed_user_ids`。
 
 **director 的 Slack：** 使用与 manager 相同的 Slack App 和 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`，将机器人邀请到 director 频道，并在修改 Slack 配置后重新启动 daemon。配置 `director.slack` 后，可以接收汇总通知并允许获准用户对话，回复发送到原消息列。连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)，完整的分工与限制参阅 [director CLI 说明](./cli-reference.zh-CN.md#director实验性)。
 

@@ -14,7 +14,7 @@ const helloResponse = z.object({ protocolVersion: z.literal(1), type: z.literal(
 
 export async function isConversationIpcReady(configDirectory: string, owner: DaemonOwner): Promise<boolean> {
   let state: DaemonIpcState | undefined;
-  try { state = readDaemonIpcState(configDirectory); }
+  try { state = await readDaemonIpcState(configDirectory); }
   catch { return false; }
   if (state === undefined || !ipcStateMatchesOwner(state, owner)
     || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) return false;

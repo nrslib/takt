@@ -100,9 +100,9 @@ takt director
 takt director --help
 ```
 
-Director is experimental; behavior and saved data formats may change without notice. Conversations and scheduled patrols incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director patrol](./goal-management.md#director-patrol) for responsibilities, global `director.patrol_interval` and `director.slack` settings, and Slack setup.
+Director is experimental; behavior and saved data formats may change without notice. Human and event turns incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director responsibilities](./goal-management.md#director-responsibilities) for responsibilities, global `director.slack` settings, and Slack setup.
 
-Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) and patrol report unreadable projects with reasons and continue with the remaining managers.
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers.
 
 ## Web UI execution boundary
 

@@ -53,7 +53,7 @@ export function createDirectorSlackConversationPort(options: {
       },
     },
   };
-  const receiveMessage = async (endpoint: DirectorSlackEndpoint, text: string): Promise<void> => {
+  const receiveMessage = async (endpoint: DirectorSlackEndpoint, text: string, requestId: string): Promise<void> => {
     let attachmentId: string | undefined;
     let operationId: string | undefined;
     let admitted!: () => void;
@@ -75,14 +75,14 @@ export function createDirectorSlackConversationPort(options: {
       attachments.add(attachmentId);
       opened.read.cancel();
       if (!accepting) return;
-      const submission = await options.input.submit({ attachmentId, requestId: randomUUID(), speaker: resolved.speaker,
+      const submission = await options.input.submit({ attachmentId, requestId, speaker: resolved.speaker,
         command: { kind: 'message', text } });
       if (submission.kind === 'accepted') {
+        if (targets.has(submission.operationId)) return;
         operationId = submission.operationId;
         targets.set(operationId, { endpoint, attachmentId });
         attachmentId = undefined;
-        if (submission.queuedMessageCount !== undefined) await postReply(endpoint,
-          getLabel('manager.conversation.queued', options.language, { count: String(submission.queuedMessageCount) }));
+        await postReply(endpoint, options.language === 'ja' ? '受け付けて保存しました。' : 'Accepted and saved.');
       } else {
         const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
         await postReply(endpoint, message);
@@ -109,9 +109,9 @@ export function createDirectorSlackConversationPort(options: {
     },
   };
   return { ...port, notifications,
-    receive(endpoint: DirectorSlackEndpoint, text: string): Promise<void> {
+    receive(endpoint: DirectorSlackEndpoint, text: string, requestId: string = randomUUID()): Promise<void> {
       if (!accepting) return Promise.resolve();
-      const receiving = receiveMessage(endpoint, text);
+      const receiving = receiveMessage(endpoint, text, requestId);
       admissions.add(receiving);
       return receiving.finally(() => { admissions.delete(receiving); });
     },

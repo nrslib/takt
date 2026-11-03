@@ -10,6 +10,8 @@ import type { ConversationReadMetadata } from '../features/manager/conversationT
 const doubles = vi.hoisted(() => ({ connect: vi.fn(), ensure: vi.fn(), resolve: vi.fn(), owner: {
   pid: 1234, identity: { startTime: 'incarnation-one' }, version: 'test', cliPath: '/cli.js',
 } }));
+vi.mock('../infra/task/repositoryDirectory.js', () => ({ resolveGitRepositoryDirectory: async (path: string) => path }));
+vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: async (value: unknown) => value }));
 vi.mock('node:net', () => ({ createConnection: doubles.connect }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.ensure }));
 vi.mock('../features/manager/tuiConversationPort.js', () => ({ createTuiConversationPort: () => ({ resolve: doubles.resolve }) }));

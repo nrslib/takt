@@ -339,3 +339,13 @@ it.each(['value', 'remove'] as const)('rejects a duplicate delta key from a seco
   expect(observer.remove).not.toHaveBeenCalled();
   expect(observer.read).toHaveBeenLastCalledWith('incomplete', delta.transferId, 'delta');
 });
+
+it.each(['message', 'task_completed', 'watch_observation', 'turn'])('preserves active %s turn generation through a snapshot for interruption', async (kind) => {
+  const { receiver, observer, state, metadata, frames } = fixture();
+  const operationId = randomUUID();
+  const read = metadata(4, 2, operationId);
+  const running = { ...state, running: { kind, operationId, generation: 9 } };
+  receiver.expectRead(read);
+  for (const frame of await frames(read, [{ kind: 'state', state: running }])) receiver.receive(frame);
+  expect(observer.state).toHaveBeenCalledExactlyOnceWith(running, read);
+});

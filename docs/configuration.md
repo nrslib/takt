@@ -15,7 +15,6 @@ If the global configuration directory and the current project's `.takt/` point t
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
 director:
-  patrol_interval: 900        # Director patrol interval in seconds (positive integer, default: 900)
   slack:
     channel_id: C0DIR
     allowed_user_ids: [U0AAA]
@@ -193,7 +192,6 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
-| `director.patrol_interval` | positive integer seconds | `900` | Interval between scheduled director patrols while the daemon is running. Global-only. |
 | `director.slack.channel_id` | string | - | Director Slack channel. Global-only; see [Slack conversations with director](#slack-conversations-with-director). |
 | `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director from Slack. Required when `director.slack` is configured; an empty list accepts no users. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
@@ -568,12 +566,16 @@ When a repository has Slack configured and both tokens are present, the daemon k
 
 ### Conversations and inquiries
 
+Waiting input survives restart. Current Slack ports do not guarantee restoration of reply destinations after a daemon restart.
+
+The Slack ACK acknowledges transport receipt. Business acceptance is reported only after the daemon durably saves the input. Results arrive later in the originating thread.
+
 - Post a message in the configured channel. Manager replies in that post's thread; continue the exchange there. All conversation threads connect to the same manager conversation for the repository, shared with the TUI. Replies go only to the thread where the message was sent. Replies to TUI messages are not sent to Slack.
 - Messages in other channels, DMs to the bot, and messages or button actions from users outside `allowed_user_ids` receive no response.
-- Messages sent during processing are saved and acknowledged with a waiting count. They run in saved order after the current turn, with replies in the original thread, and survive daemon restarts while waiting. Slack reply destinations are not restored after a restart, so those replies will not reach the original thread. Each conversation's waiting queue is limited to 32 messages and 1 MiB of UTF-8 for the complete serialized queue JSON. Messages exceeding either limit are not saved. If a message exceeds the byte capacity on its own, the originating port asks the sender to shorten or split it; if the count or total byte capacity is temporarily exceeded, it asks the sender to wait a little before trying again. Non-message operations, including inquiry answers and summary approval, still return busy during processing.
+- The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed work is retried only on an explicit human request.
 - Each inquiry (a question, approval, or operation request) appears as a separate new post outside any thread in the configured channel. Use buttons for approval decisions (Allow or Deny and scope) and choices. For an approval scope broader than this time only, the button opens a modal: edit the proposed permission sentence and confirm it to append the sentence to the permission Markdown.
 - Answer free-text inquiries by replying in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer, not a manager conversation message. Answers are saved with source `slack`.
-- Inquiries already pending when Slack connects are not posted to Slack; answer them in the TUI with `Ctrl+R`. Each new inquiry after connection is posted once, with no retry. If the binding between a post and its inquiry could not be saved or cannot be read, replies in that thread are treated as ordinary conversation, not answers.
+- Inquiry changes arrive through watcher events; Slack does not periodically scan every inquiry. Use `Ctrl+R` in the TUI for inquiries predating the connection. An unreadable inquiry binding rejects the reply without redirecting it into the conversation.
 - Notices such as goal completion are not posted through the conversation connection. They continue to arrive through `TAKT_NOTIFY_WEBHOOK`.
 
 ## Slack conversations with director
@@ -592,7 +594,7 @@ Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` envir
 
 Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons and modals use `manager.slack.allowed_user_ids`.
 
-Director groups new notices from one turn or patrol into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
+Director groups new notices from one turn into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
 ## Manager sensitive read targets
 

@@ -82,12 +82,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const state = snapshot.state;
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   active.current = busy;
-  const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && !busy;
+  const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete';
   const append = (content: string, role: TranscriptEntry['role'] = 'assistant'): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
-    if (submitting.current && command.kind !== 'abort_turn' && command.kind !== 'message') { append(getLabel('manager.conversation.busy', lang)); return null; }
     submitting.current++;
     setSending(true);
     try {
@@ -192,7 +191,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const register = async (revision: number): Promise<void> => {
     const current = client.getSnapshot();
     if (current.connection !== 'connected' || current.readStatus !== 'complete'
-      || current.state?.running != null || submitting.current || current.state?.pending?.revision !== revision) return;
+      || registering.current || current.state?.pending?.revision !== revision) return;
     registering.current = true;
     resetChoice();
     if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
@@ -256,7 +255,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useManagerInput({
     exiting, active, registering, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
-    abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId }); },
+    abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }); },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
     slashCompletion,
