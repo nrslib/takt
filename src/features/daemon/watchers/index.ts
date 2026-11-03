@@ -54,7 +54,7 @@ export function startDaemonWatchers(dependencies: {
   };
   register('process', WATCH_INTERVALS.process, () => dependencies.source.runs(), (checks, target, signal) =>
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
-  register('log', WATCH_INTERVALS.log, () => dependencies.source.runs(), (checks, target) =>
+  register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) =>
     checks.log(target, async () => {
       if (target.logPath === null) throw new Error('Run log path is unknown');
       return readLogStamp(target.logPath);

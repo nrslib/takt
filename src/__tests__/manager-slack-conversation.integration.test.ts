@@ -65,7 +65,7 @@ beforeEach(async () => {
   };
   input = createDaemonConversationInput({ ingress, resolveAssignment: async (selected) => selected });
   slack = await createDaemonSlackPorts({ configDirectory: process.env.TAKT_CONFIG_DIR!, input,
-    repositories: [{ repositoryDirectory, assignment, channelId: 'C1', allowedUserIds: ['U1', 'U2'], language: 'en' }],
+    repositories: [{ repositoryDirectory, resolveAssignment: async () => assignment, channelId: 'C1', allowedUserIds: ['U1', 'U2'], language: 'en' }],
     tokens: { appToken: 'fake-app', botToken: 'fake-bot' }, clientFactory: createSlackClient });
 });
 afterEach(async () => { await slack.close(); input.close(); });
@@ -189,8 +189,8 @@ it('routes workspace inquiries only through their repository channel and rejects
   const workspace = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'shared', repositoryDirectories: ['/a', '/b'] };
   const workspaceId = conversationId(workspace); const configDirectory = process.env.TAKT_CONFIG_DIR!;
   const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
-  const a = createSlackConversationPort({ repositoryDirectory: '/a', configDirectory, assignment: workspace, channelId: 'CA', input, client, language: 'en' });
-  const b = createSlackConversationPort({ repositoryDirectory: '/b', configDirectory, assignment: workspace, channelId: 'CB', input, client, language: 'en' });
+  const a = createSlackConversationPort({ repositoryDirectory: '/a', configDirectory, resolveAssignment: async () => workspace, channelId: 'CA', input, client, language: 'en' });
+  const b = createSlackConversationPort({ repositoryDirectory: '/b', configDirectory, resolveAssignment: async () => workspace, channelId: 'CB', input, client, language: 'en' });
   try {
     const target = { repositoryDirectory: '/b', goalId: randomUUID() }; const question = createInquiry({ body: 'B only' });
     await a.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
@@ -213,8 +213,8 @@ it('checks the operation repository for standalone workspace inquiries on delive
   const workspace = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'shared', repositoryDirectories: repositories };
   const workspaceId = conversationId(workspace);
   const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
-  const portA = createSlackConversationPort({ repositoryDirectory: repositories[0]!, configDirectory, assignment: workspace, channelId: 'CA', input, client, language: 'en' });
-  const portB = createSlackConversationPort({ repositoryDirectory: repositories[1]!, configDirectory, assignment: workspace, channelId: 'CB', input, client, language: 'en' });
+  const portA = createSlackConversationPort({ repositoryDirectory: repositories[0]!, configDirectory, resolveAssignment: async () => workspace, channelId: 'CA', input, client, language: 'en' });
+  const portB = createSlackConversationPort({ repositoryDirectory: repositories[1]!, configDirectory, resolveAssignment: async () => workspace, channelId: 'CB', input, client, language: 'en' });
   try {
     const target = { goalId: null, owner: { kind: 'workspace' as const, workspaceId: workspace.workspaceId } } as const;
     const question = createInquiry({ kind: 'approval', body: 'B operation', operation: { toolName: 'Bash', args: 'npm test', cwd: join(b, 'nested') } });

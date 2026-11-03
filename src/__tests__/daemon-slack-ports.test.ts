@@ -103,7 +103,7 @@ function directorFixture() {
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'director-attachment', read });
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'director-operation' });
   const factory = vi.fn(() => client);
-  const options = { repositories: [{ repositoryDirectory: '/repo', assignment: { kind: 'repository' as const, repositoryDirectory: '/repo', repositoryDirectories: ['/repo'] }, channelId: 'C0123', allowedUserIds: ['U0BBB'], language: 'en' as const }], configDirectory: process.env.TAKT_CONFIG_DIR!, input,
+  const options = { repositories: [{ repositoryDirectory: '/repo', resolveAssignment: async () => ({ kind: 'repository' as const, repositoryDirectory: '/repo', repositoryDirectories: ['/repo'] }), channelId: 'C0123', allowedUserIds: ['U0BBB'], language: 'en' as const }], configDirectory: process.env.TAKT_CONFIG_DIR!, input,
     tokens: { appToken: 'app', botToken: 'bot' }, clientFactory: factory,
     director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] }, language: 'en' as const } };
   return { client, factory, options };

@@ -53,7 +53,8 @@ export class ConversationStateStore {
   private state(stored: StoredConversation): ConversationTurnState {
     const { record } = stored;
     return { version: stored.metadata.version, assignment: record.assignment,
-      session: { provider: record.provider, model: record.model, sessionId: record.sessionId },
+      session: { provider: record.provider, model: record.model, sessionId: record.sessionId,
+        ...(record.agentOverrides === undefined ? {} : { agentOverrides: record.agentOverrides }) },
       revision: record.revision, pending: record.pending, approval: record.approval };
   }
 
@@ -124,7 +125,8 @@ export class ConversationStateStore {
         if (rebaseInterrupted && change.expectedVersion < stored.metadata.version) change.expectedVersion = stored.metadata.version;
         if (change.expectedVersion !== stored.metadata.version) return { kind: 'error', code: 'version_conflict', message: 'Conversation version changed' };
         const checked = ConversationRecordSchema.safeParse({ ...stored.record,
-          ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId }),
+          ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId,
+            agentOverrides: change.session.agentOverrides }),
           ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
           ...(change.approval === undefined ? {} : { approval: change.approval }),
         });

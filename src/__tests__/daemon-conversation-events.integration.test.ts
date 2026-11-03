@@ -30,6 +30,9 @@ import type { PortOutput } from '../features/manager/conversationPort.js';
 import { createTurnProcessRuntime } from '../features/daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../features/daemonTurn/conversationState.js';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
+import { WatchChecks } from '../features/daemon/watchers/checks.js';
+import { saveManagerEvent } from '../infra/goals/events.js';
+import { parseDaemonProcessMessage } from '../core/daemon/processProtocol.js';
 
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({ stopAccepting() {}, async close() {} }) }));
 const cleanups: Array<() => Promise<void>> = [];
@@ -94,13 +97,30 @@ it('interrupts only the named generation and retains accepted waiting input thro
 it('saves state requests independently of the pending model turn and rejects stale and unauthorized requests', async () => {
   const f = await fixture();
   accepted(await f.post('human')); const call = await f.runner.started(1);
-  const change = { operationId: 'session-save', expectedVersion: 0, session: { provider: 'mock', model: null, sessionId: 'kept' } };
+  const change = { operationId: 'session-save', expectedVersion: 0, session: { provider: 'mock', model: 'chosen', sessionId: 'kept',
+    agentOverrides: { provider: 'mock' as const, model: 'chosen' } } };
   expect(await f.dispatcher.request(call.turn, { kind: 'save_conversation', change }, call.signal)).toEqual({ kind: 'state_saved', version: 1, duplicate: false });
   expect(await f.dispatcher.request(call.turn, { kind: 'save_conversation', change }, call.signal)).toEqual({ kind: 'state_saved', version: 1, duplicate: true });
   expect(await f.dispatcher.request(call.turn, { kind: 'notify_director', notificationId: randomUUID(), message: 'forged' }, call.signal)).toMatchObject({ kind: 'error', code: 'forbidden' });
   await f.runner.finish(call);
   expect(await f.dispatcher.request(call.turn, { kind: 'save_conversation', change }, call.signal)).toMatchObject({ kind: 'error', code: 'stale_turn' });
-  expect((await f.conversations.store.read(f.id))!.state.session.sessionId).toBe('kept');
+  expect((await new ConversationStateStore(f.directory).read(f.id))!.state.session).toEqual(change.session);
+});
+
+it('supplies Slack with the current workspace assignment after daemon startup', async () => {
+  const ports = vi.spyOn(slackPorts, 'createDaemonSlackPorts');
+  const f = await fixture(async (_directory, repository) => {
+    await writeFile(join(repository, '.takt', 'config.yaml'), 'manager:\n  slack:\n    channel_id: C0123\n    allowed_user_ids: [U0123]\n');
+  });
+  const repository = ports.mock.calls[0]![0].repositories[0]!;
+  expect(await repository.resolveAssignment()).toMatchObject({ kind: 'repository', repositoryDirectory: f.repository });
+  const workspace = { id: randomUUID(), name: 'new workspace', repositoryDirectories: [f.repository] };
+  const path = join(f.directory, 'workspaces', workspace.id, 'workspace.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, JSON.stringify(workspace));
+  expect(await repository.resolveAssignment()).toEqual({ kind: 'workspace', workspaceId: workspace.id,
+    name: workspace.name, repositoryDirectories: workspace.repositoryDirectories });
+  expect(await f.conversations.store.read(conversationId({ kind: 'workspace', workspaceId: workspace.id }))).toBeDefined();
 });
 
 it('settles interruption after a save commits before its reply reaches the child and resumes queued input after restart', async () => {
@@ -441,15 +461,41 @@ it('admits a director event for each new blocked notification and deduplicates i
   }
 });
 
-it('keeps the PID of a running task whose process start time is unavailable', async () => {
+it.each(['run', undefined])('watches a running PID without a start time and accepts its loss and completion (slug: %s)', async (runSlug) => {
   const f = await fixture();
   const timestamp = '2026-11-03T00:00:00Z'; const goal = goalRecord();
   const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
   await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
   await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{ name: 'windows-run', status: 'running',
-    goal_id: goal.id, run_slug: 'run', owner_pid: 12345, owner_start_time: null, created_at: timestamp, started_at: timestamp, completed_at: null }] }));
+    goal_id: goal.id, run_slug: runSlug, execution_id: 'execution', owner_pid: 12345, owner_start_time: null, created_at: timestamp, started_at: timestamp, completed_at: null }] }));
   const source = new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; });
-  expect(await source.runs()).toMatchObject([{ owner: { pid: 12345, startTime: null } }]);
+  const targets = await source.runs();
+  expect(targets).toMatchObject([{ owner: { pid: 12345, startTime: null }, task: { executionId: 'execution' }, logPath: null }]);
+  const target = targets[0]!;
+  expect(target.task.runSlug).toBe(runSlug);
+  const checks = new WatchChecks(new WatchObservations(new FileWatchRecords(f.directory), f.dispatcher, Date.now), Date.now,
+    (_target, error) => { throw error; }, 'process');
+  await checks.process(target, { inspect: async () => ({ kind: 'dead' }) }, { signal: new AbortController().signal, timeoutMs: 1000 }, () => source.run(target.targetId));
+  const lost = await f.runner.started(1);
+  expect(lost.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'run_process_lost',
+    task: { executionId: 'execution' }, pid: 12345, startTime: null } });
+  if (lost.input.event.event.kind !== 'watch_observation' || lost.input.event.event.observation.kind !== 'run_process_lost') throw new Error('Expected process loss');
+  expect(lost.input.event.event.observation.task.runSlug).toBe(runSlug);
+  expect(parseDaemonProcessMessage({ protocolVersion: 1, launchId: 'watch', kind: 'start_turn', input: lost.input }, 'watch')).toMatchObject({ kind: 'start_turn' });
+  await f.runner.finish(lost);
+  saveManagerEvent(f.repository, { kind: 'completion', goalId: goal.id, taskName: 'windows-run', runSlug,
+    result: { success: false, interrupted: true, workflowResult: 'error', failureReason: 'Process lost', shaUnavailableReason: 'Process lost' } });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const inboxTarget = (await source.directories()).find((target) => target.kind === 'inbox')!;
+  const [name] = await readdir(inbox);
+  await receiveInboxChange({ target: inboxTarget, path: join(inbox, name!), removed: false, generation: 'completion', value: {} }, files, f.conversations, f.dispatcher);
+  const completion = await f.runner.started(2);
+  expect(completion.input.event.event).toMatchObject({ kind: 'task_failed', task: { taskName: 'windows-run' }, result: { interrupted: true } });
+  if (completion.input.event.event.kind !== 'task_failed') throw new Error('Expected task failure');
+  expect(completion.input.event.event.task.runSlug).toBe(runSlug);
+  expect(parseDaemonProcessMessage({ protocolVersion: 1, launchId: 'completion', kind: 'start_turn', input: completion.input }, 'completion')).toMatchObject({ kind: 'start_turn' });
+  await f.runner.finish(completion);
 });
 
 it.each([false, true])('records and notifies a legacy running interruption before retiring it, preserving queued input (director: %s)', async (director) => {

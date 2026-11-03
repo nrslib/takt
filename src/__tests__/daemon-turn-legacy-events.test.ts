@@ -22,30 +22,32 @@ it('retires only pending patrol files without executing a model or deleting comp
   expect(retirePendingPatrols('/repository')).toBe(1);
   expect(doubles.remove).toHaveBeenCalledExactlyOnceWith(events[0]);
 });
-function lostRun() {
+function lostRun(runSlug: string | undefined) {
   const goalId = randomUUID();
   const task = TaskRecordSchema.parse({ name: 'task', status: 'running', content: 'work', goal_id: goalId,
     created_at: '2026-11-03T00:00:00.000Z', started_at: '2026-11-03T00:00:01.000Z', completed_at: null,
-    owner_pid: 12345, owner_start_time: 'start', run_slug: 'run', execution_id: 'execution' });
+    owner_pid: 12345, owner_start_time: 'start', run_slug: runSlug, execution_id: 'execution' });
   let state: TasksFileData = { tasks: [task] };
   doubles.update.mockImplementation((update: (value: TasksFileData) => TasksFileData | undefined) => {
     state = TasksFileSchema.parse(update(state) ?? state); return state;
   });
   const observation: Extract<WatchObservation, { kind: 'run_process_lost' }> = {
     kind: 'run_process_lost', targetId: 'target', generation: 'generation', observedAt: '2026-11-03T00:00:00.000Z', pid: 12345, startTime: 'start',
-    task: { repositoryDirectory: '/repository', goalId, taskName: 'task', runSlug: 'run', executionId: 'execution' },
+    task: { repositoryDirectory: '/repository', goalId, taskName: 'task', runSlug, executionId: 'execution' },
   };
   return { observation, get state() { return state; }, task };
 }
-it('rechecks process loss under the task lock and records one completion', () => {
-  const f = lostRun(); vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+it.each(['run', undefined])('rechecks process loss under the task lock and records one completion (run slug: %s)', (runSlug) => {
+  const f = lostRun(runSlug); vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
   expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(true);
   expect(f.state.tasks[0]).toMatchObject({ status: 'failed', owner_pid: null, owner_start_time: null, completion: { interrupted: true } });
   expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(false);
   expect(doubles.save).toHaveBeenCalledOnce();
+  expect(doubles.save).toHaveBeenCalledWith('/repository', expect.objectContaining({ kind: 'completion', runSlug,
+    result: expect.objectContaining({ success: false, interrupted: true }) }));
 });
 it.each(['EPERM', 'alive', 'unknown'])('does not classify %s as a dead process', (mode) => {
-  const f = lostRun();
+  const f = lostRun('run');
   vi.spyOn(process, 'kill').mockImplementation(() => {
     if (mode === 'EPERM') throw Object.assign(new Error('denied'), { code: 'EPERM' });
     return true;
@@ -54,8 +56,8 @@ it.each(['EPERM', 'alive', 'unknown'])('does not classify %s as a dead process',
   expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(false);
   expect(f.state.tasks[0]?.status).toBe('running'); expect(doubles.save).not.toHaveBeenCalled();
 });
-it('preserves a newer task generation and normal completion', () => {
-  const f = lostRun(); vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+it.each(['run', undefined])('preserves a newer task generation and normal completion (run slug: %s)', (runSlug) => {
+  const f = lostRun(runSlug); vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
   f.observation.task.executionId = 'old-execution';
   expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(false);
   f.observation.task.executionId = 'execution';
@@ -67,7 +69,7 @@ it('preserves a newer task generation and normal completion', () => {
 });
 
 it.each(['ESRCH', 'EPERM', 'present'] as const)('rechecks a run without a start time and recovers only a missing PID (%s)', (mode) => {
-  const f = lostRun();
+  const f = lostRun('run');
   f.task.owner_start_time = null;
   f.observation.startTime = null;
   vi.spyOn(process, 'kill').mockImplementation(() => {

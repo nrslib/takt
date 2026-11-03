@@ -87,7 +87,7 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
 
 export interface SlackRepositoryConfig {
   repositoryDirectory: string;
-  assignment: ManagerAssignment;
+  resolveAssignment(): Promise<ManagerAssignment>;
   channelId: string;
   allowedUserIds: readonly string[];
   language: Language;

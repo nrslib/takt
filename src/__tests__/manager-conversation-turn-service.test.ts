@@ -6,6 +6,8 @@ import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
 import { turnStart, deferred } from './helpers/daemon-turn.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { randomUUID } from 'node:crypto';
+import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
+import type { TurnEvent } from '../core/daemon/events.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), updateGoal: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.getGoal; update = doubles.updateGoal; } }));
@@ -39,20 +41,35 @@ beforeEach(() => {
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
 });
-it('shares the persisted session between human and event turns and forwards per-message overrides', async () => {
+it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { provider: 'codex', model: 'custom' }])('keeps selection %j and session across human, director and completion turns', async (overrides) => {
   const f = fixture();
-  if (f.input.event.event.kind !== 'human_command') throw new Error('Expected human command');
-  f.input.event.event.agentOverrides = { provider: 'mock', model: 'custom' };
-  const first = await f.service.execute(f.input, f.io);
-  expect(f.resolve).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'repository' }), f.io.signal, { provider: 'mock', model: 'custom' });
-  expect(f.execute.mock.calls[0]![0]).toMatchObject({ sessionId: 'shared-session', recovery: { context: 'saved-goal-memory' } });
-  expect(first).toMatchObject({ kind: 'completed', change: { expectedVersion: 11, session: { sessionId: 'session-after' } } });
-  const second = turnStart(2); second.state.version = 11; second.state.session.sessionId = 'session-after';
-  second.event.event = { kind: 'director_message', directorConversationId: 'director', text: 'event message' };
-  second.event.lane = 'other';
-  await f.service.execute(second, f.io);
-  expect(f.resolve).toHaveBeenLastCalledWith(expect.any(Object), f.io.signal, undefined);
-  expect(f.execute.mock.calls[1]![0]).toMatchObject({ sessionId: 'session-after', directorMessage: true });
+  f.resolve.mockImplementation(async (_assignment, _signal, selected) => {
+    const provider = selected?.provider ?? 'mock';
+    const model = selected?.model ?? null;
+    return { provider, model, contextKey: JSON.stringify([provider, model]), language: 'en', executor: { execute: f.execute } };
+  });
+  f.execute.mockImplementation(async () => ({ message: 'reply', summary: null, sessionId: `session-${f.execute.mock.calls.length}`, assignment: undefined }));
+  const human: TurnEvent = { kind: 'human_command', command: { kind: 'message', text: 'hello' },
+    speaker: { namespace: 'human', id: 'test' }, agentOverrides: overrides };
+  const events: TurnEvent[] = [human, { kind: 'director_message', directorConversationId: 'director', text: 'event message' },
+    { kind: 'task_completed', task: { repositoryDirectory: '/repository', goalId: goalRecord().id, taskName: 'task', runSlug: 'run' },
+      result: { success: true, interrupted: false, workflowResult: 'completed', shaUnavailableReason: 'test' } }, human];
+  let state = f.input.state;
+  for (const [index, event] of events.entries()) {
+    const input = turnStart(index + 1); input.state = state; input.event.event = event;
+    input.event.lane = event.kind === 'human_command' ? 'human' : 'other';
+    // 子プロセスを作り直しても、保存した選択だけで同じ会話を続けられる。
+    const service = createConversationTurnService('/config', { resolve: f.resolve, close: vi.fn(async () => {}) });
+    const outcome = await service.execute(input, f.io);
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' }, change: { session: { agentOverrides: overrides } } });
+    expect(f.resolve).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'repository' }), f.io.signal, overrides);
+    expect(f.execute.mock.calls[index]![0]).toMatchObject({ sessionId: index === 0 ? undefined : `session-${index}`,
+      recovery: { context: 'saved-goal-memory' } });
+    if (outcome.change?.session === undefined) throw new Error('Expected saved session');
+    await f.io.request({ kind: 'save_conversation', change: outcome.change });
+    state = { ...state, version: outcome.change.expectedVersion + 1, session: outcome.change.session,
+      ...(outcome.change.proposal === undefined ? {} : outcome.change.proposal) };
+  }
 });
 it('saves approval reservation before registering a goal and uses the returned state version for completion', async () => {
   const f = fixture(); const confirmation = deferred<void>(); const requested = deferred<DaemonStateRequest>();

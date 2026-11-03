@@ -8,7 +8,7 @@ import type { ConversationChange, TurnIdentity, TurnResult } from '../../core/da
 
 const id = z.string().min(1).max(128);
 const sequence = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-const task = z.object({ repositoryDirectory: z.string(), goalId: id, taskName: z.string(), runSlug: id, executionId: id.optional() }).strict();
+const task = z.object({ repositoryDirectory: z.string(), goalId: id, taskName: z.string(), runSlug: id.optional(), executionId: id.optional() }).strict();
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: z.string(), goalId: id };
 const observation = z.discriminatedUnion('kind', [
@@ -43,7 +43,7 @@ const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
-  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable() }).strict().optional(),
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined) satisfies z.ZodType<ConversationChange>;

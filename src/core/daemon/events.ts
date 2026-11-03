@@ -11,7 +11,7 @@ export interface TaskRef {
   repositoryDirectory: string;
   goalId: string;
   taskName: string;
-  runSlug: string;
+  runSlug?: string;
   executionId?: string;
 }
 

@@ -11,7 +11,7 @@ const MAX_PROJECTION_BYTES = 256 * 1024;
 const tasksFile = z.object({ tasks: z.array(z.record(z.string(), z.unknown())) }).strict();
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 const inboxEvent = z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
   z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.enum(['registered', 'resumed', 'patrol']) }).strict(),
 ]);

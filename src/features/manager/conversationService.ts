@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { TurnEvent } from '../../core/daemon/events.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
 import type { ConversationDisplayAssignment, OperationResult } from './conversationPort.js';
@@ -115,11 +116,16 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }) };
           }
         } else if (command.kind === 'message') {
-          const resolved = await runtime.resolve(assignment, io.signal, human ? event.agentOverrides : undefined);
+          const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
+          const resolved = await runtime.resolve(assignment, io.signal, agentOverrides);
           try {
             const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
               || contextKey !== undefined && contextKey !== resolved.contextKey;
-            if (changed) await state.save({ session: { provider: resolved.provider, model: resolved.model, sessionId: null } });
+            if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
+              await state.save({ session: { provider: resolved.provider, model: resolved.model,
+                sessionId: changed ? null : state.current.session.sessionId,
+                ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
+            }
             contextKey = resolved.contextKey;
             language = resolved.language;
             const previousDenials = denials;

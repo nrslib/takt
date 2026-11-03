@@ -1,4 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import { createSlackConversationPort, SLACK_GOAL_APPROVE } from '../features/manager/slackConversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { ConversationError } from '../features/manager/conversationErrors.js';
@@ -20,8 +22,9 @@ function fixture() {
   const client: SlackClient = { start: vi.fn(), postMessage: vi.fn().mockResolvedValue({ kind: 'delivered', parentTs: endpoint.parentTs }),
     openModal: vi.fn().mockResolvedValue({ kind: 'delivered' }),
     postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
-  const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', assignment: { kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }, channelId: 'C0123', input, client, language: 'ja' });
-  return { input, client, port };
+  const resolveAssignment = vi.fn<() => Promise<ManagerAssignment>>(async () => ({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }));
+  const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', resolveAssignment, channelId: 'C0123', input, client, language: 'ja' });
+  return { input, client, port, resolveAssignment };
 }
 function read(items: SnapshotItem[] = []): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
@@ -69,13 +72,38 @@ it('posts a proposal once when another Slack attachment receives the same update
   expect(client.postThreadMessage).toHaveBeenCalledTimes(3);
   await port.close();
 });
-it('preserves the pre-resolved assignment and Slack binding and speaker namespaces', async () => {
+it('resolves the current assignment and preserves Slack binding and speaker namespaces', async () => {
   const { port } = fixture();
   const resolved = await port.resolve(endpoint);
   expect(resolved.conversationId).toBe(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }));
   expect(resolved.binding).toEqual({ port: 'slack', key: '["T1","C0123","1700000000.000001"]',
     counterpart: { namespace: 'slack-thread', id: '["T1","C0123","1700000000.000001"]' } });
   expect(resolved.speaker).toEqual({ namespace: 'slack-user', id: '["T1","U0AAA"]' });
+});
+it('routes messages and standalone inquiry delivery and answers to the workspace created after startup', async () => {
+  const { port, input, client, resolveAssignment } = fixture();
+  const before = await port.resolve(endpoint);
+  const workspace: ManagerAssignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'workspace', repositoryDirectories: ['/canonical'] };
+  resolveAssignment.mockResolvedValue(workspace);
+  const id = conversationId(workspace);
+  const target = { goalId: null, owner: { kind: 'workspace' as const, workspaceId: workspace.workspaceId } };
+  const question = createInquiry({ body: 'Which option?' });
+  vi.mocked(input.open).mockImplementation(async () => ({ attachmentId: randomUUID(), read: read([{ kind: 'inquiry', inquiry: { target, question } }]) }));
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: randomUUID() });
+  await port.receive(endpoint, 'after workspace creation');
+  expect(input.open).toHaveBeenCalledWith(expect.objectContaining({ conversationId: id, assignment: target.owner }), expect.any(Object));
+  await port.delivery.deliver(before.conversationId, { kind: 'inquiry', target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/canonical' } }, question },
+    { revision: 0, stateSequence: 1, operationId: null });
+  expect(client.postMessage).not.toHaveBeenCalled();
+  await port.delivery.deliver(id, { kind: 'inquiry', target, question }, { revision: 0, stateSequence: 2, operationId: null });
+  expect(client.postMessage).toHaveBeenCalledOnce();
+  expect(inquiries.save).toHaveBeenCalledWith(expect.objectContaining({ target, questionId: question.id }));
+  inquiries.find.mockReturnValue({ channelId: endpoint.channelId, parentTs: endpoint.parentTs, target, questionId: question.id });
+  await port.receive(endpoint, 'chosen option');
+  expect(input.open).toHaveBeenLastCalledWith(expect.objectContaining({ conversationId: id, assignment: target.owner }), expect.any(Object));
+  expect(input.submit).toHaveBeenLastCalledWith(expect.objectContaining({ command: { kind: 'answer_question', target,
+    questionId: question.id, answer: { text: 'chosen option' }, source: 'slack' } }));
+  await port.close();
 });
 it('delivers a result emitted before admission returns exactly once and detaches even on delivery failure', async () => {
   const { port, input, client } = fixture();

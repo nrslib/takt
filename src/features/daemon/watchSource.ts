@@ -44,22 +44,25 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for await (const project of this.projects()) {
       try {
         for (const task of await readWatchTasks(project.repositoryDirectory)) {
-          if (task.status !== 'running' || task.goal_id === undefined || task.run_slug === undefined) continue;
+          if (task.status !== 'running' || task.goal_id === undefined) continue;
           let goal;
           try { goal = await readWatchGoal(project.repositoryDirectory, task.goal_id); }
           catch (error) { this.onError(error); }
-          const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
           let logPath: string | null = null;
           let modified = -1;
-          for (const entry of await listWatchEntries(logDirectory)) {
-            if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-            const path = join(logDirectory, entry.name);
-            const stamp = await stat(path);
-            if (stamp.mtimeMs > modified) { logPath = path; modified = stamp.mtimeMs; }
+          if (task.run_slug !== undefined) {
+            const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
+            for (const entry of await listWatchEntries(logDirectory)) {
+              if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+              const path = join(logDirectory, entry.name);
+              const stamp = await stat(path);
+              if (stamp.mtimeMs > modified) { logPath = path; modified = stamp.mtimeMs; }
+            }
           }
           targets.push({ targetId: digest([project.repositoryDirectory, task.name]),
             generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
-            task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name, runSlug: task.run_slug,
+            task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name,
+              ...(task.run_slug === undefined ? {} : { runSlug: task.run_slug }),
               ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
             owner: task.owner_pid == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time ?? null },
             running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });

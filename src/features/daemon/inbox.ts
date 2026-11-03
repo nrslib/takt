@@ -41,7 +41,8 @@ export async function receiveInboxChange(change: WatchFileChange, files: DaemonP
     let event: TurnEvent;
     switch (saved.kind) {
       case 'completion': event = { kind: saved.result.success ? 'task_completed' : 'task_failed',
-        task: { repositoryDirectory: directory, goalId: saved.goalId, taskName: saved.taskName, runSlug: saved.runSlug }, result: saved.result }; break;
+        task: { repositoryDirectory: directory, goalId: saved.goalId, taskName: saved.taskName,
+          ...(saved.runSlug === undefined ? {} : { runSlug: saved.runSlug }) }, result: saved.result }; break;
       case 'answer': event = { kind: 'inquiry_answered', repositoryDirectory: directory, goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer }; break;
       case 'registered': case 'resumed': event = { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed', repositoryDirectory: directory, goalId: saved.goalId }; break;
     }

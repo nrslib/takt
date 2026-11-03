@@ -8,7 +8,7 @@ import { GoalAnswerSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.j
 
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
   z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
   z.object({ ...common, kind: z.literal('resumed') }).strict(),

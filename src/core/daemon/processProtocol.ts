@@ -16,7 +16,7 @@ const id = z.string().min(1).max(128);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
 const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, generation: version.refine((v) => v > 0) }).strict() satisfies z.ZodType<TurnIdentity>;
-const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable() }).strict();
+const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
   revision: version, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
 }).strict() satisfies z.ZodType<ConversationTurnState>;
@@ -24,7 +24,7 @@ const change = z.object({ operationId: id, expectedVersion: version, session: se
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined) satisfies z.ZodType<ConversationChange>;
-const task = z.object({ repositoryDirectory: text, goalId: id, taskName: text, runSlug: id, executionId: id.optional() }).strict();
+const task = z.object({ repositoryDirectory: text, goalId: id, taskName: text, runSlug: id.optional(), executionId: id.optional() }).strict();
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: text, goalId: id };
 const observation = z.discriminatedUnion('kind', [

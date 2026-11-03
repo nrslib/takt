@@ -2,6 +2,7 @@ import type { ConversationAssignment, ConversationRecord } from '../../infra/con
 import type { OperationResult, SnapshotRead, SnapshotItem, QuestionTarget } from '../../features/manager/conversationPort.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 import type { AcceptedEvent } from './events.js';
+import type { AssistantCliOverrides } from '../config/provider-resolution.js';
 
 export interface TurnIdentity {
   conversationId: string;
@@ -13,6 +14,7 @@ export interface ConversationSession {
   provider: string;
   model: string | null;
   sessionId: string | null;
+  agentOverrides?: AssistantCliOverrides;
 }
 
 /** version は条件付き保存の版。提案の revision とは独立して増える。 */

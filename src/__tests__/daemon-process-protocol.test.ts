@@ -86,10 +86,23 @@ describe('daemon turn process protocol', () => {
 
   it.each([
     {}, { provider: 'codex' }, { model: 'custom-model' }, { provider: 'claude-sdk', model: 'other-model' },
-  ])('preserves per-message agent overrides in start_turn: %j', (agentOverrides) => {
+  ])('preserves per-message and saved session agent overrides in start_turn: %j', (agentOverrides) => {
+    const state = turnState();
     const value = { ...common, kind: 'start_turn', input: {
-      event: { ...acceptedEvent, event: { ...acceptedEvent.event, agentOverrides } }, turn, state: turnState(),
+      event: { ...acceptedEvent, event: { ...acceptedEvent.event, agentOverrides } }, turn,
+      state: { ...state, session: { ...state.session, agentOverrides } },
     } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(value)), common.launchId)).toEqual(value);
+  });
+
+  it('accepts a process loss before run slug assignment in start_turn', () => {
+    const value = { ...common, kind: 'start_turn', input: { turn, state: turnState(), event: {
+      ...acceptedEvent, lane: 'other', source: 'watcher', event: { kind: 'watch_observation', observation: {
+        kind: 'run_process_lost', targetId: 'target', generation: 'generation', observedAt: '2026-11-03T00:00:00.000Z',
+        task: { repositoryDirectory: '/repository', goalId: 'goal', taskName: 'task', executionId: 'execution' },
+        pid: 12345, startTime: null,
+      } },
+    } } };
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(value)), common.launchId)).toEqual(value);
   });
 

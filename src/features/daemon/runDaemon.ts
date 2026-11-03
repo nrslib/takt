@@ -118,9 +118,13 @@ export async function startDaemon(options: {
       await conversations.ensure(assignment);
       const config = await readDaemonConfiguration(join(route.repositoryDirectory, '.takt', 'config.yaml'));
       if (config.manager?.slack === undefined) continue;
-      const display = await routing.display(assignment);
-      if (display.kind === 'daemon') throw new Error('Manager assignment required');
-      repositories.push({ repositoryDirectory: route.repositoryDirectory, assignment: display, channelId: config.manager.slack.channel_id,
+      repositories.push({ repositoryDirectory: route.repositoryDirectory, async resolveAssignment() {
+        const current = await routing.resolve({ kind: 'repository', repositoryDirectory: route.repositoryDirectory });
+        await conversations.ensure(current);
+        const display = await routing.display(current);
+        if (display.kind === 'daemon') throw new Error('Manager assignment required');
+        return display;
+      }, channelId: config.manager.slack.channel_id,
         allowedUserIds: config.manager.slack.allowed_user_ids, language: config.language ?? global.language ?? 'en' });
     }
     ipc = await createConversationIpcServer(directory, options.owner, input);

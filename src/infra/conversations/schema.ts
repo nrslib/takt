@@ -60,6 +60,7 @@ export const ConversationRecordSchema = z.object({
   assignment: ConversationAssignmentSchema,
   counterpart: ConversationActorSchema, lastSpeaker: ConversationActorSchema.nullable(),
   provider: nonempty, model: z.string().nullable(), sessionId: nonempty.nullable(),
+  agentOverrides: ConversationAgentOverridesSchema.optional(),
   bindings: z.array(PortBindingSchema), revision,
   pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
   running: RunningOperationSchema.nullable(),
