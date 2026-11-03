@@ -61,7 +61,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
             generation: digest([task.run_slug, task.execution_id, task.owner_pid, task.owner_start_time]), conversationId: project.conversationId,
             task: { repositoryDirectory: project.repositoryDirectory, goalId: task.goal_id, taskName: task.name, runSlug: task.run_slug,
               ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
-            owner: task.owner_pid == null || task.owner_start_time == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time },
+            owner: task.owner_pid == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time ?? null },
             running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });
         }
       } catch (error) { this.onError(error); }
@@ -142,6 +142,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       try {
         for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
           await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
+            blockedNotifications: (goal.notifications ?? []).filter((notification) => notification.kind === 'blocked').map((notification) => notification.id).sort(),
             pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() });
           for (const question of goal.questions ?? []) {
             yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };

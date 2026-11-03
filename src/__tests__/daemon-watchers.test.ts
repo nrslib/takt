@@ -69,6 +69,16 @@ const observedKinds = (accepted: Map<string, EventInput>) => [...accepted.values
   return input.event.observation.kind;
 });
 
+it('emits process loss with a PID and unknown start time only when the PID is missing', async () => {
+  const h = harness();
+  const target = { ...run, owner: { pid: 123, startTime: null } };
+  const inspect = vi.fn(async () => ({ kind: 'unknown' as const, reason: 'Process start time unavailable' }));
+  await expect(h.checks.process(target, { inspect }, options(), async () => target)).rejects.toThrow('unknown');
+  expect(h.accept).not.toHaveBeenCalled();
+  await h.checks.process(target, { inspect: async () => ({ kind: 'dead' }) }, options(), async () => target);
+  expect([...h.accepted.values()]).toMatchObject([{ event: { observation: { kind: 'run_process_lost', pid: 123, startTime: null } } }]);
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-11-01T00:00:00.000Z'));

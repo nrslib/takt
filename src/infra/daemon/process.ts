@@ -18,7 +18,7 @@ async function psStart(pid: number, options: IoOptions): Promise<string | undefi
   return PS_START.test(text) ? text : undefined;
 }
 
-export async function readProcessOwner(pid: number, options: IoOptions): Promise<ProcessOwner | undefined> {
+export async function readProcessOwner(pid: number, options: IoOptions): Promise<(ProcessOwner & { startTime: string }) | undefined> {
   options.signal.throwIfAborted();
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid process PID');
   if (process.platform === 'linux') {
@@ -59,10 +59,11 @@ function isMissing(pid: number): boolean {
 export async function observeProcess(owner: ProcessOwner, options: IoOptions): Promise<ProcessObservation> {
   const scope = ioScope(options);
   try {
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || owner.startTime.length === 0) throw new Error('Invalid process owner');
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || owner.startTime === '') throw new Error('Invalid process owner');
     if (isMissing(owner.pid)) return { kind: 'dead' };
+    if (owner.startTime === null) return { kind: 'unknown', reason: 'Process start time unavailable' };
     const bounded = { signal: scope.signal, timeoutMs: options.timeoutMs };
-    let current: ProcessOwner | undefined;
+    let current: Awaited<ReturnType<typeof readProcessOwner>>;
     // tasks.yaml の既存 run は ps の表示形式を保存している。
     if (PS_START.test(owner.startTime) && (process.platform === 'darwin' || process.platform === 'linux')) {
       const startTime = await psStart(owner.pid, bounded);

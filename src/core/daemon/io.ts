@@ -38,7 +38,7 @@ export interface CommandPort {
 /** B/C が保存し、E が PID の再利用を識別する。 */
 export interface ProcessOwner {
   pid: number;
-  startTime: string;
+  startTime: string | null;
 }
 
 /** B が観測し、E が unknown と dead を区別する。 */

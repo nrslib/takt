@@ -140,6 +140,16 @@ export class FileEventStore implements EventStore {
     });
   }
 
+  async hasGoalRegistration(repositoryDirectory: string, goalId: string): Promise<boolean> {
+    await ensurePrivateDirectory(this.directory);
+    for await (const entry of await opendir(this.directory)) {
+      if (!entry.name.endsWith('.json')) continue;
+      const { event } = (await this.read(join(this.directory, entry.name))).event;
+      if (event.kind === 'goal_registered' && event.repositoryDirectory === repositoryDirectory && event.goalId === goalId) return true;
+    }
+    return false;
+  }
+
   private async *pending(): AsyncGenerator<StoredEvent> {
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;

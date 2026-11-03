@@ -7,7 +7,9 @@ import { turnStart, deferred } from './helpers/daemon-turn.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { randomUUID } from 'node:crypto';
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn() }));
+const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), updateGoal: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.getGoal; update = doubles.updateGoal; } }));
+vi.mock('../features/daemonTurn/reconcileLostRun.js', () => ({ reconcileLostRun: doubles.reconcile }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
   resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path }));
 vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(), registerReservedGoal: doubles.register }));
@@ -35,6 +37,7 @@ function fixture() {
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
+  doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
 });
 it('shares the persisted session between human and event turns and forwards per-message overrides', async () => {
   const f = fixture();
@@ -104,4 +107,23 @@ it('does not turn an event response into a human registration proposal', async (
     summary: { objective: 'unexpected', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(f.request).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('settles a run loss observation without AI and invokes AI only for the resulting completion (recovered: %s)', async (recovered) => {
+  const f = fixture();
+  const task = { repositoryDirectory: '/repository', goalId: goalRecord().id, taskName: 'task', runSlug: 'run', executionId: 'execution' };
+  const observation = { kind: 'run_process_lost' as const, task, targetId: 'target', generation: 'generation',
+    observedAt: '2026-11-03T00:00:00Z', pid: 12345, startTime: null };
+  f.input.event.event = { kind: 'watch_observation', observation }; f.input.event.lane = 'other';
+  doubles.reconcile.mockReturnValue(recovered);
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  expect(doubles.reconcile).toHaveBeenCalledExactlyOnceWith(observation, f.io.signal);
+  expect(f.resolve).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+  expect(f.request).not.toHaveBeenCalled();
+  if (recovered) {
+    f.input.event.event = { kind: 'task_failed', task, result: { success: false, interrupted: true, workflowResult: 'error',
+      failureReason: 'Execution process stopped before saving its result', shaUnavailableReason: 'Process stopped' } };
+    expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'reply' } });
+    expect(f.resolve).toHaveBeenCalledOnce(); expect(f.execute).toHaveBeenCalledOnce();
+  }
 });

@@ -12,7 +12,7 @@ const task = z.object({ repositoryDirectory: z.string(), goalId: id, taskName: z
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: z.string(), goalId: id };
 const observation = z.discriminatedUnion('kind', [
-  z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id }).strict(),
+  z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('run_log_stalled'), task, lastUpdatedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: z.string(), reason: z.string() }).strict(),

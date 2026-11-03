@@ -100,6 +100,10 @@ export class ConversationStateStore {
   }
 
   async save(turn: TurnIdentity, input: ConversationChange, signal: AbortSignal): Promise<DaemonStateReply> {
+    return this.saveChange(turn, input, signal, false);
+  }
+
+  private async saveChange(turn: TurnIdentity, input: ConversationChange, signal: AbortSignal, rebaseInterrupted: boolean): Promise<DaemonStateReply> {
     const identity = StoredTurnSchema.parse(turn);
     const change = ConversationChangeSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     let committed: Extract<DaemonStateReply, { kind: 'state_saved' }> | undefined;
@@ -110,11 +114,14 @@ export class ConversationStateStore {
         if (stored === undefined) return { kind: 'error', code: 'forbidden', message: 'Unknown conversation' };
         const previous = stored.metadata.receipts.find((entry) => entry.change.operationId === change.operationId);
         if (previous !== undefined) {
+          if (rebaseInterrupted && change.expectedVersion < previous.change.expectedVersion) change.expectedVersion = previous.change.expectedVersion;
           if (!isDeepStrictEqual(previous.change, change) || !isDeepStrictEqual(previous.turn, identity)) {
             return { kind: 'error', code: 'forbidden', message: 'Operation ID was reused with different content or turn' };
           }
           return committed = { kind: 'state_saved', version: previous.version, duplicate: true };
         }
+        // 中断時は、確定後に子へ届かなかった保存の版へ後片付けを載せ直す。
+        if (rebaseInterrupted && change.expectedVersion < stored.metadata.version) change.expectedVersion = stored.metadata.version;
         if (change.expectedVersion !== stored.metadata.version) return { kind: 'error', code: 'version_conflict', message: 'Conversation version changed' };
         const checked = ConversationRecordSchema.safeParse({ ...stored.record,
           ...(change.session === undefined ? {} : { provider: change.session.provider, model: change.session.model, sessionId: change.session.sessionId }),
@@ -139,8 +146,8 @@ export class ConversationStateStore {
 
   async apply(result: TurnResult): Promise<void> {
     if (result.outcome.change === undefined) return;
-    const reply = await this.save({ conversationId: result.conversationId, operationId: result.operationId, generation: result.generation },
-      result.outcome.change, new AbortController().signal);
+    const reply = await this.saveChange({ conversationId: result.conversationId, operationId: result.operationId, generation: result.generation },
+      result.outcome.change, new AbortController().signal, result.outcome.kind === 'interrupted');
     if (reply.kind !== 'state_saved') throw new Error(`Conversation result could not be applied: ${JSON.stringify(reply)}`);
   }
 }

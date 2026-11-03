@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import * as slackPorts from '../features/daemon/slackPorts.js';
 import * as watcherModule from '../features/daemon/watchers/index.js';
+import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
 import { startDaemon } from '../features/daemon/runDaemon.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
@@ -24,7 +25,11 @@ import { projectKey } from '../features/daemon/routing.js';
 import { ControlledTurnRunner, deferred, input, accepted } from './helpers/controlledDaemon.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import type { Goal } from '../infra/goals/schema.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
+import { createTurnProcessRuntime } from '../features/daemonTurn/processRuntime.js';
+import { TurnConversationState } from '../features/daemonTurn/conversationState.js';
+import { createConversationTurnService } from '../features/manager/conversationService.js';
 
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({ stopAccepting() {}, async close() {} }) }));
 const cleanups: Array<() => Promise<void>> = [];
@@ -96,6 +101,105 @@ it('saves state requests independently of the pending model turn and rejects sta
   await f.runner.finish(call);
   expect(await f.dispatcher.request(call.turn, { kind: 'save_conversation', change }, call.signal)).toMatchObject({ kind: 'error', code: 'stale_turn' });
   expect((await f.conversations.store.read(f.id))!.state.session.sessionId).toBe('kept');
+});
+
+it('settles interruption after a save commits before its reply reaches the child and resumes queued input after restart', async () => {
+  const f = await fixture();
+  accepted(await f.post('active'));
+  const active = await f.runner.started(1);
+  accepted(await f.post('waiting'));
+  const committed = deferred<void>();
+  const releaseReply = deferred<void>();
+  const replied = deferred<void>();
+  const envelope = { protocolVersion: 1 as const, launchId: 'shutdown-race' };
+  const runtime = createTurnProcessRuntime({
+    onFatal(error) { throw error; },
+    createBusiness: () => ({ async close() {}, async execute(input, io) {
+      const state = new TurnConversationState(input.state, io);
+      try {
+        await state.save({ proposal: { revision: state.current.revision + 1, pending: null } });
+        throw new Error('Expected shutdown before reply');
+      } catch (error) {
+        if (!io.signal.aborted) throw error;
+        return { kind: 'interrupted', change: state.change({ session: { ...state.current.session, sessionId: null } }) };
+      }
+    } }),
+    transport: { async send(message) {
+      if (message.kind === 'daemon_request') {
+        const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
+        expect(reply).toMatchObject({ kind: 'state_saved', version: 1 });
+        committed.resolve();
+        await releaseReply.promise;
+        await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
+        replied.resolve();
+      } else if (message.kind === 'turn_finished') {
+        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 0 } });
+        await f.runner.finish(active, message.outcome);
+      }
+    } },
+  });
+  await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id, assignment: active.input.state.assignment, configDirectory: f.directory });
+  f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
+  await runtime.receive({ ...envelope, kind: 'start_turn', input: active.input });
+  try {
+    await committed.promise;
+    expect((await f.conversations.store.read(f.id))?.state).toMatchObject({ version: 1, revision: 1 });
+    await f.close();
+  } finally { releaseReply.resolve(); }
+  await replied.promise;
+  const store = new FileEventStore(f.directory);
+  const restored = await store.restore();
+  const pending = []; for await (const item of restored.pending) pending.push(item);
+  expect(pending).toMatchObject([{ state: 'queued', event: { eventId: 'waiting' } }]);
+  const state = await f.conversations.store.read(f.id);
+  expect(state?.state).toMatchObject({ version: 2, revision: 1, session: { sessionId: null } });
+  const persisted = await Promise.all((await readdir(join(f.directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))
+    .map(async (name) => JSON.parse(await readFile(join(f.directory, 'daemon-events', name), 'utf8')) as { state: string; event: { eventId: string }; result: import('../core/daemon/messages.js').TurnResult }));
+  const settled = persisted.find((record) => record.event.eventId === 'active')!;
+  expect(settled.state).toBe('settled');
+  await new ConversationStateStore(f.directory).apply(settled.result);
+  expect((await f.conversations.store.read(f.id))?.state.version).toBe(2);
+  const restarted = await fixture();
+  const waiting = await restarted.runner.started(1);
+  expect(waiting.input.event.eventId).toBe('waiting');
+  expect(waiting.input.state.version).toBe(2);
+  await restarted.runner.finish(waiting);
+});
+
+it('recovers the reserved goal ID after its registration event leaves the inbox and the child exits', async () => {
+  const f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const goal = goalRecord();
+  const summary = { objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints };
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  expect(await f.conversations.store.save({ conversationId: f.id, operationId: 'reserve', generation: 1 }, {
+    operationId: 'reserved-goal', expectedVersion: 0, proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: f.repository, summary } },
+    approval: { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: f.repository },
+  }, new AbortController().signal)).toMatchObject({ kind: 'state_saved' });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository); await mkdir(inbox, { recursive: true });
+  const eventPath = join(inbox, 'registered.json');
+  await writeFile(eventPath, JSON.stringify({ kind: 'registered', goalId: goal.id, createdAt: '2026-11-03T00:00:00Z' }));
+  const source = new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; });
+  const target = (await source.directories()).find((target) => target.kind === 'inbox')!;
+  await receiveInboxChange({ target, path: eventPath, removed: false, generation: 'registration', value: {} }, files, f.conversations, f.dispatcher);
+  const registration = await f.runner.started(1);
+  expect(await readdir(inbox)).toEqual([]);
+  expect((await f.conversations.store.read(f.id))?.state.approval?.state).toBe('reserved');
+  await f.runner.finish(registration, { kind: 'interrupted' });
+  accepted(await f.dispatcher.accept({ ...input('reapprove', f.id), event: { kind: 'human_command',
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'approve_summary', revision: 1 } } }));
+  const retry = await f.runner.started(2);
+  const resolve = vi.fn();
+  const service = createConversationTurnService(f.directory, { resolve, async close() {} });
+  const outcome = await service.execute(retry.input, { signal: retry.signal, progress() {},
+    request: (request) => f.dispatcher.request(retry.turn, request, retry.signal) });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal: { id: goal.id } } });
+  await f.runner.finish(retry, outcome);
+  expect((await f.conversations.store.read(f.id))?.state.approval).toMatchObject({ state: 'registered', goalId: goal.id });
+  expect(await readdir(join(f.repository, '.takt', 'goals'))).toEqual([goal.id]);
+  expect(resolve).not.toHaveBeenCalled();
 });
 
 it.each<TurnOutcome>([
@@ -314,6 +418,38 @@ it('admits director turns for saved goal and inquiry changes and deduplicates un
   await writeFile(path, JSON.stringify({ ...goal, questions: [{ id: randomUUID(), body: 'question', status: 'pending', recipient: 'human' }] }));
   await source().inquiries(); await f.runner.started(3);
   await source().inquiries(); expect(f.runner.calls).toHaveLength(3);
+});
+
+it('admits a director event for each new blocked notification and deduplicates it across restart', async () => {
+  const f = await fixture();
+  const goal: Goal = goalRecord();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  const source = () => new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; },
+    new WatchObservations(new FileWatchRecords(f.directory), f.dispatcher, Date.now));
+  await source().inquiries(); await f.runner.finish(await f.runner.started(1));
+  for (let index = 0; index < 2; index++) {
+    goal.notifications = [...(goal.notifications ?? []), { id: randomUUID(), kind: 'blocked', body: '作業が停止', recordedAt: '2026-11-03T00:00:00Z' }];
+    await writeFile(path, JSON.stringify(goal));
+    await source().inquiries();
+    const call = await f.runner.started(index + 2);
+    expect(call.turn.conversationId).toBe(conversationId({ kind: 'daemon' }));
+    expect(call.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'director_state_changed', goalId: goal.id } });
+    await f.runner.finish(call);
+    await source().inquiries();
+    expect(f.runner.calls).toHaveLength(index + 2);
+  }
+});
+
+it('keeps the PID of a running task whose process start time is unavailable', async () => {
+  const f = await fixture();
+  const timestamp = '2026-11-03T00:00:00Z'; const goal = goalRecord();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{ name: 'windows-run', status: 'running',
+    goal_id: goal.id, run_slug: 'run', owner_pid: 12345, owner_start_time: null, created_at: timestamp, started_at: timestamp, completed_at: null }] }));
+  const source = new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; });
+  expect(await source.runs()).toMatchObject([{ owner: { pid: 12345, startTime: null } }]);
 });
 
 it.each([false, true])('records and notifies a legacy running interruption before retiring it, preserving queued input (director: %s)', async (director) => {

@@ -21,7 +21,7 @@ export type WatchObservation = {
   generation: string;
   observedAt: string;
 } & (
-  | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string }
+  | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
   | { kind: 'run_log_stalled'; task: TaskRef; lastUpdatedAt: string }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }

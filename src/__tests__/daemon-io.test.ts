@@ -88,6 +88,16 @@ describe('bounded asynchronous commands', () => {
 });
 
 describe('asynchronous process identity observations', () => {
+  it('detects a missing PID without a start time and keeps a present PID unknown', async () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('missing'), { code: 'ESRCH' }); });
+    const options = { signal: new AbortController().signal, timeoutMs: 1000 };
+    expect(await observeProcess({ pid: 123, startTime: null }, options)).toEqual({ kind: 'dead' });
+    kill.mockReturnValue(true);
+    expect(await observeProcess({ pid: 123, startTime: null }, options)).toMatchObject({ kind: 'unknown' });
+    kill.mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); });
+    expect(await observeProcess({ pid: 123, startTime: null }, options)).toMatchObject({ kind: 'unknown' });
+  });
+
   it('distinguishes a missing PID from an unavailable inspector', async () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('missing'), { code: 'ESRCH' }); });
     const options = { signal: new AbortController().signal, timeoutMs: 1000 };

@@ -76,7 +76,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         io.signal.throwIfAborted();
         const reference = eventReference(event);
         if (reference !== undefined && !assignment.repositoryDirectories.includes(reference.repositoryDirectory)) throw new ConversationError('invalid_assignment');
-        if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') reconcileLostRun(event.observation, io.signal);
+        if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
+          reconcileLostRun(event.observation, io.signal);
+          return { kind: 'completed', result: { kind: 'reply', message: '' } };
+        }
         const eventGoal = reference?.goalId !== undefined && reference.goalId !== null
           ? { repositoryDirectory: reference.repositoryDirectory, goal: await new GoalStore(reference.repositoryDirectory).get(reference.goalId) } : undefined;
         if (eventGoal?.goal.executionStatus === 'paused' || eventGoal?.goal.executionStatus === 'aborted') {

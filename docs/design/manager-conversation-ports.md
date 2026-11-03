@@ -1,6 +1,6 @@
 # Daemon conversation ports
 
-This is the event-driven conversation contract. The event and process contracts in `src/core/daemon/` are the source of truth. Composition in `runDaemon.ts` and the CLI startup path are completed during final integration.
+This is the event-driven conversation contract. The event and process contracts in `src/core/daemon/` are the source of truth. `runDaemon.ts` が dispatcher、会話状態、ターン子、IPC、Slack、watcher を結線し、CLI は専用 daemon プロセスへ接続する。
 
 ## Ownership and execution
 
@@ -40,7 +40,7 @@ Manager and director channels may be shared. A bound inquiry thread routes only 
 
 Inquiry changes arrive through `delivery.deliver` from watchers or the state owner. Slack performs no initial or five-second whole-inquiry scan. The posted inquiry uses the delivered question; answering a bound thread reads its current question through the snapshot interface, and the child revalidates it on execution. Binding reads and writes are asynchronous. An unreadable binding fails closed, rather than treating the answer as ordinary conversation. Existing inquiries remain accessible through the TUI.
 
-Persistent request-to-thread routing across daemon restarts requires a delivery-state persistence interface in final integration. Current live ports preserve the exact originating thread; durable event acceptance alone does not promise restored Slack routing after restart.
+要求と送信元スレッドの対応は稼働中のポートがメモリに保持する。daemon の再起動後、この対応は復元されない。イベントの永続受付と、再起動後の Slack 配送先の復元は別の保証である。
 
 ## Child state requests and director delivery
 
@@ -48,16 +48,20 @@ A child uses the finite `DaemonBus.request` protocol. `tellDirectorManager` subm
 
 The dispatcher validates active turn, operation, generation, cancellation, and shutdown. The state owner checks authorization and assignment scope. The target manager receives `director_message` on the other-event queue. A director message is not a human merge instruction unless the original human explicitly authorized that merge.
 
-`connectedPorts` supplies delivery metadata for `get_delivery`. The state owner must persist and deduplicate `notify_director` before using screen/Slack delivery. Delivery success is not inferred from notification persistence. Replies, failures, and interruptions retain their operation ID. An accepted director message is not automatically resent after failure or disconnection.
+`connectedPorts` supplies delivery metadata for `get_delivery`. 状態所有者は `notify_director` を永続保存し、通知 ID で重複を除いて画面へ配信する。Slack への通知は director ターンの結果にまとめて配信する。 Delivery success is not inferred from notification persistence. Replies, failures, and interruptions retain their operation ID. An accepted director message is not automatically resent after failure or disconnection.
 
 ## Approval and recovery
 
 Proposal revision and conversation-state version are separate. The child reserves an approval before external side effects through a conditional `save_conversation` request. A reservation fixes the revision, repository, and generated goal ID. Repeated requests with the same operation ID must be idempotent; changed content or an unexpected state version is rejected.
 
-After registration succeeds, the saved receipt identifies the existing goal, so replay does not register another goal. An unresolved reservation prevents overwriting its input. A crash after an external side effect requires reconciliation of saved facts, never blind repetition.
+登録イベントを受け箱から移送した後も、`daemon-events` の受付記録が既存ゴールの登録の証拠となる。承認が reserved のまま子が終了した場合、再承認は同じ goalId を使って回復する。 An unresolved reservation prevents overwriting its input. A crash after an external side effect requires reconciliation of saved facts, never blind repetition.
 
-Event persistence follows accept → started → result → settled. On restart, queued events retain their order. Running events become interrupted. Settling events apply their already-saved result without invoking the provider again. Stale child launch IDs, operation IDs, and generations cannot update conversation state.
+Event persistence follows accept → started → result → settled. On restart, queued events retain their order. Running events become interrupted. Settling events apply their already-saved result without invoking the provider again. Stale child launch IDs, operation IDs, and generations cannot update conversation state. 保存確定後・応答前の停止で中断結果の版が古くなった場合、中断の後片付けだけを最新の版へ載せ直す。通常の保存と完了結果では版の一致を要求する。
 
-## Final integration
+## 現在の結線と制約
 
-Wire the adapter and its routing resolver to the dispatcher and async conversation owner. Connect state changes and watcher inquiry events to Slack delivery. Supply resolved Slack configuration before creating the ports. Wire child director requests to the dispatcher/state owner, including authorization, durable notifications, and connected-port metadata. Remove the old daemon polling and self-IPC callers, then enable the synchronous-API lint for the final daemon reachability set.
+`runDaemon.ts` は `createDaemonConversationInput` を dispatcher と非同期の会話状態所有者へ接続する。watcher の問い合わせ変更は会話配送を通して TUI と Slack へ届く。Slack ポートには解決済みの設定を渡す。子の director 要求は dispatcher と状態所有者が認可し、イベント受付・通知保存・接続ポートの照会を処理する。旧 daemon のモデル巡回と自己 IPC の呼び出し経路は廃止され、daemon から到達する同期 API は lint で常時禁止されている。
+
+run 消失の観測は子で状態を再確認し、現在の実行ならタスクを修復して completion を受け箱へ保存する。古い観測は処理済みとして終える。AI が扱うのは後続の task_completed / task_failed のみで、消失の観測では呼ばない。開始時刻が不明でも PID は保持し、不存在が確かめられた場合だけ消失と扱う。存在する PID の本人確認ができなければ unknown を維持する。director はゴール状態・未回答質問・blocked 通知 ID の変化を観測し、同じ保存済み通知では再起動後もイベントを増やさない。
+
+`tasks.yaml` とゴール JSON は非同期で読み込むが、解析は親 daemon で行う。大きなファイルの解析をワーカーへ移す仕様項目は未対応である。Slack の要求とスレッドの対応も再起動をまたいで永続化されない。

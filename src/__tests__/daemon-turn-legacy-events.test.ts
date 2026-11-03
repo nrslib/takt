@@ -65,3 +65,18 @@ it('preserves a newer task generation and normal completion', () => {
   expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(false);
   expect(doubles.save).not.toHaveBeenCalled();
 });
+
+it.each(['ESRCH', 'EPERM', 'present'] as const)('rechecks a run without a start time and recovers only a missing PID (%s)', (mode) => {
+  const f = lostRun();
+  f.task.owner_start_time = null;
+  f.observation.startTime = null;
+  vi.spyOn(process, 'kill').mockImplementation(() => {
+    if (mode !== 'present') throw Object.assign(new Error(mode), { code: mode });
+    return true;
+  });
+  doubles.identity.mockReturnValue({ startTime: 'some-other-process' });
+  expect(reconcileLostRun(f.observation, new AbortController().signal)).toBe(mode === 'ESRCH');
+  expect(f.state.tasks[0]?.status).toBe(mode === 'ESRCH' ? 'failed' : 'running');
+  expect(doubles.save).toHaveBeenCalledTimes(mode === 'ESRCH' ? 1 : 0);
+  expect(doubles.identity).not.toHaveBeenCalled();
+});

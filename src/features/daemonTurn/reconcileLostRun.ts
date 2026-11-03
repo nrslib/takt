@@ -5,9 +5,10 @@ import { withGoalExecutionLock } from '../../infra/goals/execution-lock.js';
 import { saveManagerEvent } from '../../infra/goals/events.js';
 import type { GoalTaskResult } from '../../infra/goals/schema.js';
 
-function recordedProcessLost(pid: number, startTime: string): boolean {
+function recordedProcessLost(pid: number, startTime: string | null): boolean {
   try { process.kill(pid, 0); }
   catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+  if (startTime === null) return false;
   const actual = getTaskProcessIdentity(pid);
   return actual !== undefined && actual.startTime !== startTime;
 }
@@ -23,7 +24,7 @@ export function reconcileLostRun(observation: Extract<WatchObservation, { kind: 
       signal.throwIfAborted();
       const task = current.tasks.find((task) => task.name === reference.taskName);
       if (task === undefined || task.status !== 'running' || task.goal_id !== reference.goalId || task.run_slug !== reference.runSlug
-        || task.execution_id !== reference.executionId || task.owner_pid !== observation.pid || task.owner_start_time !== observation.startTime
+        || task.execution_id !== reference.executionId || task.owner_pid !== observation.pid || (task.owner_start_time ?? null) !== observation.startTime
         || !recordedProcessLost(observation.pid, observation.startTime)) return undefined;
       recovered = true;
       return { tasks: current.tasks.map((value) => value !== task ? value : {
