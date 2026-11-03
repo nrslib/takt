@@ -32,6 +32,7 @@ export interface ManagerTurnInput {
   assignment: ManagerAssignmentIdentity | undefined;
   configDirectory: string;
   conversationOperationId?: string;
+  directorMessage?: boolean;
   goal?: ManagerPermissionGoal;
   onProviderOutput?: () => void;
   onNotification?: (message: string) => void;

@@ -219,7 +219,6 @@ describe('IT: project-local config keys should prefer project over global', () =
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
         'manager:',
         '  auto_run: false',
-        '  patrol_interval: 60',
         '  main_merge: approve',
         '  notifications:',
         '    completed: false',
@@ -229,7 +228,6 @@ describe('IT: project-local config keys should prefer project over global', () =
       ].join('\n'), 'utf-8');
       const manager = {
         autoRun: false,
-        patrolInterval: 60,
         mainMerge: 'approve',
         notifications: { completed: false },
         slack: { channelId: 'C0123', allowedUserIds: ['U0AAA', 'U0BBB'] },
@@ -245,7 +243,6 @@ describe('IT: project-local config keys should prefer project over global', () =
     it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('saves and reloads Slack authorization without losing user IDs $allowedUserIds', ({ allowedUserIds }) => {
       const manager = {
         autoRun: false,
-        patrolInterval: 60,
         notifications: { completed: false },
         slack: { channelId: 'C0123', allowedUserIds },
       };
@@ -255,7 +252,6 @@ describe('IT: project-local config keys should prefer project over global', () =
       const raw: unknown = parseYaml(readFileSync(join(projectDir, '.takt', 'config.yaml'), 'utf-8'));
       expect(raw).toEqual({ manager: {
         auto_run: false,
-        patrol_interval: 60,
         notifications: { completed: false },
         slack: { channel_id: 'C0123', allowed_user_ids: allowedUserIds },
       } });

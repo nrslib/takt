@@ -8,7 +8,7 @@ const defaultSensitivePaths = [
 ];
 
 export function resolveManagerConfig(cwd: string): {
-  autoRun: boolean; patrolInterval: number; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
+  autoRun: boolean; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
   notifications: Record<ManagerNotificationKind, boolean>;
   sensitivePaths: string[];
 } {
@@ -16,7 +16,6 @@ export function resolveManagerConfig(cwd: string): {
   const global = loadGlobalConfig().manager;
   return {
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
-    patrolInterval: project?.patrolInterval ?? global?.patrolInterval ?? 900,
     defaultWorkflow: project?.defaultWorkflow ?? global?.defaultWorkflow,
     mainMerge: project?.mainMerge ?? 'approve',
     sensitivePaths: [...new Set([...defaultSensitivePaths, ...(global?.sensitivePaths ?? []), ...(project?.sensitivePaths ?? [])])],
