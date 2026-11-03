@@ -1,3 +1,5 @@
+import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Socket } from 'node:net';
@@ -683,4 +685,36 @@ it('keeps a newer running transition within revision four when an older idle sna
     finishGoal!();
     await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 5, running: null }));
   } finally { finishRead(); finishGoal?.(); register.mockRestore(); open.mockRestore(); }
+});
+
+it.each(['answered', 'withdrawn'] as const)('keeps the TUI attached when the watched inquiry becomes %s', async (status) => {
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Question', recipient: 'human' as const, kind: 'question' as const,
+    status: 'pending' as const, createdAt: '2026-11-03T00:00:00Z' };
+  const goal = { ...goalRecord(), questions: [question] }; saveGoal(goal);
+  const value = await authenticated(); const attachment = await opened(value); await value.items(attachment.read.transferId);
+  const source = new FileDaemonWatchSource(fixture.conversations, (notice) => fixture.dispatcher.inquiry(notice), (error) => { throw error; });
+  await source.inquiries(); await fixture.conversations.close();
+  saveGoal({ ...goal, questions: [{ ...question, status, ...(status === 'answered'
+    ? { answer: { text: 'answer', source: 'tui' as const, answeredAt: '2026-11-03T00:01:00Z' } }
+    : { withdrawnAt: '2026-11-03T00:01:00Z' }) }] });
+  await source.inquiries(); await fixture.conversations.close();
+  const response = await value.request('snapshot', { attachmentId: attachment.attachmentId });
+  const items = await value.items(response.result!.read.transferId);
+  expect(items.filter((item) => typeof item === 'object' && item !== null && 'kind' in item && item.kind === 'inquiry')).toEqual([]);
+  const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+  const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+  expect(() => { for (const frame of value.frames) if (frame.type === 'event') receiver.receive(frame); }).not.toThrow();
+  expect(value.socket.destroyed).toBe(false);
+});
+
+it('keeps a stall inspection reply out of the goal work log', async () => {
+  const goal = { ...goalRecord(), createdAt: '2026-11-01T00:00:00Z' }; saveGoal(goal);
+  const eventId = 'stall-inspection';
+  expect(await fixture.dispatcher.accept({ eventId, requestId: eventId, conversationId: selected.conversationId, source: 'watcher',
+    occurredAt: '2026-11-03T00:00:00Z', event: { kind: 'watch_observation', observation: { kind: 'goal_stalled', targetId: goal.id,
+      generation: 'old', observedAt: '2026-11-03T00:00:00Z', repositoryDirectory: repository, goalId: goal.id, lastUpdatedAt: goal.createdAt } } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(execute).toHaveBeenCalledOnce();
+  expect((await new GoalStore(repository).get(goal.id)).workLog).toEqual([]);
 });

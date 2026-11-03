@@ -260,7 +260,7 @@ describe('event driven daemon dispatcher', () => {
     expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H1', 'H2']);
   });
 
-  it('does not call provider after start persistence fails and starts the original event once after recovery', async () => {
+  it('settles a failed start without calling its provider and preserves later messages', async () => {
     const h = await harness();
     h.store.beforeStart = async () => { throw new Error('start storage'); };
     await h.dispatcher.accept(input('H1'));
@@ -273,9 +273,21 @@ describe('event driven daemon dispatcher', () => {
     h.store.beforeStart = async () => {};
     await h.dispatcher.retryStorage();
     await h.runner.finish(await h.runner.started(1));
-    await h.runner.finish(await h.runner.started(2));
-    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H1', 'H2']);
+    expect(h.store.records.get('H1')).toMatchObject({ state: 'settled', result: { outcome: { kind: 'failed' } } });
+    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H2']);
     expect(h.failures).toHaveBeenCalledWith(expect.objectContaining({ phase: 'start' }));
+  });
+
+  it('settles a start committed before acknowledgement failure using its original generation', async () => {
+    const h = await harness();
+    h.store.afterStart = vi.fn().mockRejectedValueOnce(new Error('start acknowledgement failed')).mockResolvedValue(undefined);
+    await h.dispatcher.accept(input('H1'));
+    await h.dispatcher.accept(input('H2'));
+    const next = await h.runner.started(1);
+    expect(next.input.event.eventId).toBe('H2');
+    expect(h.store.records.get('H1')).toMatchObject({ state: 'settled', result: { generation: 1, outcome: { kind: 'failed' } } });
+    expect(h.store.markStarted.mock.calls.filter(([id]) => id === 'H1').map(([, turn]) => turn.generation)).toEqual([1, 1]);
+    await h.runner.finish(next);
   });
 
   it.each(['checkpoint', 'apply', 'event-store'] as const)('retries only result persistence after %s failure and keeps later admissions', async (phase) => {

@@ -9,14 +9,16 @@ import { ConversationIdSchema, ConversationRecordSchema, type ConversationRecord
 import { FileAsyncLock } from './lock.js';
 import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
 
+const MAX_RECEIPTS = 32;
+const MAX_RECEIPT_BYTES = 1024 * 1024;
 const MAX_CONVERSATION_BYTES = 4 * 1024 * 1024;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const receipt = z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict();
 const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {
   const operations = new Set<string>();
-  if (value.version !== value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
+  if (value.version < value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
   for (const [index, entry] of value.receipts.entries()) {
-    if (entry.version !== index + 1 || entry.change.expectedVersion !== index || operations.has(entry.change.operationId)) {
+    if (entry.version !== value.version - value.receipts.length + index + 1 || entry.change.expectedVersion !== entry.version - 1 || operations.has(entry.change.operationId)) {
       context.addIssue({ code: 'custom', message: 'Invalid conversation receipt sequence' });
     }
     operations.add(entry.change.operationId);
@@ -74,7 +76,7 @@ export class ConversationStateStore {
     await this.lock.exclusive(`${this.path(id)}.lock`, async () => {
       const stored = await this.load(id);
       if (stored === undefined) throw new Error('Unknown legacy conversation');
-      stored.record = { ...stored.record, running: null, directorMessages: operationId === null ? stored.record.directorMessages
+      stored.record = { ...stored.record, running: operationId === null ? null : stored.record.running, directorMessages: operationId === null ? stored.record.directorMessages
         : stored.record.directorMessages?.filter((message) => message.operationId !== operationId) };
       await this.write(stored);
     }, { signal: new AbortController().signal, timeoutMs: 5000 });
@@ -122,8 +124,10 @@ export class ConversationStateStore {
         if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
         const nextVersion = stored.metadata.version + 1;
         if (!Number.isSafeInteger(nextVersion)) throw new Error('Conversation version exhausted');
+        const receipts = [...stored.metadata.receipts, { turn: identity, change, version: nextVersion }].slice(-MAX_RECEIPTS);
+        while (receipts.length > 1 && Buffer.byteLength(JSON.stringify(receipts)) > MAX_RECEIPT_BYTES) receipts.shift();
         await this.write({ record: checked.data, metadata: { version: nextVersion,
-          receipts: [...stored.metadata.receipts, { turn: identity, change, version: nextVersion }] } }, signal);
+          receipts } }, signal);
         return committed = { kind: 'state_saved', version: nextVersion, duplicate: false };
       }, { signal, timeoutMs: 5000 });
     } catch (error) {

@@ -118,3 +118,14 @@ it('waits for initialization cleanup on shutdown and never advertises a ready ch
   expect(close).toHaveBeenCalledOnce();
   expect(messages.map((message) => message.kind)).toEqual(['shutdown_complete']);
 });
+
+it('starts resource cleanup before waiting for a blocked execution to finish', async () => {
+  const released = deferred<void>();
+  const f = fixture(vi.fn(async (): Promise<TurnOutcome> => { await released.promise; return { kind: 'interrupted' }; }));
+  f.close.mockImplementation(async () => { released.resolve(); });
+  await f.initialize();
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  await f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
+  expect(f.close).toHaveBeenCalledOnce();
+  expect(f.messages.map((message) => message.kind)).toEqual(['ready', 'turn_finished', 'shutdown_complete']);
+});

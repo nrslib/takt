@@ -13,7 +13,7 @@ export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
-  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void> }>();
+  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number }>();
   let accepting = true;
   const attached = (id: string) => {
     const attachment = attachments.get(id);
@@ -47,7 +47,7 @@ export function createDaemonConversationInput(options: {
       if (!['tui', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
       const assignment = await options.resolveAssignment(request.assignment);
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
-      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve() };
+      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve(), pendingDeliveries: 0 };
       const snapshot = await read(request.conversationId, attachment);
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
@@ -135,7 +135,12 @@ export function createDaemonConversationInput(options: {
         } finally { current.cancel(); }
       }
       const value = output;
-      await Promise.all(recipients.map(({ delivery }) => delivery.deliver(id, value, version)));
+      await Promise.all(recipients.map(async (attachment) => {
+        if (value.kind === 'progress' && attachment.pendingDeliveries >= 32) return;
+        attachment.pendingDeliveries++;
+        try { await attachment.delivery.deliver(id, value, version); }
+        finally { attachment.pendingDeliveries--; }
+      }));
     },
     stopAccepting() { accepting = false; },
     close() { accepting = false; attachments.clear(); },

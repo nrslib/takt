@@ -12,6 +12,8 @@ vi.mock('../shared/utils/spawn.js', () => ({ spawnManagedProcess: doubles.spawn 
 
 function childFixture() {
   const child = Object.assign(new EventEmitter(), { connected: true }) as ChildProcess;
+  child.kill = vi.fn(() => true);
+  child.on('disconnect', () => { Object.defineProperty(child, 'connected', { value: false }); });
   const messages: DaemonProcessMessage[] = [];
   const initialized = deferred<void>();
   child.send = vi.fn((message: unknown, callback: unknown) => {
@@ -70,7 +72,7 @@ it('does not release an interrupted turn until forced termination is confirmed',
   f.host.interrupt({ ...input.turn, generation: 99 });
   expect(child.messages.filter((message) => message.kind === 'interrupt')).toHaveLength(0);
   f.host.interrupt(input.turn);
-  await vi.runOnlyPendingTimersAsync();
+  await vi.advanceTimersByTimeAsync(10_000);
   await child.terminated.promise;
   expect(f.post).not.toHaveBeenCalled();
   expect(() => f.host.start(turnStart(2), new AbortController().signal)).toThrow();
@@ -85,7 +87,7 @@ it('treats disconnect as failure only after process exit and ignores stale launc
   child.child.emit('message', { ...child.envelope(), launchId: 'old', kind: 'turn_finished', turn: input.turn,
     outcome: { kind: 'failed', message: 'old' } });
   expect(f.post).not.toHaveBeenCalled();
-  child.child.emit('disconnect'); await child.terminated.promise;
+  child.child.emit('disconnect'); await vi.advanceTimersByTimeAsync(5_000); await child.terminated.promise;
   expect(f.post).not.toHaveBeenCalled();
   child.exit.resolve({ code: 1, signal: null }); await f.posted.promise;
   expect(f.post.mock.calls[0]![0]).toMatchObject({ outcome: { kind: 'failed' } });
@@ -109,7 +111,7 @@ it('forwards bounded state requests independently of turn completion and cancels
     request: { kind: 'get_delivery', conversationId: 'manager' } });
   expect(f.request).toHaveBeenCalledOnce();
   const signal = f.request.mock.calls[0]![2]; expect(signal.aborted).toBe(false);
-  child.child.emit('disconnect'); await child.terminated.promise; expect(signal.aborted).toBe(true);
+  child.child.emit('disconnect'); await vi.advanceTimersByTimeAsync(5_000); await child.terminated.promise; expect(signal.aborted).toBe(true);
   pending.resolve({ kind: 'error', code: 'stale_turn', message: 'cancelled' });
   child.exit.resolve({ code: 1, signal: null }); await f.host.close();
   expect(child.messages.some((message) => message.kind === 'daemon_reply')).toBe(false);
@@ -135,7 +137,7 @@ it('preserves the interrupted cleanup change while shutting down', async () => {
 it('fails initialization only after the timed-out child is terminated', async () => {
   const child = childFixture(); const f = fixture(); const input = turnStart();
   f.host.start(input, new AbortController().signal);
-  await vi.runOnlyPendingTimersAsync(); await child.terminated.promise;
+  await vi.advanceTimersByTimeAsync(35_000); await child.terminated.promise;
   expect(f.post).not.toHaveBeenCalled();
   child.exit.resolve({ code: null, signal: 'SIGTERM' }); await f.posted.promise; await f.host.close();
   expect(f.post).toHaveBeenCalledOnce();
@@ -172,7 +174,7 @@ it('waits for the old process to exit before starting the next event after an ac
     outcome: { kind: 'completed', result: { kind: 'reply', message: 'done' } } });
   await f.posted.promise;
   Object.defineProperty(first.child, 'connected', { value: false });
-  f.host.resultCommitted(input.turn); await first.terminated.promise;
+  f.host.resultCommitted(input.turn); await vi.advanceTimersByTimeAsync(5_000); await first.terminated.promise;
   const second = childFixture();
   f.host.start(turnStart(2), new AbortController().signal);
   expect(doubles.spawn).toHaveBeenCalledTimes(1);
@@ -181,4 +183,37 @@ it('waits for the old process to exit before starting the next event after an ac
   expect(doubles.spawn).toHaveBeenCalledTimes(2);
   second.receive({ kind: 'ready' });
   const closing = f.host.close(); second.exit.resolve({ code: 0, signal: null }); await closing;
+});
+
+it('requests child cleanup before force termination and accepts a graceful exit', async () => {
+  const child = childFixture(); const f = fixture();
+  f.host.start(turnStart(), new AbortController().signal); child.receive({ kind: 'ready' });
+  const closing = f.host.close();
+  expect(child.messages.at(-1)?.kind).toBe('shutdown');
+  expect(child.terminate).not.toHaveBeenCalled();
+  child.exit.resolve({ code: 0, signal: null });
+  await closing;
+  expect(f.post).toHaveBeenCalledOnce();
+});
+
+it('records leader exit and finishes the turn even when descendant cleanup fails', async () => {
+  const child = childFixture(); const f = fixture();
+  child.terminate.mockRejectedValue(new Error('descendant cleanup failed'));
+  const input = turnStart(); f.host.start(input, new AbortController().signal); child.receive({ kind: 'ready' });
+  child.exit.resolve({ code: 1, signal: null });
+  await f.posted.promise;
+  expect(f.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ turn: input.turn, outcome: expect.objectContaining({ kind: 'failed' }) }));
+  expect(f.onError).toHaveBeenCalledOnce();
+  await f.host.close();
+});
+
+it('gives a disconnected child time to clean up before terminating its process group', async () => {
+  const child = childFixture(); const f = fixture();
+  f.host.start(turnStart(), new AbortController().signal); child.receive({ kind: 'ready' });
+  child.child.emit('disconnect');
+  if (process.platform !== 'win32') expect(child.child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  expect(child.terminate).not.toHaveBeenCalled();
+  child.exit.resolve({ code: 0, signal: null });
+  await f.posted.promise; await f.host.close();
+  expect(f.post).toHaveBeenCalledOnce();
 });

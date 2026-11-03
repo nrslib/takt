@@ -44,7 +44,7 @@ function eventReference(event: TurnEvent): { repositoryDirectory: string; goalId
       const observation = event.observation;
       switch (observation.kind) {
         case 'run_process_lost': case 'run_log_stalled': return observation.task;
-        case 'watch_failed': return undefined;
+        case 'watch_failed': case 'director_state_changed': return undefined;
         default: return observation;
       }
     }
@@ -150,7 +150,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               validateManagerSummary(summary);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
-            if (!human && !directorMessage && assignment.kind !== 'daemon' && eventGoal !== undefined) {
+            if (!human && !directorMessage && event.kind !== 'watch_observation' && assignment.kind !== 'daemon' && eventGoal !== undefined) {
               await new GoalStore(eventGoal.repositoryDirectory).update(eventGoal.goal.id, (goal) => appendGoalWorkLog(goal, { summary: output.message }));
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({

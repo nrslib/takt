@@ -41,10 +41,10 @@ export function startDirectoryWatcher(dependencies: {
   const watchers = new Map<string, { identity: string; watcher: FSWatcher }>();
   const known = new Map<string, { target: DirectoryWatchTarget; generation: string }>();
   let closed = false;
+  let offset = 0;
 
   const loop = startWatchLoop(WATCH_INTERVALS.files, async (signal) => {
     const targets = await dependencies.targets();
-    if (targets.length > MAX_WATCH_ENTRIES) throw new Error('Directory watch target count exceeds the limit');
     const desired = new Set<string>();
     const files = new Map<string, DirectoryWatchTarget>();
     for (const target of targets) {
@@ -57,7 +57,6 @@ export function startDirectoryWatcher(dependencies: {
           desired.add(directory);
           files.set(join(directory, 'workspace.json'), target);
         }
-        if (files.size > MAX_WATCH_ENTRIES || desired.size > MAX_WATCH_ENTRIES) throw new Error('File watch count exceeds the limit');
       }
     }
     signal.throwIfAborted();
@@ -78,7 +77,11 @@ export function startDirectoryWatcher(dependencies: {
       });
       watchers.set(path, { identity, watcher });
     }
-    for (const [path, target] of files) {
+    const entries = [...files];
+    if (offset >= entries.length) offset = 0;
+    const page = entries.slice(offset, offset + MAX_WATCH_ENTRIES);
+    offset += page.length;
+    for (const [path, target] of page) {
       signal.throwIfAborted();
       const value = await readSmallJson(path);
       const info = await stat(path);

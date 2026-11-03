@@ -10,9 +10,9 @@ import type { DaemonWatchSource } from './watchers/index.js';
 import type { GoalWatchTarget, RunWatchTarget, InquiryWatchTarget, LaunchWatchTarget } from './watchers/checks.js';
 import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
-import { boundWatchTargets } from './watchers/checks.js';
+import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
-import { readWatchGoals, readWatchInquiries, readWatchTasks } from './watchers/state.js';
+import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
@@ -27,7 +27,8 @@ const safeName = (name: string): string => {
 export class FileDaemonWatchSource implements DaemonWatchSource {
   private readonly inquiriesSeen = new Map<string, string>();
   constructor(private readonly conversations: DaemonConversations,
-    private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void) {}
+    private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
+    private readonly stateChanges?: WatchObservations) {}
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -40,10 +41,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async runs(): Promise<readonly RunWatchTarget[]> {
     const targets: RunWatchTarget[] = [];
     for await (const project of this.projects()) {
-      const goals = await readWatchGoals(project.repositoryDirectory, this.onError);
       for (const task of await readWatchTasks(project.repositoryDirectory)) {
         if (task.status !== 'running' || task.goal_id === undefined || task.run_slug === undefined) continue;
-        const goal = goals.find((entry) => entry.id === task.goal_id);
+        let goal;
+        try { goal = await readWatchGoal(project.repositoryDirectory, task.goal_id); }
+        catch (error) { this.onError(error); }
         const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
         let logPath: string | null = null;
         let modified = -1;
@@ -59,7 +61,6 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
             ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
           owner: task.owner_pid == null || task.owner_start_time == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time },
           running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });
-        boundWatchTargets(targets);
       }
     }
     return targets;
@@ -70,12 +71,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async pullRequests(): Promise<readonly PullRequestWatchTarget[]> {
     const targets: PullRequestWatchTarget[] = [];
     for await (const project of this.projects()) {
-      for (const goal of await readWatchGoals(project.repositoryDirectory, this.onError)) {
+      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
         if (goal.pullRequest === undefined || goal.status !== 'awaiting_merge' || goal.executionStatus !== 'active') continue;
         targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest(goal.pullRequest), conversationId: project.conversationId,
           repositoryDirectory: project.repositoryDirectory, goalId: goal.id, awaitingMerge: true,
           ...goal.pullRequest, headBranch: goal.branch, baseBranch: goal.integrationBranch });
-        boundWatchTargets(targets);
       }
     }
     return targets;
@@ -83,7 +83,15 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async inquiries(): Promise<readonly InquiryWatchTarget[]> {
     const targets: InquiryWatchTarget[] = [];
-    for (const notice of await this.inquiryNotices()) {
+    const present = new Set<string>();
+    for await (const notice of this.inquiryNotices()) {
+      const key = JSON.stringify([notice.conversationId, notice.target, notice.question.id]);
+      present.add(key);
+      const version = digest(notice.question);
+      if (this.inquiriesSeen.get(key) !== version) {
+        await this.publish(notice);
+        this.inquiriesSeen.set(key, version);
+      }
       const directory = notice.target.goalId !== null ? notice.target.repositoryDirectory
         : notice.target.owner.kind === 'repository' ? notice.target.owner.repositoryDirectory
           : (await this.conversations.routing.display(notice.target.owner)).repositoryDirectories[0];
@@ -91,30 +99,31 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       targets.push({ conversationId: notice.conversationId, targetId: digest([notice.conversationId, notice.target, notice.question.id]), generation: notice.question.id,
         repositoryDirectory: directory,
         questionId: notice.question.id, goalId: notice.target.goalId, pending: notice.question.status === 'pending', createdAt: notice.question.createdAt ?? null });
-      boundWatchTargets(targets);
     }
+    for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
     return targets;
   }
 
   async goals(): Promise<readonly GoalWatchTarget[]> {
     const targets: GoalWatchTarget[] = [];
     for await (const project of this.projects()) {
-      for (const goal of await readWatchGoals(project.repositoryDirectory, this.onError)) {
-        const dates = [goal.createdAt, ...goal.workLog.map((entry) => entry.recordedAt), ...(goal.notifications ?? []).map((entry) => entry.recordedAt),
+      const tasks = await readWatchTasks(project.repositoryDirectory);
+      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+        const dates = [goal.createdAt, ...goal.workLog.filter((entry) => entry.kind !== 'patrol').map((entry) => entry.recordedAt),
           ...(goal.questions ?? []).flatMap((question) => [question.createdAt, question.answer?.answeredAt, question.withdrawnAt])]
           .filter((date): date is string => date !== undefined).sort((left, right) => Date.parse(left) - Date.parse(right));
         if (dates.length === 0) continue;
         const lastUpdatedAt = dates.at(-1)!;
         targets.push({ targetId: digest([project.repositoryDirectory, goal.id]), generation: digest([goal.id, lastUpdatedAt]), conversationId: project.conversationId,
-          repositoryDirectory: project.repositoryDirectory, goalId: goal.id, active: goal.executionStatus === 'active' && goal.status !== 'completed', lastUpdatedAt });
-        boundWatchTargets(targets);
+          repositoryDirectory: project.repositoryDirectory, goalId: goal.id, active: goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge'
+            && !goal.questions?.some((question) => question.status === 'pending' && question.recipient === 'human')
+            && !tasks.some((task) => task.goal_id === goal.id && task.status === 'running'), lastUpdatedAt });
       }
     }
     return targets;
   }
 
-  private async inquiryNotices(): Promise<InquiryNotice[]> {
-    const notices: InquiryNotice[] = [];
+  private async *inquiryNotices(): AsyncGenerator<InquiryNotice> {
     const assignments = new Map<string, { assignment: Exclude<import('../../infra/conversations/schema.js').ConversationAssignment, { kind: 'daemon' }>; directory: string }>();
     for await (const project of this.projects()) {
       const { assignment } = project;
@@ -122,20 +131,31 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       assignments.set(project.conversationId, { assignment, directory: assignment.kind === 'workspace'
         ? join(this.conversations.routing.directory, 'workspaces', assignment.workspaceId, 'inquiries')
         : join(this.conversations.routing.directory, 'projects', projectKey(project.repositoryDirectory), 'inquiries') });
-      for (const goal of await readWatchGoals(project.repositoryDirectory, this.onError)) {
+      for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+        await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
+          pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() });
         for (const question of goal.questions ?? []) {
-          notices.push({ conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question });
-          boundWatchTargets(notices);
+          yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
         }
       }
     }
     for (const [id, { assignment, directory }] of assignments) {
-      for (const question of await readWatchInquiries(directory)) {
-        notices.push({ conversationId: id, target: { goalId: null, owner: assignment }, question });
-        boundWatchTargets(notices);
+      const pendingInquiries: string[] = [];
+      for await (const question of readWatchInquiries(directory)) {
+        if (question.status === 'pending' && question.recipient === 'human') pendingInquiries.push(question.id);
+        yield { conversationId: id, target: { goalId: null, owner: assignment }, question };
       }
+      const repositories = await this.conversations.routing.display(assignment);
+      const repository = repositories.repositoryDirectories[0];
+      if (repository !== undefined && pendingInquiries.length > 0) await this.directorChanged(id, repository, null, { pendingInquiries: pendingInquiries.sort() });
     }
-    return notices;
+  }
+
+  private async directorChanged(managerConversationId: string, repositoryDirectory: string, goalId: string | null, state: unknown): Promise<void> {
+    if (this.stateChanges === undefined) return;
+    const target = { conversationId: conversationId({ kind: 'daemon' }), targetId: digest([managerConversationId, repositoryDirectory, goalId]), generation: digest(state) };
+    await this.stateChanges.changed(target, { ...this.stateChanges.evidence(target), kind: 'director_state_changed',
+      managerConversationId, repositoryDirectory, goalId, state: JSON.stringify(state) });
   }
 
   async launches(): Promise<readonly LaunchWatchTarget[]> {
@@ -143,9 +163,14 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     const global = await globalDaemonConfiguration(this.conversations.routing.directory);
     for await (const project of this.projects()) {
       const tasks = await readWatchTasks(project.repositoryDirectory);
-      const goals = await readWatchGoals(project.repositoryDirectory, this.onError);
-      const pending = tasks.filter((task) => task.status === 'pending' && goals.some((goal) => goal.id === task.goal_id
-        && goal.status === 'created' && goal.executionStatus === 'active'));
+      const pending = [];
+      for (const task of tasks) {
+        if (task.status !== 'pending' || task.goal_id === undefined) continue;
+        try {
+          const goal = await readWatchGoal(project.repositoryDirectory, task.goal_id);
+          if (goal.status === 'created' && goal.executionStatus === 'active') pending.push(task);
+        } catch (error) { this.onError(error); }
+      }
       if (pending.length === 0) continue;
       const projectConfig = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));
       const owners = (await listWatchEntries(join(project.repositoryDirectory, '.takt', 'execution.lock'))).filter((entry) => entry.name.startsWith('owner-') && entry.name.endsWith('.json'));
@@ -163,7 +188,6 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
         autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
         pendingSince: pending.map((task) => task.created_at).sort()[0]! });
-      boundWatchTargets(targets);
     }
     return targets;
   }
@@ -177,18 +201,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for await (const project of this.projects()) {
       targets.push({ targetId: project.repositoryDirectory, generation: 'inbox', conversationId: project.conversationId, kind: 'inbox',
         directory: join(directory, 'manager-inbox', projectKey(project.repositoryDirectory)) });
-      boundWatchTargets(targets);
     }
-    const present = new Set<string>();
-    for (const notice of await this.inquiryNotices()) {
-      const key = JSON.stringify([notice.conversationId, notice.target, notice.question.id]);
-      present.add(key);
-      const version = digest(notice.question);
-      if (this.inquiriesSeen.get(key) === version) continue;
-      await this.publish(notice);
-      this.inquiriesSeen.set(key, version);
-    }
-    for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
     return targets;
   }
 }

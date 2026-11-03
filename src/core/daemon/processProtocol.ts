@@ -36,6 +36,7 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('goal_stalled'), ...repositoryGoal, lastUpdatedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: text }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: text }).strict(),
+  z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: text, goalId: id.nullable(), state: text }).strict(),
 ]) satisfies z.ZodType<WatchObservation>;
 const humanCommand = z.custom<HumanCommand>((value) => {
   const parsed = ConversationCommandSchema.safeParse(value);

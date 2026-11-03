@@ -29,6 +29,7 @@ export type WatchObservation = {
   | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }
   | { kind: 'run_launch_stalled'; repositoryDirectory: string }
   | { kind: 'watch_failed'; reason: string }
+  | { kind: 'director_state_changed'; managerConversationId: string; repositoryDirectory: string; goalId: string | null; state: string }
 );
 
 /** F/C/E が作り、A が優先度を決め、D が同じ会話の文脈で処理する。 */

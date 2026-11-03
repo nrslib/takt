@@ -12,6 +12,14 @@ import crossSpawnPackage from 'cross-spawn';
 import { resolveSystem32ExecutablePathAsync } from './executable-path-async.js';
 import { formatProcessExitCause } from './process-exit.js';
 
+const managedProcesses = new Set<ManagedProcess>();
+
+export async function terminateManagedProcesses(): Promise<void> {
+  const results = await Promise.allSettled([...managedProcesses].map((managed) => managed.terminate()));
+  const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+  if (errors.length > 0) throw new AggregateError(errors, 'Managed process cleanup failed');
+}
+
 const TERMINATION_GRACE_MS = 250;
 const TERMINATION_SETTLE_INTERVAL_MS = 10;
 const TERMINATION_SETTLE_TIMEOUT_MS = 2_000;
@@ -123,7 +131,8 @@ export async function forceTerminateWindowsProcess(pid: number | undefined): Pro
       killer.once('error', (error) => { failure ??= error; });
       killer.once('close', (code, signal) => {
         if (failure !== undefined) { reject(failure); return; }
-        if (code === 0) { resolve(); return; }
+        try { if (code === 0 || !isWindowsProcessRunning(targetPid)) { resolve(); return; } }
+        catch (error) { reject(error); return; }
         reject(new Error(`taskkill for process ${targetPid} exited with ${formatProcessExitCause(code, signal)}`));
       });
     });
@@ -269,7 +278,7 @@ export function spawnManagedProcess(
     requestTermination();
   }
 
-  return {
+  const managed: ManagedProcess = {
     child,
     async waitForExit(): Promise<ManagedProcessExit> {
       const outcome = await leaderExitOutcomePromise;
@@ -326,4 +335,7 @@ export function spawnManagedProcess(
       await closePromise;
     },
   };
+  managedProcesses.add(managed);
+  child.once('close', () => { managedProcesses.delete(managed); });
+  return managed;
 }

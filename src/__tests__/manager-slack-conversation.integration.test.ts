@@ -1,3 +1,9 @@
+import { execFile } from 'node:child_process';
+import { mkdir, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
+import { SlackInquiryBindings } from '../infra/slack/inquiryBindings.js';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
@@ -54,7 +60,7 @@ beforeEach(async () => {
     control: vi.fn().mockResolvedValue({ kind: 'interrupted' }),
     snapshot: vi.fn(async (): Promise<ConversationSnapshot> => ({ ...version, operationId, generation: 5,
       transferId: randomUUID(), conversationId: id, mode: 'initial', cancel: vi.fn(), complete: vi.fn(),
-      turnState: { version: 1, assignment, session: { provider: 'mock', model: null, sessionId: 'same-session' }, revision: 4, pending: null, approval: null },
+      turnState: { version: 1, assignment, session: { provider: 'mock', model: null, sessionId: 'same-session' }, revision: 4, pending: { revision: 4, repositoryDirectory, summary: { objective: 'work', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] } }, approval: null },
       items: (async function* () { yield* items; })() })),
   };
   input = createDaemonConversationInput({ ingress, resolveAssignment: async (selected) => selected });
@@ -150,8 +156,8 @@ it('posts inquiry changes from delivery and routes a bound reply through a lazy 
 it('keeps approval revision and conversation identity through a Slack button', async () => {
   await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' },
     container: { type: 'message', channel_id: 'C1', message_ts: 'proposal' }, message: { ts: 'proposal', thread_ts: 'origin' },
-    actions: [{ type: 'button', action_id: 'takt_goal_approve', value: JSON.stringify({ conversationId: id, revision: 3 }) }] } });
-  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 3, requirePending: true } });
+    actions: [{ type: 'button', action_id: 'takt_goal_approve', value: JSON.stringify({ conversationId: id, revision: 4 }) }] } });
+  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, requirePending: true } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: 'origin' }));
 });
 it('does not admit a permission sentence from another modal user or team', async () => {
@@ -177,4 +183,52 @@ it('reports failed persistence without claiming business acceptance or retrying'
   await emit(message('not saved'));
   expect(events).toEqual([]); expect(ingress.accept).toHaveBeenCalledOnce();
   expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: expect.stringContaining('storage') }));
+});
+
+it('routes workspace inquiries only through their repository channel and rejects cross-repository answers', async () => {
+  const workspace = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'shared', repositoryDirectories: ['/a', '/b'] };
+  const workspaceId = conversationId(workspace); const configDirectory = process.env.TAKT_CONFIG_DIR!;
+  const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
+  const a = createSlackConversationPort({ repositoryDirectory: '/a', configDirectory, assignment: workspace, channelId: 'CA', input, client, language: 'en' });
+  const b = createSlackConversationPort({ repositoryDirectory: '/b', configDirectory, assignment: workspace, channelId: 'CB', input, client, language: 'en' });
+  try {
+    const target = { repositoryDirectory: '/b', goalId: randomUUID() }; const question = createInquiry({ body: 'B only' });
+    await a.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
+    await b.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB' }));
+    await new SlackInquiryBindings(configDirectory, '/a').save({ channelId: 'CA', parentTs: 'forged', target, questionId: question.id });
+    await a.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'answer');
+    await a.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'takt_inquiry_answer_allow_once', 'allow_once', 'trigger');
+    expect(events).toEqual([]);
+    expect(sdk.open).not.toHaveBeenCalled();
+  } finally { await a.close(); await b.close(); await client.close(); }
+});
+
+it('checks the operation repository for standalone workspace inquiries on delivery and reply', async () => {
+  const configDirectory = process.env.TAKT_CONFIG_DIR!;
+  const a = join(configDirectory, 'standalone-a'); const b = join(configDirectory, 'standalone-b');
+  await mkdir(join(b, 'nested'), { recursive: true }); await mkdir(a, { recursive: true });
+  await promisify(execFile)('git', ['init', '--quiet', a]); await promisify(execFile)('git', ['init', '--quiet', b]);
+  const repositories = await Promise.all([realpath(a), realpath(b)]);
+  const workspace = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'shared', repositoryDirectories: repositories };
+  const workspaceId = conversationId(workspace);
+  const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
+  const portA = createSlackConversationPort({ repositoryDirectory: repositories[0]!, configDirectory, assignment: workspace, channelId: 'CA', input, client, language: 'en' });
+  const portB = createSlackConversationPort({ repositoryDirectory: repositories[1]!, configDirectory, assignment: workspace, channelId: 'CB', input, client, language: 'en' });
+  try {
+    const target = { goalId: null, owner: { kind: 'workspace' as const, workspaceId: workspace.workspaceId } } as const;
+    const question = createInquiry({ kind: 'approval', body: 'B operation', operation: { toolName: 'Bash', args: 'npm test', cwd: join(b, 'nested') } });
+    await portA.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
+    await portB.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB' }));
+    const base = await ingress.snapshot(id); items = [{ kind: 'inquiry', inquiry: { target, question } }];
+    vi.mocked(ingress.snapshot).mockImplementation(async () => ({ ...base, conversationId: workspaceId, transferId: randomUUID(),
+      turnState: { ...base.turnState, assignment: workspace }, items: (async function* () { yield* items; })() }));
+    await new SlackInquiryBindings(configDirectory, repositories[0]!).save({ channelId: 'CA', parentTs: 'forged', target, questionId: question.id });
+    await portA.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'answer');
+    expect(events).toEqual([]);
+    await portB.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CB', parentTs: 'posted-1' }, 'takt_inquiry_answer_allow_once', 'allow_once', undefined);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toMatchObject({ kind: 'inquiry_answer', command: { target, questionId: question.id } });
+  } finally { await portA.close(); await portB.close(); await client.close(); }
 });

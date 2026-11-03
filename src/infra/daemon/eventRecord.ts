@@ -20,6 +20,7 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('goal_stalled'), ...repositoryGoal, lastUpdatedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
+  z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
 ]);
 const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, questionId: id, answer: GoalAnswerSchema }).strict(),

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { vi } from 'vitest';
 import type { AcceptedEvent, Admission, EventInput } from '../../core/daemon/events.js';
 import type { ConversationTurnState, TurnStart, TurnIdentity, TurnOutcome, TurnResult } from '../../core/daemon/messages.js';
@@ -35,19 +36,37 @@ export class MemoryEventStore implements EventStore {
   });
   readonly markStarted = vi.fn(async (eventId: string, turn: TurnIdentity) => {
     await this.beforeStart(eventId);
-    this.records.set(eventId, { state: 'running', event: this.records.get(eventId)!.event, turn });
+    const record = this.records.get(eventId)!;
+    if (record.event.conversationId !== turn.conversationId || record.event.operationId !== turn.operationId) throw new Error('Turn mismatch');
+    if (record.state !== 'queued') {
+      const saved = record.state === 'running' ? record.turn : record.result;
+      if (saved.generation !== turn.generation) throw new Error('Conflicting started turn');
+      return;
+    }
+    this.records.set(eventId, { state: 'running', event: record.event, turn });
+    await this.afterStart(eventId);
   });
   readonly saveResult = vi.fn(async (eventId: string, result: TurnResult) => {
     await this.beforeResult(eventId);
+    const record = this.records.get(eventId)!;
+    if (!isDeepStrictEqual(record.event, result.event)) throw new Error('Result event mismatch');
+    if (record.state === 'settling' || record.state === 'settled') {
+      if (!isDeepStrictEqual(record.result, result)) throw new Error('Conflicting stored result');
+      return;
+    }
+    if (record.state !== 'running' || !isDeepStrictEqual(record.turn, { conversationId: result.conversationId, operationId: result.operationId, generation: result.generation })) throw new Error('Result has no matching running turn');
     this.records.set(eventId, { state: 'settling', event: result.event, result });
   });
   readonly markSettled = vi.fn(async (eventId: string, result: TurnResult) => {
     await this.beforeSettle(eventId);
+    const record = this.records.get(eventId)!;
+    if ((record.state !== 'settling' && record.state !== 'settled') || !isDeepStrictEqual(record.result, result)) throw new Error('Result was not saved before settlement');
     this.records.set(eventId, { state: 'settled', event: result.event, result });
   });
   beforeAccept: (event: AcceptedEvent) => Promise<void> = async () => {};
   afterAccept: (event: AcceptedEvent) => Promise<void> = async () => {};
   beforeStart: (eventId: string) => Promise<void> = async () => {};
+  afterStart: (eventId: string) => Promise<void> = async () => {};
   beforeResult: (eventId: string) => Promise<void> = async () => {};
   beforeSettle: (eventId: string) => Promise<void> = async () => {};
   async restore() {

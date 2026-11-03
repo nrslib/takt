@@ -421,6 +421,7 @@
     "src/__tests__/managed-provider-retry-preflight.test.ts",
     "src/__tests__/managed-providers.test.ts",
     "src/__tests__/managed-sdk-version-alignment.test.ts",
+    "src/__tests__/managed-spawn.test.ts",
     "src/__tests__/manager-auto-run.test.ts",
     "src/__tests__/manager-command.test.ts",
     "src/__tests__/manager-config.test.ts",

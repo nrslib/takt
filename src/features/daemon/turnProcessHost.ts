@@ -91,7 +91,23 @@ export function createTurnProcessHost(input: {
     entry.stopping = true;
     clearTimeout(entry.timer);
     cancelRequests(entry);
-    try { await entry.process.terminate(); await entry.exit; }
+    try {
+      if (!entry.exited) {
+        if (entry.process.child.connected) {
+          try { send(entry, { ...envelope(entry), kind: 'shutdown' }); }
+          catch (error) {
+            input.onError(error);
+            if (process.platform !== 'win32') entry.process.child.kill('SIGTERM');
+          }
+        } else if (process.platform !== 'win32') entry.process.child.kill('SIGTERM');
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([entry.exit, new Promise<void>((resolve) => { timer = setTimeout(resolve, SHUTDOWN_GRACE_MS); })]);
+        } finally { clearTimeout(timer); }
+      }
+      if (!entry.exited) await entry.process.terminate();
+      await entry.exit;
+    }
     finally {
       // A disconnected IPC channel alone never releases the conversation slot.
       if (entry.exited) finish(entry, entry.active?.interrupted ? { kind: 'interrupted' } : { kind: 'failed', message });
@@ -174,11 +190,12 @@ export function createTurnProcessHost(input: {
     const entry: ChildEntry = { launchId: randomUUID(), process: managed, ready: false, stopping: false, exited: false,
       requests: new Map(), requestBytes: 0, sendCount: 0, sendBytes: 0, exit: Promise.resolve() };
     owned.add(entry);
-    entry.exit = managed.wait().then(async () => {
+    entry.exit = managed.waitForExit().then(async () => {
+      entry.exited = true;
       // An unexpected leader exit can leave provider/MCP descendants in the owned group.
       // Detached automatic runs own a separate group and are not part of this cleanup.
-      await managed.terminate();
-      entry.exited = true;
+      try { await managed.terminate(); }
+      catch (error) { input.onError(error); }
       clearTimeout(entry.timer);
       cancelRequests(entry);
       if (children.get(turn.turn.conversationId) === entry) children.delete(turn.turn.conversationId);
@@ -258,15 +275,8 @@ export function createTurnProcessHost(input: {
     close() {
       return closing ??= (async () => {
         const results = await Promise.allSettled([...owned].map(async (entry) => {
-          entry.stopping = true;
           if (entry.active !== undefined && !entry.active.finished) entry.active.interrupted = true;
-          cancelRequests(entry);
-          clearTimeout(entry.timer);
-          entry.timer = setTimeout(() => { report(terminate(entry, 'Turn process shutdown timed out')); }, SHUTDOWN_GRACE_MS);
-          try { send(entry, { ...envelope(entry), kind: 'shutdown' }); }
-          catch { await terminate(entry, 'Turn process shutdown failed'); }
-          await entry.exit;
-          if (entry.termination !== undefined) await entry.termination;
+          await terminate(entry, 'Turn process shutdown failed');
         }));
         const startResults = await Promise.allSettled([...starts]);
         await Promise.allSettled([...notifications]);

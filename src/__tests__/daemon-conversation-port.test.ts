@@ -111,3 +111,20 @@ it('does not resend a rejected director message or submit after cancellation', a
   await expect(tellDirectorManager({ bus: { request }, turn }, 'manager', 'cancelled', controller.signal)).rejects.toThrow();
   expect(request).toHaveBeenCalledOnce();
 });
+
+it('limits progress per attachment while always delivering final results to both slow and fast attachments', async () => {
+  const f = await fixture();
+  const stalled = gate<void>();
+  const slow = { deliver: vi.fn(async () => { await stalled.promise; return { kind: 'delivered' as const }; }) };
+  const opened = await f.port.open(f.selected, slow); opened.read.cancel();
+  const version = { revision: 3, stateSequence: 6, operationId: '11111111-1111-4111-8111-111111111111' };
+  const progress = Array.from({ length: 40 }, () => f.port.deliver(f.selected.conversationId,
+    { kind: 'progress', operationId: version.operationId, message: 'progress' }, version));
+  // 速い接続は次の発言の配送までに完了する。
+  await Promise.resolve(); await Promise.resolve();
+  const final = f.port.deliver(f.selected.conversationId, { kind: 'result', operationId: version.operationId,
+    result: { kind: 'reply', message: 'final' } }, version);
+  expect(slow.deliver).toHaveBeenCalledTimes(33);
+  expect(f.delivery.deliver).toHaveBeenLastCalledWith(f.selected.conversationId, expect.objectContaining({ kind: 'result' }), version);
+  stalled.resolve(); await Promise.all([...progress, final]); f.port.close();
+});

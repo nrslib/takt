@@ -61,7 +61,6 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   get activeTurnCount(): number { return this.active.size; }
   private readonly queues = createTurnQueues();
   private readonly active = new Map<string, ActiveTurn>();
-  private readonly blocked = new Set<string>();
   private readonly admissions = new Map<string, PendingAdmission>();
   private readonly eventAdmissions = new Map<string, PendingAdmission>();
   private readonly idleReplies: Reply<void>[] = [];
@@ -379,7 +378,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       .filter((admission) => admission.phase === 'uncertain' || admission.phase === 'reconciling')
       .map((admission) => admission.event.conversationId));
     while (true) {
-      const event = this.queues.peekNext((id) => !this.active.has(id) && !this.blocked.has(id) && !uncertain.has(id));
+      const event = this.queues.peekNext((id) => !this.active.has(id) && !uncertain.has(id));
       if (event === undefined) return;
       const turn = { conversationId: event.conversationId, operationId: event.operationId, generation: ++this.generation };
       this.active.set(event.conversationId, this.newTurn(event, turn));
@@ -396,14 +395,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const { event, turn, abort } = active;
     if (notice.kind === 'start_saved' && !notice.result.ok) {
       this.failure('start', event, notice.result.error, effects);
-      if (active.interrupted) this.finish(active, { kind: 'interrupted' }, effects);
-      else {
-        this.active.delete(event.conversationId);
-        this.queues.remove(event.eventId);
-        this.queues.add(event);
-        this.queues.confirm(event.eventId);
-        this.blocked.add(event.conversationId);
-      }
+      this.finish(active, active.interrupted ? { kind: 'interrupted' }
+        : { kind: 'failed', message: 'Turn start could not be saved' }, effects);
       return;
     }
     if (notice.kind !== 'process_started' && active.interrupted) { this.finish(active, { kind: 'interrupted' }, effects); return; }
@@ -472,7 +465,11 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     active.save = 'saving';
     const attempt = ++active.saveAttempt;
     const { turn, event } = active;
-    effects.push(effect(() => this.dependencies.store.saveResult(event.eventId, result), (completion) => ({ kind: 'result_saved', turn, attempt, result: completion })));
+    effects.push(effect(async () => {
+      // 開始保存の応答が失われても、同じ世代を確定してから失敗結果を保存する。
+      await this.dependencies.store.markStarted(event.eventId, turn);
+      await this.dependencies.store.saveResult(event.eventId, result);
+    }, (completion) => ({ kind: 'result_saved', turn, attempt, result: completion })));
   }
 
   private resultCompleted(notice: Extract<DispatcherNotice, { kind: 'result_saved' | 'result_applied' | 'result_settled' | 'result_committed' }>, effects: DispatcherEffect[]): void {
@@ -543,7 +540,6 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   }
 
   private retry(response: Reply<void>, effects: DispatcherEffect[]): void {
-    this.blocked.clear();
     for (const admission of this.eventAdmissions.values()) {
       if (admission.phase === 'uncertain') {
         admission.reply = reply<Admission>();

@@ -477,7 +477,7 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
   await vi.advanceTimersByTimeAsync(15_000);
   expect(source.runs).toHaveBeenCalledTimes(6);
   expect(source.pullRequests).toHaveBeenCalledTimes(1);
-  expect(source.inquiries).toHaveBeenCalledTimes(1);
+  expect(source.inquiries).toHaveBeenCalledTimes(4);
   expect(source.launches).toHaveBeenCalledTimes(1);
   await watchers.close();
   watchers.changed();
@@ -515,4 +515,18 @@ it('ゴールの長期停滞は保存時刻から判定し、同じ状態では�
   await h.checks.goal({ ...target, active: false });
   await h.checks.goal(target);
   expect(observedKinds(h.accepted)).toEqual(['goal_stalled', 'goal_stalled']);
+});
+
+it('processes directory files in pages and retains unchanged entries between pages', async () => {
+  filesystem.list.mockResolvedValue(Array.from({ length: 130 }, (_, index) => entry(`${index.toString().padStart(3, '0')}.json`)));
+  filesystem.json.mockResolvedValue({ kind: 'registered' });
+  const changed = vi.fn(); const onError = vi.fn();
+  const loop = startDirectoryWatcher({ targets: async () => [directoryTarget], changed, onError });
+  try {
+    await loop.drain(); expect(changed).toHaveBeenCalledTimes(128);
+    loop.wake(); await loop.drain(); expect(changed).toHaveBeenCalledTimes(130);
+    loop.wake(); await loop.drain(); expect(changed).toHaveBeenCalledTimes(130);
+    expect(changed.mock.calls.every(([change]) => !(change as WatchFileChange).removed)).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+  } finally { await loop.close(); }
 });

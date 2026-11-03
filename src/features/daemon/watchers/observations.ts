@@ -58,6 +58,26 @@ export class WatchObservations {
     await this.records.write(key, { ...record, accepted: true });
   }
 
+  async changed(target: WatchTarget, observation: Extract<WatchObservation, { kind: 'director_state_changed' }>): Promise<void> {
+    const key = createHash('sha256').update(JSON.stringify([target.conversationId, target.targetId, observation.kind])).digest('hex');
+    let record = await this.records.read(key);
+    const previous = record?.input?.event;
+    if (previous?.kind !== 'watch_observation' || previous.observation.generation !== observation.generation) {
+      const episode = (record?.episode ?? 0) + 1;
+      const id = `watch-${key}-${episode}`;
+      record = { episode, active: true, accepted: false, input: {
+        eventId: id, requestId: id, conversationId: target.conversationId, source: 'watcher',
+        occurredAt: observation.observedAt, event: { kind: 'watch_observation', observation },
+      } };
+      await this.records.write(key, record);
+    }
+    if (record === undefined || record.input === null) throw new Error('Missing state change event');
+    if (record.accepted) return;
+    const admission = await this.ingress.accept(record.input);
+    if (admission.kind === 'rejected') throw new Error(`State change admission rejected: ${admission.reason}`);
+    await this.records.write(key, { ...record, accepted: true });
+  }
+
   evidence(target: WatchTarget): { targetId: string; generation: string; observedAt: string } {
     return { targetId: target.targetId, generation: target.generation, observedAt: new Date(this.now()).toISOString() };
   }

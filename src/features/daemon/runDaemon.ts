@@ -9,6 +9,7 @@ import { AsyncCommand } from '../../infra/daemon/command.js';
 import { FileEventStore } from '../../infra/daemon/eventStore.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../../infra/daemon/notifications.js';
+import { WatchObservations } from './watchers/observations.js';
 import { FileWatchRecords } from '../../infra/daemon/watchRecords.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { readPrivateFile } from '../../infra/daemon/privateFile.js';
@@ -54,7 +55,12 @@ export async function startDaemon(options: {
   const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version) => {
     await input.deliver(id, output, version);
     if (output.kind === 'inquiry') await (await slackReady)?.delivery.deliver(id, output, version);
-    if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' })) {
+    if (output.kind === 'result' && id === conversationId({ kind: 'daemon' })) {
+      const batch = [];
+      for await (const notice of notifications.iterate()) if (notice.turnOperationId === output.operationId) batch.push(notice);
+      await (await slackReady)?.notifications.deliver(batch);
+    }
+    if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' }) && (version.operationId === null || output.id.startsWith('result-'))) {
       await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
     }
   }, reportDaemonError);
@@ -120,8 +126,10 @@ export async function startDaemon(options: {
     ipc = await createConversationIpcServer(directory, options.owner, input);
     options.signal.throwIfAborted();
     const files = new DaemonPersistedFiles(directory);
-    watchers = startDaemonWatchers({ source: new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError),
-      processes: new AsyncProcess(), commands: new AsyncCommand(), records: new FileWatchRecords(directory), ingress: dispatcher,
+    const records = new FileWatchRecords(directory);
+    watchers = startDaemonWatchers({ source: new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
+      new WatchObservations(records, dispatcher, Date.now)),
+      processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {
         if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
         else {

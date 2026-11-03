@@ -36,7 +36,6 @@ export class DaemonConversations implements ConversationOwner {
   }
 
   send(id: string, output: PortOutput, version: OutputVersion): void {
-    if (this.deliveries.size >= 32) { this.onError(new Error('Daemon delivery capacity exceeded')); return; }
     const pending = this.deliver(id, output, version);
     this.deliveries.add(pending);
     void pending.then(() => { this.deliveries.delete(pending); }, (error: unknown) => {
@@ -68,13 +67,17 @@ export class DaemonConversations implements ConversationOwner {
       interrupted: outcome.kind === 'interrupted' } }, version);
     this.send(result.conversationId, { kind: 'result', operationId: result.operationId, result: outcome.kind === 'completed' ? outcome.result
       : { kind: 'error', code: outcome.kind, message: outcome.kind === 'failed' ? outcome.message : 'Turn interrupted' } }, version);
-    if (result.event.event.kind === 'director_message') {
-      const message = outcome.kind === 'completed' && 'message' in outcome.result ? outcome.result.message
-        : outcome.kind === 'failed' ? outcome.message : outcome.kind === 'interrupted' ? 'Manager turn interrupted' : 'Manager operation completed';
-      const id = `result-${result.operationId}`;
-      if (await this.notifications.save({ id, message: `${result.conversationId}: ${message}` }, new AbortController().signal)) {
-        this.send(conversationId({ kind: 'daemon' }), { kind: 'notice', id, message: `${result.conversationId}: ${message}` }, version);
-      }
+    if (result.event.event.kind === 'director_message') await this.notifyResult(result);
+  }
+
+  async notifyResult(result: TurnResult): Promise<void> {
+    const outcome = result.outcome;
+    const message = outcome.kind === 'completed' && 'message' in outcome.result ? outcome.result.message
+      : outcome.kind === 'failed' ? outcome.message : outcome.kind === 'interrupted' ? 'Manager turn interrupted' : 'Manager operation completed';
+    const id = `result-${result.operationId}`;
+    if (await this.notifications.save({ id, message: `${result.conversationId}: ${message}` }, new AbortController().signal)) {
+      const directorId = conversationId({ kind: 'daemon' });
+      this.send(directorId, { kind: 'notice', id, message: `${result.conversationId}: ${message}` }, this.version(directorId, 0, null));
     }
   }
 
@@ -87,6 +90,11 @@ export class DaemonConversations implements ConversationOwner {
   async inquiry(notice: import('../../core/daemon/messages.js').InquiryNotice): Promise<void> {
     const current = await this.store.read(notice.conversationId);
     if (current === undefined) throw new Error('Missing inquiry conversation');
+    if (notice.question.status !== 'pending' || notice.question.recipient !== 'human') {
+      const read = await this.snapshot(notice.conversationId);
+      this.send(notice.conversationId, { kind: 'snapshot', read: { ...read, operationId: null } }, this.version(notice.conversationId, current.state.revision, null));
+      return;
+    }
     this.send(notice.conversationId, { kind: 'inquiry', target: notice.target, question: notice.question },
       this.version(notice.conversationId, current.state.revision, null));
   }

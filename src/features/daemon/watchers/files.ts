@@ -41,7 +41,6 @@ export async function listWatchEntries(path: string): Promise<readonly Dirent[]>
   }
   const entries: Dirent[] = [];
   for await (const entry of directory) {
-    if (entries.length === MAX_WATCH_ENTRIES) throw new Error('Watch directory exceeds the entry limit');
     entries.push(entry);
   }
   return entries.sort((left, right) => left.name.localeCompare(right.name));

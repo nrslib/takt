@@ -203,6 +203,24 @@ describe('conditional conversation state persistence', () => {
     expect((await store.read(id))?.state.version).toBe(1);
   });
 
+  it('bounds receipt history while preserving recent retries and rejecting old versions', async () => {
+    const directory = await root(); const store = new ConversationStateStore(directory);
+    await store.create(record());
+    for (let index = 0; index < 40; index++) {
+      expect(await store.save(turn, { operationId: `save-${index}`, expectedVersion: index,
+        session: { provider: 'codex', model: null, sessionId: 'x'.repeat(100_000) } }, signal())).toMatchObject({ kind: 'state_saved', version: index + 1 });
+    }
+    const saved = JSON.parse(await readFile(join(directory, 'conversations', `${id}.json`), 'utf8')) as { daemonState: { receipts: unknown[] } };
+    expect(saved.daemonState.receipts.length).toBeLessThanOrEqual(32);
+    expect(Buffer.byteLength(JSON.stringify(saved.daemonState.receipts))).toBeLessThanOrEqual(1024 * 1024);
+    const restarted = new ConversationStateStore(directory);
+    expect((await restarted.read(id))?.state.version).toBe(40);
+    expect(await restarted.save(turn, { operationId: 'save-39', expectedVersion: 39,
+      session: { provider: 'codex', model: null, sessionId: 'x'.repeat(100_000) } }, signal())).toMatchObject({ kind: 'state_saved', duplicate: true });
+    expect(await restarted.save(turn, { operationId: 'save-0', expectedVersion: 0,
+      session: { provider: 'codex', model: null, sessionId: 'old' } }, signal())).toMatchObject({ kind: 'error', code: 'version_conflict' });
+  });
+
   it('allows only one of two competing expected-version writes', async () => {
     const directory = await root();
     await new ConversationStateStore(directory).create(record());

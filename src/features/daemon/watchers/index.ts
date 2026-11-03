@@ -1,12 +1,13 @@
+import { MAX_WATCH_ENTRIES } from './files.js';
 import type { CommandPort, ProcessPort } from '../../../core/daemon/io.js';
 import type { DaemonIngress, DaemonResources } from '../../../core/daemon/ports.js';
-import { boundWatchTargets, readLogStamp, WatchChecks, type GoalWatchTarget, type InquiryWatchTarget, type LaunchWatchTarget, type RunWatchTarget } from './checks.js';
+import { readLogStamp, WatchChecks, type GoalWatchTarget, type InquiryWatchTarget, type LaunchWatchTarget, type RunWatchTarget } from './checks.js';
 import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange } from './directories.js';
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './loop.js';
 import { WatchObservations, type WatchRecordStore, type WatchTarget } from './observations.js';
 import { observePullRequest, type PullRequestWatchTarget } from './pullRequests.js';
 
-/** 取得元も件数上限を適用し、大きな全件読取の後で切り出す実装にはしない。 */
+/** 観測対象を取得する。1回の観測件数はループ側で区切る。 */
 export interface DaemonWatchSource {
   runs(): Promise<readonly RunWatchTarget[]>;
   run(targetId: string): Promise<RunWatchTarget | undefined>;
@@ -38,10 +39,14 @@ export function startDaemonWatchers(dependencies: {
   const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'pr' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
     observe: (checks: WatchChecks, target: T, signal: AbortSignal) => Promise<void>): void => {
     const checks = new WatchChecks(observations, dependencies.now, dependencies.onError, scope);
+    let offset = 0;
     loops.push(startWatchLoop(interval, async (signal) => {
-      const targets = boundWatchTargets(await read());
+      const targets = await read();
       checks.retain(targets);
-      for (const target of targets) {
+      if (offset >= targets.length) offset = 0;
+      const page = targets.slice(offset, offset + MAX_WATCH_ENTRIES);
+      offset += page.length;
+      for (const target of page) {
         signal.throwIfAborted();
         await checks.check(target, () => observe(checks, target, signal));
       }
@@ -56,7 +61,7 @@ export function startDaemonWatchers(dependencies: {
     }, () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
-  register('inquiry', WATCH_INTERVALS.long, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));
+  register('inquiry', WATCH_INTERVALS.files, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));
   register('goal', WATCH_INTERVALS.long, () => dependencies.source.goals(), (checks, target) => checks.goal(target));
   register('launch', WATCH_INTERVALS.launch, () => dependencies.source.launches(), (checks, target) => checks.launch(target));
   loops.push(startDirectoryWatcher({ targets: () => dependencies.source.directories(), changed: dependencies.filesChanged,

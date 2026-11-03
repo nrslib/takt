@@ -1,3 +1,4 @@
+import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { tellDirectorManager } from '../director/tellManager.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
@@ -43,8 +44,9 @@ export async function createTurnBusiness(configDirectory: string, assignment: Co
       finally { current = undefined; }
     },
     async close() {
-      try { await runtime.close(); }
-      finally { await prepareSharedServerPoolForForcedShutdown(); }
+      const results = await Promise.allSettled([terminateManagedProcesses(), runtime.close(), prepareSharedServerPoolForForcedShutdown()]);
+      const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+      if (errors.length > 0) throw new AggregateError(errors, 'Turn business cleanup failed');
     },
   };
 }

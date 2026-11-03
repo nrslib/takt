@@ -76,8 +76,9 @@ export function createTurnProcessRuntime(input: {
     active?.controller.abort();
     rejectRequests(new Error('Turn process is shutting down'));
     await initialization;
-    await active?.completion;
-    await business?.close();
+    const results = await Promise.allSettled([active?.completion, business?.close()]);
+    const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+    if (errors.length > 0) throw new AggregateError(errors, 'Turn shutdown failed');
     if (initialized !== undefined) await send({ ...envelope(), kind: 'shutdown_complete' });
   })();
   return {

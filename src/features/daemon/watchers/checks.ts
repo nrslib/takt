@@ -2,7 +2,6 @@ import { stat } from 'node:fs/promises';
 import type { TaskRef } from '../../../core/daemon/events.js';
 import type { IoOptions, ProcessOwner, ProcessPort } from '../../../core/daemon/io.js';
 import { WATCH_THRESHOLDS } from './loop.js';
-import { MAX_WATCH_ENTRIES } from './files.js';
 import { watchKey, WatchObservations, type WatchTarget } from './observations.js';
 
 export interface RunWatchTarget extends WatchTarget {
@@ -50,11 +49,6 @@ export async function readLogStamp(path: string): Promise<LogStamp> {
   const value = await stat(path);
   if (!value.isFile()) throw new Error('Run log is not a regular file');
   return { identity: `${value.dev}:${value.ino}`, size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs };
-}
-
-export function boundWatchTargets<T>(targets: readonly T[]): readonly T[] {
-  if (targets.length > MAX_WATCH_ENTRIES) throw new Error('Watch target count exceeds the limit');
-  return targets;
 }
 
 export class WatchChecks {

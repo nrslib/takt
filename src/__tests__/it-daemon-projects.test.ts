@@ -74,13 +74,13 @@ it('bounds small-file reads before parsing and rejects growth beyond the limit',
   await expect(readSmallText(root)).rejects.toThrow();
 });
 
-it('bounds directory enumeration and does not silently return a partial target set', async () => {
+it('enumerates directories above one watch page without rejecting or dropping entries', async () => {
   const directory = join(root, 'bounded');
   await mkdir(directory);
   for (let index = 0; index < MAX_WATCH_ENTRIES; index++) await writeFile(join(directory, `${index}.json`), '{}');
   expect((await listWatchEntries(directory)).length).toBe(MAX_WATCH_ENTRIES);
   await writeFile(join(directory, 'extra.json'), '{}');
-  await expect(listWatchEntries(directory)).rejects.toThrow();
+  expect(await listWatchEntries(directory)).toHaveLength(MAX_WATCH_ENTRIES + 1);
 });
 
 it('rejects YAML aliases without expanding them into a large observation payload', async () => {

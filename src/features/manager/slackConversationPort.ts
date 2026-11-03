@@ -1,3 +1,7 @@
+import { realpath } from 'node:fs/promises';
+import { AsyncCommand } from '../../infra/daemon/command.js';
+import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
+import type { GoalQuestion } from '../../infra/goals/schema.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import { randomUUID } from 'node:crypto';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -31,8 +35,22 @@ export function createSlackConversationPort(options: {
   const modals = new Map<string, { endpoint: SlackEndpoint; binding: SlackInquiryBinding; scope: WritablePermissionScope }>();
   let accepting = true;
   const detach = (id: string): void => { attachments.delete(id); options.input.detach(id); };
+  const ownsInquiry = (target: QuestionTarget): boolean => target.goalId === null
+    ? conversationId(target.owner) === conversationId(options.assignment)
+    : target.repositoryDirectory === options.repositoryDirectory;
+  const matchesInquiryRepository = async (target: QuestionTarget, question: GoalQuestion): Promise<boolean> => {
+    if (!ownsInquiry(target)) return false;
+    if (target.goalId !== null || question.operation === undefined) return true;
+    const cwd = question.operation.cwd;
+    const result = await new AsyncCommand().run({ executable: 'git', args: ['rev-parse', '--show-toplevel'], cwd,
+      env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }), maxOutputBytes: 16 * 1024 },
+    { signal: new AbortController().signal, timeoutMs: 5000 });
+    if (result.code !== 0 || result.truncated) throw new Error('Cannot resolve inquiry repository');
+    return await realpath(Buffer.from(result.stdout).toString('utf8').replace(/\r?\n$/u, '')) === options.repositoryDirectory;
+  };
   const findInquiryBinding = (channelId: string, parentTs: string) => bindings.find(channelId, parentTs);
   const loadInquiry = async (endpoint: SlackEndpoint, target: QuestionTarget, questionId: string) => {
+    if (!ownsInquiry(target) || endpoint.channelId !== options.channelId) return undefined;
     const resolved = await port.resolve(endpoint);
     const opened = await options.input.open(resolved, port.delivery);
     try {
@@ -40,7 +58,7 @@ export function createSlackConversationPort(options: {
         if (item.kind === 'inquiry' && item.inquiry.question.id === questionId
           && slackInquiryKey(item.inquiry.target, questionId) === slackInquiryKey(target, questionId)) {
           const question = item.inquiry.question;
-          if (question.status !== 'pending' || question.recipient !== 'human') return undefined;
+          if (question.status !== 'pending' || question.recipient !== 'human' || !await matchesInquiryRepository(target, question)) return undefined;
           const pending: PendingQuestion = target.goalId === null ? { ...target, question }
             : { ...target, question, objective: item.inquiry.objective ?? question.body };
           return { pending, assignment: options.assignment };
@@ -67,9 +85,7 @@ export function createSlackConversationPort(options: {
         }
         if (output.kind === 'inquiry') {
           if (!accepting) return { kind: 'unavailable', reason: 'Slack port closed' };
-          if (currentConversationId !== conversationId(options.assignment) || (output.target.goalId === null
-            ? conversationId(output.target.owner) !== currentConversationId
-            : !options.assignment.repositoryDirectories.includes(output.target.repositoryDirectory))) return { kind: 'delivered' };
+          if (currentConversationId !== conversationId(options.assignment) || !await matchesInquiryRepository(output.target, output.question)) return { kind: 'delivered' };
           const key = slackInquiryKey(output.target, output.question.id);
           const attempt = attempted.get(key);
           if (attempt !== undefined) return attempt;
@@ -152,7 +168,7 @@ export function createSlackConversationPort(options: {
     },
   };
   const submitCommand = async (endpoint: SlackEndpoint, command: ConversationCommand, makeGoal = false, expectedConversationId?: string, requestId: string = randomUUID()): Promise<void> => {
-    if (!accepting) return;
+    if (!accepting || endpoint.channelId !== options.channelId || command.kind === 'answer_question' && !ownsInquiry(command.target)) return;
     let attachmentId: string | undefined;
     let ownedOperationId: string | undefined;
     let admitted!: () => void;
@@ -263,6 +279,7 @@ export function createSlackConversationPort(options: {
       if (modal === undefined || modal.endpoint.teamId !== endpoint.teamId || modal.endpoint.userId !== endpoint.userId
         || modal.endpoint.channelId !== endpoint.channelId) return;
       modals.delete(metadata);
+      if (await loadInquiry(endpoint, modal.binding.target, modal.binding.questionId) === undefined) return;
       if (sentence === undefined || sentence.trim().length === 0) return;
       await submitCommand(endpoint, { kind: 'answer_question', target: modal.binding.target, questionId: modal.binding.questionId,
         answer: { decision: 'allow', scope: modal.scope.kind }, source: 'slack', permission: { scope: modal.scope, sentence } }, false, undefined, requestId);

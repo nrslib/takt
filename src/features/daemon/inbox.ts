@@ -64,6 +64,25 @@ export async function restoreLegacyConversations(conversations: DaemonConversati
           : { kind: 'director_message', directorConversationId: message.directorConversationId, text: message.text } });
       await conversations.store.retireLegacy(record.id, message.operationId);
     }
-    if (record.running !== null) await conversations.store.retireLegacy(record.id, null);
+    if (record.running !== null) {
+      const running = record.running;
+      const id = `legacy-running-${running.operationId}`;
+      const event: import('../../core/daemon/events.js').AcceptedEvent = { eventId: id, requestId: id, conversationId: record.id,
+        operationId: running.operationId, acceptedSequence: ++sequence, lane: running.directorConversationId === undefined ? 'human' : 'other',
+        source: running.directorConversationId === undefined ? 'daemon' : 'director', occurredAt: new Date().toISOString(),
+        event: running.directorConversationId === undefined ? { kind: 'human_command', command: { kind: 'message', text: 'Legacy turn interrupted during daemon restart', display: false },
+          speaker: record.lastSpeaker ?? record.counterpart }
+          : { kind: 'director_message', directorConversationId: running.directorConversationId, text: 'Legacy turn interrupted during daemon restart' } };
+      // 再起動が移行中に止まっても、保存済みのイベント・結果を使い直す。
+      const admission = await store.accept(event);
+      const canonical = admission.kind === 'stored' ? event : admission.event;
+      const result = { conversationId: record.id, operationId: running.operationId, generation: 1, event: canonical, outcome: { kind: 'interrupted' as const } };
+      await store.markStarted(id, result);
+      await store.saveResult(id, result);
+      await conversations.apply(result);
+      await conversations.notifyResult(result);
+      await store.markSettled(id, result);
+      await conversations.store.retireLegacy(record.id, null);
+    }
   }
 }
