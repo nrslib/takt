@@ -54,16 +54,16 @@ async function removeUnchanged(path: string, content: Buffer): Promise<boolean> 
   return true;
 }
 
-async function recover(path: string, options: IoOptions): Promise<void> {
+async function recover(path: string, selfStartTime: string | undefined, options: IoOptions): Promise<void> {
   const content = await readPrivateFile(path, 16 * 1024);
   if (content === undefined) return;
   let owner: unknown;
   try { owner = JSON.parse(content.toString('utf8')) as unknown; } catch { owner = undefined; }
   if (owner !== null && typeof owner === 'object' && 'pid' in owner && Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0) {
     const value = owner as { pid: number; startTime?: string; processIdentity?: { startTime: string } };
-    if (value.pid === process.pid) return;
     const startTime = value.startTime ?? value.processIdentity?.startTime;
     if (typeof startTime === 'string') {
+      if (value.pid === process.pid && startTime === selfStartTime) return;
       const observed = await observeProcess({ pid: value.pid, startTime }, options);
       if (observed.kind !== 'dead') return;
     } else {
@@ -87,6 +87,7 @@ export class FileAsyncLock implements AsyncLock {
       releaseLocal = await acquireLocal(absolute, scope.signal);
       scope.signal.throwIfAborted();
       await ensurePrivateDirectory(dirname(absolute));
+      scope.signal.throwIfAborted();
       const owner = await waitWithSignal(getProcessOwner(options), scope.signal);
       content = Buffer.from(JSON.stringify({ pid: process.pid, startTime: owner?.startTime, token: randomUUID() }));
       let nextRecovery = 0;
@@ -108,7 +109,7 @@ export class FileAsyncLock implements AsyncLock {
           break;
         }
         if (Date.now() >= nextRecovery) {
-          await recover(absolute, { signal: scope.signal, timeoutMs: options.timeoutMs });
+          await recover(absolute, owner?.startTime, { signal: scope.signal, timeoutMs: options.timeoutMs });
           nextRecovery = Date.now() + RECOVERY_INTERVAL_MS;
         }
         try { await delay(RETRY_MS, undefined, { signal: scope.signal }); } catch (error) {

@@ -2,7 +2,7 @@ import { open, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { observeProcess, readProcessOwner } from '../infra/daemon/process.js';
-import { readPrivateFile } from '../infra/daemon/privateFile.js';
+import { ensurePrivateDirectory, readPrivateFile } from '../infra/daemon/privateFile.js';
 import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 
@@ -113,6 +113,44 @@ describe('FileAsyncLock contention', () => {
     expect(readProcessOwner).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['abort', 'deadline'] as const)('does not start an identity lookup after %s during directory creation', async (kind) => {
+    const directory = deferred<void>();
+    vi.mocked(ensurePrivateDirectory).mockReturnValueOnce(directory.promise);
+    const abort = new AbortController();
+    const action = vi.fn(async () => 1);
+    const run = new FileAsyncLock().exclusive(path, action, { signal: abort.signal, timeoutMs: 100 });
+    const rejected = expect(run).rejects.toMatchObject({ name: kind === 'abort' ? 'AbortError' : 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ensurePrivateDirectory).toHaveBeenCalledTimes(1);
+    if (kind === 'abort') abort.abort();
+    else await vi.advanceTimersByTimeAsync(100);
+    directory.resolve();
+    await rejected;
+    expect(readProcessOwner).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+    expect(await new FileAsyncLock().exclusive(path, async () => 2, options())).toBe(2);
+  });
+
+  it('handles a shared identity lookup failure after its only waiter is cancelled', async () => {
+    const identity = deferred<Awaited<ReturnType<typeof readProcessOwner>>>();
+    vi.mocked(readProcessOwner).mockReturnValueOnce(identity.promise);
+    const abort = new AbortController();
+    const action = vi.fn(async () => 1);
+    const run = new FileAsyncLock().exclusive(path, action, { ...options(), signal: abort.signal });
+    const rejected = expect(run).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readProcessOwner).toHaveBeenCalledTimes(1);
+    abort.abort();
+    await rejected;
+    identity.reject(new Error('identity unavailable'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(open).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+    expect(await new FileAsyncLock().exclusive(path, async () => 2, options())).toBe(2);
+    expect(readProcessOwner).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['abort', 'deadline'] as const)('removes a %s waiter without letting later waiters bypass the holder', async (kind) => {
     const entered = deferred<void>();
     const release = deferred<void>();
@@ -166,20 +204,41 @@ describe('FileAsyncLock contention', () => {
     expect(files.size).toBe(0);
   });
 
-  it.each([true, false])('does not inspect or recover a self-owned file (start time present: %s)', async (withStartTime) => {
+  it.each([true, false])('preserves a self-owned file (start time present: %s)', async (withStartTime) => {
     const content = Buffer.from(JSON.stringify({ pid: process.pid, ...(withStartTime ? { startTime: 'self-start' } : {}) }));
     files.set(path, content);
-    const kill = vi.spyOn(process, 'kill');
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
     const action = vi.fn(async () => 1);
     const run = new FileAsyncLock().exclusive(path, action, { ...options(), timeoutMs: 1500 });
     const rejected = expect(run).rejects.toMatchObject({ name: 'TimeoutError' });
     await vi.advanceTimersByTimeAsync(1500);
     await rejected;
     expect(observeProcess).not.toHaveBeenCalled();
-    expect(kill).not.toHaveBeenCalled();
+    if (withStartTime) expect(kill).not.toHaveBeenCalled();
+    else expect(kill).toHaveBeenCalledWith(process.pid, 0);
     expect(unlink).not.toHaveBeenCalled();
     expect(action).not.toHaveBeenCalled();
     expect(files.get(path)).toEqual(content);
+  });
+
+  it.each([
+    { startTime: 'previous-start' },
+    { processIdentity: { startTime: 'previous-start' } },
+  ])('recovers a previous process lock with the same PID and a different start time: %j', async (identity) => {
+    files.set(path, Buffer.from(JSON.stringify({ pid: process.pid, ...identity })));
+    vi.mocked(observeProcess).mockResolvedValue({ kind: 'dead' });
+    const action = vi.fn(async () => {
+      expect(JSON.parse(files.get(path)!.toString())).toMatchObject({ pid: process.pid, startTime: 'self-start' });
+      return 42;
+    });
+    const run = new FileAsyncLock().exclusive(path, action, options());
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await run).toBe(42);
+    expect(observeProcess).toHaveBeenCalledExactlyOnceWith(
+      { pid: process.pid, startTime: 'previous-start' }, expect.objectContaining({ timeoutMs: 5000 }));
+    expect(readProcessOwner).toHaveBeenCalledTimes(1);
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(files.size).toBe(0);
   });
 
   it.each(['alive', 'unknown'] as const)('spaces foreign %s owner checks one second apart and recovers after death', async (kind) => {
