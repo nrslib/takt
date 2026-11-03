@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveSystem32ExecutablePath, resolveWindowsPowerShellExecutablePath } from '../shared/utils/executable-path.js';
+import { resolveSystem32ExecutablePathAsync, resolveWindowsPowerShellExecutablePathAsync } from '../shared/utils/executable-path-async.js';
 
 const temporaryDirectories: string[] = [];
 const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -140,5 +141,42 @@ describe('Windows PowerShell executable path resolution', () => {
     createExecutable(root, 'taskkill.exe');
 
     expect(() => resolveSystem32ExecutablePath('taskkill.exe')).toThrow();
+  });
+});
+
+describe('asynchronous System32 executable resolution', () => {
+  it('resolves taskkill and PowerShell inside the canonical OS directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-system32-async-'));
+    temporaryDirectories.push(root);
+    const system32 = join(root, 'System32');
+    const powershellDirectory = join(system32, 'WindowsPowerShell', 'v1.0');
+    mkdirSync(powershellDirectory, { recursive: true });
+    const taskkill = createExecutable(system32, 'taskkill.exe');
+    const powershell = createExecutable(powershellDirectory, 'powershell.exe');
+    process.env.SystemRoot = root;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    expect(await resolveSystem32ExecutablePathAsync('taskkill.exe')).toBe(realpathSync(taskkill));
+    expect(await resolveWindowsPowerShellExecutablePathAsync()).toBe(realpathSync(powershell));
+    await expect(resolveSystem32ExecutablePathAsync('../taskkill.exe')).rejects.toThrow();
+    await expect(resolveSystem32ExecutablePathAsync('missing.exe')).rejects.toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a canonical executable outside System32', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-system32-async-link-'));
+    temporaryDirectories.push(root);
+    const system32 = join(root, 'System32');
+    mkdirSync(system32);
+    const outside = createExecutable(root, 'taskkill.exe');
+    symlinkSync(outside, join(system32, 'taskkill.exe'));
+    process.env.SystemRoot = root;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    await expect(resolveSystem32ExecutablePathAsync('taskkill.exe')).rejects.toThrow();
+  });
+
+  it.each([undefined, '', 'relative'])('rejects an invalid SystemRoot %j', async (root) => {
+    if (root === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = root;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    await expect(resolveSystem32ExecutablePathAsync('taskkill.exe')).rejects.toThrow();
   });
 });

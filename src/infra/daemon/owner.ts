@@ -1,60 +1,54 @@
-import { rmSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
-import { isRecordedProcessAlive, withFileLock } from '../fs/file-lock.js';
-import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity } from '../task/process.js';
-import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
+import { z } from 'zod/v4';
+import type { IoOptions } from '../../core/daemon/io.js';
+import { FileAsyncLock } from './lock.js';
+import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { observeProcess } from './process.js';
 
 const DaemonOwnerSchema = z.object({
   pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   identity: z.object({ startTime: z.string().min(1) }).strict(),
-  version: z.string().min(1),
-  cliPath: z.string().min(1),
+  version: z.string().min(1), cliPath: z.string().min(1),
 }).strict();
 export type DaemonOwner = z.infer<typeof DaemonOwnerSchema>;
+const ownerPath = (directory: string): string => join(directory, 'daemon.json');
 
-function ownerPath(globalConfigDirectory: string): string {
-  return join(globalConfigDirectory, 'daemon.json');
+export async function readDaemonOwner(directory: string): Promise<DaemonOwner | undefined> {
+  const content = await readPrivateFile(ownerPath(directory), 16 * 1024);
+  return content === undefined ? undefined : DaemonOwnerSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
 }
 
-export function readDaemonOwner(globalConfigDirectory: string): DaemonOwner | undefined {
-  const snapshot = readPrivateFileState(ownerPath(globalConfigDirectory));
-  if (!('content' in snapshot)) return undefined;
-  return DaemonOwnerSchema.parse(JSON.parse(snapshot.content.toString('utf8')) as unknown);
+export async function writeDaemonOwner(directory: string, owner: DaemonOwner, signal?: AbortSignal): Promise<void> {
+  await writePrivateFile(ownerPath(directory), JSON.stringify(DaemonOwnerSchema.parse(owner)), signal);
 }
 
-export function writeDaemonOwner(globalConfigDirectory: string, owner: DaemonOwner): void {
-  ensurePrivateDirectory(globalConfigDirectory);
-  writePrivateFile(ownerPath(globalConfigDirectory), JSON.stringify(DaemonOwnerSchema.parse(owner)));
-}
-
-export function registerDaemonOwner(globalConfigDirectory: string, owner: DaemonOwner): boolean {
-  ensurePrivateDirectory(globalConfigDirectory);
-  return withFileLock(`${ownerPath(globalConfigDirectory)}.lock`, () => {
-    const existing = readDaemonOwner(globalConfigDirectory);
-    if (existing !== undefined && isRecordedProcessAlive(existing.pid, existing.identity)) return false;
-    writeDaemonOwner(globalConfigDirectory, owner);
+export async function registerDaemonOwner(directory: string, owner: DaemonOwner, options: IoOptions): Promise<boolean> {
+  await ensurePrivateDirectory(directory);
+  return new FileAsyncLock().exclusive(`${ownerPath(directory)}.lock`, async () => {
+    const existing = await readDaemonOwner(directory);
+    if (existing !== undefined) {
+      const observed = await observeProcess({ pid: existing.pid, startTime: existing.identity.startTime }, options);
+      if (observed.kind === 'alive') return false;
+      if (observed.kind === 'unknown') throw new Error(`Cannot verify daemon owner: ${observed.reason}`);
+    }
+    await writeDaemonOwner(directory, owner, options.signal);
     return true;
-  });
+  }, options);
 }
 
-/** Removes the owner record only when it still names the given process, so a newer daemon keeps its record. */
-export function removeDaemonOwner(globalConfigDirectory: string, expected: DaemonOwner): void {
-  if (readDaemonOwner(globalConfigDirectory) === undefined) return;
-  withFileLock(`${ownerPath(globalConfigDirectory)}.lock`, () => {
-    const owner = readDaemonOwner(globalConfigDirectory);
+export async function removeDaemonOwner(directory: string, expected: DaemonOwner, options: IoOptions): Promise<void> {
+  if (await readDaemonOwner(directory) === undefined) return;
+  await new FileAsyncLock().exclusive(`${ownerPath(directory)}.lock`, async () => {
+    const owner = await readDaemonOwner(directory);
     if (owner === undefined || owner.pid !== expected.pid || owner.identity.startTime !== expected.identity.startTime) return;
-    rmSync(ownerPath(globalConfigDirectory), { force: true });
-  });
+    options.signal.throwIfAborted();
+    await unlink(ownerPath(directory)).catch((error: unknown) => { if (!hasCode(error, 'ENOENT')) throw error; });
+  }, options);
 }
 
-export function isDaemonOwnerRunning(owner: DaemonOwner): boolean {
-  if (!isProcessAlive(owner.pid)) return false;
-  const identity = getProcessIdentity(owner.pid);
-  if (hasProcessIdentityMismatch(owner.identity, identity)) return false;
-  if (!sameProcessIdentity(owner.identity, identity)) {
-    if (!isProcessAlive(owner.pid)) return false;
-    throw new Error(`Cannot verify daemon process identity (PID ${owner.pid})`);
-  }
-  return true;
+export async function isDaemonOwnerRunning(owner: DaemonOwner, options: IoOptions): Promise<boolean> {
+  const observed = await observeProcess({ pid: owner.pid, startTime: owner.identity.startTime }, options);
+  if (observed.kind === 'unknown') throw new Error(`Cannot verify daemon process identity: ${observed.reason}`);
+  return observed.kind === 'alive';
 }
