@@ -468,8 +468,10 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(output[status]).toEqual(['runParam']);
       expect(argumentAfter(testCall!.args, '--match')).toBe('^(runParam)$');
       expect(argumentAfter(testCall!.args, '--main')).toBe('workflowModel');
-      expect(result.quint.verify?.status).toBe(status === 'passed' && java17Available ? 'passed' : 'skipped');
-      expect(calls.some(({ args }) => args[1] === 'verify')).toBe(status === 'passed' && java17Available);
+      const hasJava17 = result.javaMajorVersion !== undefined && result.javaMajorVersion >= 17;
+      const shouldVerify = status === 'passed' && hasJava17;
+      expect(result.quint.verify?.status).toBe(shouldVerify ? 'passed' : 'skipped');
+      expect(calls.some(({ args }) => args[1] === 'verify')).toBe(shouldVerify);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
