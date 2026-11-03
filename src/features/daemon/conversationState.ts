@@ -65,6 +65,7 @@ export class DaemonConversations implements ConversationOwner {
     this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,
       revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
       interrupted: outcome.kind === 'interrupted' } }, version);
+    if (outcome.kind === 'deferred') return;
     this.send(result.conversationId, { kind: 'result', operationId: result.operationId, result: outcome.kind === 'completed' ? outcome.result
       : { kind: 'error', code: outcome.kind, message: outcome.kind === 'failed' ? outcome.message : 'Turn interrupted' } }, version);
     if (result.event.event.kind === 'director_message') await this.notifyResult(result);

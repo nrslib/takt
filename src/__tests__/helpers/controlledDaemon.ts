@@ -31,7 +31,8 @@ export class MemoryEventStore implements EventStore {
       return { kind: 'duplicate', event: saved, state: existing.state };
     }
     this.records.set(event.eventId, { state: 'queued', event });
-    await this.afterAccept(event);
+    try { await this.afterAccept(event); }
+    catch (error) { this.records.delete(event.eventId); throw error; }
     return { kind: 'stored' };
   });
   readonly markStarted = vi.fn(async (eventId: string, turn: TurnIdentity) => {
@@ -60,8 +61,10 @@ export class MemoryEventStore implements EventStore {
   readonly markSettled = vi.fn(async (eventId: string, result: TurnResult) => {
     await this.beforeSettle(eventId);
     const record = this.records.get(eventId)!;
+    if (result.outcome.kind === 'deferred' && record.state === 'queued' && isDeepStrictEqual(record.event, result.event)) return;
     if ((record.state !== 'settling' && record.state !== 'settled') || !isDeepStrictEqual(record.result, result)) throw new Error('Result was not saved before settlement');
-    this.records.set(eventId, { state: 'settled', event: result.event, result });
+    this.records.set(eventId, result.outcome.kind === 'deferred'
+      ? { state: 'queued', event: result.event } : { state: 'settled', event: result.event, result });
   });
   beforeAccept: (event: AcceptedEvent) => Promise<void> = async () => {};
   afterAccept: (event: AcceptedEvent) => Promise<void> = async () => {};

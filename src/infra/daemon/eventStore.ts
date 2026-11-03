@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { opendir } from 'node:fs/promises';
+import { opendir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
 import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
 import { AcceptedEventSchema, EventRecordSchema, StoredResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
-import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
 
 const MAX_RECORD_BYTES = 4 * 1024 * 1024;
@@ -71,20 +71,34 @@ export class FileEventStore implements EventStore {
   async accept(input: AcceptedEvent): ReturnType<EventStore['accept']> {
     // 呼出し元が await 中に変更しても、受付内容は変えない。
     const event = AcceptedEventSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
-    return this.exclusive(async () => {
-      await this.refresh();
-      const path = this.ids.get(event.eventId) ?? this.requests.get(requestKey(event));
-      if (path !== undefined) {
-        const stored = await this.read(path);
-        return { kind: 'duplicate', event: stored.event, state: stored.state };
+    let writing = false;
+    try {
+      return await this.exclusive(async () => {
+        await this.refresh();
+        const path = this.ids.get(event.eventId) ?? this.requests.get(requestKey(event));
+        if (path !== undefined) {
+          const stored = await this.read(path);
+          return { kind: 'duplicate', event: stored.event, state: stored.state };
+        }
+        const record: EventRecord = { state: 'queued', event };
+        const sequence = this.sequences.get(event.acceptedSequence);
+        if (sequence !== undefined) throw new Error('Accepted sequence is already stored');
+        writing = true;
+        await this.write(record);
+        this.index(record, this.path(event.eventId));
+        return { kind: 'stored' };
+      });
+    } catch (error) {
+      if (writing) {
+        // 保存後の応答・ロック解放の失敗でも、拒否した発言を復元させない。
+        await unlink(this.path(event.eventId)).catch((cleanup: unknown) => { if (!hasCode(cleanup, 'ENOENT')) throw cleanup; });
+        this.ids.delete(event.eventId);
+        this.requests.delete(requestKey(event));
+        this.sequences.delete(event.acceptedSequence);
+        this.knownFiles.delete(this.path(event.eventId));
       }
-      const record: EventRecord = { state: 'queued', event };
-      const sequence = this.sequences.get(event.acceptedSequence);
-      if (sequence !== undefined) throw new Error('Accepted sequence is already stored');
-      await this.write(record);
-      this.index(record, this.path(event.eventId));
-      return { kind: 'stored' };
-    });
+      throw error;
+    }
   }
 
   private assertTurn(event: AcceptedEvent, turn: TurnIdentity): void {
@@ -128,8 +142,10 @@ export class FileEventStore implements EventStore {
     const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
+      if (result.outcome.kind === 'deferred' && record.state === 'queued' && isDeepStrictEqual(record.event, result.event)) return;
       if (record.state !== 'settling' && record.state !== 'settled' || !isDeepStrictEqual(record.result, result)) throw new Error('Result was not saved before settlement');
-      if (record.state === 'settling') await this.write({ ...record, state: 'settled' });
+      if (record.state === 'settling') await this.write(result.outcome.kind === 'deferred'
+        ? { state: 'queued', event: record.event } : { ...record, state: 'settled' });
     });
   }
 

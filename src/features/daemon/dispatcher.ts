@@ -22,9 +22,7 @@ export interface DispatcherDependencies {
 interface PendingAdmission {
   event: AcceptedEvent;
   reply: Reply<Admission>;
-  attempt: number;
-  // 応答失敗後は、再送による照合が終わるまで会話を止める。
-  phase: 'saving' | 'uncertain' | 'reconciling' | 'accepted';
+  phase: 'saving' | 'accepted';
 }
 
 interface ActiveTurn {
@@ -218,9 +216,6 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         if (this.shutdown?.phase === 'replies') {
           if (this.busy()) { this.shutdown.phase = 'draining'; break; }
           if (this.active.size > 0) this.shutdown.errors.push(new Error('Unsettled turns remain at shutdown'));
-          if ([...this.eventAdmissions.values()].some((admission) => admission.phase === 'uncertain')) {
-            this.shutdown.errors.push(new Error('Event admission persistence failed at shutdown'));
-          }
           this.shutdown.errors.push(...this.effectErrors.splice(0));
           this.shutdown.phase = 'resources';
           effects.push(effect(() => this.dependencies.resources.close(), (result) => ({ kind: 'resources_closed', result })));
@@ -233,12 +228,12 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
           stop.phase = 'closed';
           if (stop.errors.length > 0) stop.reply.reject(new AggregateError(stop.errors, 'Daemon shutdown failed'));
           else stop.reply.resolve({ kind: 'stopped' });
-          for (const response of this.deferredRetries.splice(0)) this.retry(response, effects);
+          for (const response of this.deferredRetries.splice(0)) this.retry(response);
         }
         break;
       case 'retry_storage':
         if (this.shutdown?.phase === 'replies' || this.shutdown?.phase === 'resources') this.deferredRetries.push(notice.reply);
-        else this.retry(notice.reply, effects);
+        else this.retry(notice.reply);
         break;
       case 'drain': this.idleReplies.push(notice.reply); break;
       case 'effect_completed':
@@ -294,7 +289,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     this.queues.confirm(event.eventId);
     const response = reply<Admission>();
     response.resolve(this.receipt(event));
-    this.indexAdmission({ event, reply: response, phase: 'accepted', attempt: 0 });
+    this.indexAdmission({ event, reply: response, phase: 'accepted' });
     if (stored.state === 'queued') return;
     const turn = stored.state === 'running' ? stored.turn : stored.result;
     this.generation = Math.max(this.generation, turn.generation);
@@ -308,13 +303,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const { input, response } = notice;
     if (this.shutdown !== undefined) { response.reply.resolve({ kind: 'rejected', reason: 'stopping' }); return; }
     const duplicate = this.admissions.get(this.requestKey(input)) ?? this.eventAdmissions.get(input.eventId);
-    if (duplicate !== undefined) {
-      if (duplicate.phase === 'uncertain') {
-        duplicate.reply = response.reply;
-        this.persistAdmission(duplicate, effects);
-      } else response.reply = duplicate.reply;
-      return;
-    }
+    if (duplicate !== undefined) { response.reply = duplicate.reply; return; }
     const event: AcceptedEvent = {
       ...input, operationId: notice.operationId, acceptedSequence: ++this.sequence,
       lane: input.event.kind === 'human_command' || input.event.kind === 'inquiry_answer' ? 'human' : 'other',
@@ -326,24 +315,18 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       return;
     }
     this.queues.add(event);
-    const admission: PendingAdmission = { event, reply: response.reply, attempt: 0, phase: 'saving' };
+    const admission: PendingAdmission = { event, reply: response.reply, phase: 'saving' };
     this.indexAdmission(admission);
-    this.persistAdmission(admission, effects);
-  }
-
-  private persistAdmission(admission: PendingAdmission, effects: DispatcherEffect[]): void {
-    admission.phase = admission.phase === 'uncertain' ? 'reconciling' : 'saving';
-    const { event } = admission;
-    const attempt = ++admission.attempt;
-    effects.push(effect(() => this.dependencies.store.accept(event), (result) => ({ kind: 'admission_saved', event, attempt, result })));
+    effects.push(effect(() => this.dependencies.store.accept(event), (result) => ({ kind: 'admission_saved', event, result })));
   }
 
   private admissionSaved(notice: Extract<DispatcherNotice, { kind: 'admission_saved' }>, effects: DispatcherEffect[]): void {
     const admission = this.eventAdmissions.get(notice.event.eventId);
     if (admission === undefined || admission.event.operationId !== notice.event.operationId
-      || admission.attempt !== notice.attempt || (admission.phase !== 'saving' && admission.phase !== 'reconciling')) return;
+      || admission.phase !== 'saving') return;
     if (!notice.result.ok) {
-      admission.phase = 'uncertain';
+      this.queues.remove(admission.event.eventId);
+      this.forgetAdmission(admission.event);
       admission.reply.resolve({ kind: 'rejected', reason: 'storage' });
       this.failure('accept', admission.event, notice.result.error, effects);
       if (this.shutdown !== undefined) this.shutdown.errors.push(notice.result.error);
@@ -374,11 +357,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private schedule(effects: DispatcherEffect[]): void {
     if (this.shutdown !== undefined || this.restoring) return;
-    const uncertain = new Set([...this.eventAdmissions.values()]
-      .filter((admission) => admission.phase === 'uncertain' || admission.phase === 'reconciling')
-      .map((admission) => admission.event.conversationId));
     while (true) {
-      const event = this.queues.peekNext((id) => !this.active.has(id) && !uncertain.has(id));
+      const event = this.queues.peekNext((id) => !this.active.has(id));
       if (event === undefined) return;
       const turn = { conversationId: event.conversationId, operationId: event.operationId, generation: ++this.generation };
       this.active.set(event.conversationId, this.newTurn(event, turn));
@@ -496,9 +476,13 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         effects.push(effect(() => this.dependencies.runner.resultCommitted(turn), (completion) => ({ kind: 'result_committed', turn, attempt, result: completion })));
         break;
       case 'result_committed':
-        this.queues.remove(event.eventId);
+        if (result.outcome.kind === 'deferred') this.queues.defer(event.eventId);
+        else {
+          this.queues.remove(event.eventId);
+          if (event.event.kind === 'goal_resumed') this.queues.resumeGoal(event.event.repositoryDirectory, event.event.goalId);
+          this.forgetAdmission(event);
+        }
         this.active.delete(event.conversationId);
-        this.forgetAdmission(event);
         active.finishReply?.resolve();
         break;
     }
@@ -539,13 +523,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     effects.push(effect(action, (result) => ({ kind: 'effect_completed', id, result })));
   }
 
-  private retry(response: Reply<void>, effects: DispatcherEffect[]): void {
-    for (const admission of this.eventAdmissions.values()) {
-      if (admission.phase === 'uncertain') {
-        admission.reply = reply<Admission>();
-        this.persistAdmission(admission, effects);
-      }
-    }
+  private retry(response: Reply<void>): void {
     for (const active of this.active.values()) {
       if (active.phase === 'settling' && active.save === 'failed') active.save = 'waiting';
     }
@@ -554,7 +532,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private busy(): boolean {
     return this.ancillaryEffects.size > 0
-      || [...this.eventAdmissions.values()].some((admission) => admission.phase === 'saving' || admission.phase === 'reconciling')
+      || [...this.eventAdmissions.values()].some((admission) => admission.phase === 'saving')
       || [...this.active.values()].some((active) => active.launchPending || active.phase === 'starting' || active.phase === 'reading'
         || active.phase === 'settling' && active.save !== 'failed' || active.progress.size > 0);
   }

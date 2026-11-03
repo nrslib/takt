@@ -83,6 +83,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         }
         const eventGoal = reference?.goalId !== undefined && reference.goalId !== null
           ? { repositoryDirectory: reference.repositoryDirectory, goal: await new GoalStore(reference.repositoryDirectory).get(reference.goalId) } : undefined;
+        if (eventGoal?.goal.executionStatus === 'paused' && (event.kind === 'task_completed' || event.kind === 'task_failed')) {
+          return { kind: 'deferred' };
+        }
         if (eventGoal?.goal.executionStatus === 'paused' || eventGoal?.goal.executionStatus === 'aborted') {
           return { kind: 'completed', result: { kind: 'reply', message: getLabel(eventGoal.goal.executionStatus === 'paused'
             ? 'manager.goalPaused' : 'manager.goalAborted', language, { goalId: eventGoal.goal.id }) } };

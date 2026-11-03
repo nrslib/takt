@@ -24,7 +24,7 @@ export type DispatcherNotice =
   | { kind: 'restore_event'; stored: StoredEvent }
   | { kind: 'restore_complete'; reply: Reply<void> }
   | { kind: 'accept'; input: EventInput; operationId: string; response: { reply: Reply<Admission> } }
-  | { kind: 'admission_saved'; event: AcceptedEvent; attempt: number; result: Completion<Awaited<ReturnType<EventStore['accept']>>> }
+  | { kind: 'admission_saved'; event: AcceptedEvent; result: Completion<Awaited<ReturnType<EventStore['accept']>>> }
   | { kind: 'start_saved'; turn: TurnIdentity; result: Completion<void> }
   | { kind: 'turn_state_read'; turn: TurnIdentity; result: Completion<ConversationTurnState> }
   | { kind: 'process_started'; turn: TurnIdentity; result: Completion<void> }

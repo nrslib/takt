@@ -3,8 +3,7 @@ import type { TurnQueues } from '../../core/daemon/ports.js';
 
 interface Entry {
   event: AcceptedEvent;
-  ready: boolean;
-  started: boolean;
+  state: 'saving' | 'queued' | 'running' | 'deferred';
 }
 
 export function createTurnQueues(): TurnQueues {
@@ -20,23 +19,31 @@ export function createTurnQueues(): TurnQueues {
     add(event) {
       if (entries().some((entry) => entry.event.eventId === event.eventId)) throw new Error(`Duplicate queued event: ${event.eventId}`);
       const lane = event.lane === 'human' ? human : other;
-      lane.push({ event, ready: false, started: false });
+      lane.push({ event, state: 'saving' });
       lane.sort((a, b) => a.event.acceptedSequence - b.event.acceptedSequence);
     },
-    confirm(eventId) { get(eventId).ready = true; },
+    confirm(eventId) { get(eventId).state = 'queued'; },
     peekNext(canStart) {
       // 保存中・実行不能の人の発言も、other に追い越させない。
-      const waitingHumans = human.filter((entry) => !entry.started);
-      const lane = waitingHumans.length > 0 ? waitingHumans : other.filter((entry) => !entry.started);
+      const waitingHumans = human.filter((entry) => entry.state !== 'running');
+      const lane = waitingHumans.length > 0 ? waitingHumans : other.filter((entry) => entry.state === 'saving' || entry.state === 'queued');
       const blocked = new Set<string>();
-      for (const { event, ready } of lane) {
+      for (const { event, state } of lane) {
         if (blocked.has(event.conversationId)) continue;
         blocked.add(event.conversationId);
-        if (ready && canStart(event.conversationId)) return event;
+        if (state === 'queued' && canStart(event.conversationId)) return event;
       }
       return undefined;
     },
-    markStarted(eventId) { get(eventId).started = true; },
+    markStarted(eventId) { get(eventId).state = 'running'; },
+    defer(eventId) { get(eventId).state = 'deferred'; },
+    resumeGoal(repositoryDirectory, goalId) {
+      for (const entry of other) {
+        const event = entry.event.event;
+        if (entry.state === 'deferred' && (event.kind === 'task_completed' || event.kind === 'task_failed')
+          && event.task.repositoryDirectory === repositoryDirectory && event.task.goalId === goalId) entry.state = 'queued';
+      }
+    },
     remove(eventId) {
       const entry = get(eventId);
       const lane = entry.event.lane === 'human' ? human : other;

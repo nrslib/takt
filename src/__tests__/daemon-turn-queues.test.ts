@@ -46,6 +46,27 @@ describe('daemon turn queues', () => {
     expect(queue.peekNext((id) => id !== 'busy')?.eventId).toBe('2');
   });
 
+  it('holds deferred task results without blocking resume and releases only the matching goal and repository', () => {
+    const queue = createTurnQueues();
+    const tasks: AcceptedEvent[] = [1, 2, 3].map((id) => ({ ...event(id, 'other', 'a'), event: {
+      kind: 'task_completed', task: { repositoryDirectory: id === 2 ? '/other' : '/repo', goalId: id === 3 ? 'other-goal' : 'goal', taskName: String(id) },
+      result: { success: true, interrupted: false },
+    } }));
+    for (const task of tasks) {
+      queue.add(task); queue.confirm(task.eventId); queue.markStarted(task.eventId); queue.defer(task.eventId);
+    }
+    const resumed: AcceptedEvent = { ...event(4, 'other', 'a'),
+      event: { kind: 'goal_resumed', repositoryDirectory: '/repo', goalId: 'goal' } };
+    queue.add(resumed); queue.confirm(resumed.eventId);
+    expect(queue.peekNext(() => true)).toEqual(resumed);
+    queue.remove(resumed.eventId);
+    queue.resumeGoal('/repo', 'goal');
+    expect(queue.peekNext(() => true)).toEqual(tasks[0]);
+    queue.remove('1');
+    expect(queue.peekNext(() => true)).toBeUndefined();
+    expect(queue.pending('a')).toEqual([tasks[1], tasks[2]]);
+  });
+
   it('keeps waiting messages when only the active event is removed', () => {
     const queue = createTurnQueues();
     for (const value of [event(1, 'human', 'a'), event(2, 'human', 'a')]) { queue.add(value); queue.confirm(value.eventId); }

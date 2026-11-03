@@ -7,6 +7,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import * as slackPorts from '../features/daemon/slackPorts.js';
 import * as watcherModule from '../features/daemon/watchers/index.js';
 import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
+import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
+import { createDaemonStateRequests } from '../features/daemon/stateRequests.js';
 import { startDaemon } from '../features/daemon/runDaemon.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
@@ -29,10 +31,11 @@ import type { Goal } from '../infra/goals/schema.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
 import { createTurnProcessRuntime } from '../features/daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../features/daemonTurn/conversationState.js';
+import type { PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { WatchChecks } from '../features/daemon/watchers/checks.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
-import { parseDaemonProcessMessage } from '../core/daemon/processProtocol.js';
+import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
 
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({ stopAccepting() {}, async close() {} }) }));
 const cleanups: Array<() => Promise<void>> = [];
@@ -79,6 +82,80 @@ it('persists H1 and H2 during a stopped turn and schedules both human messages b
     expect(call.input.event.eventId).toBe(name);
     await f.runner.finish(call);
   }
+});
+
+it.each([true, false])('defers a paused task result across restart and handles it once after resume (success: %s)', async (success) => {
+  const f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const goal = { ...goalRecord(), executionStatus: 'paused' as const };
+  const goalPath = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(goalPath, '..'), { recursive: true });
+  await writeFile(goalPath, JSON.stringify(goal));
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const target = { targetId: f.repository, generation: 'inbox', conversationId: f.id, kind: 'inbox' as const, directory: inbox };
+  saveManagerEvent(f.repository, { kind: 'completion', goalId: goal.id, taskName: 'paused-task', runSlug: 'paused-run',
+    result: { success, interrupted: false, workflowResult: success ? 'completed' : 'error', shaUnavailableReason: 'No commit' } });
+  const completionPath = join(inbox, (await readdir(inbox))[0]!);
+  await receiveInboxChange({ target, path: completionPath, removed: false, generation: 'completion', value: {} }, files, f.conversations, f.dispatcher);
+  const completion = await f.runner.started(1);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({ message: 'handled', summary: null, sessionId: 'session', assignment: undefined }));
+  const resolve = vi.fn(async () => ({ provider: 'mock' as const, model: null, language: 'en' as const,
+    contextKey: 'fixture', executor: { execute } }));
+  const service = createConversationTurnService(f.directory, { resolve, async close() {} });
+  const outcome = await service.execute(completion.input, { signal: completion.signal, progress() {},
+    request: (request) => f.dispatcher.request(completion.turn, request, completion.signal) });
+  expect(parseTurnProcessMessage({ protocolVersion: 1, launchId: 'paused', kind: 'turn_finished',
+    turn: completion.turn, outcome }, 'paused')).toMatchObject({ kind: 'turn_finished', outcome: { kind: 'deferred' } });
+  await f.runner.finish(completion, outcome);
+  await f.dispatcher.retryStorage();
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(1);
+  expect(resolve).not.toHaveBeenCalled();
+  expect(await readdir(inbox)).toEqual([]);
+  expect(f.outputs.filter((output) => output.kind === 'result' && output.operationId === completion.turn.operationId)).toEqual([]);
+  const pending = [];
+  for await (const value of (await new FileEventStore(f.directory).restore()).pending) pending.push(value);
+  expect(pending).toEqual([{ state: 'queued', event: completion.input.event }]);
+  await f.close();
+  const runner = new ControlledTurnRunner();
+  const restarted = await createDaemonDispatcher({ store: new FileEventStore(f.directory), conversations: f.conversations, runner,
+    stateRequests: createDaemonStateRequests({ conversations: f.conversations,
+      ingress: { accept: (event) => restarted.accept(event) }, connectedPorts: () => [] }),
+    resources: { async close() {} }, limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 },
+    onFailure({ error }) { throw error; } });
+  runner.bus = restarted;
+  cleanups.push(async () => { await restarted.control({ kind: 'stop' }); });
+  const perform = async (call: Awaited<ReturnType<typeof runner.started>>) => {
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => restarted.request(call.turn, request, call.signal) });
+    await runner.finish(call, outcome);
+    return outcome;
+  };
+  expect(await perform(await runner.started(1))).toEqual({ kind: 'deferred' });
+  expect(resolve).not.toHaveBeenCalled();
+  accepted(await restarted.accept({ ...input('resume', f.id), event: { kind: 'human_command',
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'resume_goal', goalId: goal.id } } }));
+  const resumeCommand = await runner.started(2);
+  expect(resumeCommand.input.event.event).toMatchObject({ kind: 'human_command', command: { kind: 'resume_goal' } });
+  expect(await perform(resumeCommand)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  const resumedPath = join(inbox, (await readdir(inbox))[0]!);
+  await receiveInboxChange({ target, path: resumedPath, removed: false, generation: 'resume', value: {} }, files, f.conversations, restarted);
+  const resumed = await runner.started(3);
+  expect(resumed.input.event.event.kind).toBe('goal_resumed');
+  await perform(resumed);
+  const retried = await runner.started(4);
+  expect(retried.input.event).toEqual(completion.input.event);
+  await perform(retried);
+  await restarted.retryStorage();
+  await restarted.drain();
+  expect(runner.calls).toHaveLength(4);
+  const taskCalls = execute.mock.calls.filter(([input]) => input.instruction.includes(success ? 'task_completed' : 'task_failed'));
+  expect(taskCalls).toHaveLength(1);
+  expect(taskCalls[0]![0].instruction).toContain('paused-task');
+  const remaining = [];
+  for await (const value of (await new FileEventStore(f.directory).restore()).pending) remaining.push(value);
+  expect(remaining).toEqual([]);
 });
 
 it('interrupts only the named generation and retains accepted waiting input through shutdown and restore', async () => {

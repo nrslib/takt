@@ -67,6 +67,7 @@ const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict(),
 ]);
 const outcome = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('deferred') }).strict(),
   z.object({ kind: z.literal('completed'), result: operationResult, change: change.optional() }).strict(),
   z.object({ kind: z.literal('failed'), message: text, change: change.optional() }).strict(),
   z.object({ kind: z.literal('interrupted'), change: change.optional() }).strict(),

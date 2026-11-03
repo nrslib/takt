@@ -18,12 +18,14 @@ export type StoredEvent =
 /** B が実装し、A が使う。各更新は atomic・冪等。重複キーは eventId または conversationId/requestId。 */
 export interface EventStore {
   // 発言ごとの agentOverrides を含むイベント全体を保存し、restore/duplicate でも保持する。
+  // 失敗時は保存途中のイベントも破棄し、復元で実行しない。
   accept(event: AcceptedEvent): Promise<
     { kind: 'stored' } | { kind: 'duplicate'; event: AcceptedEvent; state: 'queued' | 'running' | 'settling' | 'settled' }
   >;
   markStarted(eventId: string, turn: TurnIdentity): Promise<void>;
   // apply の前に結果を durable にし、再起動時も provider を呼び直さない。
   saveResult(eventId: string, result: TurnResult): Promise<void>;
+  // deferred はターンだけを終え、元イベントを queued に戻す。
   markSettled(eventId: string, result: TurnResult): Promise<void>;
   restore(): Promise<{ lastAcceptedSequence: number; pending: AsyncIterable<StoredEvent> }>;
 }
@@ -34,6 +36,8 @@ export interface TurnQueues {
   confirm(eventId: string): void;
   peekNext(canStart: (conversationId: string) => boolean): AcceptedEvent | undefined;
   markStarted(eventId: string): void;
+  defer(eventId: string): void;
+  resumeGoal(repositoryDirectory: string, goalId: string): void;
   remove(eventId: string): void;
   pending(conversationId: string): readonly AcceptedEvent[];
 }

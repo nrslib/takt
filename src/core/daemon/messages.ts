@@ -44,6 +44,7 @@ export interface TurnStart {
 }
 
 export type TurnOutcome =
+  | { kind: 'deferred'; change?: never }
   | { kind: 'completed'; result: OperationResult; change?: ConversationChange }
   | { kind: 'failed'; message: string; change?: ConversationChange }
   // 現ターンの中断処理で確定した session 更新・承認予約の解除等。中断後も反映する。

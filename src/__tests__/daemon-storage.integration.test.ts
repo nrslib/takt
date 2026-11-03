@@ -23,10 +23,17 @@ import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
-const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false }));
+const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
+    unlink: async (...args: Parameters<typeof fs.unlink>) => {
+      if (injection.lockReleaseFailure && String(args[0]).endsWith('/.lock')) {
+        injection.lockReleaseFailure = false;
+        throw Object.assign(new Error('lock release failed'), { code: 'EIO' });
+      }
+      await fs.unlink(...args);
+    },
     open: async (...args: Parameters<typeof fs.open>) => {
       const file = await fs.open(...args);
       if (!String(args[0]).endsWith('.tmp')) return file;
@@ -72,7 +79,7 @@ function record() {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false;
+  injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false; injection.lockReleaseFailure = false;
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
@@ -151,14 +158,47 @@ describe('durable daemon event storage', () => {
     expect(pending).toEqual([]);
   });
 
-  it('reconciles a committed acceptance whose acknowledgement failed', async () => {
+  it.each(['rename', 'after-rename', 'lock-release'] as const)('discards a failed acceptance across restart (%s)', async (phase) => {
     const directory = await root();
     const store = new FileEventStore(directory);
-    const input = event('uncertain', 1);
-    injection.afterRenameFailure = true;
+    const input = event('rejected', 1);
+    if (phase === 'rename') injection.renameFailure = true;
+    else if (phase === 'after-rename') injection.afterRenameFailure = true;
+    else injection.lockReleaseFailure = true;
     await expect(store.accept(input)).rejects.toThrow();
-    expect(await store.accept(input)).toEqual({ kind: 'duplicate', event: input, state: 'queued' });
-    expect((await new FileEventStore(directory).restore()).lastAcceptedSequence).toBe(1);
+    if (phase === 'lock-release') await rm(join(directory, 'daemon-events', '.lock'));
+    const restored = await new FileEventStore(directory).restore();
+    const pending = [];
+    for await (const value of restored.pending) pending.push(value);
+    expect(pending).toEqual([]);
+    expect(await store.accept(event('resent', 2))).toEqual({ kind: 'stored' });
+    expect(await store.accept(input)).toEqual({ kind: 'stored' });
+  });
+
+  it('restores a deferred result as pending and processes the same event after resumption', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const input = event('deferred', 1);
+    const deferredResult: TurnResult = { ...result(input), outcome: { kind: 'deferred' } };
+    await store.accept(input);
+    await store.markStarted(input.eventId, deferredResult);
+    await store.saveResult(input.eventId, deferredResult);
+    const restarted = new FileEventStore(directory);
+    const pending = [];
+    for await (const value of (await restarted.restore()).pending) pending.push(value);
+    expect(pending).toEqual([{ state: 'settling', event: input, result: deferredResult }]);
+    await restarted.markSettled(input.eventId, deferredResult);
+    await restarted.markSettled(input.eventId, deferredResult);
+    const queued = [];
+    for await (const value of (await restarted.restore()).pending) queued.push(value);
+    expect(queued).toEqual([{ state: 'queued', event: input }]);
+    const resumed: TurnResult = { ...deferredResult, generation: 2, outcome: { kind: 'completed', result: { kind: 'reply', message: 'handled' } } };
+    await restarted.markStarted(input.eventId, resumed);
+    await restarted.saveResult(input.eventId, resumed);
+    await restarted.markSettled(input.eventId, resumed);
+    const settled = [];
+    for await (const value of (await restarted.restore()).pending) settled.push(value);
+    expect(settled).toEqual([]);
   });
 
   it('retains queued data after a failed start write and allows a retry', async () => {

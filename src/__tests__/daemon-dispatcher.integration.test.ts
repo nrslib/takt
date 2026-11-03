@@ -178,20 +178,20 @@ describe('event driven daemon dispatcher', () => {
     expect(h.store.records.size).toBe(1);
   });
 
-  it('recovers the canonical queued event when admission storage committed but its acknowledgement failed', async () => {
+  it('discards a rejected admission after publication and runs only the resent message', async () => {
     const h = await harness();
     h.store.afterAccept = async () => { throw new Error('acknowledgement failed after publication'); };
     expect(await h.dispatcher.accept(input('H1'))).toEqual({ kind: 'rejected', reason: 'storage' });
-    const committed = h.store.records.get('H1')!.event;
-    expect(h.runner.calls).toHaveLength(0);
+    expect(h.store.records.size).toBe(0);
     h.store.afterAccept = async () => {};
-    const retry = await h.dispatcher.accept(input('H1'));
-    expect(retry).toMatchObject({ kind: 'accepted', operationId: committed.operationId, acceptedSequence: committed.acceptedSequence });
-    await h.runner.finish(await h.runner.started(1));
+    await h.dispatcher.retryStorage();
     await h.dispatcher.drain();
-    expect(h.runner.calls).toHaveLength(1);
-    expect(h.store.records.size).toBe(1);
-    expect(h.store.records.get('H1')?.state).toBe('settled');
+    expect(h.runner.calls).toHaveLength(0);
+    accepted(await h.dispatcher.accept(input('resent-H1')));
+    await h.runner.finish(await h.runner.started(1));
+    await h.dispatcher.retryStorage();
+    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['resent-H1']);
+    expect(h.store.records.has('H1')).toBe(false);
   });
 
   it('deduplicates simultaneous submissions before admission persistence finishes', async () => {
@@ -206,58 +206,40 @@ describe('event driven daemon dispatcher', () => {
     expect(h.store.accept).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps H2 behind H1 when publication succeeds but the delayed admission acknowledgement fails', async () => {
-    const h = await harness();
-    const published = deferred<void>();
-    const acknowledgement = deferred<void>();
-    h.store.afterAccept = async (event) => {
-      if (event.eventId === 'H1') { published.resolve(); await acknowledgement.promise; }
-    };
-    const first = h.dispatcher.accept(input('H1'));
-    await published.promise;
-    const canonical = h.store.records.get('H1')!.event;
-    const second = await h.dispatcher.accept(input('H2'));
-    accepted(second);
-    expect(h.runner.calls).toHaveLength(0);
-    acknowledgement.reject(new Error('acknowledgement lost after publication'));
-    expect(await first).toEqual({ kind: 'rejected', reason: 'storage' });
-    await h.dispatcher.drain();
-    expect(h.runner.calls).toHaveLength(0);
-    expect(h.store.records.get('H2')?.state).toBe('queued');
-    h.store.afterAccept = async () => {};
-    const retried = await h.dispatcher.accept({ ...input('retry-H1'), requestId: 'H1' });
-    expect(retried).toMatchObject({ kind: 'accepted', eventId: 'H1', operationId: canonical.operationId, acceptedSequence: canonical.acceptedSequence });
-    const t1 = await h.runner.started(1);
-    expect(t1.input.event).toEqual(canonical);
-    await h.runner.finish(t1);
-    const t2 = await h.runner.started(2);
-    expect(t2.input.event.eventId).toBe('H2');
-    await h.runner.finish(t2);
-    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H1', 'H2']);
-  });
-
-  it('reconciles an uncertain unpublished admission before releasing later events on storage retry', async () => {
+  it.each(['before-publication', 'after-publication'] as const)('discards a failed admission and releases later messages (%s)', async (phase) => {
     const h = await harness();
     const entered = deferred<void>();
     const write = deferred<void>();
-    h.store.beforeAccept = async (event) => {
+    const pause = async (event: Parameters<typeof h.store.accept>[0]) => {
       if (event.eventId === 'H1') { entered.resolve(); await write.promise; }
     };
+    if (phase === 'before-publication') h.store.beforeAccept = pause;
+    else h.store.afterAccept = pause;
     const first = h.dispatcher.accept(input('H1'));
     await entered.promise;
     accepted(await h.dispatcher.accept(input('H2')));
-    write.reject(new Error('write failed before publication'));
-    expect(await first).toEqual({ kind: 'rejected', reason: 'storage' });
-    await h.dispatcher.drain();
     expect(h.runner.calls).toHaveLength(0);
+    write.reject(new Error('admission failed'));
+    expect(await first).toEqual({ kind: 'rejected', reason: 'storage' });
+    const second = await h.runner.started(1);
+    expect(second.input.event.eventId).toBe('H2');
+    await h.runner.finish(second);
     h.store.beforeAccept = async () => {};
+    h.store.afterAccept = async () => {};
     await h.dispatcher.retryStorage();
-    const t1 = await h.runner.started(1);
-    expect(t1.input.event.eventId).toBe('H1');
-    expect(t1.input.event.acceptedSequence).toBeLessThan(h.store.records.get('H2')!.event.acceptedSequence);
-    await h.runner.finish(t1);
+    accepted(await h.dispatcher.accept(input('resent-H1')));
     await h.runner.finish(await h.runner.started(2));
-    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H1', 'H2']);
+    await h.dispatcher.retryStorage();
+    expect(h.runner.calls.map((call) => call.input.event.eventId)).toEqual(['H2', 'resent-H1']);
+    expect(h.store.records.has('H1')).toBe(false);
+    const runner = new ControlledTurnRunner();
+    const restored = await createDaemonDispatcher({
+      store: h.store, runner, conversations: h.owner, stateRequests: h.stateRequests, resources: h.resources,
+      limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: h.failures,
+    });
+    runner.bus = restored;
+    await restored.drain();
+    expect(runner.calls).toHaveLength(0);
   });
 
   it('settles a failed start without calling its provider and preserves later messages', async () => {
