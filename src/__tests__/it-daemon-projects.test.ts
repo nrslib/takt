@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { hasDaemonProjectWork, listDaemonProjects } from '../features/daemon/projects.js';
+import { hasDaemonProjectWork, listDaemonProjects, readDaemonProjectRoutes } from '../features/daemon/projects.js';
+import { listWatchEntries, MAX_WATCH_ENTRIES, MAX_WATCH_FILE_BYTES, readSmallText } from '../features/daemon/watchers/files.js';
+import { readWatchTasks } from '../features/daemon/watchers/state.js';
 import { runDaemon } from '../features/daemon/runDaemon.js';
 import { registerProject, readProjectRegistry } from '../infra/config/global/projectRegistry.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -213,4 +216,38 @@ it('retains a newly registered daemon with the same PID and a different start ti
   expect(readDaemonOwner(directory)).toEqual(replacement);
   removeDaemonOwner(directory, replacement);
   expect(readDaemonOwner(directory)).toBeUndefined();
+});
+
+it('routes workspace repositories together without importing a synchronous business store', async () => {
+  const configDirectory = join(root, 'config');
+  await registerProject({ globalConfigDirectory: configDirectory, projectDirectory: cwd, command: 'manager', managerUsed: true });
+  const id = randomUUID();
+  const directory = join(configDirectory, 'workspaces', id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'workspace.json'), JSON.stringify({ id, name: 'workspace', repositoryDirectories: [cwd] }));
+  expect(await readDaemonProjectRoutes(configDirectory)).toEqual([{ repositoryDirectory: cwd, workspaceId: id }]);
+});
+
+it('bounds small-file reads before parsing and rejects growth beyond the limit', async () => {
+  const file = join(root, 'small.json');
+  await writeFile(file, 'x'.repeat(MAX_WATCH_FILE_BYTES));
+  expect((await readSmallText(file)).length).toBe(MAX_WATCH_FILE_BYTES);
+  await writeFile(file, 'x'.repeat(MAX_WATCH_FILE_BYTES + 1));
+  await expect(readSmallText(file)).rejects.toThrow();
+  await expect(readSmallText(root)).rejects.toThrow();
+});
+
+it('bounds directory enumeration and does not silently return a partial target set', async () => {
+  const directory = join(root, 'bounded');
+  await mkdir(directory);
+  for (let index = 0; index < MAX_WATCH_ENTRIES; index++) await writeFile(join(directory, `${index}.json`), '{}');
+  expect((await listWatchEntries(directory)).length).toBe(MAX_WATCH_ENTRIES);
+  await writeFile(join(directory, 'extra.json'), '{}');
+  await expect(listWatchEntries(directory)).rejects.toThrow();
+});
+
+it('rejects YAML aliases without expanding them into a large observation payload', async () => {
+  await mkdir(join(cwd, '.takt'));
+  await writeFile(join(cwd, '.takt', 'tasks.yaml'), 'shared: &shared []\ntasks: *shared\n');
+  await expect(readWatchTasks(cwd)).rejects.toThrow();
 });
