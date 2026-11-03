@@ -639,6 +639,8 @@ describe('manager questions, answers and notifications through production bounda
     vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
     vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     resetScenario();
+    vi.stubEnv('COLUMNS', '100');
+    vi.stubEnv('LINES', '24');
     vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
     const temporaryRoot = join(process.cwd(), '.tmp');
     mkdirSync(temporaryRoot, { recursive: true });

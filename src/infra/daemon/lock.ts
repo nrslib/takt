@@ -1,6 +1,7 @@
 import { open, stat, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { addAbortListener } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AsyncLock, IoOptions } from '../../core/daemon/io.js';
 import { ensurePrivateDirectory, hasCode, readPrivateFile } from './privateFile.js';
@@ -8,7 +9,43 @@ import { ioScope } from './io.js';
 import { observeProcess, readProcessOwner } from './process.js';
 
 const RETRY_MS = 25;
+const RECOVERY_INTERVAL_MS = 1000;
 const STALE_MS = 30_000;
+const localTails = new Map<string, Promise<void>>();
+let processOwner: ReturnType<typeof readProcessOwner> | undefined;
+
+async function waitWithSignal<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  try {
+    return await Promise.race([pending, new Promise<never>((_resolve, reject) => {
+      listener = addAbortListener(signal, () => reject(signal.reason));
+    })]);
+  } finally { listener?.[Symbol.dispose](); }
+}
+
+function getProcessOwner(options: IoOptions): ReturnType<typeof readProcessOwner> {
+  // 共有の照会は、個々のロック待機のキャンセルから独立させる。
+  processOwner ??= readProcessOwner(process.pid, { signal: new AbortController().signal, timeoutMs: options.timeoutMs })
+    .catch((error: unknown) => { processOwner = undefined; throw error; });
+  return processOwner;
+}
+
+async function acquireLocal(path: string, signal: AbortSignal): Promise<() => void> {
+  const previous = localTails.get(path) ?? Promise.resolve();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => held);
+  localTails.set(path, tail);
+  void tail.then(() => { if (localTails.get(path) === tail) localTails.delete(path); });
+  try {
+    await waitWithSignal(previous, signal);
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
 
 async function removeUnchanged(path: string, content: Buffer): Promise<boolean> {
   const current = await readPrivateFile(path, 16 * 1024);
@@ -24,6 +61,7 @@ async function recover(path: string, options: IoOptions): Promise<void> {
   try { owner = JSON.parse(content.toString('utf8')) as unknown; } catch { owner = undefined; }
   if (owner !== null && typeof owner === 'object' && 'pid' in owner && Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0) {
     const value = owner as { pid: number; startTime?: string; processIdentity?: { startTime: string } };
+    if (value.pid === process.pid) return;
     const startTime = value.startTime ?? value.processIdentity?.startTime;
     if (typeof startTime === 'string') {
       const observed = await observeProcess({ pid: value.pid, startTime }, options);
@@ -44,10 +82,14 @@ export class FileAsyncLock implements AsyncLock {
     const scope = ioScope(options);
     const absolute = resolve(path);
     let content: Buffer | undefined;
+    let releaseLocal: (() => void) | undefined;
     try {
+      releaseLocal = await acquireLocal(absolute, scope.signal);
+      scope.signal.throwIfAborted();
       await ensurePrivateDirectory(dirname(absolute));
-      const owner = await readProcessOwner(process.pid, { signal: scope.signal, timeoutMs: options.timeoutMs });
+      const owner = await waitWithSignal(getProcessOwner(options), scope.signal);
       content = Buffer.from(JSON.stringify({ pid: process.pid, startTime: owner?.startTime, token: randomUUID() }));
+      let nextRecovery = 0;
       while (true) {
         scope.signal.throwIfAborted();
         const file = await open(absolute, 'wx', 0o600).catch((error: unknown) => {
@@ -65,7 +107,10 @@ export class FileAsyncLock implements AsyncLock {
           }
           break;
         }
-        await recover(absolute, { signal: scope.signal, timeoutMs: options.timeoutMs });
+        if (Date.now() >= nextRecovery) {
+          await recover(absolute, { signal: scope.signal, timeoutMs: options.timeoutMs });
+          nextRecovery = Date.now() + RECOVERY_INTERVAL_MS;
+        }
         try { await delay(RETRY_MS, undefined, { signal: scope.signal }); } catch (error) {
           scope.signal.throwIfAborted();
           throw error;
@@ -83,6 +128,6 @@ export class FileAsyncLock implements AsyncLock {
       }
       if (failed) throw failure;
       return value;
-    } finally { scope.close(); }
+    } finally { releaseLocal?.(); scope.close(); }
   }
 }

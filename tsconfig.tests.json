@@ -138,6 +138,7 @@
     "src/__tests__/daemon-io.test.ts",
     "src/__tests__/daemon-lifecycle.test.ts",
     "src/__tests__/daemon-lint.test.ts",
+    "src/__tests__/daemon-lock.test.ts",
     "src/__tests__/daemon-process-protocol.test.ts",
     "src/__tests__/daemon-reachability.integration.test.ts",
     "src/__tests__/daemon-slack-ports.test.ts",
