@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 import type { SnapshotItem } from '../../features/manager/conversationPort.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { goalRecord } from './goal-fixtures.js';
@@ -138,7 +139,7 @@ it('sends the selected target and structured answer, then closes the saved answe
   });
 });
 
-it.each([false, true])('preserves another question draft after reconnect when delayed answer results arrive (second answer submitted: %s)', async (submitted) => {
+it.each([false, true])('preserves another question draft and prevents duplicate submission after reconnect when delayed answer results arrive (second answer submitted: %s)', async (submitted) => {
   const first = question(1), second = question(2);
   const context = mounted([first, second]);
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: 'active-turn', kind: 'message' } } });
@@ -172,6 +173,11 @@ it.each([false, true])('preserves another question draft after reconnect when de
     expect(context.app.lastFrame()).toContain('Choose output 2');
     expect(promptFrame(context)).toContain('Second draft');
   });
+  if (submitted) {
+    context.app.stdin.write(ENTER);
+    await setImmediate();
+    expect(context.client.commands()).toHaveLength(2);
+  }
   context.client.output({ kind: 'result', operationId: 'unrelated-operation',
     result: { kind: 'answer_saved', answerSaved: true, message: 'Unrelated saved' } });
   await waitFor(() => expect(context.app.lastFrame()).toContain('Unrelated saved'));
@@ -180,10 +186,15 @@ it.each([false, true])('preserves another question draft after reconnect when de
     context.app.stdin.write(ENTER);
     await waitFor(() => expect(context.client.commands()).toHaveLength(2));
   }
+  context.app.stdin.write(ENTER);
+  await setImmediate();
+  expect(context.client.commands()).toHaveLength(2);
   const secondOperation = await context.client.operation();
   context.client.output({ kind: 'result', operationId: secondOperation,
     result: { kind: 'answer_saved', answerSaved: true, message: 'Second saved' } });
   await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+  context.app.stdin.write('Next message' + ENTER);
+  await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'message', text: 'Next message' }));
 });
 
 it('sends /make-goal as a free-text inquiry answer without requesting a goal proposal', async () => {

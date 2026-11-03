@@ -18,7 +18,7 @@ export function useManagerInput({
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
   registering: RefObject<boolean>;
-  savingAnswer: RefObject<boolean>;
+  savingAnswer: RefObject<{ operationId: string | null } | null>;
   editorRef: RefObject<EditorState>;
   edit: (next: EditorState) => void;
   submit: (text: string) => void;

@@ -61,7 +61,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
-  const savingAnswer = useRef(false);
+  const savingAnswer = useRef<{ operationId: string | null } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
   const { stdout } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
@@ -123,7 +123,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   });
   const display = { questions, goals };
   useEffect(() => {
-    if (snapshot.connection !== 'connected' || snapshot.readStatus === 'complete') savingAnswer.current = false;
+    if (snapshot.connection !== 'connected' || snapshot.readStatus === 'complete') savingAnswer.current = null;
   }, [snapshot.connection, snapshot.readStatus]);
   useEffect(() => {
     if (snapshot.connection !== 'connected' || snapshot.readStatus !== 'complete' || answerTarget === null) return;
@@ -173,7 +173,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
-    if (answer !== undefined) savingAnswer.current = false;
+    if (savingAnswer.current?.operationId === operationId) savingAnswer.current = null;
     if ('answerSaved' in result && result.answerSaved && answer !== undefined) {
       if (clearAnswer(answer.questionId)) editAnswer(createEditorState(''));
       setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(answer.text) }]);
@@ -237,12 +237,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const saveAnswer: SaveManagerAnswer = async (target, answer, permission) => {
     if (savingAnswer.current) return;
-    savingAnswer.current = true;
+    const saving: { operationId: string | null } = { operationId: null };
+    savingAnswer.current = saving;
     const operationId = await send({ kind: 'answer_question', target: target.goalId === null
       ? { goalId: null, owner: target.owner } : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory },
       questionId: target.question.id, answer, ...(permission === undefined ? {} : { permission }) },
-    (id) => { pendingAnswers.current.set(id, { text: answer.text ?? '', questionId: target.question.id }); });
-    if (operationId === null) savingAnswer.current = false;
+    (id) => {
+      saving.operationId = id;
+      pendingAnswers.current.set(id, { text: answer.text ?? '', questionId: target.question.id });
+    });
+    if (operationId === null && savingAnswer.current === saving) savingAnswer.current = null;
   };
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
