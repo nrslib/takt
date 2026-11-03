@@ -9,8 +9,9 @@ import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { createConversationService } from '../features/manager/conversationService.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { ConversationSpeakerStore } from '../infra/conversations/speakerStore.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 import type { ConversationRecord } from '../infra/conversations/schema.js';
+import { MAX_PENDING_MESSAGES, MAX_PENDING_MESSAGES_BYTES } from '../infra/conversations/schema.js';
 import type { ConversationDelivery, PortOutput, SnapshotRead, SnapshotItem } from '../features/manager/conversationPort.js';
 import type { PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
@@ -30,6 +31,7 @@ import * as goalPrMerge from '../features/manager/mergeGoalPr.js';
 import { DirectorMessageResultStore } from '../infra/conversations/directorMessageResults.js';
 import { DirectorNotificationStore, type DirectorNotification, type DirectorNotificationSubject } from '../infra/conversations/directorNotifications.js';
 import { ManagerTurnScheduler } from '../features/manager/managerTurnScheduler.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), notification: vi.fn(), codexRun: vi.fn(), tmux: vi.fn(), transcript: vi.fn(), pasteInput: vi.fn(), taskItems: vi.fn<() => TaskState[]>() }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notification }));
@@ -139,6 +141,305 @@ beforeEach(() => {
   delivery = { deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; } };
 });
 afterEach(async () => { vi.restoreAllMocks(); await service.close(); });
+
+describe('Feature: 処理中の人の発言を保存して順に処理する', () => {
+  it('waits for the same initialization when two human ports open concurrently', async () => {
+    const read = vi.spyOn(ConversationStore.prototype, 'read');
+    const [first, second] = await Promise.all([open(), open()]);
+    expect(first.attachmentId).not.toBe(second.attachmentId);
+    expect(read).toHaveBeenCalledOnce();
+    expect(service.attachmentCount).toBe(2);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('queues human speech in the daemon director conversation through the same service', async () => {
+    const director = directorConversationRecord();
+    store.write(director);
+    const opened = await service.open({ conversationId: director.id, assignment: director.assignment,
+      binding: director.bindings[0]!, speaker: director.counterpart }, delivery);
+    const release = holdNextTurn();
+    const say = (text: string) => service.submit({ attachmentId: opened.attachmentId, requestId: randomUUID(),
+      speaker: director.counterpart, command: { kind: 'message', text } });
+    try {
+      expect(await say('director first')).toMatchObject({ kind: 'accepted' });
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      expect(await say('director second')).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
+      expect(store.read(director.id, director.assignment)?.directorMessages).toMatchObject([
+        { text: 'director second', speaker: director.counterpart },
+      ]);
+    } finally { release(); }
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['director first', 'director second']);
+    expect(store.read(director.id, director.assignment)).toMatchObject({ revision: 2, pending: null, directorMessages: [] });
+  });
+
+  it('Given 巡回が実行枠を使用中 When 人が2つ発言する Then 保存順に通常の会話ターンとして実行する', async () => {
+    const human = await open();
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    try {
+      const first = await submit(human.attachmentId, { kind: 'message', text: 'first human input' });
+      const second = await submit(human.attachmentId, { kind: 'message', text: 'second human input' });
+      expect(first).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
+      expect(second).toMatchObject({ kind: 'accepted', queuedMessageCount: 2 });
+      const saved = store.read(record.id, record.assignment)!;
+      expect(saved.directorMessages?.map(({ text, speaker }) => ({ text, speaker }))).toEqual([
+        { text: 'first human input', speaker: record.counterpart }, { text: 'second human input', speaker: record.counterpart },
+      ]);
+      expect(saved).toMatchObject({ revision: 4, pending: record.pending, running: null });
+      expect(await state(await service.snapshot(human.attachmentId))).toMatchObject({ queuedMessageCount: 2 });
+      expect(execute).not.toHaveBeenCalled();
+    } finally { release(); }
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['first human input', 'second human input']);
+    expect(execute.mock.calls.every(([input]) => input.prompt === input.instruction)).toBe(true);
+    expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 6, pending: null, running: null, directorMessages: [] });
+    expect(await savedDirectorNotifications()).toEqual([]);
+  });
+
+  it('Given 実行中のターンと待機発言 When abort_turn Then 実行中のターンだけ中断して待機発言を残す', async () => {
+    const human = await open();
+    let aborted!: () => void;
+    const abortObserved = new Promise<void>((resolve) => { aborted = resolve; });
+    let cleanup!: () => void;
+    const cleaned = new Promise<void>((resolve) => { cleanup = resolve; });
+    execute.mockImplementationOnce(async (input) => {
+      input.abortSignal.addEventListener('abort', aborted, { once: true });
+      await abortObserved;
+      await cleaned;
+      input.abortSignal.throwIfAborted();
+      throw new Error('Expected abort');
+    });
+    try {
+      const current = await submit(human.attachmentId, { kind: 'message', text: 'active human input' });
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      const queued = await submit(human.attachmentId, { kind: 'message', text: 'waiting human input' });
+      if (current.kind !== 'accepted' || queued.kind !== 'accepted') throw new Error('Messages must be accepted');
+      expect(await submit(human.attachmentId, { kind: 'abort_turn', operationId: current.operationId })).toEqual(current);
+      await abortObserved;
+      expect(store.read(record.id, record.assignment)?.directorMessages).toMatchObject([{ operationId: queued.operationId, text: 'waiting human input' }]);
+      expect(execute).toHaveBeenCalledOnce();
+      cleanup();
+      await finished();
+      expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['active human input', 'waiting human input']);
+      expect(execute.mock.calls[1]![0].abortSignal.aborted).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it('Given 実行中のターン When 要約を承認する Then 従来どおり busy で登録しない', async () => {
+    const human = await open();
+    const release = holdNextTurn();
+    try {
+      const current = await submit(human.attachmentId, { kind: 'message', text: 'active input' });
+      expect(await submit(human.attachmentId, { kind: 'approve_summary', revision: 4 }))
+        .toEqual({ kind: 'busy', operationId: 'operationId' in current ? current.operationId : '' });
+      expect(store.read(record.id, record.assignment)?.directorMessages ?? []).toEqual([]);
+      expect(doubles.register).not.toHaveBeenCalled();
+    } finally { release(); }
+    await finished();
+  });
+
+  it('aborts a queued human turn during preparation without treating it as a director message or dropping the next input', async () => {
+    const human = await open();
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    const first = await submit(human.attachmentId, { kind: 'message', text: 'abort during preparation' });
+    await submit(human.attachmentId, { kind: 'message', text: 'keep waiting' });
+    if (first.kind !== 'accepted') throw new Error('Message must be accepted');
+    let preparing = false;
+    let prepared!: () => void;
+    const gate = new Promise<void>((resolve) => { prepared = resolve; });
+    doubles.assignment.mockImplementationOnce(async () => { preparing = true; await gate; return assignment; });
+    release();
+    try {
+      await vi.waitFor(() => expect(preparing).toBe(true));
+      await submit(human.attachmentId, { kind: 'abort_turn', operationId: first.operationId });
+      expect(store.read(record.id, record.assignment)?.directorMessages).toMatchObject([{ text: 'keep waiting' }]);
+    } finally { prepared(); }
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['keep waiting']);
+    expect(outputs).toContainEqual({ kind: 'result', operationId: first.operationId,
+      result: expect.objectContaining({ kind: 'error', code: 'operation_failed' }) });
+    expect(new DirectorMessageResultStore(directory).read(first.operationId)).toBeUndefined();
+  });
+
+  it('keeps hidden input and CLI overrides when a queued human turn starts', async () => {
+    const human = await service.open({ conversationId: record.id, assignment: record.assignment,
+      binding: record.bindings[0]!, speaker: record.counterpart, agentOverrides: { provider: 'mock', model: 'chosen' } }, delivery);
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    try {
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'hidden request', display: false })).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
+      expect(store.read(record.id, record.assignment)?.directorMessages).toMatchObject([
+        { agentOverrides: { provider: 'mock', model: 'chosen' } },
+      ]);
+      expect(outputs.some((output) => output.kind === 'user_message')).toBe(false);
+    } finally { release(); }
+    await finished();
+    expect(resolveRuntime).toHaveBeenCalledWith(assignment, expect.any(AbortSignal), { provider: 'mock', model: 'chosen' });
+    expect(outputs.some((output) => output.kind === 'user_message')).toBe(false);
+  });
+
+  it('refuses an unsaved human input and does not execute it after storage recovery', async () => {
+    const human = await open();
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    const write = vi.spyOn(ConversationStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+    try {
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'unsaved human input' })).toMatchObject({ kind: 'error', code: 'storage_error' });
+      write.mockRestore();
+      await service.maintain();
+    } finally { write.mockRestore(); release(); }
+    expect(execute).not.toHaveBeenCalled();
+    expect(store.read(record.id, record.assignment)?.directorMessages ?? []).toEqual([]);
+  });
+
+  it.each(['human', 'director'] as const)('Given %s受付が割当確認を待機中 When 終了保存が失敗 Then 保存せずstorage_errorを返し既受付分を復旧する', async (source) => {
+    const human = await open();
+    const director = source === 'director' ? await openDirector() : undefined;
+    const releaseTurn = holdNextTurn();
+    let releaseAssignment!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseAssignment = resolve; });
+    try {
+      const current = await submit(human.attachmentId, { kind: 'message', text: 'active input' });
+      if (current.kind !== 'accepted') throw new Error('Message must be accepted');
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'already accepted' })).toMatchObject({ kind: 'accepted' });
+      let preparing = false;
+      doubles.assignment.mockImplementationOnce(async () => { preparing = true; await gate; return assignment; });
+      const admitting = director === undefined
+        ? submit(human.attachmentId, { kind: 'message', text: 'not accepted' }) : tell(director, 'not accepted');
+      await vi.waitFor(() => expect(preparing).toBe(true));
+      const write = ConversationStore.prototype.write;
+      const writes = vi.spyOn(ConversationStore.prototype, 'write').mockImplementationOnce(function (this: ConversationStore, value) {
+        return write.call(this, value);
+      }).mockImplementationOnce(() => { throw new Error('terminal write failed'); });
+      releaseTurn();
+      await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', operationId: current.operationId,
+        result: expect.objectContaining({ code: 'storage_error' }) })));
+      const saved = store.read(record.id, record.assignment);
+      writes.mockClear();
+      releaseAssignment();
+      expect(await admitting).toMatchObject({ kind: 'error', code: 'storage_error' });
+      expect(writes).not.toHaveBeenCalled();
+      expect(store.read(record.id, record.assignment)).toEqual(saved);
+      expect(saved?.directorMessages).toMatchObject([{ text: 'already accepted' }]);
+      await service.maintain();
+      await finished();
+      expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['active input', 'already accepted']);
+      expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [] });
+    } finally { releaseTurn(); releaseAssignment(); }
+  });
+
+  it.each(['count', 'bytes'] as const)('Given 待機発言が%s上限 When 超過発言を送る Then 保存せず満杯を返し再起動後も既受付順を保つ', async (limit) => {
+    const human = await open();
+    const director = await openDirector();
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    const texts = limit === 'count'
+      ? Array.from({ length: MAX_PENDING_MESSAGES }, (_, index) => `accepted ${index}`)
+      : ['あ'.repeat(Math.floor(MAX_PENDING_MESSAGES_BYTES / 6)), 'い'.repeat(Math.floor(MAX_PENDING_MESSAGES_BYTES / 6) - 256)];
+    try {
+      for (const [index, text] of texts.entries()) {
+        expect(await submit(human.attachmentId, { kind: 'message', text }))
+          .toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
+      }
+      const path = join(directory, 'conversations', `${record.id}.json`);
+      const saved = readFileSync(path, 'utf8');
+      const writes = vi.spyOn(ConversationStore.prototype, 'write');
+      const rejectedText = 'not accepted'.repeat(128);
+      const rejected = await Promise.all([
+        submit(human.attachmentId, { kind: 'message', text: rejectedText }),
+        tell(director, rejectedText),
+      ]);
+      expect(rejected).toEqual([
+        expect.objectContaining({ kind: 'error', code: 'queue_full', message: expect.any(String) }),
+        expect.objectContaining({ kind: 'error', code: 'queue_full', message: expect.any(String) }),
+      ]);
+      const oversized = 'a'.repeat(MAX_PENDING_MESSAGES_BYTES);
+      expect(await submit(human.attachmentId, { kind: 'message', text: oversized })).toMatchObject({ kind: 'error', code: 'message_too_large' });
+      expect(await tell(director, oversized)).toMatchObject({ kind: 'error', code: 'message_too_large' });
+      expect(writes).not.toHaveBeenCalled();
+      expect(readFileSync(path, 'utf8')).toBe(saved);
+      expect(await state(await service.snapshot(human.attachmentId))).toMatchObject({ queuedMessageCount: texts.length });
+      expect(execute).not.toHaveBeenCalled();
+      await service.close();
+      scheduler = new ManagerTurnScheduler();
+      service = createConversationService({ configDirectory: directory, owner,
+        runtime: { resolve: resolveRuntime, close: closeRuntime }, scheduler, onDomainChange: vi.fn() });
+      await service.restore();
+      await finished();
+      expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(texts);
+      expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [] });
+    } finally { release(); }
+  });
+
+  it.each([
+    { language: 'ja', source: 'human' }, { language: 'ja', source: 'director' },
+    { language: 'en', source: 'human' }, { language: 'en', source: 'director' },
+  ] as const)('distinguishes an oversized $source message from temporary byte capacity, accepts the exact limit, and drains it ($language)', async ({ language, source }) => {
+    mkdirSync(join(repository, '.takt'), { recursive: true });
+    writeFileSync(join(repository, '.takt', 'config.yaml'), `language: ${language}\n`);
+    const speaker = source === 'director' ? directorActor : record.counterpart;
+    const attachmentId = source === 'director' ? await openDirector() : (await open()).attachmentId;
+    const send = (text: string) => service.submit({ attachmentId, requestId: randomUUID(), speaker, command: { kind: 'message', text } });
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    const overhead = Buffer.byteLength(JSON.stringify([{ operationId: randomUUID(), text: '', speaker,
+      ...(source === 'director' ? { directorConversationId: conversationId({ kind: 'daemon' }) } : {}),
+    }]), 'utf8');
+    const text = 'a'.repeat(MAX_PENDING_MESSAGES_BYTES - overhead);
+    const writes = vi.spyOn(ConversationStore.prototype, 'write');
+    const tooLarge = { kind: 'error', code: 'message_too_large', message: getLabel('manager.conversation.message_too_large', language) };
+    try {
+      expect(await send(`${text}a`)).toMatchObject(tooLarge);
+      expect(writes).not.toHaveBeenCalled();
+      expect(await send(text)).toMatchObject({ kind: 'accepted', ...(source === 'human' ? { queuedMessageCount: 1 } : {}) });
+      const saved = store.read(record.id, record.assignment)!;
+      expect(saved.directorMessages).toHaveLength(1);
+      expect(Buffer.byteLength(JSON.stringify(saved.directorMessages), 'utf8')).toBe(MAX_PENDING_MESSAGES_BYTES);
+      writes.mockClear();
+      const published = outputs.length;
+      expect(await send('more')).toMatchObject({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', language) });
+      expect(await send(`${text}a`)).toMatchObject(tooLarge);
+      expect(writes).not.toHaveBeenCalled();
+      expect(store.read(record.id, record.assignment)).toEqual(saved);
+      expect(outputs).toHaveLength(published);
+    } finally { release(); }
+    await finished();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]![0].instruction).toBe(text);
+  });
+
+  it.each(['count', 'bytes'] as const)('drains previously accepted queues above the new %s limit while refusing additions', async (limit) => {
+    const texts = limit === 'count'
+      ? Array.from({ length: MAX_PENDING_MESSAGES + 1 }, (_, index) => `previously accepted ${index}`)
+      : ['a'.repeat(MAX_PENDING_MESSAGES_BYTES)];
+    record = { ...record, directorMessages: texts.map((text) => ({ operationId: randomUUID(), text, speaker: record.counterpart })) };
+    store.write(record);
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    try {
+      const human = await open();
+      const writes = vi.spyOn(ConversationStore.prototype, 'write');
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'not accepted' })).toMatchObject({ kind: 'error', code: 'queue_full' });
+      expect(writes).not.toHaveBeenCalled();
+      expect(store.read(record.id, record.assignment)?.directorMessages).toEqual(record.directorMessages);
+    } finally { release(); }
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(texts);
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [] });
+  });
+
+  it('reports revision exhaustion once per accepted input without repeatedly restarting the queue head', async () => {
+    record = { ...record, revision: Number.MAX_SAFE_INTEGER, pending: null };
+    store.write(record);
+    const human = await open();
+    const release = await scheduler.acquire(record.id, randomUUID(), new AbortController().signal);
+    try {
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'cannot advance revision' })).toMatchObject({ kind: 'accepted' });
+      expect(await submit(human.attachmentId, { kind: 'message', text: 'next input' })).toMatchObject({ kind: 'accepted' });
+    } finally { release(); }
+    await finished();
+    expect(execute).not.toHaveBeenCalled();
+    expect(outputs.filter((output) => output.kind === 'result').map((output) => output.result))
+      .toEqual([expect.objectContaining({ kind: 'error', code: 'operation_failed' }), expect.objectContaining({ kind: 'error', code: 'operation_failed' })]);
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [], revision: Number.MAX_SAFE_INTEGER });
+  });
+});
 
 it.each([undefined, false])('shares accepted message text with both attachments only when display is enabled (%s)', async (display) => {
   const first = await open(); await open();
@@ -374,6 +675,69 @@ it('does not accept or register when the reservation write fails', async () => {
   expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ running: null, pending: record.pending });
 });
 
+it.each([false, true])('retains queued human messages through failed registration and drains them after approval recovery (restart: %s)', async (restart) => {
+  let opened = await open();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  doubles.register.mockImplementationOnce(async () => {
+    await gate;
+    throw new Error('creation failed');
+  });
+  const approval = await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 });
+  if (approval.kind !== 'accepted') throw new Error('Approval must be accepted');
+  const texts = ['first waiting human input', 'second waiting human input'];
+  try {
+    await vi.waitFor(() => expect(doubles.register).toHaveBeenCalledOnce());
+    for (const [index, text] of texts.entries()) {
+      expect(await submit(opened.attachmentId, { kind: 'message', text }))
+        .toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
+    }
+    expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 }))
+      .toEqual({ kind: 'busy', operationId: approval.operationId });
+  } finally { release(); }
+  await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({
+    kind: 'result', operationId: approval.operationId, result: expect.objectContaining({ kind: 'error' }),
+  })));
+  const saved = store.read(record.id, record.assignment)!;
+  expect(saved).toMatchObject({ revision: 4, pending: record.pending, approval: { state: 'reserved' }, running: null });
+  expect(saved.directorMessages?.map(({ text }) => text)).toEqual(texts);
+  expect(execute).not.toHaveBeenCalled();
+
+  if (restart) {
+    await service.close();
+    service = createConversationService({ configDirectory: directory, owner,
+      runtime: { resolve: resolveRuntime, close: closeRuntime }, onDomainChange: vi.fn() });
+    await service.restore();
+    opened = await open();
+  }
+  await service.maintain();
+  expect(store.read(record.id, record.assignment)?.directorMessages).toEqual(saved.directorMessages);
+  expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ queuedMessageCount: 2, running: null });
+  expect(await submit(opened.attachmentId, { kind: 'message', text: 'third waiting human input' }))
+    .toMatchObject({ kind: 'accepted', queuedMessageCount: 3 });
+  texts.push('third waiting human input');
+  const queued = store.read(record.id, record.assignment)!.directorMessages!;
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 3 })).toMatchObject({ kind: 'error' });
+  expect(execute).not.toHaveBeenCalled();
+  expect(doubles.register).toHaveBeenCalledOnce();
+
+  execute.mockImplementation(async (input) => {
+    expect(store.read(record.id, record.assignment)?.approval).toMatchObject({ ...saved.approval, state: 'registered' });
+    return { message: `reply:${input.instruction}`, summary: null, sessionId: 'recovered-session', assignment: record.assignment };
+  });
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4, requirePending: true }))
+    .toMatchObject({ kind: 'accepted' });
+  for (const message of queued) {
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: message.operationId,
+      result: { kind: 'reply', message: `reply:${message.text}` } }));
+  }
+  await finished();
+  expect(doubles.register.mock.calls.map(([input]) => input.id)).toEqual([saved.approval!.goalId, saved.approval!.goalId]);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(texts);
+  expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 8, pending: null,
+    approval: { ...saved.approval, state: 'registered' }, running: null, directorMessages: [] });
+});
+
 it.each(['abort_turn', 'close'] as const)('keeps the reserved proposal when %s interrupts registration, then registers the same ID on reapproval', async (kind) => {
   const opened = await open();
   let release!: () => void;
@@ -446,7 +810,7 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
     const accepted = await submit(first.attachmentId, { kind: 'message', text: 'first' });
     await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
     const busyCommands: Parameters<typeof service.submit>[0]['command'][] = [
-      { kind: 'message', text: 'rejected' }, { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
+      { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
       { kind: 'answer_question', target: { goalId: goalRecord().id, repositoryDirectory: repository },
         questionId: '650e8400-e29b-41d4-a716-446655440001', answer: { text: 'CSV' } },
       ...(['pause_goal', 'resume_goal', 'abort_goal'] as const).map((kind) => ({ kind, goalId: goalRecord().id })),
@@ -1004,7 +1368,7 @@ it('keeps the active human operation and revision four proposal unchanged when a
   } finally { release(); }
 });
 
-it('executes director inputs in saved order with distinct IDs and never executes a rejected human input', async () => {
+it('executes director and human inputs in their shared saved order with distinct IDs', async () => {
   const director = await openDirector();
   const human = await open();
   execute.mockImplementation(async (input) => ({ message: `reply:${input.instruction}`, summary: null,
@@ -1018,13 +1382,12 @@ it('executes director inputs in saved order with distinct IDs and never executes
     expect(first.kind).toBe('accepted'); expect(second.kind).toBe('accepted');
     if (first.kind !== 'accepted' || second.kind !== 'accepted' || current.kind !== 'accepted') throw new Error('Messages must be accepted');
     expect(new Set([current.operationId, first.operationId, second.operationId]).size).toBe(3);
-    expect(await submit(human.attachmentId, { kind: 'message', text: 'rejected human input' })).toMatchObject({ kind: 'busy' });
-    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('rejected human input');
+    expect(await submit(human.attachmentId, { kind: 'message', text: 'queued human input' })).toMatchObject({ kind: 'accepted', queuedMessageCount: 3 });
     release();
     await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: second.operationId,
       result: { kind: 'reply', message: 'reply:second director input' } }));
     await finished();
-    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human turn', 'first director input', 'second director input']);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human turn', 'first director input', 'second director input', 'queued human input']);
     const savedResults = new DirectorMessageResultStore(directory);
     for (const [accepted, text] of [[first, 'first director input'], [second, 'second director input']] as const) {
       expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: `reply:${text}` } });
@@ -1034,7 +1397,7 @@ it('executes director inputs in saved order with distinct IDs and never executes
   } finally { release(); }
 });
 
-it('returns busy without saving a human input while a director message is queued and no turn is persisted as running', async () => {
+it('saves a human input after a waiting director input while an event holds the execution slot', async () => {
   const human = await open();
   const director = await openDirector();
   const eventId = randomUUID();
@@ -1045,16 +1408,15 @@ it('returns busy without saving a human input while a director message is queued
     if (accepted.kind !== 'accepted') throw new Error('Director input must be accepted');
     expect(store.read(record.id, record.assignment)).toMatchObject({ running: null,
       directorMessages: [{ operationId: accepted.operationId, text: 'pending director input' }] });
-    expect(await submit(human.attachmentId, { kind: 'message', text: 'rejected while only queued' }))
-      .toEqual({ kind: 'busy', operationId: eventId });
-    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('rejected while only queued');
+    expect(await submit(human.attachmentId, { kind: 'message', text: 'queued human input' }))
+      .toMatchObject({ kind: 'accepted', queuedMessageCount: 2 });
     expect(execute).not.toHaveBeenCalled();
     release();
     release = undefined;
     await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
       result: { kind: 'reply', message: 'manager reply' } }));
     await finished();
-    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['pending director input']);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['pending director input', 'queued human input']);
   } finally { release?.(); }
 });
 
@@ -1278,7 +1640,7 @@ it.each(['active', 'paused', 'aborted', 'created', 'wrong-pr'] as const)('checks
     });
     release();
     await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
-      result: { kind: 'reply', message: 'merge checked' } }));
+      result: { kind: 'reply', message: 'merge checked' } }), { timeout: 5_000 });
     await finished();
     expect((await invoke(accepted.operationId)).isError).toBe(true);
     expect(merge).toHaveBeenCalledTimes(state === 'active' ? 1 : 0);

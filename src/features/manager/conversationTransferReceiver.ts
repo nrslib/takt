@@ -16,7 +16,8 @@ export const ConversationReadMetadataSchema = z.object({ ...version, transferId:
 export type ConversationReadMetadata = z.infer<typeof ConversationReadMetadataSchema>;
 const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment: ConversationAssignmentSchema,
   revision: sequence, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
-  running: RunningOperationSchema.omit({ owner: true }).nullable(), interrupted: z.boolean() }).strict()
+  running: RunningOperationSchema.omit({ owner: true }).nullable(), interrupted: z.boolean(),
+  queuedMessageCount: sequence.optional() }).strict()
   .superRefine((state, ctx) => {
     if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null
       || state.running !== null && state.running.kind !== 'message')) {

@@ -18,7 +18,7 @@ it('runs queued director operations in order before waking an event waiter', asy
   const queue = ['director-1', 'director-2'];
   const started: string[] = [];
   scheduler.tryAcquire('manager', 'human');
-  scheduler.registerDirector('manager', { peek: () => queue[0], start: () => {
+  scheduler.registerQueue('manager', { peek: () => queue[0], start: () => {
     const id = queue[0];
     if (id !== undefined && scheduler.tryAcquire('manager', id)) { queue.shift(); started.push(id); }
   } });
@@ -37,7 +37,7 @@ it('runs queued director operations in order before waking an event waiter', asy
 
 it('refuses a human or event acquisition while only a director message is pending', () => {
   const scheduler = new ManagerTurnScheduler();
-  scheduler.registerDirector('manager', { peek: () => 'director', start: vi.fn() });
+  scheduler.registerQueue('manager', { peek: () => 'director', start: vi.fn() });
   expect(scheduler.busyOperationId('manager')).toBe('director');
   expect(scheduler.tryAcquire('manager', 'human')).toBe(false);
   expect(scheduler.tryAcquire('manager', 'event')).toBe(false);

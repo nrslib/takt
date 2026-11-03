@@ -1,0 +1,8 @@
+ja:
+  lang: ja
+  execution: true
+  user: 取り込み済みのimport-taskの成果を実際にテストで確認して報告してください。
+en:
+  lang: en
+  execution: true
+  user: Verify the integrated import-task result by actually running its test and report.

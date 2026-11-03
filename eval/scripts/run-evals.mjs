@@ -9,10 +9,11 @@
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import {
   mergeCiResultPaths,
   normalizeMergeCiResults,
@@ -98,6 +99,7 @@ for (const suite of selected) {
   const config = join(evalDir, suite.config);
   console.log(`\n=== suite: ${suite.name} (${suite.config}) ===`);
   let code;
+  let filteredConfigPath;
   try {
     const paths = mergeCiResultPaths(suite.name, repoRoot);
     const expected = paths === undefined ? undefined
@@ -106,7 +108,17 @@ for (const suite of selected) {
       mkdirSync(dirname(paths.raw), { recursive: true });
       rmSync(paths.raw, { force: true });
     }
-    const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...options.flags], {
+    if (suite.name === 'manager-work-split') {
+      const { filterManagerWorkSplitConfig } = await import('../manager-work-split-config.mjs');
+      const original = parse(readFileSync(config, 'utf8'));
+      const filtered = filterManagerWorkSplitConfig(original, options.flags);
+      if (filtered !== original) {
+        // Keep relative prompt/provider/assertion paths anchored to the original config directory.
+        filteredConfigPath = join(dirname(config), `.manager-filter-${randomUUID()}.yaml`);
+        writeFileSync(filteredConfigPath, stringify(filtered));
+      }
+    }
+    const result = spawnSync('npx', ['promptfoo', 'eval', '-c', filteredConfigPath ?? config, '--no-progress-bar', ...options.flags], {
       stdio: 'inherit',
       cwd: repoRoot,
       env: {
@@ -124,6 +136,8 @@ for (const suite of selected) {
   } catch (error) {
     console.error(`Failed to run or publish ${suite.name}: ${error.message}`);
     code = 1;
+  } finally {
+    if (filteredConfigPath !== undefined) rmSync(filteredConfigPath, { force: true });
   }
   summary.push({ name: suite.name, code });
 }

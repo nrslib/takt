@@ -1,4 +1,6 @@
 import { TaskRunner } from '../task/runner.js';
+import { cleanupOrphanedClone } from '../task/clone.js';
+import { loadCloneMeta } from '../task/clone-meta.js';
 import { buildSafeGitEnvironment } from '../task/git-environment.js';
 import { GoalStore } from './store.js';
 import type { Goal } from './schema.js';
@@ -15,6 +17,7 @@ import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from './pull-request.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { readGoalPullRequestStatus } from './pull-request-status.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -35,6 +38,21 @@ export async function assertReviewedGoalSha(
   if (actual !== expectedSha) throw new Error(`Reviewed SHA changed: expected ${expectedSha}, current ${actual}`);
 }
 
+function cleanupIntegratedTaskClone(
+  cwd: string, taskName: string, sourceBranch: string,
+): { cleanupWarning?: { path: string; reason: string } } {
+  const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
+  if (task === undefined || task.status === 'pending' || task.status === 'running') return {};
+  const meta = loadCloneMeta(cwd, sourceBranch);
+  if (meta === null) return {};
+  try {
+    cleanupOrphanedClone(cwd, sourceBranch, { throwOnError: true });
+    return {};
+  } catch (error) {
+    return { cleanupWarning: { path: meta.clonePath, reason: safeExternalErrorMessage(error) } };
+  }
+}
+
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
   notifications: GoalNotificationPolicy, language: Language,
@@ -46,7 +64,8 @@ export async function integrateGoalTask(
   const targetSha = await resolveGoalBranchSha(cwd, goal.branch, signal);
   // 成果取り込みは内容一致だけで省略せず、厳密な到達性を維持する。
   if (await isGoalCommitIncluded(cwd, expectedSha, targetSha, signal)) {
-    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal };
+    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal,
+      ...cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) };
   }
   if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -60,7 +79,8 @@ export async function integrateGoalTask(
       summary: `Integrated ${taskName} (${expectedSha}) into ${goal.branch}: ${purpose}`,
     }), { kind: 'progress', body: formatIntegratedWorkNotification(purpose, language) }, notifications));
   }
-  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved };
+  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved,
+    ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
 function shellQuote(value: string): string {
@@ -99,6 +119,9 @@ function assertCompletionAllowed(current: Goal, previous: Goal): void {
   assertCompletionUnchanged(current, previous);
   if (current.executionStatus === 'paused') {
     throw new Error('Goal is paused. Resume it in the manager TUI before completing it.');
+  }
+  if (current.executionStatus === 'aborted') {
+    throw new Error('Goal is aborted. Work cannot continue for this goal.');
   }
 }
 
@@ -225,17 +248,34 @@ export async function checkGoalCompletion(
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   if (goal.status === 'completed') return { included: true, goal };
-  if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  signal?.throwIfAborted();
+  if (goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  assertCompletionAllowed(goal, goal);
   const approvedSha = goal.completion.goalSha;
-  const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
-  const included = await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
+  const prStatus = await readGoalPullRequestStatus(cwd, goal, signal);
+  const mergedPr = prStatus?.status === 'available' && prStatus.pullRequest.state === 'MERGED'
+    ? prStatus.pullRequest : undefined;
+  if (goal.status === 'created' && mergedPr === undefined) throw new Error('Goal is not awaiting a human merge');
+  if (prStatus?.status === 'available' && prStatus.pullRequest.state === 'CLOSED') {
+    const current = store.getSync(goalId);
+    assertCompletionUnchanged(current, goal);
+    return { included: false, goal: current };
+  }
+  const mergedSha = mergedPr?.mergeCommit?.oid;
+  const targetSha = mergedSha ?? await resolveCompletionTargetSha(cwd, goal, signal);
+  const included = mergedSha !== undefined || await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
   if (!included) {
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);
     return { included: false, goal: current };
   }
   const saved = await store.update(goalId, (current) => {
+    signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
+    if (mergedPr !== undefined && (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
+      || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url)) {
+      throw new Error('Goal PR changed during the completion check. Use takt_check_goal_completion.');
+    }
     const completion = { ...current.completion!, targetBranch: current.integrationBranch, targetSha };
     return appendGoalNotification(withdrawPendingGoalQuestions({
       ...current, status: 'completed', completion,

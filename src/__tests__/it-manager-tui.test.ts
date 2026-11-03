@@ -11,6 +11,39 @@ import { toDisplayText } from '../features/tui/displayText.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
 
+it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方送信して受付と待機件数を表示する', async () => {
+  const context = mount('ja');
+  let accepted!: () => void;
+  const firstId = randomUUID();
+  context.client.submit.mockImplementationOnce((_command, onAccepted) => new Promise((resolve) => {
+    accepted = () => { onAccepted?.(firstId); resolve({ kind: 'accepted', operationId: firstId }); };
+  })).mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });
+  try {
+    await typeAndSubmit(context, '最初の発言');
+    await waitFor(() => expect(context.client.commands()).toHaveLength(1));
+    await typeAndSubmit(context, '次の発言');
+    await waitFor(() => expect(context.client.commands()).toEqual([
+      { kind: 'message', text: '最初の発言' }, { kind: 'message', text: '次の発言' },
+    ]));
+    await waitFor(() => expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(
+      getLabel('manager.conversation.queued', 'ja', { count: '1' }).replace(/\s+/gu, ''),
+    ));
+    context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: firstId, kind: 'message' }, queuedMessageCount: 1 } });
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.waiting', 'ja', { count: '1' })));
+    expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.busy', 'ja'));
+  } finally { accepted(); }
+});
+
+it.each(['ja', 'en'] as const)('shows queue capacity rejection in the submitting manager TUI (%s)', async (lang) => {
+  const context = mount(lang);
+  const message = getLabel('manager.conversation.queue_full', lang);
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
+  await typeAndSubmit(context, 'capacity request');
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: 'capacity request' }]));
+  await waitFor(() => expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(message.replace(/\s+/gu, '')));
+  expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.queued', lang, { count: '1' }));
+});
+
 it('shows a remote message once and avoids repeating its own accepted message', async () => {
   const context = mount();
   await waitFor(() => expect(context.app.lastFrame()).toContain('Discuss your goal'));
@@ -72,8 +105,8 @@ it.each(['typed', 'Tab completion', 'pasted'] as const)('regenerates a displayed
   await showProposal(context, summaryB, 5);
   await finish(context, 'Replacement ready');
   await waitFor(() => {
-    expect(context.app.lastFrame()).toContain(summaryB.objective);
-    expect(context.app.lastFrame()).not.toContain(summaryA.objective);
+    expect(context.app.lastFrame()!.split(summaryB.objective)).toHaveLength(2);
+    expect(context.app.lastFrame()!.split(summaryA.objective)).toHaveLength(2);
   });
   expect(context.client.commands().map((command) => command.kind)).toEqual(['message']);
   expect(context.client.getSnapshot().state?.approval).toBeNull();
@@ -143,8 +176,27 @@ it.each(['ja', 'en'] as const)('approves exactly the restored revision with Up a
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(goal.id);
     expect(context.app.lastFrame()).toContain(goal.branch);
-    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録する要約' : 'Summary to register');
+    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録を承認' : 'Approve registration');
+    expect(context.app.lastFrame()).toContain(summaryB.objective);
   });
+});
+
+it.each(['ja', 'en'] as const)('returns to conversation input without registration after Down and Enter in %s', async (lang) => {
+  const context = mount(lang);
+  await showProposal(context, summaryB, 4);
+  context.app.stdin.write(DOWN);
+  context.app.stdin.write(ENTER);
+  await waitFor(() => {
+    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
+    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録を承認' : 'Approve registration');
+    expect(promptFrame(context)).toContain(lang === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
+  });
+  await finish(context, 'Continue discussing the goal');
+  await typeAndSubmit(context, 'Adjust the acceptance criteria');
+  await waitFor(() => expect(context.client.commands()).toEqual([
+    { kind: 'dismiss_summary', revision: 4 },
+    { kind: 'message', text: 'Adjust the acceptance criteria' },
+  ]));
 });
 
 it.each([ENTER, ESC, '修正', '/g', '\x1b[13;2u', '\x1b[13;3u'])('immediately withdraws revision four on editing or continuing with %j', async (input) => {
@@ -163,6 +215,7 @@ it('restores the authoritative proposal when immediate withdrawal is refused', a
   await waitFor(() => {
     expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
     expect(context.app.lastFrame()).toContain(summaryA.objective);
+    expect(context.app.lastFrame()).toContain('Approve registration');
     expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en'));
   });
 });
@@ -189,10 +242,11 @@ it.each(['ja', 'en'] as const)('keeps original array boundaries and multiline bu
     const summary = { ...summaryA, [field]: ['CSV\n通知\n配信', 'CSV; 通知', 'CSV","通知', 'CSV', 'CSV'] };
     await showProposal(context, summary);
     const lines = context.app.lastFrame()!.split('\n').map((line) => line.replace(/^│/u, '').replace(/[│\s]+$/gu, ''));
-    const index = lines.indexOf('- CSV');
+    const index = lines.findIndex((line) => /^\s*- CSV$/u.test(line));
     expect(index).toBeGreaterThanOrEqual(0);
-    expect(lines.slice(index, index + 3)).toEqual(['- CSV', '  通知', '  配信']);
-    expect(lines.filter((line) => line === '- CSV').length).toBeGreaterThanOrEqual(3);
+    const indentation = lines[index]!.match(/^\s*/u)![0].length;
+    expect(lines.slice(index, index + 3).map((line) => line.slice(indentation))).toEqual(['- CSV', '  通知', '  配信']);
+    expect(lines.filter((line) => line.trim() === '- CSV').length).toBeGreaterThanOrEqual(3);
     expect(context.client.getSnapshot().state?.pending?.summary[field]).toEqual(summary[field]);
     context.app.stdin.write(UP);
     context.app.stdin.write(ENTER);
@@ -248,8 +302,8 @@ it('keeps revision five on the same mounted screen after delayed revision four d
   receiver.receive(oldFrames.at(-1));
   for (const frame of await collect(metadata(4, 2), initial)) receiver.receive(frame);
   await waitFor(() => {
-    expect(context.app.lastFrame()).toContain(summaryB.objective);
-    expect(context.app.lastFrame()).not.toContain(summaryA.objective);
+    expect(context.app.lastFrame()!.split(summaryB.objective)).toHaveLength(2);
+    expect(context.app.lastFrame()!.split(summaryA.objective)).toHaveLength(2);
   });
   approveSummary(context);
   await waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 5 }]));

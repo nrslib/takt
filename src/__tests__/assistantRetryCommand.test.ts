@@ -70,7 +70,8 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   },
 }));
 
-vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
+vi.mock('../features/tasks/taskRetryPreparation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/tasks/taskRetryPreparation.js')>()),
   prepareFailedTaskRetry: (...args: unknown[]) => mocks.prepareFailedTaskRetry(...args),
   buildFailedTaskRetryStartContext: (...args: unknown[]) => mocks.buildFailedTaskRetryStartContext(...args),
   resolveFailedTaskRetryStart: (...args: unknown[]) => mocks.resolveFailedTaskRetryStart(...args),
@@ -163,7 +164,14 @@ const implementRestartPoint: WorkflowRestartPoint = {
   stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent' }],
 };
 
+const failedResumePoint: WorkflowResumePoint = {
+  version: 2,
+  stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent', occurrence: 1 }],
+  iteration: 1, elapsed_ms: 0, workflow_call_invocations: {}, workflow_step_participations: {},
+};
+
 const preparation: FailedTaskRetryPreparation = {
+  skippedRuns: [],
   worktreePath: task.worktreePath!,
   freshStart: false,
   interactionCwd: task.worktreePath!,
@@ -174,7 +182,7 @@ const preparation: FailedTaskRetryPreparation = {
   runMeta: null,
   previousWorkflow: 'development',
   previousOrderContent: '# Original order\n\nFix diagnostics.',
-  resumePoint: undefined,
+  resumePoint: failedResumePoint,
 };
 
 const options: AssistantRetryCommandOptions = {
@@ -242,9 +250,11 @@ function setPreparedStart(): void {
   mocks.prepareFailedTaskRetry.mockReturnValue(preparation);
   mocks.buildFailedTaskRetryStartContext.mockReturnValue({
     workflowName: 'development',
-    workflowConfig: { steps: [] },
+    workflowConfig: { name: 'development', initialStep: 'plan', maxSteps: 10,
+      steps: ['plan', 'implement'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
+    },
     workflowOverride: undefined,
-    options: {},
+    options: { resumePoint: failedResumePoint },
     startOptions: {
       options: [
         { id: 'resume-checkpoint', label: 'Resume from implement', path: '"development" > "implement"', selectable: true },
@@ -256,7 +266,7 @@ function setPreparedStart(): void {
   });
   mocks.resolveFailedTaskRetryStart.mockImplementation((_context, id: string) => {
     if (id === 'resume-checkpoint') {
-      return { label: 'Resume from implement', startStep: 'implement', resumePoint: undefined, restartPoint: undefined };
+      return { label: 'Resume from implement', startStep: 'implement', resumePoint: failedResumePoint, restartPoint: undefined };
     }
     return { label: 'Restart implement', startStep: undefined, resumePoint: undefined, restartPoint: implementRestartPoint };
   });

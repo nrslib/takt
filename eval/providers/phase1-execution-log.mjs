@@ -1,3 +1,4 @@
+import { recordProviderCalls } from './execution-record.mjs';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { auditPhase2, snapshotFiles } from './phase1-execution-log-audit.mjs';
@@ -16,6 +17,7 @@ export function executionReference(prompt) {
 export default class Phase1ExecutionLogProvider {
   constructor(options = {}, dependencies = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
     this.dependencies = { prepareWorkingDirectory, createCliReviewSession, snapshotFiles, ...dependencies };
   }
   id() { return `phase1-execution-log:${this.config.cli}:${this.config.model}`; }

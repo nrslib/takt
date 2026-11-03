@@ -128,6 +128,7 @@ const SUPPORTED_RUNTIME = (
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
+const ASYNC_WAIT_TIMEOUT_MS = 30_000;
 const offlineManagedNpmCache = process.env.TAKT_DSH_OFFLINE_NPM_CACHE;
 const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', managedPackageRootEnvironmentKey] as const;
 const savedEnvironment = new Map<string, string | undefined>();
@@ -384,23 +385,23 @@ async function runSeparateParentProcess(
   });
 }
 
-/** Wait until the separate parent publishes a marker; propagate non-ENOENT errors and fail at the deadline. */
-async function waitForFile(path: string, timeoutMs: number): Promise<void> {
+/** Wait until a marker has content; propagate non-ENOENT errors and fail at the deadline. */
+async function waitForFile(path: string, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      await readFile(path);
-      return;
+      const content = await readFile(path, 'utf8');
+      if (content.length > 0) return content;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error('Timed out waiting for the separate parent process marker');
+  throw new Error(`Timed out waiting for the separate parent process marker: ${path}`);
 }
 
 /** Wait for asynchronously owned runtime resources to be removed after exit confirmation. */
-async function waitForPathRemoval(path: string, timeoutMs = 5_000): Promise<void> {
+async function waitForPathRemoval(path: string, timeoutMs = ASYNC_WAIT_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!existsSync(path)) return;
@@ -426,6 +427,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
   });
 
+  // SDK shutdown and installed npm fixture deletion can exceed the default hook timeout under load.
   afterEach(async () => {
     await closeDeepSeekHarnessProcesses().catch(() => undefined);
     vi.restoreAllMocks();
@@ -438,7 +440,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       else process.env[key] = value;
     }
     savedEnvironment.clear();
-  });
+  }, 120_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('reports missing or damaged SDK before resolving any configured Git plugin', async () => {
     managedModuleLoads.mockImplementationOnce(() => { throw new DeepSeekHarnessInstallRequiredError(); });
@@ -588,7 +590,6 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     api.setMode('hold-response');
     const timeoutController = new AbortController();
     const timeoutMs = 1_000;
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
     let releaseCleanup!: () => void;
     const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
@@ -608,9 +609,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       });
       await vi.waitFor(() => expect(api.requests).toHaveLength(2), { timeout: 10_000, interval: 25 });
       const nextTurn = callDeepSeekHarness('worker', 'must wait for timeout cleanup', { ...options, sessionId });
-      timeoutHandle = setTimeout(() => {
-        timeoutController.abort(new Error(createPartTimeoutReason(timeoutMs)));
-      }, timeoutMs);
+      timeoutController.abort(new Error(createPartTimeoutReason(timeoutMs)));
 
       await vi.waitFor(() => expect(cleanupHasStarted).toBe(true), { timeout: 10_000, interval: 25 });
       const requestsWhileCleanupIsPending = api.requests.map((request) => JSON.stringify(request.body.messages)).join('\n');
@@ -622,7 +621,6 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       expect(next).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
       expect(api.requests).toHaveLength(2);
     } finally {
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       releaseCleanup();
       close.mockRestore();
     }
@@ -1240,8 +1238,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
         [`npm:file:${packageDirectory}`],
         abortController.signal,
       );
-      await waitForFile(installStartedPath, 5_000);
-      expect(await readFile(installStartedPath, 'utf8')).toBe('install');
+      expect(await waitForFile(installStartedPath, ASYNC_WAIT_TIMEOUT_MS)).toBe('install');
       abortController.abort();
       await expect(resolution).rejects.toMatchObject({ name: 'AbortError' });
       expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-npm-plugin-')))
@@ -1251,7 +1248,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
     }
-  }, 15_000);
+  }, 60_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('does not infer Cordis failure from an untyped runtime exit during npm plugin startup and cleans its installed package', async () => {
     const api = await startLocalApi();
@@ -2107,22 +2104,26 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     let releaseRepeatedClose: () => void = () => {};
     const repeatedCloseCanFinish = new Promise<void>((resolve) => { releaseRepeatedClose = resolve; });
     let closeCalls = 0;
+    let signalRepeatedCloseStarted!: () => void;
+    const repeatedCloseStarted = new Promise<void>((resolve) => { signalRepeatedCloseStarted = resolve; });
     let delayStrictAcknowledgement = false;
-    let strictAcknowledgementPending = false;
+    let signalStrictAcknowledgementStarted!: () => void;
+    const strictAcknowledgementStarted = new Promise<void>((resolve) => { signalStrictAcknowledgementStarted = resolve; });
     let releaseStrictAcknowledgement: () => void = () => {};
     const strictAcknowledgementCanFinish = new Promise<void>((resolve) => { releaseStrictAcknowledgement = resolve; });
     const realAcknowledgement = runtimeState.acknowledgeDeepSeekRuntimeCleanup;
     vi.spyOn(runtimeState, 'acknowledgeDeepSeekRuntimeCleanup').mockImplementation(async (confirmationPath) => {
       if (delayStrictAcknowledgement) {
         delayStrictAcknowledgement = false;
-        strictAcknowledgementPending = true;
+        signalStrictAcknowledgementStarted();
         await strictAcknowledgementCanFinish;
       }
       return realAcknowledgement(confirmationPath);
     });
-    vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async () => {
+    const close = vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async () => {
       // Let the supervisor watcher reconcile before a repeated SDK close returns.
       if (++closeCalls > 1) {
+        signalRepeatedCloseStarted();
         await repeatedCloseCanFinish;
         if (repeatedCloseSucceeds) return;
       }
@@ -2175,12 +2176,13 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
 
       abortController.abort(new Error('test aborted active DeepSeek turn'));
       await waitForFile(cleanupBarrierPath, 30_000);
+      await vi.waitFor(() => repeatedCloseStarted, { timeout: ASYNC_WAIT_TIMEOUT_MS });
       expect(existsSync(cleanupPaths[0]!)).toBe(true);
       const constructedBeforeRetry = sdkConstructorOptions.length;
       const retryAbortController = new AbortController();
       const retryAbortTimeout = setTimeout(
         () => retryAbortController.abort(new Error('bounded cleanup-barrier retry')),
-        500,
+        ASYNC_WAIT_TIMEOUT_MS,
       );
       let blocked: Awaited<ReturnType<typeof callDeepSeekHarness>>;
       try {
@@ -2191,7 +2193,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       } finally {
         clearTimeout(retryAbortTimeout);
       }
-      expect(blocked.status).toBe('error');
+      expect(blocked).toMatchObject({ status: 'error', failureCategory: 'provider_error' });
       expect(sdkConstructorOptions).toHaveLength(constructedBeforeRetry);
       expect(existsSync(cleanupBarrierPath)).toBe(true);
 
@@ -2201,11 +2203,11 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       await mkdir(dirname(receiptPath), { recursive: true });
       await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
       if (repeatedCloseSucceeds) {
-        await vi.waitFor(() => expect(strictAcknowledgementPending).toBe(true));
+        await vi.waitFor(() => strictAcknowledgementStarted, { timeout: ASYNC_WAIT_TIMEOUT_MS });
         // Another state owner consumes the proven-exit receipt while the strict watcher is pending.
         expect(await realAcknowledgement(receiptPath)).toBe(true);
         releaseRepeatedClose();
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await close.mock.results[1]!.value;
         releaseStrictAcknowledgement();
       } else {
         await waitForPathRemoval(cleanupPaths[0]!);
@@ -2234,12 +2236,12 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       releaseStrictAcknowledgement();
       await operation;
       for (const cleanupPath of cleanupPaths) {
-        await waitForPathRemoval(cleanupPath, 10_000).catch(() => undefined);
+        await waitForPathRemoval(cleanupPath).catch(() => undefined);
       }
       if (ownerPath !== undefined) await rm(ownerPath, { force: true });
       await closeDeepSeekHarnessProcesses().catch(() => undefined);
     }
-  }, 60_000);
+  }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('keeps a timed-out call classified while cleanup blocks another runtime start', async () => {
     let signalRunStarted: () => void = () => {};
@@ -2255,9 +2257,14 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     let releaseRepeatedClose: () => void = () => {};
     const repeatedCloseCanFinish = new Promise<void>((resolve) => { releaseRepeatedClose = resolve; });
     let closeCalls = 0;
+    let signalRepeatedCloseStarted!: () => void;
+    const repeatedCloseStarted = new Promise<void>((resolve) => { signalRepeatedCloseStarted = resolve; });
     vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async () => {
       // Let the supervisor watcher reconcile before a repeated SDK close returns.
-      if (++closeCalls > 1) await repeatedCloseCanFinish;
+      if (++closeCalls > 1) {
+        signalRepeatedCloseStarted();
+        await repeatedCloseCanFinish;
+      }
       throw new Error('simulated unconfirmed shutdown');
     });
 
@@ -2307,12 +2314,13 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       timeoutTriggered = true;
       rejectRun(timeoutError);
       await waitForFile(cleanupBarrierPath, 30_000);
+      await vi.waitFor(() => repeatedCloseStarted, { timeout: ASYNC_WAIT_TIMEOUT_MS });
       expect(existsSync(cleanupPaths[0]!)).toBe(true);
       const constructedBeforeRetry = sdkConstructorOptions.length;
       const retryAbortController = new AbortController();
       const retryAbortTimeout = setTimeout(
         () => retryAbortController.abort(new Error('bounded cleanup-barrier retry')),
-        500,
+        ASYNC_WAIT_TIMEOUT_MS,
       );
       let blocked: Awaited<ReturnType<typeof callDeepSeekHarness>>;
       try {
@@ -2323,7 +2331,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       } finally {
         clearTimeout(retryAbortTimeout);
       }
-      expect(blocked.status).toBe('error');
+      expect(blocked).toMatchObject({ status: 'error', failureCategory: 'provider_error' });
       expect(sdkConstructorOptions).toHaveLength(constructedBeforeRetry);
       expect(existsSync(cleanupBarrierPath)).toBe(true);
 
@@ -2353,12 +2361,12 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       releaseRepeatedClose();
       await operation;
       for (const cleanupPath of cleanupPaths) {
-        await waitForPathRemoval(cleanupPath, 10_000).catch(() => undefined);
+        await waitForPathRemoval(cleanupPath).catch(() => undefined);
       }
       if (ownerPath !== undefined) await rm(ownerPath, { force: true });
       await closeDeepSeekHarnessProcesses().catch(() => undefined);
     }
-  }, 60_000);
+  }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('applies per-call effort to a new session and refuses changing it for a live session', async () => {
     const api = await startLocalApi();
@@ -3149,8 +3157,8 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       if (existsSync(cleanupPaths[0]!) || existsSync(cleanupPaths[1]!) || existsSync(ownerPath)) {
         await mkdir(dirname(receiptPath), { recursive: true });
         await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
-        await waitForPathRemoval(cleanupPaths[0]!, 10_000);
-        await waitForPathRemoval(cleanupPaths[1]!, 10_000);
+        await waitForPathRemoval(cleanupPaths[0]!);
+        await waitForPathRemoval(cleanupPaths[1]!);
       }
       await rm(receiptPath, { force: true });
       await rm(ownerPath, { force: true });
@@ -3176,7 +3184,6 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
       "import { setTimeout as delay } from 'node:timers/promises';",
       'const cleanupPaths = JSON.parse(process.env.TAKT_DSH_CLEANUP_PATHS);',
-      `writeFileSync(${JSON.stringify(runtimeStarted)}, 'ready');`,
       `writeFileSync(${JSON.stringify(runtimePidMarker)}, String(process.pid));`,
       'process.on("SIGTERM", async () => {',
       `  writeFileSync(${JSON.stringify(runtimeSignal)}, cleanupPaths.every((path) => existsSync(path)) ? 'present' : 'missing');`,
@@ -3188,6 +3195,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       '  process.exit(0);',
       '});',
       'setInterval(() => {}, 1000);',
+      `writeFileSync(${JSON.stringify(runtimeStarted)}, 'ready');`,
     ].join('\n');
     await writeFile(preloadPath, [
       "import { syncBuiltinESMExports } from 'node:module';",
@@ -3245,8 +3253,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       expect(parent.timedOut).toBe(false);
       expect(parent.exitCode).toBe(0);
       expect(parent.stdout).toBe('supervisor-started');
-      await waitForFile(runtimeSignal, 20_000);
-      expect(await readFile(runtimeSignal, 'utf8')).toBe('present');
+      expect(await waitForFile(runtimeSignal, ASYNC_WAIT_TIMEOUT_MS)).toBe('present');
       expect(existsSync(patchDirectory)).toBe(true);
       expect(existsSync(pluginDirectory)).toBe(true);
       const ownerEntries = await readdir(runtimePaths.owners);

@@ -1,3 +1,4 @@
+import { recordProviderCalls } from './execution-record.mjs';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,6 +38,7 @@ export function persistGeneratedOutput(outputDirectory, record) {
 export default class InteractiveTopicJudge {
   constructor(options = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
   }
 
   id() {
