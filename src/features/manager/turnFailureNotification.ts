@@ -1,5 +1,5 @@
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
-import { appendGoalNotification } from '../../infra/goals/notifications.js';
+import { appendGoalNotification, managerTurnFailureNotification } from '../../infra/goals/notifications.js';
 import type { Goal } from '../../infra/goals/schema.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { basename } from 'node:path';
@@ -26,11 +26,11 @@ export async function notifyManagerTurnFailure(cwd: string, goalId: string | und
       if (webhookUrl) await sendSlackNotification(webhookUrl, message);
       return message;
     }
-    const body = getLabel('manager.turnFailureNotification', language, { goalId, reason });
+    const notification = managerTurnFailureNotification(goalId, error, language);
     let previous: Goal | undefined;
     const saved = await new GoalStore(cwd).update(goalId, (current) => {
       previous = current;
-      return appendGoalNotification(current, { kind: 'blocked', severity: 'error', body }, policy);
+      return appendGoalNotification(current, notification, policy);
     });
     if (previous !== undefined) await sendSavedGoalNotifications(cwd, previous, saved, webhookUrl);
   } catch (notificationError) {

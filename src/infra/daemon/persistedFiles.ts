@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
 import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
-import { readPrivateFile } from './privateFile.js';
+import type { Language } from '../../core/models/types.js';
+import { managerTurnFailureNotification } from '../goals/notifications.js';
+import { FileAsyncLock } from './lock.js';
+import { readPrivateFile, writePrivateFile } from './privateFile.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -26,6 +29,20 @@ export class DaemonPersistedFiles {
     const goal = GoalSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
     if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
     return goal;
+  }
+
+  async saveTurnFailure(repositoryDirectory: string, goalId: string, operationId: string, message: string, language: Language): Promise<void> {
+    const path = join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
+    const lock = new FileAsyncLock();
+    const io = { signal: new AbortController().signal, timeoutMs: 5000 };
+    await lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
+      const goal = await this.readGoal(repositoryDirectory, goalId);
+      if (goal === undefined) throw new Error('Missing failed turn goal');
+      if (goal.notifications?.some((notice) => notice.id === operationId)) return;
+      const notification = { ...managerTurnFailureNotification(goalId, message, language), id: operationId, recordedAt: new Date().toISOString() };
+      const saved = GoalSchema.parse({ ...goal, notifications: [...(goal.notifications ?? []), notification] });
+      await writePrivateFile(path, JSON.stringify(saved), io.signal);
+    }, io), io);
   }
 
   async readTasks(repositoryDirectory: string) {

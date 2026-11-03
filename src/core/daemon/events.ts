@@ -43,6 +43,22 @@ export type TurnEvent =
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation };
 
+export function eventGoalReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
+  switch (event.kind) {
+    case 'task_completed': case 'task_failed': return event.task;
+    case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
+    case 'watch_observation': {
+      const observation = event.observation;
+      switch (observation.kind) {
+        case 'run_process_lost': case 'run_log_stalled': return observation.task;
+        case 'watch_failed': case 'director_state_changed': return undefined;
+        default: return observation;
+      }
+    }
+    default: return undefined;
+  }
+}
+
 /** F が作り、A がキューを経由せず現在の実行だけへ配送する。 */
 export type ControlEvent =
   | { kind: 'interrupt'; conversationId: string; operationId: string; generation: number }

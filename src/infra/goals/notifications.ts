@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { ManagerNotificationKind } from '../../core/models/config-types.js';
 import type { Language } from '../../core/models/types.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { GoalNotificationInputSchema, type Goal, type GoalNotificationInput, type GoalQuestion } from './schema.js';
 
@@ -13,6 +15,12 @@ export function appendGoalNotification(goal: Goal, input: GoalNotificationInput,
   };
   if (goal.notifications?.some((saved) => saved.id === notification.id)) throw new Error('Notification ID already exists');
   return { ...goal, notifications: [...(goal.notifications ?? []), notification] };
+}
+
+export function managerTurnFailureNotification(goalId: string, error: unknown, language: Language): GoalNotificationInput {
+  return { kind: 'blocked', severity: 'error', body: getLabel('manager.turnFailureNotification', language, {
+    goalId, reason: sanitizeSensitiveText(getErrorMessage(error)),
+  }) };
 }
 
 const OBJECTIVE_LIMIT = 60;

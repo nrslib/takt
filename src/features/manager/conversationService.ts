@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { TurnEvent } from '../../core/daemon/events.js';
+import { eventGoalReference } from '../../core/daemon/events.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
 import type { ConversationDisplayAssignment, OperationResult } from './conversationPort.js';
 import type { ConversationAssignment, PendingSummary } from '../../infra/conversations/schema.js';
@@ -37,22 +37,6 @@ function identityOf(assignment: ConversationDisplayAssignment): ConversationAssi
     : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
 }
 
-function eventReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
-  switch (event.kind) {
-    case 'task_completed': case 'task_failed': return event.task;
-    case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
-    case 'watch_observation': {
-      const observation = event.observation;
-      switch (observation.kind) {
-        case 'run_process_lost': case 'run_log_stalled': return observation.task;
-        case 'watch_failed': case 'director_state_changed': return undefined;
-        default: return observation;
-      }
-    }
-    default: return undefined;
-  }
-}
-
 export function createConversationTurnService(configDirectory: string, runtime: ConversationRuntime): Pick<TurnBusiness, 'execute'> {
   let contextKey: string | undefined;
   let denials: string[] = [];
@@ -73,10 +57,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' }) };
       let result: OperationResult;
-      let reference: ReturnType<typeof eventReference>;
+      let reference: ReturnType<typeof eventGoalReference>;
       try {
         io.signal.throwIfAborted();
-        const candidate = eventReference(event);
+        const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {

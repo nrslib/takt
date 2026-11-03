@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { eventGoalReference } from '../../core/daemon/events.js';
+import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
+import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import type { ConversationOwner } from '../../core/daemon/ports.js';
 import type { ConversationSnapshot, TurnIdentity, TurnResult, TurnStart } from '../../core/daemon/messages.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
@@ -60,6 +64,19 @@ export class DaemonConversations implements ConversationOwner {
     if (current === undefined) throw new Error('Missing result conversation');
     if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
     else this.interrupted.delete(result.conversationId);
+    if (result.outcome.kind === 'failed' && current.state.assignment.kind !== 'daemon') {
+      const reference = eventGoalReference(result.event.event);
+      if (reference?.goalId !== undefined && reference.goalId !== null) {
+        const assignment = await this.routing.display(current.state.assignment);
+        if (!assignment.repositoryDirectories.includes(reference.repositoryDirectory)) throw new Error('Failed turn goal is outside assignment');
+        const global = await globalDaemonConfiguration(this.routing.directory);
+        const project = await readDaemonConfiguration(join(reference.repositoryDirectory, '.takt', 'config.yaml'));
+        if (project.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked ?? true) {
+          await new DaemonPersistedFiles(this.routing.directory).saveTurnFailure(reference.repositoryDirectory, reference.goalId,
+            result.operationId, result.outcome.message, project.language ?? global.language ?? 'en');
+        }
+      }
+    }
     const version = this.version(result.conversationId, current.state.revision, result.operationId);
     const outcome = result.outcome;
     this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,

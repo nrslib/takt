@@ -1,6 +1,12 @@
 import { installDaemonErrorLog, reportDaemonError } from '../infra/daemon/diagnostics.js';
 import { DaemonLogger } from '../infra/daemon/logger.js';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
+import * as spawnModule from '../shared/utils/spawn.js';
+import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
+import type { DaemonProcessMessage } from '../core/daemon/processProtocol.js';
+import type { RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -152,6 +158,63 @@ it('persists a blocked notification for a goal event when the provider fails wit
   await f.runner.finish(call, outcome);
   const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
   expect(saved.notifications).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'blocked', severity: 'error' })]));
+});
+
+it('persists a blocked notification after an unattached turn process exits and includes it in the manager snapshot', async () => {
+  const f = await fixture();
+  const goal = goalRecord();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, JSON.stringify(goal));
+  f.input.detach(f.opened.attachmentId);
+  const outputCount = f.outputs.length;
+  const child = Object.assign(new EventEmitter(), { connected: true }) as ChildProcess;
+  const initialized = deferred<DaemonProcessMessage>();
+  const started = deferred<TurnStart>();
+  child.send = vi.fn((value: unknown, callback: unknown) => {
+    const message = value as DaemonProcessMessage;
+    if (message.kind === 'initialize') initialized.resolve(message);
+    if (message.kind === 'start_turn') started.resolve(message.input);
+    (callback as (error: Error | null) => void)(null);
+    return true;
+  }) as typeof child.send;
+  const exit = deferred<spawnModule.ManagedProcessExit>();
+  const spawn = spawnModule.spawnManagedProcess;
+  vi.spyOn(spawnModule, 'spawnManagedProcess').mockImplementation((...args) => {
+    if (!args[1].some((arg) => arg.endsWith('/app/daemon-turn/index.js'))) return spawn(...args);
+    return { child, wait: () => exit.promise, waitForExit: () => exit.promise, async terminate() {} };
+  });
+  const finished = deferred<RuntimeMessage>();
+  const host = createTurnProcessHost({ configDirectory: f.directory, onError(error) { throw error; },
+    bus: { request: (...args) => f.dispatcher.request(...args), async post(message) {
+      await f.dispatcher.post(message);
+      finished.resolve(message);
+    } } });
+  cleanups.push(async () => { exit.resolve({ code: 1, signal: null }); await host.close(); });
+  vi.spyOn(f.runner, 'start').mockImplementation((...args) => host.start(...args));
+  vi.spyOn(f.runner, 'resultCommitted').mockImplementation((turn) => host.resultCommitted(turn));
+  const admission = await f.dispatcher.accept({ ...input('crashed-completion', f.id, 'other'), event: { kind: 'task_completed',
+    task: { repositoryDirectory: f.repository, goalId: goal.id, taskName: 'task' }, result: { success: true, interrupted: false } } });
+  accepted(admission);
+  const initialization = await initialized.promise;
+  child.emit('message', { protocolVersion: initialization.protocolVersion, launchId: initialization.launchId, kind: 'ready' });
+  const start = await started.promise;
+  exit.resolve({ code: 1, signal: null });
+  const terminal = await finished.promise;
+  expect(terminal).toMatchObject({ kind: 'turn_finished', outcome: { kind: 'failed' } });
+  const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
+  expect(saved.notifications).toEqual([expect.objectContaining({ id: admission.operationId, kind: 'blocked', severity: 'error' })]);
+  expect(f.outputs).toHaveLength(outputCount);
+  const snapshot = await f.conversations.snapshot(f.id);
+  const items = [];
+  for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  expect(items).toContainEqual(expect.objectContaining({ kind: 'display_event', event: expect.objectContaining({
+    id: JSON.stringify([f.repository, goal.id, 'notification', admission.operationId]),
+  }) }));
+  if (terminal.kind !== 'turn_finished') throw new Error('Expected terminal turn result');
+  await f.conversations.apply({ ...terminal.turn, event: start.event, outcome: terminal.outcome });
+  expect((JSON.parse(await readFile(path, 'utf8')) as Goal).notifications).toHaveLength(1);
 });
 
 it('waits for attachments, accepted turns and initializing IPC, then closes the runner when idle', async () => {
