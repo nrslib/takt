@@ -180,7 +180,7 @@ function buildTargetedRun(script, shared, targets) {
   if (targets.length === 0) {
     return undefined;
   }
-  const scriptArgs = script === 'test:unit:parallel'
+  const scriptArgs = ['test:unit:parallel', 'test:it:heavy:parallel'].includes(script)
     ? ['run', script, '--ignore-scripts']
     : ['run', script];
   return { npmArgs: [...scriptArgs, '--', ...shared, ...targets] };

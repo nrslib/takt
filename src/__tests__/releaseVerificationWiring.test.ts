@@ -758,7 +758,7 @@ describe('release verification wiring', () => {
       expect(heavyParallelIntegrationTestFiles).toContain(testFile);
     }
     expect(selectNpmTestRuns(movedFiles)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...movedFiles] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...movedFiles] },
     ]);
   });
 
@@ -782,7 +782,7 @@ describe('release verification wiring', () => {
   it('routes tell publication concurrency through the heavy integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
     expect(selectNpmTestRuns([testFile])).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', testFile] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', testFile] },
     ]);
   });
 
@@ -922,7 +922,7 @@ describe('release verification wiring', () => {
       npmArgs: [
         'run',
         script,
-        ...(script === 'test:unit:parallel' ? ['--ignore-scripts'] : []),
+        ...(['test:unit:parallel', 'test:it:heavy:parallel'].includes(script) ? ['--ignore-scripts'] : []),
         '--',
         normalized,
       ],

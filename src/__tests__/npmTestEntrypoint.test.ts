@@ -207,6 +207,7 @@ describe('npm test execution', () => {
       [
         'run',
         'test:it:heavy:parallel',
+        '--ignore-scripts',
         '--',
         '--reporter',
         'verbose',
@@ -624,6 +625,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: [
           'run',
           'test:it:heavy:parallel',
+          '--ignore-scripts',
           '--',
           'src/__tests__/engine-happy-path.test.ts',
         ],
@@ -675,7 +677,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/task.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -683,7 +685,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/task-exceed-service.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -691,7 +693,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/it-task-restart-point.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -699,7 +701,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/saveTaskFile.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -720,7 +722,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', integrationTarget],
       },
     ]);
   });
@@ -730,7 +732,7 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args],
       },
     ]);
   });
@@ -745,7 +747,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -760,7 +762,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -775,7 +777,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -790,7 +792,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -800,7 +802,7 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--changed=true', args[1]],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--changed=true', args[1]],
       },
     ]);
   });
@@ -815,7 +817,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--silent=true', '--api=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--silent=true', '--api=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--silent=true', '--api=true', integrationTarget],
       },
     ]);
   });
@@ -830,7 +832,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--inspect=true', '--inspectBrk=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
       },
     ]);
   });
