@@ -61,7 +61,7 @@ function createDeepSeekFixture(): {
       dependencies: {},
       bundleDependencies: [],
       devDependencies: {},
-      files: ['managed/deepseek-harness/'],
+      files: ['managed/*/package.json', 'managed/*/package-lock.json'],
     },
     rootLock: {
       packages: {

@@ -210,7 +210,8 @@
   },
   "files": [
     "dist/",
-    "managed/",
+    "managed/*/package.json",
+    "managed/*/package-lock.json",
     "bin/",
     "builtins/",
     "docs/assets/takt-logo-dark.svg",

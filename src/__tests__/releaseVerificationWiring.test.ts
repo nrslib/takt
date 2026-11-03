@@ -445,7 +445,10 @@ describe('release verification wiring', () => {
     expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
     expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
     expect(manifest.devDependencies['@deepseek-ai/dsh']).toBeUndefined();
-    expect(manifest.files).toContain('managed/');
+    expect(manifest.files).toEqual(expect.arrayContaining([
+      'managed/*/package.json',
+      'managed/*/package-lock.json',
+    ]));
     expect(manifest.scripts.prepack).toBeUndefined();
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
     expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs --pack')).toBe(true);

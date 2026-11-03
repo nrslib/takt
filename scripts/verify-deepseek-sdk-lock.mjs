@@ -8,7 +8,6 @@ import process from 'node:process';
 import { satisfies } from 'semver';
 
 const sdkVersion = '0.2.1-rc.5';
-const managedBase = 'managed/deepseek-harness/';
 
 /** Resolve a peer at the declaring package's placement level, then at ancestor levels. */
 function resolvePeerEntry(packages, packagePath, peerName) {
@@ -36,7 +35,7 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
     || hasDeepSeekPackage(rootLock.packages?.['']?.dependencies)
     || hasDeepSeekPackage(rootLock.packages?.['']?.devDependencies)
     || Object.keys(rootLock.packages ?? {}).some((path) => path.includes('node_modules/@deepseek-ai/'))
-    || !(root.files.includes(managedBase) || root.files.includes('managed/'))) {
+    || !['package.json', 'package-lock.json'].every((name) => root.files.includes(`managed/*/${name}`))) {
     throw new Error('The TAKT package must ship the managed assets without root DeepSeek dependencies');
   }
   for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-sdk-client']) {

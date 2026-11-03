@@ -419,7 +419,9 @@ describe('manager goal execution tools through MCP', () => {
     const originalArgv = process.argv;
     const reader = new Client({ name: 'public-goal-execution-test', version: '1' });
     const [a, b] = InMemoryTransport.createLinkedPair();
-    stdioTransport.mockReturnValueOnce(b);
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() {
+      return b;
+    });
     try {
       process.argv = [...originalArgv.slice(0, 2), '--tool-set', 'manager', '--enable-goal-execution-tools'];
       await connectTaktMcpServerToStdio();

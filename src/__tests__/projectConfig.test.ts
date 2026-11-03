@@ -47,6 +47,7 @@ describe('projectConfig', () => {
       rmSync(testDir, { recursive: true, force: true });
     }
     restoreTaktEnv(taktEnvSnapshot);
+    vi.restoreAllMocks();
   });
 
   describe('assistant init files', () => {

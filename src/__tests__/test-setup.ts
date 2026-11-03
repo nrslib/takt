@@ -1,8 +1,11 @@
+import { Console } from 'node:console';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
+
+globalThis.console.Console = Console;
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
