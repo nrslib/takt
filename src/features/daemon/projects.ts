@@ -1,56 +1,103 @@
-import { realpath, stat } from 'node:fs/promises';
-import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
-import { readWorkspaceRegistry } from '../../infra/config/global/workspaceRegistry.js';
-import { GoalStore } from '../../infra/goals/store.js';
-import { readManagerEvents } from '../../infra/goals/events.js';
-import { TaskStore } from '../../infra/task/store.js';
-import { createLogger } from '../../shared/utils/debug.js';
+import { createHash } from 'node:crypto';
+import { access, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import { z } from 'zod/v4';
 import { getErrorMessage } from '../../shared/utils/error.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
+import { listWatchEntries, readSmallJson, MAX_WATCH_ENTRIES } from './watchers/files.js';
+import { readWatchGoals, readWatchTasks } from './watchers/state.js';
 
-const log = createLogger('daemon');
+const RegistrationSchema = z.object({
+  version: z.literal(2), locationId: z.string().regex(/^[a-f0-9]{64}$/u), stateId: z.uuid(),
+  canonicalDirectory: z.string().refine(isAbsolute), fingerprint: z.object({ dev: z.number().int(), ino: z.number().int() }),
+  managerUsed: z.boolean().optional(),
+});
+const WorkspaceSchema = z.object({
+  id: z.uuid(), name: z.string().trim().min(1), repositoryDirectories: z.array(z.string().refine(isAbsolute)).max(MAX_WATCH_ENTRIES),
+});
 
-export async function listDaemonProjects(globalConfigDirectory: string): Promise<readonly string[]> {
-  const registry = await readProjectRegistry(globalConfigDirectory);
-  for (const warning of registry.warnings) log.warn('Invalid project registration', { warning });
-  const directories = new Set(registry.projects
-    .filter((project) => project.managerUsed === true && project.available)
-    .map((project) => project.canonicalDirectory));
-  for (const workspace of await readWorkspaceRegistry(globalConfigDirectory)) {
-    for (const directory of workspace.repositoryDirectories) {
-      try {
-        const canonical = await realpath(directory);
-        if (!(await stat(canonical)).isDirectory()) throw new Error(`Not a project directory: ${canonical}`);
-        const registered = registry.projects.find((project) => project.canonicalDirectory === canonical);
-        if (registered !== undefined && !registered.available) {
-          log.warn('Workspace project registration is unavailable', { directory });
-          continue;
-        }
-        directories.add(canonical);
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES'))) throw error;
-        log.warn('Workspace project is unavailable', { directory, error: sanitizeSensitiveText(getErrorMessage(error)) });
+export interface DaemonProjectRoute {
+  repositoryDirectory: string;
+  workspaceId: string | null;
+}
+
+function projectLocation(directory: string): string {
+  return createHash('sha256').update(directory).digest('hex');
+}
+
+function reportProjectReadError(error: unknown): void {
+  process.stderr.write(`Cannot read daemon project state: ${sanitizeSensitiveText(getErrorMessage(error))}\n`);
+}
+
+export async function readDaemonProjectRoutes(globalConfigDirectory: string,
+  onReadError: (error: unknown) => void = reportProjectReadError): Promise<readonly DaemonProjectRoute[]> {
+  const registrations = new Map<string, { available: boolean; managerUsed: boolean }>();
+  const projectsDirectory = join(globalConfigDirectory, 'projects');
+  for (const entry of await listWatchEntries(projectsDirectory)) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      const project = RegistrationSchema.parse(await readSmallJson(join(projectsDirectory, entry.name)));
+      if (`${project.locationId}.json` !== entry.name || projectLocation(project.canonicalDirectory) !== project.locationId) {
+        throw new Error('Project registration identity differs from its filename');
       }
+      let available = false;
+      try {
+        const directory = await realpath(project.canonicalDirectory);
+        await access(directory, constants.R_OK | constants.X_OK);
+        const info = await stat(directory);
+        available = directory === project.canonicalDirectory && info.isDirectory()
+          && info.dev === project.fingerprint.dev && info.ino === project.fingerprint.ino;
+      } catch (error) { onReadError(error); }
+      registrations.set(project.canonicalDirectory, { available, managerUsed: project.managerUsed === true });
+    } catch (error) { onReadError(error); }
+  }
+  const routes = new Map<string, DaemonProjectRoute>();
+  for (const [directory, project] of registrations) {
+    if (project.available && project.managerUsed) routes.set(directory, { repositoryDirectory: directory, workspaceId: null });
+  }
+  const workspacesDirectory = join(globalConfigDirectory, 'workspaces');
+  for (const entry of await listWatchEntries(workspacesDirectory)) {
+    if (!entry.isDirectory() || !z.uuid().safeParse(entry.name).success) continue;
+    const workspace = WorkspaceSchema.parse(await readSmallJson(join(workspacesDirectory, entry.name, 'workspace.json')));
+    if (workspace.id !== entry.name) throw new Error('Workspace ID differs from its directory');
+    for (const candidate of workspace.repositoryDirectories) {
+      let directory;
+      try {
+        directory = await realpath(candidate);
+        await access(directory, constants.R_OK | constants.X_OK);
+        if (!(await stat(directory)).isDirectory()) throw new Error('Workspace project is not a directory');
+      } catch (error) { onReadError(error); continue; }
+      if (registrations.get(directory)?.available === false) continue;
+      const assigned = routes.get(directory);
+      if (assigned !== undefined && assigned.workspaceId !== null && assigned.workspaceId !== workspace.id) {
+        throw new Error('Repository is assigned to multiple workspaces');
+      }
+      routes.set(directory, { repositoryDirectory: directory, workspaceId: workspace.id });
+      if (routes.size > MAX_WATCH_ENTRIES) throw new Error('Daemon project count exceeds the watch limit');
     }
   }
-  return [...directories].sort();
+  return [...routes.values()].sort((left, right) => left.repositoryDirectory.localeCompare(right.repositoryDirectory));
+}
+
+export async function listDaemonProjects(globalConfigDirectory: string): Promise<readonly string[]> {
+  return (await readDaemonProjectRoutes(globalConfigDirectory)).map((route) => route.repositoryDirectory);
 }
 
 export async function hasDaemonProjectWork(cwd: string, onReadError?: (error: unknown) => void): Promise<boolean> {
-  const { goals, errors } = await new GoalStore(cwd).list();
-  for (const failure of errors) {
-    log.error('Cannot read goal', { goalId: failure.goalId, error: sanitizeSensitiveText(failure.error.message) });
-    onReadError?.(failure.error);
-  }
-  const hasGoalOrEventWork = goals.some((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted')
-    || readManagerEvents(cwd).length > 0;
+  const report = onReadError ?? reportProjectReadError;
+  const goals = await readWatchGoals(cwd, report);
+  const hasGoalWork = goals.some((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted');
+  const directory = await realpath(cwd);
+  const configDirectory = process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
+  const inbox = join(configDirectory, 'manager-inbox', projectLocation(directory));
+  const hasEventWork = (await listWatchEntries(inbox)).some((entry) => entry.isFile() && entry.name.endsWith('.json'));
   try {
-    const hasTaskWork = new TaskStore(cwd).read().tasks.some((task) => task.status === 'pending' || task.status === 'running');
-    return hasGoalOrEventWork || hasTaskWork;
+    const tasks = await readWatchTasks(cwd);
+    return hasGoalWork || hasEventWork || tasks.some((task) => task.status === 'pending' || task.status === 'running');
   } catch (error) {
-    log.error('Cannot read daemon project tasks', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
-    onReadError?.(error);
-    // Unreadable tasks cannot establish work; readable goals and events still can.
-    return hasGoalOrEventWork;
+    report(error);
+    return hasGoalWork || hasEventWork;
   }
 }
