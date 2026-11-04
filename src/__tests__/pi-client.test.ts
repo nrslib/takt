@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 type MockResolvedPaths = {
-  [Kind in keyof ResolvedPaths]: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
-};
+  [Kind in 'extensions' | 'skills' | 'prompts' | 'themes']: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
+} & Pick<ResolvedPaths, 'installFailures'>;
 
 const TRUSTED_EXTENSION_PATH = '/private/tmp/takt-trusted-extension.ts';
 const AMBIENT_EXTENSION_PATH = '/private/tmp/takt-ambient-extension.ts';
@@ -1102,10 +1103,82 @@ export default function registerLifecycleTool(pi) {
     expect(mocks.packageManager.resolveExtensionSources).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('rejects install failures with resources present: %s and tries the next scope', async (hasResources) => {
+    mocks.resetTransient();
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-install-test-'));
+    const project = path.join(root, '.pi', 'npm', 'node_modules', 'example-extension');
+    mkdirSync(project, { recursive: true });
+    const user = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
+    const rejected = path.join(tmpdir(), 'rejected-extension.ts');
+    const accepted = path.join(tmpdir(), 'accepted-extension.ts');
+    mocks.projectPackageLookup.getInstalledPath.mockReturnValue(project);
+    mocks.packageManager.getInstalledPath.mockReturnValue(user);
+    mocks.packageManager.resolveExtensionSources
+      .mockResolvedValueOnce({
+        extensions: hasResources ? [{ enabled: true, path: rejected }] : [], skills: [], prompts: [], themes: [],
+        installFailures: [{ source: project, scope: 'temporary', message: 'install failed at /private/tmp/install-secret' }],
+      })
+      .mockResolvedValueOnce({ extensions: [{ enabled: true, path: accepted }], skills: [], prompts: [], themes: [], installFailures: [] });
+
+    const logSpy = vi.spyOn(DebugLogger.prototype, 'writeLog');
+    try {
+      const response = await callPi('worker', 'use the extension', {
+        ...sessionOptions(`pi-install-fallback-${hasResources}`),
+        cwd: root,
+        providerOptions: { extensions: ['npm:example-extension'] },
+      });
+
+      expect(response.status).toBe('done');
+      expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(2, [user], { temporary: true });
+      expect(mocks.getLoaderOptions()).toMatchObject({ additionalExtensionPaths: [accepted] });
+      expect(logSpy).toHaveBeenCalledWith('DEBUG', 'pi', 'Pi extension candidate failed', {
+        source: 'npm:example-extension', scope: 'project', reason: 'install failed at [path]',
+      });
+    } finally {
+      logSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports every sanitized install failure from all scopes', async () => {
+    mocks.resetTransient();
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-install-test-'));
+    const project = path.join(root, '.pi', 'npm', 'node_modules', 'example-extension');
+    mkdirSync(project, { recursive: true });
+    mocks.projectPackageLookup.getInstalledPath.mockReturnValue(project);
+    mocks.packageManager.getInstalledPath.mockReturnValue(path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension'));
+    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
+    mocks.packageManager.resolveExtensionSources
+      .mockResolvedValueOnce({ ...empty, installFailures: [
+        { source: 'one', scope: 'temporary', message: 'EACCES /private/tmp/project-secret' },
+        { source: 'two', scope: 'temporary', message: 'another project failure' },
+      ] })
+      .mockResolvedValueOnce({ ...empty, installFailures: [{ source: 'user', scope: 'temporary', message: 'user install failed' }] })
+      .mockResolvedValueOnce({ ...empty, installFailures: [{ source: 'temporary', scope: 'temporary', message: 'temporary install failed' }] });
+
+    try {
+      const response = await callPi('worker', 'use the extension', {
+        ...sessionOptions('pi-install-all-failed'),
+        cwd: root,
+        providerOptions: { extensions: ['npm:example-extension'] },
+      });
+
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('permission denied');
+      expect(response.error).toContain('another project failure');
+      expect(response.error).toContain('user: user install failed');
+      expect(response.error).toContain('temporary: temporary install failed');
+      expect(response.error).not.toContain('/private/tmp/project-secret');
+      expect(response.error).not.toContain('no enabled resources');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to temporary when an existing user-scope npm extension has no resources', async () => {
     mocks.resetTransient();
     const userInstallPath = path.join(tmpdir(), 'pi-agent-test', 'npm', 'node_modules', 'example-extension');
-    const empty = { extensions: [], skills: [], prompts: [], themes: [] };
+    const empty = { extensions: [], skills: [], prompts: [], themes: [], installFailures: [] };
     const temporary = {
       extensions: [{ enabled: true, path: path.join(tmpdir(), 'temporary-extension.ts') }],
       skills: [],
@@ -1119,12 +1192,21 @@ export default function registerLifecycleTool(pi) {
       .mockResolvedValueOnce(empty)
       .mockResolvedValueOnce(temporary);
 
-    const response = await callPi('worker', 'use the extension', {
-      ...sessionOptions('pi-sdk-user-empty-fallback'),
-      providerOptions: {
-        extensions: ['npm:example-extension'],
-      },
-    });
+    const logSpy = vi.spyOn(DebugLogger.prototype, 'writeLog');
+    let response;
+    try {
+      response = await callPi('worker', 'use the extension', {
+        ...sessionOptions('pi-sdk-user-empty-fallback'),
+        providerOptions: {
+          extensions: ['npm:example-extension'],
+        },
+      });
+      expect(logSpy).toHaveBeenCalledWith('DEBUG', 'pi', 'Pi extension candidate failed', {
+        source: 'npm:example-extension', scope: 'user', reason: 'no enabled resources',
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
 
     expect(response.status).toBe('done');
     expect(mocks.packageManager.resolveExtensionSources).toHaveBeenNthCalledWith(

@@ -364,7 +364,7 @@ export default function register(pi) {
     expect(response.status).toBe('done');
     expect(response.content).toBe('selected tool executed');
     expect(executions()).toEqual(['write']);
-    expect(sessions[0]!.getActiveToolNames()).toEqual(['orchestrator', 'write']);
+    expect(sessions[0]!.getActiveToolNames().sort()).toEqual(['orchestrator', 'write']);
   });
 
   it.each([
