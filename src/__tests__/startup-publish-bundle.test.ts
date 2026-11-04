@@ -70,14 +70,14 @@ function createDeepSeekFixture(): {
     },
     managed: {
       dependencies: managedDependencies,
-      overrides: { fflate: '0.8.3', '@earendil-works/pi-ai': '1.4.0' },
+      overrides: { fflate: '0.8.3', '@earendil-works/pi-ai': '1.5.0' },
     },
     lock: {
       packages: {
         '': { dependencies: { ...managedDependencies } },
         ...managedLockPackages,
         'node_modules/fflate': { version: '0.8.3' },
-        'node_modules/@earendil-works/pi-ai': { version: '1.4.0' },
+        'node_modules/@earendil-works/pi-ai': { version: '1.5.0' },
         'node_modules/@deepseek-ai/dsh-sdk-client': {
           version: SDK_VERSION,
           peerDependencies: {
@@ -311,12 +311,12 @@ describe('managed DeepSeek npm dependency graph', () => {
 
   it.each([
     ['manifest override', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
-      fixture.managed.overrides!['@earendil-works/pi-ai'] = '1.5.0';
+      fixture.managed.overrides!['@earendil-works/pi-ai'] = '1.4.0';
     }],
     ['managed lock resolution', (fixture: ReturnType<typeof createDeepSeekFixture>) => {
-      fixture.lock.packages['node_modules/@earendil-works/pi-ai']!.version = '1.5.0';
+      fixture.lock.packages['node_modules/@earendil-works/pi-ai']!.version = '1.4.0';
     }],
-  ])('rejects a transitive Pi AI 1.5.0 %s', (_description, makeInvalid) => {
+  ])('rejects a transitive Pi AI 1.4.0 %s', (_description, makeInvalid) => {
     const fixture = createDeepSeekFixture();
     makeInvalid(fixture);
 
@@ -326,7 +326,7 @@ describe('managed DeepSeek npm dependency graph', () => {
       fixture.managed,
       fixture.lock,
       fixture.constants,
-    )).toThrow('transitive Pi AI dependency to 1.4.0');
+    )).toThrow('transitive Pi AI dependency to 1.5.0');
   });
 
   it.each([

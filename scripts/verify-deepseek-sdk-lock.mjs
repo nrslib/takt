@@ -60,9 +60,9 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
     || lock.packages?.['node_modules/fflate']?.version !== '0.8.3') {
     throw new Error('The managed npm project must resolve fflate 0.8.3');
   }
-  if (managed.overrides?.['@earendil-works/pi-ai'] !== '1.4.0'
-    || lock.packages?.['node_modules/@earendil-works/pi-ai']?.version !== '1.4.0') {
-    throw new Error('The managed npm project must resolve the transitive Pi AI dependency to 1.4.0');
+  if (managed.overrides?.['@earendil-works/pi-ai'] !== '1.5.0'
+    || lock.packages?.['node_modules/@earendil-works/pi-ai']?.version !== '1.5.0') {
+    throw new Error('The managed npm project must resolve the transitive Pi AI dependency to 1.5.0');
   }
   if (managed.dependencies['@deepseek-ai/libreoffice-kit'] !== '0.1.5') {
     throw new Error('The managed npm project must pin libreoffice-kit 0.1.5');
