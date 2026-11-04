@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTaktAcpAgentApp } from '../app/acp/index.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/acp-source-stdio-entrypoint.ts';
 const CHILD_TERMINATION_TIMEOUT_MS = 1_000;
@@ -46,8 +47,8 @@ steps:
 
 function spawnSourceStdioEntrypoint(scenarioPath: string): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
-    'node_modules/.bin/vite-node',
-    '--script',
+    '--import',
+    TSX_ESM_LOADER,
     SOURCE_STDIO_ENTRYPOINT_RUNNER,
   ], {
     cwd: process.cwd(),

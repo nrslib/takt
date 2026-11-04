@@ -85,16 +85,20 @@ vi.mock('../shared/context.js', () => ({
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
-  TaskPrefixWriter: vi.fn().mockImplementation(() => ({
-    flush: vi.fn(),
-  })),
+  TaskPrefixWriter: vi.fn().mockImplementation(function () {
+    return {
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -136,11 +140,15 @@ vi.mock('../features/analytics/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/analyticsEmitter.js', () => ({
-  AnalyticsEmitter: vi.fn().mockImplementation(() => ({})),
+  AnalyticsEmitter: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 vi.mock('../agents/structured-caller.js', () => ({
-  ProviderNeutralStructuredCaller: vi.fn().mockImplementation(() => ({})),
+  ProviderNeutralStructuredCaller: vi.fn().mockImplementation(function () {
+    return {};
+  }),
 }));
 
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
@@ -149,9 +157,11 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
-  SessionLogger: vi.fn().mockImplementation(() => ({
-    writeInteractiveMetadata: vi.fn(),
-  })),
+  SessionLogger: vi.fn().mockImplementation(function () {
+    return {
+      writeInteractiveMetadata: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../core/runtime/runtime-environment.js', () => ({

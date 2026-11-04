@@ -97,10 +97,12 @@ vi.mock('../shared/ui/index.js', () => ({
   warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/tty.js', async (importOriginal) => ({
@@ -722,8 +724,9 @@ describe('interactiveMode', () => {
     const displayMock = vi.mocked(StreamDisplay);
     const originalDisplayImplementation = displayMock.getMockImplementation()!;
     try {
-      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
-        new TerminalStreamDisplay(agentName, quiet, progressInfo));
+      displayMock.mockImplementation(function (agentName, quiet, progressInfo) {
+        return new TerminalStreamDisplay(agentName, quiet, progressInfo);
+      });
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, { provider: providerType });
 
@@ -789,8 +792,9 @@ describe('interactiveMode', () => {
     const displayMock = vi.mocked(StreamDisplay);
     const originalDisplayImplementation = displayMock.getMockImplementation()!;
     try {
-      displayMock.mockImplementation((agentName, quiet, progressInfo) =>
-        new TerminalStreamDisplay(agentName, quiet, progressInfo));
+      displayMock.mockImplementation(function (agentName, quiet, progressInfo) {
+        return new TerminalStreamDisplay(agentName, quiet, progressInfo);
+      });
 
       const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
         provider: providerType,

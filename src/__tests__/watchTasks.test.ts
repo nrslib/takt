@@ -16,12 +16,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../infra/task/index.js', () => ({
-  TaskRunner: vi.fn().mockImplementation(() => ({
-    failInterruptedRunningTasks: mocks.failInterruptedRunningTasks,
-    listTaskStateItems: vi.fn(() => []),
-    getTasksFilePath: mocks.getTasksFilePath,
-    claimNextTasks: mocks.claimNextTasks,
-  })),
+  TaskRunner: vi.fn().mockImplementation(function () {
+    return {
+      failInterruptedRunningTasks: mocks.failInterruptedRunningTasks,
+      listTaskStateItems: vi.fn(() => []),
+      getTasksFilePath: mocks.getTasksFilePath,
+      claimNextTasks: mocks.claimNextTasks,
+    };
+  }),
 }));
 
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({

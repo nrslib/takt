@@ -30,6 +30,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.clearAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   for (const tempDir of tempDirs.splice(0)) {
@@ -439,7 +440,7 @@ it('preserves both owners when two abortable creators select the same candidate 
   const runCommand = cloneExec.runGitCommandAbortable;
   const arrivals: string[] = [];
   const published = new Map<string, string>();
-  const link = fs.linkSync;
+  const { linkSync: link } = await vi.importActual<typeof import('node:fs')>('node:fs');
   let publicationConflicts = 0;
   vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
     try {

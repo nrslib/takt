@@ -1265,7 +1265,7 @@ steps:
     const createNamespaceRunner = (
       stepName: string,
       childWorkflowName: string,
-      createEngine: ReturnType<typeof vi.fn>,
+      createEngine: ConstructorParameters<typeof WorkflowCallRunner>[0]['createEngine'],
     ) => {
       const parentConfig = createParentWorkflow(tmpDir, {
         name: `parent-${stepName}`,

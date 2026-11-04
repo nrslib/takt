@@ -8,13 +8,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TaskStore } from '../infra/task/store.js';
 import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
   'fixtures',
   'task-store-concurrent-add.ts',
 );
-const viteNodePath = join(process.cwd(), 'node_modules', 'vite-node', 'vite-node.mjs');
 
 function runWorker(
   projectDir: string,
@@ -24,7 +24,8 @@ function runWorker(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
-      viteNodePath,
+      '--import',
+      TSX_ESM_LOADER,
       fixturePath,
       projectDir,
       String(workerId),
@@ -65,7 +66,8 @@ async function waitUntilAllWorkersReady(readyFiles: string[]): Promise<void> {
 
 function runDeletionRaceWorker(projectDir: string, role: 'delete' | 'claim', taskName: string) {
   const child = spawn(process.execPath, [
-    viteNodePath,
+    '--import',
+    TSX_ESM_LOADER,
     join(dirname(fixturePath), 'task-delete-claim.ts'),
     projectDir, role, taskName,
   ], {

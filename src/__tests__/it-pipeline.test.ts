@@ -67,10 +67,12 @@ vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   status: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: () => vi.fn(),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: () => vi.fn(),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => {

@@ -2,18 +2,16 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadDeepSeekTestModules } from './helpers/deepseek-managed-sdk.js';
+const managedTestModules = await loadDeepSeekTestModules();
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => ({
-      directory: process.cwd(),
-      sdk,
-      llm,
+      directory: managedTestModules.directory,
+      sdk: testSdk,
+      llm: managedTestModules.llm,
     }),
   };
 });
@@ -77,59 +75,54 @@ vi.mock('../infra/deepseek-harness/plugin-resolution.js', async (importOriginal)
   };
 });
 
-vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
-  return {
-    ...actual,
-    DeepSeekHarness: class {
-      private readonly id = runtimeBehavior.uniqueSessions ? `cache-session-${++runtimeBehavior.instanceCount}` : 'error-mapping-session';
-      /** Capture the mocked SDK environment so cleanup tests can publish the configured exit receipt. */
-      constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {
-        const receipt = options.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
-        if (receipt !== undefined) runtimeBehavior.cleanupReceipts.push(receipt);
-      }
+const DeepSeekHarness = class {
+  private readonly id = runtimeBehavior.uniqueSessions ? `cache-session-${++runtimeBehavior.instanceCount}` : 'error-mapping-session';
+  /** Capture the mocked SDK environment so cleanup tests can publish the configured exit receipt. */
+  constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {
+    const receipt = options.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+    if (receipt !== undefined) runtimeBehavior.cleanupReceipts.push(receipt);
+  }
 
-      /** Count SDK startup calls without creating a runtime process. */
-      async start(): Promise<void> {
-        runtimeBehavior.startCount += 1;
-      }
+  /** Count SDK startup calls without creating a runtime process. */
+  async start(): Promise<void> {
+    runtimeBehavior.startCount += 1;
+  }
 
-      /** Simulate SDK events or a controlled rejection, allowing tests to gate execution and inspect failure mapping. */
-      async run(
-        _prompt: string,
-        options?: { onNotification?: (notification: unknown) => void },
-      ): Promise<{ sessionId: string; finalResponse: string; finishReason: 'completed' }> {
-        runtimeBehavior.runCount += 1;
-        await runtimeBehavior.runGate?.(_prompt);
-        if (runtimeBehavior.runError !== undefined) {
-          throw runtimeBehavior.runError;
-        }
-        for (const notification of runtimeBehavior.notifications) {
-          options?.onNotification?.(notification);
-        }
-        if (runtimeBehavior.uniqueSessions) {
-          options?.onNotification?.({ method: 'session.event', params: { sessionId: this.id, event: {
-            type: 'turn/end', data: { reason: { kind: 'completed' } },
-          } } });
-        }
-        return { sessionId: this.id, finalResponse: 'ok', finishReason: 'completed' };
-      }
+  /** Simulate SDK events or a controlled rejection, allowing tests to gate execution and inspect failure mapping. */
+  async run(
+    _prompt: string,
+    options?: { onNotification?: (notification: unknown) => void },
+  ): Promise<{ sessionId: string; finalResponse: string; finishReason: 'completed' }> {
+    runtimeBehavior.runCount += 1;
+    await runtimeBehavior.runGate?.(_prompt);
+    if (runtimeBehavior.runError !== undefined) {
+      throw runtimeBehavior.runError;
+    }
+    for (const notification of runtimeBehavior.notifications) {
+      options?.onNotification?.(notification);
+    }
+    if (runtimeBehavior.uniqueSessions) {
+      options?.onNotification?.({ method: 'session.event', params: { sessionId: this.id, event: {
+        type: 'turn/end', data: { reason: { kind: 'completed' } },
+      } } });
+    }
+    return { sessionId: this.id, finalResponse: 'ok', finishReason: 'completed' };
+  }
 
-      /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
-      async close(): Promise<void> {
-        runtimeBehavior.closeCount += 1;
-        await runtimeBehavior.onClose?.();
-        if (runtimeBehavior.confirmedExit && this.options.env?.TAKT_DSH_CLEANUP_CONFIRMATION) {
-          await mkdir(path.dirname(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION), { recursive: true });
-          await writeFile(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION, 'confirmed\n');
-        }
-        if (runtimeBehavior.closeError !== undefined) {
-          throw runtimeBehavior.closeError;
-        }
-      }
-    },
-  };
-});
+  /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
+  async close(): Promise<void> {
+    runtimeBehavior.closeCount += 1;
+    await runtimeBehavior.onClose?.();
+    if (runtimeBehavior.confirmedExit && this.options.env?.TAKT_DSH_CLEANUP_CONFIRMATION) {
+      await mkdir(path.dirname(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION), { recursive: true });
+      await writeFile(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION, 'confirmed\n');
+    }
+    if (runtimeBehavior.closeError !== undefined) {
+      throw runtimeBehavior.closeError;
+    }
+  }
+};
+const testSdk = { ...managedTestModules.sdk, DeepSeekHarness };
 
 vi.mock('../infra/deepseek-harness/credential-patch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/deepseek-harness/credential-patch.js')>();
@@ -167,13 +160,12 @@ vi.mock('../infra/deepseek-harness/runtime-state.js', async (importOriginal) => 
   };
 });
 
-import {
-  DeepSeekHarness,
+const {
   JsonRpcResponseError,
   RequestTimeoutError,
   SdkProtocolError,
   TransportClosedError,
-} from '@deepseek-ai/dsh-sdk-client';
+} = managedTestModules.sdk;
 import { callDeepSeekHarness, closeDeepSeekHarnessProcesses } from '../infra/deepseek-harness/index.js';
 import {
   DeepSeekRuntimeCreationBlockedError,

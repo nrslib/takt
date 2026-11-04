@@ -369,13 +369,18 @@ describe('release verification wiring', () => {
 
   it('should connect each public test entrypoint to its intended runner', () => {
     expect(manifest.scripts).toMatchObject({
-      test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
+      test: 'npm run test:type-contracts && npm run test:deepseek-harness:types && npm run test:types && node scripts/run-npm-test.mjs',
+      'test:deepseek-harness:types': 'npm ci --prefix managed/deepseek-harness --ignore-scripts && tsc -p scripts/tsconfig.deepseek-sdk.json',
+      'pretest:unit': 'npm run test:deepseek-harness:types',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
+      'pretest:unit:parallel': 'npm run test:deepseek-harness:types',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:it': 'npm run test:it:light',
+      'pretest:it': 'npm run patch:dependencies && npm run test:deepseek-harness:types',
       'test:it:light': 'vitest run --config vitest.config.it.parallel.ts',
       'test:it:parallel': 'npm run test:it:light',
       'test:it:heavy': 'npm run test:it:heavy:parallel && npm run test:it:heavy:serial',
+      'pretest:it:heavy:parallel': 'npm run test:deepseek-harness:types',
       'test:it:heavy:parallel': 'vitest run --config vitest.config.it.heavy.parallel.ts',
       'test:it:heavy:serial': 'node scripts/run-it-serial-groups.mjs',
       'test:it:heavy:serial:git': 'vitest run --config vitest.config.it.serial.git.ts',
@@ -438,11 +443,16 @@ describe('release verification wiring', () => {
     expect(manifest.scripts.prepare).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
-    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.1-rc.3');
-    expect(manifest.files).toContain('managed/');
+    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
+    expect(manifest.devDependencies['@deepseek-ai/dsh']).toBeUndefined();
+    expect(manifest.files).toEqual(expect.arrayContaining([
+      'managed/*/package.json',
+      'managed/*/package-lock.json',
+    ]));
     expect(manifest.scripts.prepack).toBeUndefined();
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
     expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs --pack')).toBe(true);
+    expect(lintSteps.some((step) => step.run?.trim() === 'npm run test:deepseek-harness:types')).toBe(true);
     expect(lintSteps.some((step) => step.uses?.startsWith('astral-sh/setup-uv@') === true)).toBe(false);
     expect(lintSteps.some((step) => step.uses?.startsWith('actions/setup-python@') === true)).toBe(false);
     const result = spawnSync(
@@ -751,7 +761,7 @@ describe('release verification wiring', () => {
       expect(heavyParallelIntegrationTestFiles).toContain(testFile);
     }
     expect(selectNpmTestRuns(movedFiles)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...movedFiles] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...movedFiles] },
     ]);
   });
 
@@ -775,7 +785,7 @@ describe('release verification wiring', () => {
   it('routes tell publication concurrency through the heavy integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
     expect(selectNpmTestRuns([testFile])).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', testFile] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', testFile] },
     ]);
   });
 
@@ -912,7 +922,13 @@ describe('release verification wiring', () => {
     },
   ])('should route $target to $script', ({ target, script, normalized }) => {
     expect(selectNpmTestRuns([target])).toEqual([{
-      npmArgs: ['run', script, '--', normalized],
+      npmArgs: [
+        'run',
+        script,
+        ...(['test:unit:parallel', 'test:it:heavy:parallel'].includes(script) ? ['--ignore-scripts'] : []),
+        '--',
+        normalized,
+      ],
     }]);
   });
 });

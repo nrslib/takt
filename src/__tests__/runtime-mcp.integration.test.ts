@@ -8,6 +8,7 @@ import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/cons
 import { resolveRuntimeProviderFile } from '../infra/config/runtime-provider/loader.js';
 import { resolveInternalAgentMcpServers, resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { hasActiveMcpSection } from '../infra/config/runtime-provider/mode.js';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -270,9 +271,8 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [
-        'node_modules/.bin/vite-node',
-        '--config',
-        'src/__tests__/helpers/vite-node.config.ts',
+        '--import',
+        TSX_ESM_LOADER,
         fixtureRunner,
       ],
       cwd: process.cwd(),
@@ -363,9 +363,8 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         '    echo:',
         '      command: node',
         '      args:',
-        '        - node_modules/.bin/vite-node',
-        '        - --config',
-        '        - src/__tests__/helpers/vite-node.config.ts',
+        '        - --import',
+        `        - ${JSON.stringify(TSX_ESM_LOADER)}`,
         `        - ${fixtureRunner}`,
         '  defaults:',
         '    servers:',

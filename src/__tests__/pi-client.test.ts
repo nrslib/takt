@@ -154,7 +154,7 @@ const mocks = vi.hoisted(() => {
     }),
     modelRuntimeCreate: vi.fn(async () => modelRuntime),
     extensionRuntimeInvalidate: vi.fn(),
-    resourceLoader: vi.fn((options: unknown) => {
+    resourceLoader: vi.fn(function (options: unknown) {
       loaderOptions = options;
       const errors = extensionLoadErrorSequence.shift() ?? extensionLoadErrors;
       const additionalExtensionPaths = (
@@ -175,9 +175,9 @@ const mocks = vi.hoisted(() => {
       };
     }),
     createBashToolDefinition: vi.fn(() => ({ name: 'bash' })),
-    packageManagerConstructor: vi.fn(({ settingsManager }: { settingsManager: { projectTrusted?: boolean } }) => (
-      settingsManager.projectTrusted ? projectPackageLookup : packageManager
-    )),
+    packageManagerConstructor: vi.fn(function ({ settingsManager }: { settingsManager: { projectTrusted?: boolean } }) {
+      return settingsManager.projectTrusted ? projectPackageLookup : packageManager;
+    }),
     settingsManagerInMemory: vi.fn((_settings: unknown, options?: { projectTrusted?: boolean }) => ({
       projectTrusted: options?.projectTrusted,
     })),

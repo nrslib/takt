@@ -271,6 +271,7 @@
     "src/__tests__/helpers/controlledDaemon.ts",
     "src/__tests__/helpers/conversation-daemon.ts",
     "src/__tests__/helpers/daemon-turn.ts",
+    "src/__tests__/helpers/deepseek-managed-sdk.ts",
     "src/__tests__/helpers/engine-workflow-call-shared.ts",
     "src/__tests__/helpers/filesystem-root-alias.ts",
     "src/__tests__/helpers/goal-fixtures.ts",

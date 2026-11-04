@@ -1457,6 +1457,7 @@ process.exit(2);
   });
 
   it.each(['rule', 'fallback'].flatMap((route) => [true, false].map((accepted) => ({ route, accepted }))))('prepares the $route candidate from public configuration before step start (accepted=$accepted)', async ({ route, accepted }) => {
+    const emit = WorkflowEngine.prototype.emit;
     const { workflowPath, stepStarts } = await prepareTerminalManagedTask();
     if (route === 'fallback') {
       const installed = await runManagedCli(['install', 'codex']);
@@ -1498,7 +1499,6 @@ steps:
     const packageName = route === 'rule' ? '@openai/codex-sdk' : '@anthropic-ai/claude-agent-sdk';
     const firstCall = vi.fn().mockResolvedValue({ persona: 'worker', status: 'done', content: 'Completed', timestamp: new Date() });
     vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call: firstCall });
-    const emit = WorkflowEngine.prototype.emit;
     const observations: string[] = [];
     vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (this: WorkflowEngine, ...args) {
       if (args[0] === 'step:start') {
@@ -1804,7 +1804,7 @@ steps:
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const first = await getReadyDeepSeekHarnessPackageDirectory();
     expect((await loadManagedDeepSeekHarnessModules()).directory).toBe(first);
-    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.3');
+    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.5');
 
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
     await installDeepSeekHarness({ npmPath: fakeNpmPath });

@@ -5,5 +5,11 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-coding-agent": "1.5.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": {
+      "minimatch": "11.0.4",
+      "undici": "8.12.3"
+    }
   }
 }

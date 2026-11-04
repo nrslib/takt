@@ -29,9 +29,9 @@ vi.mock('node:child_process', () => ({
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   error: vi.fn(),
-  StreamDisplay: vi.fn(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-  })),
+  StreamDisplay: vi.fn(function () {
+    return { createHandler: vi.fn(() => vi.fn()) };
+  }),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({

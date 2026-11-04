@@ -105,8 +105,8 @@ ja:
         command: ps -p 4182 -o pid=,args=
       result: |-
         exit code: 1
-        stdout: 
-        stderr: 
+        stdout:
+        stderr:
     - tool: Read
       arguments:
         file_path: /tmp/inventory-check.log
@@ -225,8 +225,8 @@ en:
         command: ps -p 4182 -o pid=,args=
       result: |-
         exit code: 1
-        stdout: 
-        stderr: 
+        stdout:
+        stderr:
     - tool: Read
       arguments:
         file_path: /tmp/inventory-check.log

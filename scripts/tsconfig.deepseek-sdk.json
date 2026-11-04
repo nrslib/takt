@@ -1,0 +1,25 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "noEmit": true,
+    "rootDir": "..",
+    "skipLibCheck": false,
+    "paths": {
+      "#deepseek-brand": [
+        "managed/deepseek-harness/node_modules/@deepseek-ai/dsh-brand/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-sdk-client": [
+        "managed/deepseek-harness/node_modules/@deepseek-ai/dsh-sdk-client/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-llm": [
+        "managed/deepseek-harness/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "deepseek-sdk-type-contract.ts",
+    "../src/infra/deepseek-harness/sdk-types.ts"
+  ],
+  "exclude": []
+}

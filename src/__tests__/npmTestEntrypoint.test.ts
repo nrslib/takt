@@ -105,7 +105,7 @@ describe('npm test execution', () => {
     const events: string[] = [];
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: readonly string[]) => {
-      const shard = npmArgs[3]!;
+      const shard = npmArgs[4]!;
       events.push(`start:${shard}`);
       await Promise.resolve();
       events.push(`finish:${shard}`);
@@ -142,7 +142,7 @@ describe('npm test execution', () => {
     const executedShards: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: readonly string[]) => {
-      const shard = npmArgs[3]!;
+      const shard = npmArgs[4]!;
       executedShards.push(shard);
       const codeByShard = new Map([
         ['--shard=1/8', 7],
@@ -164,8 +164,8 @@ describe('npm test execution', () => {
       '--shard=8/8',
     ]);
     expect(error.mock.calls).toEqual([
-      ['[takt] npm run test:unit:parallel -- --shard=1/8 --maxWorkers=1 failed with exit=7'],
-      ['[takt] npm run test:unit:parallel -- --shard=3/8 --maxWorkers=1 failed with exit=9'],
+      ['[takt] npm run test:unit:parallel --ignore-scripts -- --shard=1/8 --maxWorkers=1 failed with exit=7'],
+      ['[takt] npm run test:unit:parallel --ignore-scripts -- --shard=3/8 --maxWorkers=1 failed with exit=9'],
     ]);
     expect(code).toBe(7);
   });
@@ -198,6 +198,7 @@ describe('npm test execution', () => {
       [
         'run',
         'test:unit:parallel',
+        '--ignore-scripts',
         '--',
         '--reporter',
         'verbose',
@@ -206,6 +207,7 @@ describe('npm test execution', () => {
       [
         'run',
         'test:it:heavy:parallel',
+        '--ignore-scripts',
         '--',
         '--reporter',
         'verbose',
@@ -230,7 +232,7 @@ describe('npm test execution', () => {
     ]);
     expect(error.mock.calls).toEqual([
       [
-        '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/git-detect.test.ts failed with exit=7',
+        '[takt] npm run test:unit:parallel --ignore-scripts -- --reporter verbose src/__tests__/git-detect.test.ts failed with exit=7',
       ],
       [
         '[takt] npm run test:it:heavy:serial:git -- --reporter verbose src/__tests__/companion-diff-runtime.integration.test.ts failed with exit=9',
@@ -301,7 +303,7 @@ describe('npm test execution', () => {
 
   it('should return indexed runs with the nested run and result shape', async () => {
     const runs = [
-      { npmArgs: ['run', 'test:unit:parallel'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts'] },
       { npmArgs: ['run', 'test:it:heavy:serial:git'] },
     ];
     const run = vi.fn(async (_npmArgs: readonly string[]) => ({
@@ -550,33 +552,33 @@ describe('npm test entrypoint routing', () => {
     const runs = selectNpmTestRuns([]);
 
     expect(runs.length).toBeGreaterThan(0);
-    expect(runs.map(({ npmArgs }) => npmArgs[3])).toEqual(
+    expect(runs.map(({ npmArgs }) => npmArgs[4])).toEqual(
       runs.map((_, index) => `--shard=${index + 1}/${runs.length}`),
     );
   });
 
   it('should run the unit suite as single-worker shards when no test target is provided', () => {
     expect(selectNpmTestRuns([], FIXED_UNIT_SHARD_COUNT)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=5/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=6/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=7/8', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=8/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=1/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=2/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=3/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=4/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=5/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=6/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=7/8', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--shard=8/8', '--maxWorkers=1'] },
     ]);
   });
 
   it('should pass required-value options to the default unit suite when no target is provided', () => {
     expect(selectNpmTestRuns(['--reporter', 'verbose'])).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--reporter', 'verbose'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--reporter', 'verbose'] },
     ]);
   });
 
   it('should pass boolean options to the default unit suite when no target is provided', () => {
     expect(selectNpmTestRuns(['--silent'])).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--silent'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--silent'] },
     ]);
   });
 
@@ -586,6 +588,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: [
           'run',
           'test:unit:parallel',
+          '--ignore-scripts',
           '--',
           'src/__tests__/git-detect.test.ts',
         ],
@@ -610,7 +613,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/git-detect.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -622,6 +625,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: [
           'run',
           'test:it:heavy:parallel',
+          '--ignore-scripts',
           '--',
           'src/__tests__/engine-happy-path.test.ts',
         ],
@@ -673,7 +677,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/task.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -681,7 +685,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/task-exceed-service.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -689,7 +693,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/it-task-restart-point.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -697,7 +701,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/saveTaskFile.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -705,7 +709,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/option-resolution-order.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...args] },
     ]);
   });
 
@@ -715,10 +719,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns([unitTarget, integrationTarget])).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', integrationTarget],
       },
     ]);
   });
@@ -728,7 +732,7 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...args],
       },
     ]);
   });
@@ -740,10 +744,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -755,10 +759,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -770,10 +774,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -785,10 +789,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
@@ -798,7 +802,7 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--changed=true', args[1]],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--changed=true', args[1]],
       },
     ]);
   });
@@ -810,10 +814,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', '--silent=true', '--api=true', unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--silent=true', '--api=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--silent=true', '--api=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--silent=true', '--api=true', integrationTarget],
       },
     ]);
   });
@@ -825,10 +829,10 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:unit:parallel', '--', '--inspect=true', '--inspectBrk=true', unitTarget],
+        npmArgs: ['run', 'test:unit:parallel', '--ignore-scripts', '--', '--inspect=true', '--inspectBrk=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
       },
     ]);
   });

@@ -8,9 +8,10 @@ import path from 'node:path';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DeepSeekHarness, HarnessClient, RequestTimeoutError, TransportClosedError, type DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { parse as parseYaml } from 'yaml';
 import { createPartTimeoutReason } from '../shared/types/agent-failure.js';
+import type { DeepSeekHarnessOptions } from '../infra/deepseek-harness/sdk-types.js';
+import { loadDeepSeekTestModules } from './helpers/deepseek-managed-sdk.js';
 
 interface ManagedModuleLoadEvidence {
   directory: string;
@@ -23,57 +24,51 @@ interface ManagedModuleLoadEvidence {
 const managedPackageRootEnvironmentKey = vi.hoisted(() => 'TAKT_DSH_CLIENT_PACKAGE_ROOT');
 const sdkConstructorOptions = vi.hoisted(() => [] as Array<DeepSeekHarnessOptions | undefined>);
 const managedModuleLoads = vi.hoisted(() => vi.fn<(evidence: ManagedModuleLoadEvidence) => void>());
-vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
-  const sdk = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
-  return {
-    ...sdk,
-    DeepSeekHarness: class extends sdk.DeepSeekHarness {
-      /** Record SDK constructor options while retaining the real client implementation for process tests. */
-      constructor(options?: DeepSeekHarnessOptions) {
-        sdkConstructorOptions.push(options);
-        super(options);
-      }
-    },
-  };
-});
+const managedTestModules = await loadDeepSeekTestModules();
+const { HarnessClient, RequestTimeoutError, TransportClosedError } = managedTestModules.sdk;
+class DeepSeekHarness extends managedTestModules.sdk.DeepSeekHarness {
+  /** Record SDK constructor options while retaining the real client implementation for process tests. */
+  constructor(options?: DeepSeekHarnessOptions) {
+    sdkConstructorOptions.push(options);
+    super(options);
+  }
+}
+const testSdk = { ...managedTestModules.sdk, DeepSeekHarness };
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => {
-      const packageRoot = process.env[managedPackageRootEnvironmentKey]
-        ?? fileURLToPath(new URL('../..', import.meta.url));
-      const requireFromPackageRoot = createRequire(join(packageRoot, 'package.json'));
-      const sdkPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-sdk-client');
-      const llmPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-llm');
-      let evidence: ManagedModuleLoadEvidence = { directory: packageRoot, sdkPath, llmPath };
       const selectedPackageRoot = process.env[managedPackageRootEnvironmentKey];
-      const [sdk, llm] = selectedPackageRoot
-        ? await Promise.all([
-          import(pathToFileURL(sdkPath).href),
-          import(pathToFileURL(llmPath).href),
-        ])
-        : await Promise.all([
-          import('@deepseek-ai/dsh-sdk-client'),
-          import('@deepseek-ai/dsh-llm'),
-        ]);
-      if (selectedPackageRoot) {
-        const piAiPackagePath = await realpath(join(
-          packageRoot,
-          'node_modules',
-          '@earendil-works',
-          'pi-ai',
-          'package.json',
-        ));
-        const piAiManifest = JSON.parse(await readFile(piAiPackagePath, 'utf8')) as { version: string };
-        evidence = { ...evidence, piAiPackagePath, piAiVersion: piAiManifest.version };
+      if (selectedPackageRoot === undefined) {
+        managedModuleLoads({
+          directory: managedTestModules.directory,
+          sdkPath: managedTestModules.sdkPath,
+          llmPath: managedTestModules.llmPath,
+        });
+        return {
+          directory: managedTestModules.directory,
+          sdk: testSdk,
+          llm: managedTestModules.llm,
+        };
       }
-      managedModuleLoads(evidence);
-      return {
-        directory: packageRoot,
-        sdk,
-        llm,
-      };
+      const selectedModules = await loadDeepSeekTestModules(selectedPackageRoot);
+      const piAiPackagePath = await realpath(join(
+        selectedPackageRoot,
+        'node_modules',
+        '@earendil-works',
+        'pi-ai',
+        'package.json',
+      ));
+      const piAiManifest = JSON.parse(await readFile(piAiPackagePath, 'utf8')) as { version: string };
+      managedModuleLoads({
+        directory: selectedPackageRoot,
+        sdkPath: selectedModules.sdkPath,
+        llmPath: selectedModules.llmPath,
+        piAiPackagePath,
+        piAiVersion: piAiManifest.version,
+      });
+      return selectedModules;
     },
   };
 });
@@ -497,10 +492,10 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await expect(assertDeepSeekRuntimeCreationAllowed()).resolves.toBeUndefined();
   });
 
-  it.skipIf(!SUPPORTED_RUNTIME)('uses the root SDK modules for one live session and refuses after teardown', async () => {
+  it.skipIf(!SUPPORTED_RUNTIME)('uses the managed SDK modules for one live session and refuses after teardown', async () => {
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
-    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const packageRoot = managedTestModules.directory;
     process.env[managedPackageRootEnvironmentKey] = packageRoot;
     const runtimePaths = getDeepSeekRuntimePaths();
     const workspace = join(temporaryRoot, 'workspace');
@@ -2604,12 +2599,12 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       DEEPSEEK_API_KEY: DUMMY_CREDENTIAL,
       TEST_WORKSPACE: workspace,
       TEST_RUNTIME_SUPERVISOR: supervisorPath,
-      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
       NO_COLOR: '1',
     };
     const createStartScript = (readyFile?: string, continueFile?: string): string => [
       `const state = await import(${JSON.stringify(clientModuleUrl)});`,
-      `const { DeepSeekHarness } = await import('@deepseek-ai/dsh-sdk-client');`,
+      `const { DeepSeekHarness } = await import(${JSON.stringify(pathToFileURL(managedTestModules.sdkPath).href)});`,
       `const { resolveDeepSeekCredentialBinding } = await import(${JSON.stringify(credentialBindingModuleUrl)});`,
       `const { createDeepSeekCredentialPatch } = await import(${JSON.stringify(credentialPatchModuleUrl)});`,
       `const { homedir } = await import('node:os');`,
@@ -2772,7 +2767,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       TAKT_DSH_OWNER_DIRECTORY: paths.owners,
       TAKT_DSH_STATE_DIRECTORY: paths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
-      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
     }, 8_000, true);
 
     expect(result.timedOut).toBe(false);
@@ -2817,7 +2812,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
           TAKT_DSH_OWNER_DIRECTORY: paths.owners,
           TAKT_DSH_STATE_DIRECTORY: paths.state,
           TAKT_DSH_PARENT_PID: String(process.pid),
-          TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+          TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
           TAKT_DSH_NPM_PLUGIN_ENTRYPOINTS: JSON.stringify([entrypoint]),
           TAKT_DSH_CLEANUP_PATHS: JSON.stringify([cleanupPath]),
           TAKT_DSH_CLEANUP_CONFIRMATION: cleanupConfirmationPath,
@@ -2906,7 +2901,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       TAKT_DSH_OWNER_DIRECTORY: paths.owners,
       TAKT_DSH_STATE_DIRECTORY: paths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
-      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
       NO_COLOR: '1',
     });
 
@@ -2942,7 +2937,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     const supervisorPath = fileURLToPath(new URL('../infra/deepseek-harness/runtime-supervisor.mjs', import.meta.url));
     const script = [
       `const state = await import(${JSON.stringify(clientModuleUrl)});`,
-      `const { DeepSeekHarness } = await import('@deepseek-ai/dsh-sdk-client');`,
+      `const { DeepSeekHarness } = await import(${JSON.stringify(pathToFileURL(managedTestModules.sdkPath).href)});`,
       `const { resolveDeepSeekCredentialBinding } = await import(${JSON.stringify(credentialBindingModuleUrl)});`,
       `const { createDeepSeekCredentialPatch } = await import(${JSON.stringify(credentialPatchModuleUrl)});`,
       `const { homedir } = await import('node:os');`,
@@ -2982,7 +2977,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR,
       DSH_HOME: process.env.DSH_HOME,
       DEEPSEEK_API_KEY: DUMMY_CREDENTIAL,
-      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
       NO_COLOR: '1',
     };
 
@@ -3222,7 +3217,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       DSH_HOME: process.env.DSH_HOME,
       TAKT_DSH_OWNER_DIRECTORY: runtimePaths.owners,
       TAKT_DSH_STATE_DIRECTORY: runtimePaths.state,
-      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: managedTestModules.directory,
       TAKT_DSH_CLEANUP_PATHS: JSON.stringify(cleanupPaths),
       TAKT_DSH_CLEANUP_CONFIRMATION: receiptPath,
       TAKT_DSH_CLEANUP_ROOT: dirname(patchDirectory),

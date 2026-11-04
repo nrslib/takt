@@ -152,7 +152,7 @@ describe('conversation after a declined managed installation', () => {
 describe('conversation session application API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCallAIWithRetry.mockResolvedValue({
+    mockCallAIWithRetry.mockReset().mockResolvedValue({
       result: {
         content: 'Assistant answer',
         sessionId: 'provider-session-1',
@@ -161,7 +161,7 @@ describe('conversation session application API', () => {
       sessionId: 'provider-session-1',
     });
     mockBuildSummaryPrompt.mockReset().mockReturnValue('summary prompt');
-    mockRunFormalSpecVerification.mockResolvedValue({
+    mockRunFormalSpecVerification.mockReset().mockResolvedValue({
       verdict: 'passed',
       verificationStarted: true,
       quint: { status: 'passed' },

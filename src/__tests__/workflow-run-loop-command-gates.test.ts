@@ -95,7 +95,7 @@ function createCommandGate(
 function makeDeps(
   state: WorkflowState,
   step: WorkflowStep,
-  runStep: ReturnType<typeof vi.fn>,
+  runStep: LoopDeps['runStep'],
   runQualityGates: RunQualityGatesFn,
   cwd = '/worktree',
 ) {
@@ -1459,7 +1459,7 @@ function makeDeadlineDeps(
     })),
     resolveStepProviderModelBeforeAutoRouting: vi.fn<LoopDeps['resolveStepProviderModelBeforeAutoRouting']>(() => ({ provider: 'claude', model: 'test-model' })),
     resolveRuntimeForStep: vi.fn(),
-    runStep: vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    runStep: vi.fn<LoopDeps['runStep']>(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
       response: makeResponse(),
       instruction,
     })),
@@ -1545,10 +1545,10 @@ describe('WorkflowRunLoop step deadline', () => {
     const callStartedAt: number[] = [];
     const startedAt = Date.now();
     let attempt = 0;
-    deps.runStep = vi.fn(async (
+    deps.runStep = vi.fn<LoopDeps['runStep']>(async (
       currentStep: WorkflowStep,
-      { text: instruction }: PreparedInstruction,
-      runtime: Parameters<OptionsBuilder['buildAgentOptions']>[1],
+      { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] },
+      runtime?: Parameters<OptionsBuilder['buildAgentOptions']>[1],
     ) => {
       const signal = context.getAbortSignal();
       if (signal === undefined) {

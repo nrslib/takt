@@ -6,6 +6,10 @@
     "lib": ["ES2022", "ES2024.String"],
     "outDir": "dist",
     "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "#deepseek-brand": ["src/infra/deepseek-harness/sdk-brand.ts"]
+    },
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

@@ -138,20 +138,22 @@ const {
 
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  TaskRunner: vi.fn().mockImplementation(() => ({
-    claimNextTasks: mockClaimNextTasks,
-    completeTask: mockCompleteTask,
-    failTask: mockFailTask,
-    autoRequeueFailedTask: mockAutoRequeueFailedTask,
-    failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
-    listTasks: vi.fn(() => []),
-    listTasksForProviderPreflight: vi.fn(() => []),
-    listFailedTasks: mockListFailedTasks,
-    isAutoRequeueEligible: mockIsAutoRequeueEligible,
-    listAllTaskItems: mockListAllTaskItems,
-    listTaskStateItems: vi.fn(() => []),
-    updateRunningTaskExecution: mockUpdateRunningTaskExecution,
-  })),
+  TaskRunner: vi.fn().mockImplementation(function () {
+    return {
+      claimNextTasks: mockClaimNextTasks,
+      completeTask: mockCompleteTask,
+      failTask: mockFailTask,
+      autoRequeueFailedTask: mockAutoRequeueFailedTask,
+      failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
+      listTasks: vi.fn(() => []),
+      listTasksForProviderPreflight: vi.fn(() => []),
+      listFailedTasks: mockListFailedTasks,
+      isAutoRequeueEligible: mockIsAutoRequeueEligible,
+      listAllTaskItems: mockListAllTaskItems,
+      listTaskStateItems: vi.fn(() => []),
+      updateRunningTaskExecution: mockUpdateRunningTaskExecution,
+    };
+  }),
 }));
 
 vi.mock('../infra/task/clone.js', async (importOriginal) => ({

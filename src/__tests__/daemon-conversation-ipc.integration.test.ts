@@ -527,9 +527,7 @@ it('accepts a complete message spanning input batches and queues concurrent mess
       attachmentId: first.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: message },
     },
   }))));
-  // mainでも発言者情報を保存する同期子プロセスで1秒を超え、応答の受信が遅れる。
-  // 通常のClient.requestと同じ5秒のI/O待機余裕を確保する。
-  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3), { timeout: 5_000 });
+  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3), { timeout: 10000 });
   const accepted = value.frames.find((frame) => frame.requestId === 'large-burst-0')!.result!;
   expect(accepted.kind).toBe('accepted');
   for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });

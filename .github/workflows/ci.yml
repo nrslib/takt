@@ -68,6 +68,8 @@ jobs:
       - run: npm run lint
       - name: Verify managed DeepSeek SDK/runtime lock
         run: node scripts/verify-deepseek-sdk-lock.mjs --pack
+      - name: Verify DeepSeek SDK type boundary
+        run: npm run test:deepseek-harness:types
 
   test-shard:
     name: test shard (${{ matrix.shard }}/8)

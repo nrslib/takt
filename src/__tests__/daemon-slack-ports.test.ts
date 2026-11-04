@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonSlackPorts, dispatchSlackEvent } from '../features/daemon/slackPorts.js';
 import type { SlackClient, SlackEvent } from '../infra/slack/client.js';
 import type { ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
+import type { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
 
 const doubles = vi.hoisted(() => ({ config: vi.fn(), error: vi.fn(), port: vi.fn() }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
@@ -11,8 +12,15 @@ const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.
 beforeEach(() => {
   vi.resetAllMocks();
 });
+type SlackPort = ReturnType<typeof createSlackConversationPort>;
 function mockPort(receive: ReturnType<typeof vi.fn>) {
-  return { receive, isInquiryThread: vi.fn().mockReturnValue(false), receiveAction: vi.fn(), modalEndpoint: vi.fn(), receiveModal: vi.fn() };
+  return {
+    receive: receive as SlackPort['receive'],
+    isInquiryThread: vi.fn<SlackPort['isInquiryThread']>().mockResolvedValue(false),
+    receiveAction: vi.fn<SlackPort['receiveAction']>(),
+    modalEndpoint: vi.fn<SlackPort['modalEndpoint']>(),
+    receiveModal: vi.fn<SlackPort['receiveModal']>(),
+  };
 }
 function message(overrides: Record<string, unknown> = {}): SlackEvent {
   return { type: 'events_api', body: { team_id: 'T1', event: {
@@ -210,7 +218,7 @@ it.each(['1700000000.000001', '1700000000.000002'])('routes identical shared-cha
   const { client, options } = directorFixture();
   doubles.config.mockReturnValue({ manager: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] } } });
   const managerPort = { ...mockPort(vi.fn()), stopAccepting: vi.fn(), close: vi.fn() };
-  managerPort.isInquiryThread.mockImplementation((channel: string, parent: string) => channel === 'C0DIR' && parent === '1700000000.000001');
+  managerPort.isInquiryThread.mockImplementation(async (channel: string, parent: string) => channel === 'C0DIR' && parent === '1700000000.000001');
   doubles.port.mockReturnValue(managerPort);
   const config = doubles.config();
   const repositories = config.manager?.slack === undefined ? [] : options.repositories.map((repository) => ({ ...repository, ...config.manager.slack }));
@@ -234,7 +242,7 @@ it.each(['U0AAA', 'U0BBB'])('applies only manager authorization to a bound share
   const { client, options } = directorFixture();
   doubles.config.mockReturnValue({ manager: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0BBB'] } } });
   const managerPort = { ...mockPort(vi.fn()), stopAccepting: vi.fn(), close: vi.fn() };
-  managerPort.isInquiryThread.mockReturnValue(true);
+  managerPort.isInquiryThread.mockResolvedValue(true);
   doubles.port.mockReturnValue(managerPort);
   const config = doubles.config();
   const repositories = config.manager?.slack === undefined ? [] : options.repositories.map((repository) => ({ ...repository, ...config.manager.slack }));
