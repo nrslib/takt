@@ -2,9 +2,17 @@
  * Read-deny wiring across the Claude providers.
  *
  * The user's ~/.claude/settings.json is a real file under an isolated HOME.
- * The Claude SDK `query` function, the headless CLI spawn, and the terminal
- * client are the only test doubles; everything between the provider call and
- * those boundaries is production code.
+ * Everything between the provider call and the replaced boundaries below is
+ * production code. The test doubles are:
+ * - the managed provider loader, replaced by a helper that returns the installed SDK modules
+ * - the Claude SDK `query` function
+ * - the headless CLI spawn (`runHeadlessCli`)
+ * - the Claude CLI skill-disable capability check (`assertClaudeSkillsDisableSupported`)
+ * - the SDK runtime check used by preflight (`assertClaudeSdkRuntime`)
+ * - the terminal client (`callClaudeTerminal`)
+ * - the UI `warn` output, which records import warnings
+ * No real Claude process is started, so whether Claude itself refuses a Read
+ * is not observed here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,11 +21,12 @@ import { join } from 'node:path';
 
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 
-const { queryMock, runHeadlessCliMock, callClaudeTerminalMock, warnMock } = vi.hoisted(() => ({
+const { queryMock, runHeadlessCliMock, callClaudeTerminalMock, warnMock, assertSdkRuntimeMock } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   runHeadlessCliMock: vi.fn(),
   callClaudeTerminalMock: vi.fn(),
   warnMock: vi.fn<(message: string) => void>(),
+  assertSdkRuntimeMock: vi.fn(async (_options: Record<string, unknown>) => {}),
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
@@ -33,6 +42,11 @@ vi.mock('../infra/claude-headless/headless-spawn.js', async (importOriginal) => 
 vi.mock('../infra/claude/cli-capability.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../infra/claude/cli-capability.js')>(),
   assertClaudeSkillsDisableSupported: vi.fn(async () => {}),
+}));
+
+vi.mock('../infra/claude/sdk-runtime.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../infra/claude/sdk-runtime.js')>(),
+  assertClaudeSdkRuntime: assertSdkRuntimeMock,
 }));
 
 vi.mock('../infra/claude-terminal/client.js', () => ({
@@ -168,6 +182,7 @@ beforeEach(() => {
     stdout: `${JSON.stringify({ type: 'result', subtype: 'success', result: 'done', structured_output: {} })}\n`,
     stderr: '',
   });
+  assertSdkRuntimeMock.mockClear();
   callClaudeTerminalMock.mockReset();
   callClaudeTerminalMock.mockResolvedValue({
     persona: 'coder',
@@ -301,6 +316,17 @@ describe('claude-sdk deny rules next to other launch settings', () => {
     await launch(sdkLauncher, 'setup', { importUserReadDeny: true });
 
     expect(queryMock.mock.calls[0]![0].options.settingSources).not.toContain('user');
+  });
+
+  it('Given import on and a missing settings file, When running the preflight that does not launch Claude, Then no warning is issued and no deny rule reaches the runtime check', async () => {
+    await new ClaudeProvider().preflight({
+      cwd: projectDir,
+      providerOptions: { claude: { permissions: { deny: ['Read(~/.ssh/**)'], importUserReadDeny: true } } },
+    });
+
+    expect(assertSdkRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(assertSdkRuntimeMock.mock.calls[0]![0]).not.toHaveProperty('settings');
+    expect(warnMock).not.toHaveBeenCalled();
   });
 
   it('Given the claude provider alias, When launching with deny rules, Then the SDK receives them', async () => {

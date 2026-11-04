@@ -1569,6 +1569,9 @@ function stripClaudeAllowedTools(
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
           : {}),
+        ...(providerOptions.claude.permissions !== undefined
+          ? { permissions: { ...providerOptions.claude.permissions } }
+          : {}),
       }
     : undefined;
 

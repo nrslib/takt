@@ -876,6 +876,50 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
       },
     });
   });
+
+  it.each(['claude', 'claude-headless'] as const)(
+    '%s part で part_allowed_tools を渡しても claude.permissions の両 leaf を維持し claude.allowedTools だけ除去する',
+    (provider) => {
+      const result = resolveEffectiveTeamLeaderPartProviderOptions(
+        'project',
+        undefined,
+        { claude: { permissions: { importUserReadDeny: false } } },
+        {
+          claude: {
+            allowedTools: ['Read', 'Edit'],
+            permissions: { deny: ['Read(./.env)'] },
+          },
+        },
+        provider,
+        ['Read', 'Edit'],
+      );
+
+      expect(result).toEqual({
+        claude: {
+          permissions: { deny: ['Read(./.env)'], importUserReadDeny: false },
+        },
+      });
+    },
+  );
+
+  it('Claude の allowedTools を扱わない provider の part でも claude.permissions と他 provider のキーを維持する', () => {
+    const result = resolveEffectiveTeamLeaderPartProviderOptions(
+      'project',
+      undefined,
+      {
+        opencode: { networkAccess: false },
+        claude: { permissions: { deny: ['Read(./.env)'] } },
+      },
+      undefined,
+      'opencode',
+      undefined,
+    );
+
+    expect(result).toEqual({
+      opencode: { networkAccess: false },
+      claude: { permissions: { deny: ['Read(./.env)'] } },
+    });
+  });
 });
 
 describe('resolveProviderOptionSource', () => {
