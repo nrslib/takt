@@ -29,7 +29,8 @@ import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
-import { GoalAbortMonitor } from '../tasks/execute/goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../tasks/execute/goalAbortMonitor.js';
+import type { GoalTaskResult } from '../../infra/goals/schema.js';
 import { TaskStoppedError } from '../../infra/task/taskStop.js';
 import { synchronizeRetryPrHead } from './retry-sync.js';
 
@@ -104,7 +105,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
 export async function executePersistedPrMergeTask(
   task: TaskInfo, runner: TaskRunner, projectCwd: string,
   abortSignal?: AbortSignal, display?: MergeDisplayOptions,
-): Promise<{ merged: boolean }> {
+): Promise<{ merged: boolean; completion?: GoalTaskResult; runSlug?: string }> {
   const data = task.data;
   if (data?.merge_task !== true || data.pr_number === undefined || data.workflow === undefined
     || data.merge_method === undefined || task.worktreePath === undefined) {
@@ -160,17 +161,24 @@ export async function executePersistedPrMergeTask(
       : controller.signal.aborted ? controller.signal.reason : caught;
     const current = runner.listAllTaskItems().find((item) => item.name === task.name);
     if (current?.kind === 'running') {
-      const saveFailure = (failure: unknown): void => {
+      const saveFailure = (failure: unknown): GoalTaskResult | undefined => {
         const reason = getErrorMessage(failure);
+        const completion: GoalTaskResult | undefined = failure instanceof TaskStoppedError
+          || failure instanceof GoalPausedError && data.goal_id !== undefined
+          ? { success: false, interrupted: true, workflowResult: 'aborted', failureReason: reason }
+          : undefined;
         runner.failTask({ task: runningTask, success: false, response: reason,
+          ...(failure instanceof GoalAbortedError ? { failureRetryable: false } : {}),
           executionLog: [], startedAt, completedAt: new Date().toISOString(),
           branch: data.branch, worktreePath: task.worktreePath,
-          ...(failure instanceof TaskStoppedError ? { completion: {
-            success: false, interrupted: true, workflowResult: 'aborted', failureReason: reason,
-          } } : {}) });
+          ...(completion === undefined ? {} : { completion }) });
+        return completion;
       };
       try {
-        saveFailure(error);
+        const completion = saveFailure(error);
+        if (error instanceof GoalPausedError && data.goal_id !== undefined) {
+          return { merged: false, completion, runSlug };
+        }
       } catch (terminalError) {
         if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
         saveFailure(terminalError);

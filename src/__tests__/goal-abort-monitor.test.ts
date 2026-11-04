@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
-import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { TaskStoppedError } from '../infra/task/taskStop.js';
 
 const doubles = vi.hoisted(() => ({ get: vi.fn(), read: vi.fn(), error: vi.fn() }));
@@ -18,26 +18,25 @@ describe('GoalAbortMonitor', () => {
   });
   afterEach(() => { monitor?.stop(); monitor = undefined; vi.useRealTimers(); });
 
-  it('observes active, paused and aborted in the same execution without aborting another task', () => {
+  it.each(['paused', 'aborted'] as const)('active から %s への変化を停止理由として通知する', (status) => {
     const target = new AbortController();
     const other = new AbortController();
     monitor = new GoalAbortMonitor('/project', goalId, target, { taskName: 'task-a', executionId: 'run-a' });
     expect(doubles.get).toHaveBeenCalledWith(goalId);
-    doubles.get.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
-    vi.advanceTimersByTime(500);
     expect(target.signal.aborted).toBe(false);
-    doubles.get.mockReturnValue({ ...goalRecord(), executionStatus: 'aborted' });
+    doubles.get.mockReturnValue({ ...goalRecord(), executionStatus: status });
     vi.advanceTimersByTime(500);
-    expect(target.signal.reason).toBeInstanceOf(GoalAbortedError);
+    expect(target.signal.reason).toBeInstanceOf(status === 'paused' ? GoalPausedError : GoalAbortedError);
     expect(target.signal.reason.message).toContain(goalId);
     expect(other.signal.aborted).toBe(false);
   });
 
-  it('aborts an already aborted goal at startup', () => {
-    doubles.get.mockReturnValue({ ...goalRecord(), executionStatus: 'aborted' });
+  it.each(['paused', 'aborted'] as const)('起動時点で %s のゴールを即座に止める', (status) => {
+    doubles.get.mockReturnValue({ ...goalRecord(), executionStatus: status });
     const controller = new AbortController();
     monitor = new GoalAbortMonitor('/project', goalId, controller, { taskName: 'task-a', executionId: 'run-a' });
-    expect(controller.signal.reason).toBeInstanceOf(GoalAbortedError);
+    expect(controller.signal.reason).toBeInstanceOf(status === 'paused' ? GoalPausedError : GoalAbortedError);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('observes a later unowned task stop without reading goals and releases its timer', () => {

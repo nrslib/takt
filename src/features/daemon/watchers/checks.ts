@@ -113,7 +113,7 @@ export class WatchChecks {
       this.logs.delete(key);
       return this.observations.normal(target, 'run_log_stalled');
     }
-    if (target.logPath === null) throw new Error('Run log path is unknown');
+    if (target.logPath === null) return;
     const value = await stamp();
     const previous = this.logs.get(key);
     const changed = previous !== undefined && (previous.stamp.identity !== value.identity

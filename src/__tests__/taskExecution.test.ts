@@ -398,10 +398,6 @@ describe('executeAndCompleteTask', () => {
       const signal = executor.mock.calls[0]![0].abortSignal;
       expect(signal).toBeDefined();
       expect(signal!.aborted).toBe(false);
-      saved = { ...saved, executionStatus: 'paused' };
-      const reads = goalDoubles.get.mock.calls.length;
-      await vi.waitFor(() => expect(goalDoubles.get.mock.calls.length).toBeGreaterThan(reads), { timeout: 2000 });
-      expect(signal!.aborted).toBe(false);
       saved = { ...saved, executionStatus: 'aborted' };
       await vi.waitFor(() => expect(signal!.aborted).toBe(true), { timeout: 2000 });
       work.resolve({ success: false, interrupted: true, reason: 'Workflow interrupted' });

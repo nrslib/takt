@@ -27,7 +27,7 @@ import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../infra/goals/standalone-inquiries.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
-import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { getLabel } from '../shared/i18n/index.js';
@@ -477,8 +477,8 @@ describe('manager goal execution tools through MCP', () => {
     const before = await store.get(goalId);
     const branchSha = () => execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
     const sha = branchSha();
-    const controller = new AbortController();
-    const monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
+    let controller = new AbortController();
+    let monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
     const invoke = async (name: string, extra: Record<string, unknown> = {}) => {
       const result = await client.callTool({ name, arguments: { cwd, goalId, ...extra } });
       expect(result.isError, firstTextContent(result.content)).not.toBe(true);
@@ -492,7 +492,8 @@ describe('manager goal execution tools through MCP', () => {
       expect(runner.listPendingTaskItems().map(({ name }) => name)).toContain(task.name);
       expect(readManagerEvents(cwd).map(({ event }) => event.goalId)).toContain(goalId);
       monitor.check();
-      expect(controller.signal.aborted).toBe(false);
+      expect(controller.signal.reason).toBeInstanceOf(GoalPausedError);
+      monitor.stop();
       expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
 
       await invoke('takt_resume_goal');
@@ -501,6 +502,8 @@ describe('manager goal execution tools through MCP', () => {
       expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
       expect(autoRun.ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
       expect((await store.get(goalId)).questions).toEqual([question]);
+      controller = new AbortController();
+      monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
       monitor.check();
       expect(controller.signal.aborted).toBe(false);
 

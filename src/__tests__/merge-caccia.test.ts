@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,6 +40,11 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWo
 import { executePrWorkflow, executePersistedPrMergeTask, resolveMergeSettings } from '../features/merge/index.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import { TaskRunner } from '../infra/task/index.js';
+import { TaskStore } from '../infra/task/store.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { setGoalExecutionStatus } from '../infra/goals/execution.js';
+import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 const headSha = 'a'.repeat(40);
 const details = { number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha,
@@ -95,6 +100,56 @@ describe('Merge workflows own Caccia execution', () => {
 
   const run = () => executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'custom-merge',
     settings: resolveMergeSettings(undefined) });
+
+  it.each(['paused', 'aborted'] as const)('ゴールの %s でマージを止め、監視を解放して clone を保持する', async (status) => {
+    mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
+    await expect(run()).rejects.toThrow('initial failure');
+    await new GoalStore(project).create(goalRecord());
+    const store = new TaskStore(project);
+    store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, goal_id: goalId })) }));
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    const stop = vi.spyOn(GoalAbortMonitor.prototype, 'stop');
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      const signal = request.abortSignal!;
+      await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      return { success: true };
+    });
+    const execution = executePersistedPrMergeTask(claimed, runner, project);
+    const settled = execution.catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledTimes(2));
+      await setGoalExecutionStatus(project, goalId, status, new AbortController().signal);
+      const result = await settled;
+      const saved = store.read().tasks[0]!;
+      if (status === 'paused') {
+        expect(saved.completion).toMatchObject({ success: false, interrupted: true, workflowResult: 'aborted' });
+        expect(result).toEqual({ merged: false, completion: saved.completion, runSlug: saved.run_slug });
+      } else {
+        expect(result).toBeInstanceOf(GoalAbortedError);
+        expect(saved.completion).toBeUndefined();
+      }
+      expect(saved).toMatchObject({ status: 'failed', owner_pid: null, worktree_path: failed.worktreePath });
+      expect(saved.failure!.retryable === false).toBe(status === 'aborted');
+      expect(existsSync(failed.worktreePath!)).toBe(true);
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+      if (status === 'paused') {
+        await setGoalExecutionStatus(project, goalId, 'active', new AbortController().signal);
+        runner.requeueTask(claimed.name, ['failed']);
+        const retried = runner.claimNextTasks(1)[0]!;
+        mocks.workflow.mockResolvedValueOnce({ success: true });
+        expect(await executePersistedPrMergeTask(retried, runner, project)).toEqual({ merged: true });
+        expect(existsSync(failed.worktreePath!)).toBe(false);
+        expect(stop).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      await setGoalExecutionStatus(project, goalId, 'aborted', new AbortController().signal);
+      await settled;
+    }
+  });
 
   it('再キューされたマージ実行は停止を検知し、処理終了を待って停止理由付きで保存する', async () => {
     mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));

@@ -81,7 +81,7 @@ function prepareRetry(
   return { kind: 'failed', startDescription: describeFailedTaskRetryStart(
     preparation, start, resolveConfigValue(input.cwd, 'language'),
   ), options: {
-    task, projectDir: input.cwd, worktreePath: preparation.worktreePath,
+    task, projectDir: input.cwd, worktreePath: preparation.worktreePath, freshStart: preparation.freshStart,
     startStep: start.startStep, resumePoint: start.resumePoint, restartPoint: start.restartPoint,
     sourceResumePoint: start.sourceResumePoint,
     retryNote, workflow: context.workflowOverride,
