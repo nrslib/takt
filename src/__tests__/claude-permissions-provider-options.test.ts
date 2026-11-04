@@ -88,6 +88,20 @@ describe('claude permissions schema', () => {
     )).toThrow(/bogus|unrecognized/iu);
   });
 
+  describe('Given a misspelled permissions key next to a valid one', () => {
+    const misspelled = { deny: ['Read(./.env)'], import_user_read_denyy: true };
+    const providerOptions = { claude: { permissions: misspelled } };
+
+    it.each([
+      ['step provider_options', () => StepProviderOptionsSchema.parse(providerOptions)],
+      ['global config provider_options', () => GlobalConfigSchema.parse({ provider_options: providerOptions })],
+      ['project config provider_options', () => ProjectConfigSchema.parse({ provider_options: providerOptions })],
+      ['persona_providers entry', () => PersonaProviderEntrySchema.parse({ provider_options: providerOptions })],
+    ])('When parsing %s, Then the key is reported instead of silently dropped', (_context, parse) => {
+      expect(parse).toThrow(/import_user_read_denyy/u);
+    });
+  });
+
   it.each([
     ['deny is a string instead of an array', { deny: 'Read(./.env)' }],
     ['deny has a non-string entry', { deny: ['Read(./.env)', 42] }],

@@ -438,7 +438,13 @@ events continue to arrive. Raise the limit with
 profiles and per-model overrides are described in
 [Provider inactivity deadline and OpenCode execution guards](./docs/configuration.md#provider-inactivity-deadline-and-opencode-execution-guards).
 
-To keep Claude from reading secret files, `provider_options.claude.permissions.deny` passes `permissions.deny` rules to `claude-sdk` and `claude-headless`. Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`. Neither key is set by default, and `claude-terminal` is not affected. See [Claude Code read-deny rules](./docs/configuration.md#claude-read-deny-rules).
+`provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`.
+`Read(` rules stop Claude's built-in file tools and the file commands Claude Code recognizes in Bash, such as `cat` and `head`.
+They do not stop a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself.
+To block every process from accessing a path, enable the Claude Code sandbox.
+Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`.
+Neither key is set by default, and `claude-terminal` is not affected.
+See [Claude Code read-deny rules](./docs/configuration.md#claude-read-deny-rules).
 
 ### Dedicated provider configuration (`runtime.yaml`)
 

@@ -1780,7 +1780,7 @@ File-edit permissions continue to be governed by `permission_mode`.
 
 #### Claude Code read-deny rules (`permissions`)
 
-To stop a Claude process started by TAKT from reading secret files, pass `permissions.deny` rules to Claude with `provider_options.claude.permissions`:
+To have a Claude process started by TAKT apply `permissions.deny` rules such as `Read(./.env)`, pass the rules to Claude with `provider_options.claude.permissions`:
 
 ```yaml
 provider_options:
@@ -1797,6 +1797,10 @@ provider_options:
 | `deny` | list of non-empty strings | none | Rules written in TAKT config. They are passed to Claude as written, so TAKT does not limit them to `Read(` rules. |
 | `import_user_read_deny` | boolean | `false` | When `true`, also imports the rules that start with `Read(` (case-sensitive) from `permissions.deny` in `~/.claude/settings.json`. Bash rules, MCP rules, and any other rule are not imported. |
 
+- Claude Code, not TAKT, decides what a `Read(` rule stops.
+  According to the [Claude Code permissions documentation](https://code.claude.com/docs/en/permissions), the rules apply to Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and to file commands Claude Code recognizes in Bash, such as `cat`, `head`, `tail`, `sed`, and `tee`.
+  They do not apply to a command that reads files without naming them, such as `grep -r pattern .`, or to a script that opens files itself, such as a Python or Node script.
+  To block every process from accessing a path, enable the [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md).
 - The rules Claude receives are the union of `deny` and the imported rules, without duplicates. TAKT passes them as `permissions.deny` in Claude's flag settings (the SDK `settings` option for `claude-sdk`, `--settings` for `claude-headless`), so they also apply to isolated internal calls such as status judgment.
 - They apply to `claude-sdk` (including its `claude` alias) and `claude-headless`, in workflow steps, internal calls, and the interactive assistant. `claude-terminal` does not receive them and never triggers the warning below.
 - The user settings file is always `~/.claude/settings.json` under the current user's home directory; `CLAUDE_CONFIG_DIR` is not consulted. It is read only when `import_user_read_deny` is `true`, once for each Claude launch. With both keys unset, nothing is read and the Claude launch arguments stay as before.

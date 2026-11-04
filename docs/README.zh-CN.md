@@ -476,7 +476,13 @@ provider_options:
 
 已移除的 `TAKT_OPENCODE_TOOL_ERROR_BUDGET`、`TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`、`TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`、`TAKT_OPENCODE_TOOL_SUCCESS_REPEATS` 和 `TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` 会被忽略，并发出一次迁移警告。详见配置指南中的 v6 guard 策略。
 
-要阻止 Claude 读取敏感文件，可用 `provider_options.claude.permissions.deny` 向 `claude-sdk` 和 `claude-headless` 传递 `permissions.deny` 规则。设置 `provider_options.claude.permissions.import_user_read_deny: true` 还会导入 `~/.claude/settings.json` 中的 `Read(` 规则。两个键默认都未设置，`claude-terminal` 不受影响。详见 [Claude Code 读取拒绝规则](./configuration.zh-CN.md#claude-read-deny-rules)。
+`provider_options.claude.permissions.deny` 可向 `claude-sdk` 和 `claude-headless` 传递 Claude Code 的 `permissions.deny` 规则，例如 `Read(./.env)`。
+`Read(` 规则会拦截 Claude 的内置文件工具，以及 Claude Code 在 Bash 中识别的文件命令（如 `cat`、`head`）。
+它们不会拦截不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不会拦截自行打开文件的脚本。
+要阻止所有进程访问某个路径，请启用 Claude Code 的 sandbox。
+设置 `provider_options.claude.permissions.import_user_read_deny: true` 还会导入 `~/.claude/settings.json` 中的 `Read(` 规则。
+两个键默认都未设置，`claude-terminal` 不受影响。
+详见 [Claude Code 读取拒绝规则](./configuration.zh-CN.md#claude-read-deny-rules)。
 
 ### 专用 provider 配置（`runtime.yaml`）
 

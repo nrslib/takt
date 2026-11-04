@@ -142,7 +142,7 @@ const ClaudeProviderOptionShape = {
   effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
-  permissions: z.object(ClaudePermissionsShape).optional(),
+  permissions: z.object(ClaudePermissionsShape).strict().optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 };
 
@@ -151,7 +151,6 @@ const ClaudeProviderOptionsSchema = z.object(ClaudeProviderOptionShape);
 const StrictClaudeProviderOptionsSchema = z.object({
   ...ClaudeProviderOptionShape,
   sandbox: z.object(ClaudeSandboxShape).strict().optional(),
-  permissions: z.object(ClaudePermissionsShape).strict().optional(),
 }).strict();
 
 const ClaudeTerminalProviderOptionsSchema = z.object({
