@@ -729,6 +729,31 @@ it('admits director turns for saved goal and inquiry changes and deduplicates un
   await source().inquiries(); expect(f.runner.calls).toHaveLength(3);
 });
 
+const completedGoal = (goal: Goal): Partial<Goal> => ({ status: 'completed', completion: { goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+  targetSha: 'b'.repeat(40), summary: 'Done', instructions: [],
+  changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } });
+it.each([completedGoal, (): Partial<Goal> => ({ executionStatus: 'aborted' })])('records a settled goal without a director turn when first seen (case %#) and admits its later change', async (settled) => {
+  const f = await fixture();
+  const base = goalRecord();
+  const goal: Goal = { ...base, ...settled(base) };
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  const source = () => new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; },
+    new WatchObservations(new FileWatchRecords(f.directory), f.dispatcher, Date.now));
+  await source().inquiries(); await source().inquiries();
+  const blocked = randomUUID();
+  await writeFile(path, JSON.stringify({ ...goal, notifications: [{ id: blocked, kind: 'blocked', body: '作業が停止', recordedAt: '2026-11-03T00:00:00Z' }] }));
+  await source().inquiries();
+  const call = await f.runner.started(1);
+  expect(call.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'director_state_changed', goalId: goal.id } });
+  const event = call.input.event.event;
+  if (event.kind !== 'watch_observation' || event.observation.kind !== 'director_state_changed') throw new Error('Unexpected event');
+  expect(JSON.parse(event.observation.state)).toMatchObject({ blockedNotifications: [blocked] });
+  await f.runner.finish(call);
+  await source().inquiries();
+  expect(f.runner.calls).toHaveLength(1);
+});
+
 it('admits a director event for each new blocked notification and deduplicates it across restart', async () => {
   const f = await fixture();
   const goal: Goal = goalRecord();
