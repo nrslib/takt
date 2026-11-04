@@ -9,12 +9,12 @@ beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doub
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
 });
-it.each([0, 60, 900, -1, 0.5, '1800', Infinity])('rejects removed manager patrol setting %s', (patrol_interval) => {
-  expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
-  expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
+it.each([0, 60, 900, -1, 0.5, '1800'])('ignores removed manager patrol setting %s', (patrol_interval) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
+  expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
 });
-it.each([0, 600, 900, -1, 0.5, '600', Infinity])('rejects removed director patrol setting %s', (patrol_interval) => {
-  expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(false);
+it.each([0, 600, 900, -1, 0.5, '600'])('ignores removed director patrol setting %s', (patrol_interval) => {
+  expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(true);
 });
 it('resolves project and global settings separately for each field', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });

@@ -160,7 +160,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
           await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
             blockedNotifications: (goal.notifications ?? []).filter((notification) => notification.kind === 'blocked').map((notification) => notification.id).sort(),
-            pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() });
+            pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() },
+          goal.status === 'completed' || goal.executionStatus === 'aborted');
           for (const question of goal.questions ?? []) {
             yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
           }
@@ -181,11 +182,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
   }
 
-  private async directorChanged(managerConversationId: string, repositoryDirectory: string, goalId: string | null, state: unknown): Promise<void> {
+  private async directorChanged(managerConversationId: string, repositoryDirectory: string, goalId: string | null, state: unknown, settled = false): Promise<void> {
     if (this.stateChanges === undefined) return;
     const target = { conversationId: conversationId({ kind: 'daemon' }), targetId: digest([managerConversationId, repositoryDirectory, goalId]), generation: digest(state) };
     await this.stateChanges.changed(target, { ...this.stateChanges.evidence(target), kind: 'director_state_changed',
-      managerConversationId, repositoryDirectory, goalId, state: JSON.stringify(state) });
+      managerConversationId, repositoryDirectory, goalId, state: JSON.stringify(state) }, settled);
   }
 
   async launches(): Promise<readonly LaunchWatchTarget[]> {

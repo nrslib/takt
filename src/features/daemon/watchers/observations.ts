@@ -61,14 +61,16 @@ export class WatchObservations {
     await this.records.write(key, { ...record, accepted: true });
   }
 
-  async changed(target: WatchTarget, observation: Extract<WatchObservation, { kind: 'director_state_changed' }>): Promise<void> {
+  /** settled が真の対象（完了・中止したゴール）は、初めて見たときは知らせず、状態だけ記録する。 */
+  async changed(target: WatchTarget, observation: Extract<WatchObservation, { kind: 'director_state_changed' }>, settled = false): Promise<void> {
     const key = createHash('sha256').update(JSON.stringify([target.conversationId, target.targetId, observation.kind])).digest('hex');
     let record = await this.records.read(key);
     const previous = record?.input?.event;
     if (previous?.kind !== 'watch_observation' || previous.observation.generation !== observation.generation) {
       const episode = (record?.episode ?? 0) + 1;
       const id = `watch-${key}-${episode}`;
-      record = { episode, active: true, accepted: false, input: {
+      const quiet = record === undefined && settled;
+      record = { episode, active: !quiet, accepted: quiet, input: {
         eventId: id, requestId: id, conversationId: target.conversationId, source: 'watcher',
         occurredAt: observation.observedAt, event: { kind: 'watch_observation', observation },
       } };

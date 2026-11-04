@@ -6,8 +6,8 @@ import { readPrivateFile } from '../../infra/daemon/privateFile.js';
 const slack = z.object({ channel_id: z.string().trim().min(1), allowed_user_ids: z.array(z.string().trim().min(1)) }).strict();
 const config = z.object({
   language: z.enum(['ja', 'en']).optional(),
-  manager: z.object({ auto_run: z.boolean().optional(), slack: slack.optional(), notifications: z.partialRecord(z.enum(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom']), z.boolean()).optional(), patrol_interval: z.never().optional() }).passthrough().optional(),
-  director: z.object({ slack: slack.optional(), patrol_interval: z.never().optional() }).strict().optional(),
+  manager: z.object({ auto_run: z.boolean().optional(), slack: slack.optional(), notifications: z.partialRecord(z.enum(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom']), z.boolean()).optional(), patrol_interval: z.unknown().optional() }).passthrough().optional(),
+  director: z.object({ slack: slack.optional(), patrol_interval: z.unknown().optional() }).strict().optional(),
 });
 
 /** 通信・観測に使う列だけを読む。実行用の設定解決はターン子が所有する。 */
