@@ -461,6 +461,8 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/it-goal-task-pause-retry.test.ts',
+  'src/__tests__/it-daemon-worktree-run-log.test.ts',
   'src/__tests__/caccia-published-pr.integration.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,

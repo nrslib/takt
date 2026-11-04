@@ -15,6 +15,13 @@ export class GoalAbortedError extends Error {
   }
 }
 
+export class GoalPausedError extends Error {
+  constructor(goalId: string) {
+    super(`Goal ${goalId} was paused`);
+    this.name = 'GoalPausedError';
+  }
+}
+
 export class GoalAbortMonitor {
   private readonly store: GoalStore | undefined;
   private readonly taskStore: TaskStore;
@@ -37,6 +44,7 @@ export class GoalAbortMonitor {
       try {
         const goal = this.store.getSync(this.goalId);
         if (goal?.executionStatus === 'aborted') this.controller.abort(new GoalAbortedError(this.goalId));
+        if (goal?.executionStatus === 'paused') this.controller.abort(new GoalPausedError(this.goalId));
       } catch (error) {
         log.error('Cannot read goal execution state; will retry', {
           goalId: this.goalId, error: sanitizeSensitiveText(getErrorMessage(error)),

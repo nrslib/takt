@@ -5,7 +5,10 @@ import {
 } from '../../../infra/config/index.js';
 import {
   type TaskInfo,
+  type WorktreeResult,
   createSharedCloneAbortable,
+  removeClone,
+  removeCloneMeta,
   resolveBaseBranch,
   branchExists,
   summarizeTaskName,
@@ -169,6 +172,7 @@ export interface ResolvedTaskExecution {
 export interface ResolveTaskExecutionOptions {
   outputMode?: ExecuteTaskOptions['outputMode'];
   taskContext?: TaskExecutionContextOverride;
+  onCloneCreated?: (clone: WorktreeResult) => void;
 }
 
 function resolveRetryResume(
@@ -374,6 +378,13 @@ export async function resolveTaskExecution(
           issueNumber: data.issue,
         }, abortSignal),
       );
+      try {
+        options?.onCloneCreated?.(result);
+      } catch (error) {
+        removeClone(result.path);
+        removeCloneMeta(defaultCwd, result.branch);
+        throw error;
+      }
       throwIfAborted(abortSignal);
       execCwd = result.path;
       branch = result.branch;

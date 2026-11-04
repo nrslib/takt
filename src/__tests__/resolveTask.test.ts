@@ -14,6 +14,7 @@ import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { buildOpaqueWorkflowRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { getCloneMetaPath } from '../infra/task/clone-meta.js';
 import {
   createWorkflowCallResolver,
   createWorkflowExecutionContext,
@@ -1403,6 +1404,28 @@ describe('resolveTaskExecution', () => {
     });
 
     expect(result.prNumber).toBe(938);
+  });
+
+  it('clone の保存通知が失敗したら作成済みの clone とメタデータを削除して元の例外を返す', async () => {
+    const root = createTempProjectDir();
+    const clonePath = path.join(root, 'clone');
+    fs.mkdirSync(clonePath);
+    fs.writeFileSync(path.join(clonePath, 'created.txt'), 'clone contents');
+    const branch = 'feature/save-failure';
+    infraTask.saveCloneMeta(root, branch, clonePath);
+    const metaPath = getCloneMetaPath(root, branch);
+    expect(fs.existsSync(metaPath)).toBe(true);
+    vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({ branch: 'main' });
+    vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({ path: clonePath, branch });
+    const task = createTask({ slug: 'save-failure', data: { task: 'Run task', workflow: 'default', worktree: true, branch } });
+    const error = new Error('Task record could not be saved');
+    const onCloneCreated = vi.fn(() => { throw error; });
+
+    await expect(resolveTaskExecution(task, root, undefined, { outputMode: 'silent', onCloneCreated })).rejects.toBe(error);
+
+    expect(onCloneCreated).toHaveBeenCalledWith({ path: clonePath, branch });
+    expect(fs.existsSync(clonePath)).toBe(false);
+    expect(fs.existsSync(metaPath)).toBe(false);
   });
 
   it('should forward abortSignal to shared clone creation', async () => {

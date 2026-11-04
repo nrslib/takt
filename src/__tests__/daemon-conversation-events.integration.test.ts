@@ -670,6 +670,33 @@ it('excludes normal waiting states from goal stalls and ignores patrol and notif
   expect((await source.goals())[0]?.active).toBe(false);
 });
 
+it('observes every running task when one saved worktree path is empty', async () => {
+  const f = await fixture();
+  const goal = goalRecord();
+  const goalDirectory = join(f.repository, '.takt', 'goals', goal.id);
+  await mkdir(goalDirectory, { recursive: true });
+  await writeFile(join(goalDirectory, 'goal.json'), JSON.stringify(goal));
+  const startedAt = '2026-11-03T00:00:00Z';
+  const tasks = ['empty-worktree', 'no-worktree'].map((name) => ({
+    name, status: 'running', goal_id: goal.id, run_slug: name,
+    created_at: startedAt, started_at: startedAt, completed_at: null,
+    ...(name === 'empty-worktree' ? { worktree_path: '' } : {}),
+  }));
+  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks }));
+  for (const task of tasks) {
+    const logs = join(f.repository, '.takt', 'runs', task.run_slug, 'logs');
+    await mkdir(logs, { recursive: true });
+    await writeFile(join(logs, 'run.jsonl'), '{}\n');
+  }
+  expect(await readWatchTasks(f.repository)).toHaveLength(2);
+  const errors = vi.fn();
+  const source = new FileDaemonWatchSource(f.conversations, async () => {}, errors);
+  expect(await source.runs()).toMatchObject(tasks.map((task) => ({
+    task: { taskName: task.name }, startedAt, logPath: join(f.repository, '.takt', 'runs', task.run_slug, 'logs', 'run.jsonl'),
+  })));
+  expect(errors).not.toHaveBeenCalled();
+});
+
 it('pages more than 128 inbox files while goals and tasks exceed the old total count limit', async () => {
   const f = await fixture(); const files = new DaemonPersistedFiles(f.directory);
   const inbox = await files.inboxDirectory(f.repository); await mkdir(inbox, { recursive: true });

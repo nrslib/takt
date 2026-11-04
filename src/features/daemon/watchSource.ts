@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod/v4';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { InquiryNotice } from '../../core/daemon/messages.js';
@@ -65,7 +65,9 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
           let logPath: string | null = null;
           let modified = -1;
           if (task.run_slug !== undefined) {
-            const logDirectory = join(project.repositoryDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
+            const executionDirectory = task.merge_task === true || !task.worktree_path
+              ? project.repositoryDirectory : resolve(project.repositoryDirectory, task.worktree_path);
+            const logDirectory = join(executionDirectory, '.takt', 'runs', safeName(task.run_slug), 'logs');
             for (const entry of await listWatchEntries(logDirectory)) {
               if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
               const path = join(logDirectory, entry.name);
@@ -79,7 +81,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
               ...(task.run_slug === undefined ? {} : { runSlug: task.run_slug }),
               ...(task.execution_id === undefined ? {} : { executionId: task.execution_id }) },
             owner: task.owner_pid == null ? null : { pid: task.owner_pid, startTime: task.owner_start_time ?? null },
-            running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true, logPath });
+            running: true, paused: goal?.executionStatus !== 'active', awaitingAnswer: goal?.questions?.some((question) => question.status === 'pending') === true,
+            logPath, startedAt: task.started_at });
         }
       } catch (error) { this.onError(error); }
     }

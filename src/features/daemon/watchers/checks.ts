@@ -11,6 +11,7 @@ export interface RunWatchTarget extends WatchTarget {
   paused: boolean;
   awaitingAnswer: boolean;
   logPath: string | null;
+  startedAt: string | null;
 }
 
 export interface InquiryWatchTarget extends WatchTarget {
@@ -106,20 +107,26 @@ export class WatchChecks {
     });
   }
 
-  async log(target: RunWatchTarget, stamp: () => Promise<LogStamp>,
+  async log(target: RunWatchTarget, stamp: (path: string) => Promise<LogStamp>,
     reread: () => Promise<RunWatchTarget | undefined>): Promise<void> {
     const key = JSON.stringify([target.targetId, target.generation]);
     if (!target.running || target.paused || target.awaitingAnswer) {
       this.logs.delete(key);
       return this.observations.normal(target, 'run_log_stalled');
     }
-    if (target.logPath === null) throw new Error('Run log path is unknown');
-    const value = await stamp();
-    const previous = this.logs.get(key);
-    const changed = previous !== undefined && (previous.stamp.identity !== value.identity
-      || previous.stamp.size !== value.size || previous.stamp.mtimeMs !== value.mtimeMs || previous.stamp.ctimeMs !== value.ctimeMs);
-    const updatedAt = changed ? this.now() : previous?.updatedAt ?? Math.max(value.mtimeMs, value.ctimeMs);
-    this.logs.set(key, { stamp: value, updatedAt });
+    let updatedAt: number;
+    if (target.logPath === null) {
+      if (target.startedAt === null) return;
+      updatedAt = Date.parse(target.startedAt);
+      if (!Number.isFinite(updatedAt)) return;
+    } else {
+      const value = await stamp(target.logPath);
+      const previous = this.logs.get(key);
+      const changed = previous !== undefined && (previous.stamp.identity !== value.identity
+        || previous.stamp.size !== value.size || previous.stamp.mtimeMs !== value.mtimeMs || previous.stamp.ctimeMs !== value.ctimeMs);
+      updatedAt = changed ? this.now() : previous?.updatedAt ?? Math.max(value.mtimeMs, value.ctimeMs);
+      this.logs.set(key, { stamp: value, updatedAt });
+    }
     const current = await reread();
     if (current === undefined || current.generation !== target.generation || current.logPath !== target.logPath
       || !current.running || current.paused || current.awaitingAnswer) return;

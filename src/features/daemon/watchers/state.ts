@@ -12,6 +12,8 @@ export const TASKS_FILE_NAME = 'tasks.yaml';
 const WatchTaskSchema = z.object({
   name: z.string().min(1), status: z.enum(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed']),
   goal_id: z.uuid().optional(), run_slug: z.string().min(1).optional(), execution_id: z.string().min(1).optional(),
+  worktree_path: z.string().optional(),
+  merge_task: z.boolean().optional(),
   owner_pid: z.number().int().positive().nullable().optional(), owner_start_time: z.string().min(1).nullable().optional(),
   created_at: z.string(), started_at: z.string().nullable(), completed_at: z.string().nullable(),
 });
