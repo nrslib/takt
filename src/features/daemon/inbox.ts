@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { readFile, unlink } from 'node:fs/promises';
-import type { EventInput, TurnEvent } from '../../core/daemon/events.js';
+import type { EventInput } from '../../core/daemon/events.js';
 import type { DaemonIngress, EventStore } from '../../core/daemon/ports.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
@@ -12,6 +12,7 @@ import { listWatchEntries, readSmallJson } from './watchers/files.js';
 import { z } from 'zod/v4';
 import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
+import { managerInboxTurnEvent } from './inboxEvent.js';
 
 /** 以前の登録がなくても、残った巡回は起動時にモデルを使わず退役させる。 */
 export async function retireLegacyPatrols(directory: string): Promise<void> {
@@ -38,14 +39,7 @@ export async function receiveInboxChange(change: WatchFileChange, files: DaemonP
   if (saved.kind !== 'patrol') {
     const assignment = await conversations.routing.resolve({ kind: 'repository', repositoryDirectory: directory });
     await conversations.ensure(assignment);
-    let event: TurnEvent;
-    switch (saved.kind) {
-      case 'completion': event = { kind: saved.result.success ? 'task_completed' : 'task_failed',
-        task: { repositoryDirectory: directory, goalId: saved.goalId, taskName: saved.taskName,
-          ...(saved.runSlug === undefined ? {} : { runSlug: saved.runSlug }) }, result: saved.result }; break;
-      case 'answer': event = { kind: 'inquiry_answered', repositoryDirectory: directory, goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer }; break;
-      case 'registered': case 'resumed': event = { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed', repositoryDirectory: directory, goalId: saved.goalId }; break;
-    }
+    const event = managerInboxTurnEvent(directory, saved);
     const id = `inbox-${createHash('sha256').update(change.path).digest('hex')}`;
     const input: EventInput = { eventId: id, requestId: id, conversationId: conversationId(assignment), source: 'run', occurredAt: saved.createdAt, event };
     const admission = await ingress.accept(input);

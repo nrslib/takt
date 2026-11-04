@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { stringify } from 'yaml';
 import { createManagerConversationPlan } from '../../dist/features/manager/conversationPlan.js';
 import { createManagerTurnExecutor } from '../../dist/features/manager/turnExecutor.js';
-import { buildGoalTurnContext } from '../../dist/features/manager/turnContext.js';
+import { buildManagerEventInput } from '../manager-work-split-prompt.mjs';
 import { startLocalMcpConnection } from '../../dist/features/mcp/localConnection.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../../dist/features/manager/managerMcp.js';
 import { GoalStore } from '../../dist/infra/goals/store.js';
@@ -238,8 +238,7 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     // One executor is retained across process death and followup, matching event manager ownership.
     const executor = createManagerTurnExecutor(cwd, plan);
     const turn = async (label, message) => {
-      const current = await store.get(goal.id);
-      const prompt = `${buildGoalTurnContext(cwd, current, { ...seed.event, kind: 'resumed', createdAt: new Date().toISOString() }, [task])}\n\nTemporary files and worktrees must remain inside ${root}.\n${message}`;
+      const prompt = `${buildManagerEventInput(cwd, { kind: 'resumed', goalId: goal.id, createdAt: new Date().toISOString() })}\n\nTemporary files and worktrees must remain inside ${root}.\n${message}`;
       const record = { index: trial.turns.length + 1, label, prompt, startedAt: Date.now() };
       state.turn = record.index;
       trial.turns.push(record);

@@ -4,24 +4,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import { parse } from 'yaml';
-import buildPrompt, { buildManagerSystemPrompt, loadManagerCase } from './manager-work-split-prompt.mjs';
+import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase } from './manager-work-split-prompt.mjs';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
-import { buildGoalTurnContext, buildManagerGoalSummary } from '../dist/features/manager/turnContext.js';
+import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { goalSummary } from '../dist/features/mcp/goalResponse.js';
+import { parseDaemonProcessMessage } from '../dist/core/daemon/processProtocol.js';
+import { TaskRecordSchema } from '../dist/infra/task/schema.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
 import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
+const runLogContent = (fixture, runSlug, index) => fixture.readResults.find(({ tool, arguments: args }) =>
+  tool === 'takt_get_run' && args.runSlug === runSlug && args.view === 'log' && args.stepIndex === index).result.log.content;
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
 const inheritedInstructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
 delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
 after(() => preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', inheritedInstructionRoot));
 
-test('assembles all 86 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 94 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 86);
+  assert.equal(suite.tests.length, 94);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -53,12 +58,10 @@ test('assembles all 86 turn prompts without a provider call, excluding scoring c
     else {
       const user = prompt.split('USER:\n')[1].split('\n\n')[0];
       const context = JSON.parse(user);
-      assert.equal(context.goal.id, fixture.goal.id);
-      assert.deepEqual(ManagerEventSchema.parse(context.event), fixture.event);
-      assert.equal(context.tasks[0].startedAt, fixture.tasks[0].startedAt);
-      assert.deepEqual(context.goal, buildManagerGoalSummary(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.tasks));
-      const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-      assert.deepEqual(GoalSchema.parse(readGoal), GoalSchema.parse(fixture.goal));
+      assert.deepEqual(context, JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event)));
+      assert.deepEqual(Object.keys(context), ['event', 'instruction']);
+      const readGoal = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.path === undefined).result.goal;
+      assert.deepEqual(readGoal, goalSummary(GoalSchema.parse(fixture.goal)));
 
     }
   }
@@ -67,19 +70,18 @@ test('assembles all 86 turn prompts without a provider call, excluding scoring c
 test('stopped-check inputs connect a previous launch to the current process and saved output observations', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('stopped-background-check', lang);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
     const processRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Bash' && args.command.startsWith('ps -p '));
     const pid = processRead.arguments.command.match(/ps -p (\d+)/)[1];
     const outputRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('.log'));
-    const launch = context.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
+    const launch = fixture.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
     assert.ok(launch);
-    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.createdAt));
-    assert.equal(processRead.result, 'exit code: 1\nstdout: \nstderr: ');
+    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
+    assert.match(processRead.result, /^exit code: 1\nstdout:\s*\nstderr:\s*$/);
     assert.match(outputRead.result, /RUN /);
     assert.doesNotMatch(outputRead.result, /PASS|FAIL|Tests\s+\d+/);
     const prompt = buildPrompt({ vars: { case: 'stopped-background-check', lang } });
     assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
-    assert.deepEqual(JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]).goal.workLog, context.goal.workLog);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'workLog').result.items, fixture.goal.workLog);
   }
 });
 
@@ -100,28 +102,29 @@ test('verification inputs expose integration state, result SHA and a distinct go
       assert.equal(history.result.sourceSha, task.completion.sha);
       const prompt = buildPrompt({ vars: { case: caseId, lang } });
       assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
-      const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-      assert.equal(context.tasks[0].completion.sha, task.completion.sha);
-      assert.equal(context.goal.branch, relation.goalBranch);
+      assert.equal(fixture.tasks[0].completion.sha, task.completion.sha);
+      assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal.branch, relation.goalBranch);
     }
   }
 });
 
-test('uses the current time for each patrol case even long after module loading', async (t) => {
+test('uses the current time for each watcher case even long after module loading', async (t) => {
   const now = Date.now();
   const clock = t.mock.method(Date, 'now', () => now - 24 * 60 * 60 * 1000);
-  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-patrol');
+  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-watcher');
   const earlier = loadLaterCase('mail-dispatch-state', 'ja');
   clock.mock.mockImplementation(() => now);
   const later = loadLaterCase('mail-dispatch-state', 'ja');
-  assert.equal(Date.parse(later.event.createdAt) - Date.parse(earlier.event.createdAt), 24 * 60 * 60 * 1000);
+  assert.equal(Date.parse(later.event.observation.observedAt) - Date.parse(earlier.event.observation.observedAt), 24 * 60 * 60 * 1000);
   const prompt = buildLaterPrompt({ vars: { case: 'mail-dispatch-state', lang: 'ja' } });
   const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-  assert.ok(Math.abs(Date.parse(context.patrol.observedAt) - Date.parse(context.event.createdAt)) < 1000);
+  assert.equal(context.event.kind, 'watch_observation');
+  assert.equal(Date.parse(context.event.observation.observedAt), now);
+  assert.ok(Date.parse(context.event.observation.observedAt) - Date.parse(context.event.observation.lastUpdatedAt) >= 30 * 60000);
   assert.deepEqual(context.event, later.event);
 });
 
-test('patrol fixtures include repeated repair history, source documents and the latest adjudication report', () => {
+test('watcher fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
   const cases = [
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
@@ -131,19 +134,19 @@ test('patrol fixtures include repeated repair history, source documents and the 
     for (const caseId of cases) {
       const fixture = loadManagerCase(caseId, lang);
       assert.equal(fixture.turn, 'event');
-      assert.equal(fixture.event.kind, 'patrol');
+      assert.equal(fixture.event.kind, 'watch_observation');
+      assert.equal(fixture.event.observation.kind, 'run_log_stalled');
       const run = fixture.readResults.find(({ tool }) => tool === 'takt_get_run');
-      const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
-      assert.ok(Math.abs(Date.parse(context.patrol.observedAt) - Date.parse(fixture.event.createdAt)) < 60000);
-      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.createdAt));
-      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.createdAt)));
+      assert.equal(fixture.event.observation.task.runSlug, run.result.runSlug);
+      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
+      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt)));
       for (const entry of run.result.stepLogs.filter(({ step }) => ['fix', 'remediation'].includes(step))) {
-        assert.doesNotMatch(entry.content, /次の review|next review/i);
+        assert.doesNotMatch(runLogContent(fixture, run.result.runSlug, entry.index), /次の review|next review/i);
       }
       if (caseId !== 'conflicting-calendar-visibility') {
-        const secondReview = run.result.stepLogs.find(({ step, iteration }) => ['review', 'reviewers'].includes(step) && iteration === 2);
-        assert.match(secondReview.content, lang === 'ja' ? /1周目.*残っている/ : /cycle 1.*remained unresolved/);
-        const secondAdjudication = run.result.stepLogs.find(({ step, iteration }) => step === 'review-adjudication' && iteration === 2);
+        const secondReview = run.result.stepLogs.filter(({ step }) => ['review', 'reviewers'].includes(step))[1];
+        assert.match(runLogContent(fixture, run.result.runSlug, secondReview.index), lang === 'ja' ? /1周目.*残っている/ : /cycle 1.*remained unresolved/);
+        const secondAdjudication = run.result.stepLogs.filter(({ step }) => step === 'review-adjudication')[1];
         assert.equal(secondAdjudication.status, 'done');
         assert.ok(Date.parse(secondReview.timestamp) < Date.parse(secondAdjudication.timestamp));
       }
@@ -154,16 +157,16 @@ test('patrol fixtures include repeated repair history, source documents and the 
         const latest = run.result.stepLogs.filter(({ step }) => step === 'review-adjudication').at(-1);
         assert.ok(Date.parse(latest.timestamp) < Date.parse(patrol.recordedAt));
         assert.equal(fixture.readResults.some(({ tool, arguments: args }) =>
-          tool === 'Read' && args.file_path.endsWith('review-resolution.md')), false);
+          tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md'), false);
       } else {
         if (caseId === 'conflicting-calendar-visibility') {
           assert.equal(run.result.stepLogs.filter(({ step }) => step === 'review-adjudication').length, 1);
           const report = fixture.readResults.find(({ tool, arguments: args }) =>
-            tool === 'Read' && args.file_path.endsWith('review-resolution.md')).result;
+            tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md').result.report.content;
           assert.match(report, lang === 'ja' ? /矛盾/ : /conflicts/);
         } else {
           for (const iteration of [1, 2]) {
-            const logs = run.result.stepLogs.filter((entry) => entry.iteration === iteration && entry.status === 'done');
+            const logs = run.result.stepLogs.slice((iteration - 1) * 3, iteration * 3);
             const review = logs.find(({ step }) => ['review', 'reviewers'].includes(step));
             const adjudication = logs.find(({ step }) => step === 'review-adjudication');
             const repair = logs.find(({ step }) => ['fix', 'remediation'].includes(step));
@@ -178,7 +181,7 @@ test('patrol fixtures include repeated repair history, source documents and the 
           }
         }
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
-          tool === 'Read' && args.file_path.endsWith('review-resolution.md')));
+          tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md'));
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
           tool === 'Read' && args.file_path.endsWith('goal-request.md')));
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
@@ -192,16 +195,13 @@ test('patrol fixtures include repeated repair history, source documents and the 
 test('data carryover includes the saved constraints and pending work through the production event input and reads', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('constraint-carryover-data', lang);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
-    assert.equal(context.goal.id, fixture.goal.id);
-    assert.equal(context.goal.workLogCount, fixture.goal.workLog.length);
+    assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal.workLogCount, fixture.goal.workLog.length);
     const request = fixture.readResults.find(({ tool }) => tool === 'Read').result;
     assert.deepEqual(request.acceptanceCriteria, fixture.goal.acceptanceCriteria);
     assert.deepEqual(request.constraints, fixture.goal.constraints);
     assert.deepEqual(request.work.map(({ workKey }) => workKey), ['channel-totals', 'report-export']);
-    const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-    assert.deepEqual(readGoal.acceptanceCriteria, fixture.goal.acceptanceCriteria);
-    assert.deepEqual(readGoal.constraints, fixture.goal.constraints);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'acceptanceCriteria').result.items, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'constraints').result.items, fixture.goal.constraints);
     assert.equal(fixture.tasks[0].goalWorkKey, 'foundation');
     assert.ok(fixture.goal.workLog.some(({ summary }) => summary.includes('foundation') && summary.includes(fixture.tasks[0].completion.sha)));
     assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalBranch, fixture.goal.branch);
@@ -211,9 +211,7 @@ test('data carryover includes the saved constraints and pending work through the
 test('already checked inventory results include git history and a completed verification run', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('integration-already-checked', lang);
-    const goal = GoalSchema.parse(fixture.goal);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-    const reader = context.tasks.find(({ name }) => name === 'result-2');
+    const reader = fixture.tasks.find(({ name }) => name === 'result-2');
     const storage = fixture.tasks.find(({ name }) => name === 'result-1');
     const history = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_history');
     assert.ok(goalHistoryInputSchema.safeParse(history.arguments).success);
@@ -227,8 +225,9 @@ test('already checked inventory results include git history and a completed veri
     assert.ok(shas.includes(storage.completion.sha));
     const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug);
     assert.equal(run.result.status, 'completed');
-    assert.equal(run.result.task, reader.goalPurpose);
-    const report = run.result.reports[0].content;
+    const taskRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug && args.view === 'task');
+    assert.equal(taskRead.result.task.content, reader.goalPurpose);
+    const report = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug && args.view === 'report').result.report.content;
     assert.ok(report.includes(reader.completion.sha));
     assert.match(report, lang === 'ja' ? /ビルドと.*結合テストが成功/ : /Build and integration tests passed/);
     assert.match(report, lang === 'ja' ? /保存して再起動後に読み込み/ : /save.*reload after restart/);
@@ -265,21 +264,39 @@ test('completion fixtures supply file patches and commit history through product
   }
 });
 
-test('event fixtures carry production goal memory, inbox events and current task state', () => {
+test('event fixtures use the production event envelope and goal/task reading contracts', () => {
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
-    const event = ManagerEventSchema.parse(fixture.event);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, event, fixture.tasks));
-    assert.deepEqual(context.goal, buildManagerGoalSummary(fixture.cwd, goal, fixture.tasks));
-    assert.deepEqual(context.event, event);
-    assert.deepEqual(context.tasks, fixture.tasks);
-    assert.equal(context.references.goal, `${fixture.cwd}/.takt/goals/${goal.id}/goal.json`);
-    assert.equal(context.references.tasks, `${fixture.cwd}/.takt/tasks.yaml`);
+    const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
+    const event = fixture.event.kind === 'watch_observation' ? fixture.event
+      : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
+    assert.deepEqual(input, { event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
+    parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
+      event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
+        lane: 'other', source: event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
+      turn: { conversationId: 'manager', operationId: 'turn', generation: 1 },
+      state: { version: 0, assignment: { kind: 'repository', repositoryDirectory: fixture.cwd },
+        session: { provider: 'mock', model: null, sessionId: null }, revision: 0, pending: null, approval: null },
+    } }, 'fixture');
     const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-    assert.deepEqual(GoalSchema.parse(readGoal), goal);
-    assert.ok(goal.workLog.some(({ summary }) => fixture.tasks.some((task) => task.completion !== undefined && summary.includes(task.completion.sha))));
+    assert.deepEqual(readGoal, goalSummary(goal));
+    const tasks = fixture.readResults.find(({ tool }) => tool === 'takt_list_tasks').result;
+    assert.equal(tasks.collection, 'tasks');
+    assert.equal(tasks.totalCount, fixture.tasks.length);
+    assert.equal(tasks.nextOffset, null);
+    assert.deepEqual(tasks.tasks.map(({ name, status, runSlug }) => ({ name, status, runSlug })),
+      fixture.tasks.map(({ name, status, runSlug }) => ({ name, status, runSlug })));
+    assert.ok(tasks.tasks.every((task) => ['integrated', 'not_integrated', 'unknown'].includes(task.goalIntegration)));
+    assert.ok(tasks.tasks.every((task) => !Object.hasOwn(task, 'completion') && !Object.hasOwn(task, 'failure')));
+    const saved = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`).result.tasks;
+    for (const task of saved) assert.ok(TaskRecordSchema.safeParse(task).success);
+    for (const path of ['acceptanceCriteria', 'constraints', 'outOfScope', 'workLog', 'questions']) {
+      const read = fixture.readResults.find(({ arguments: args }) => args.path === path);
+      assert.deepEqual(read.result.items, goal[path]);
+      assert.equal(read.result.collection, 'items');
+    }
   }
 });
 
@@ -342,7 +359,7 @@ test('red mode removes only the Concurrency limit suffix', () => {
 });
 
 test('work contents, integrated verification and constraint cases receive semantic rubrics', () => {
-  const semanticCases = new Set(['parallel-cli', 'parallel-docs-migration',
+  const semanticCases = new Set(['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued', 'parallel-cli', 'parallel-docs-migration',
     'shared-resource', 'shared-definition', 'human-order', 'integration-check',
     'constraint-carryover', 'constraint-carryover-data', 'constraint-once',
     'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
@@ -366,18 +383,18 @@ test('failure fixtures preserve attempts, revised instructions and causes throug
     for (const caseId of ['escalate-repeated-failure', 'escalate-not-on-first-failure']) {
       const fixture = loadManagerCase(caseId, lang);
       const goal = GoalSchema.parse(fixture.goal);
-      const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-      const failures = context.tasks.filter(({ completion }) => completion.success === false);
+        const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
+      const failures = fixture.tasks.filter(({ completion }) => completion.success === false);
       assert.equal(failures.length, caseId === 'escalate-repeated-failure' ? 2 : 1);
       assert.equal(fixture.event.taskName, failures.at(-1).name);
-      assert.equal(context.event.result.success, false);
-      assert.equal(context.event.result.failureReason, fixture.event.result.failureReason);
+      assert.equal(input.event.result.success, false);
+      assert.equal(input.event.result.failureReason, fixture.event.result.failureReason);
       assert.equal(goal.executionStatus, 'active');
       for (const event of failures) {
-        const task = context.tasks.find(({ name }) => name === event.name);
+        const task = fixture.tasks.find(({ name }) => name === event.name);
         assert.equal(task.completion.success, false);
-        const run = fixture.readResults.find(({ tool, result }) => tool === 'takt_get_run' && result.runSlug === event.runSlug);
-        assert.ok(run.result.reports[0].content.length > 0);
+        const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === event.runSlug && args.view === 'report');
+        assert.ok(run.result.report.content.length > 0);
       }
       if (caseId === 'escalate-repeated-failure') {
         const instruction = fixture.readResults.find(({ arguments: args }) => args.file_path?.endsWith('/order.md'));
@@ -439,7 +456,7 @@ test('verification fixtures distinguish separate finished checks, a single check
           cwd: fixture.cwd, runSlug: run.runSlug, view: 'log', stepIndex: check.index,
         });
         const { log, ...metadata } = read.result;
-        const { stepLogs: _stepLogs, reports: _reports, ...runMetadata } = run;
+        const { stepLogs: _stepLogs, reports: _reports, stepLogPage: _stepLogPage, reportPage: _reportPage, retrieval: _retrieval, ...runMetadata } = run;
         assert.deepEqual(metadata, runMetadata);
         const { content, totalBytes, offset, returnedBytes, direction, truncated, nextOffset, ...summary } = log;
         assert.deepEqual(summary, check);
@@ -494,7 +511,7 @@ test('final-check input contains direct and child-process consumers and unrelate
       .map(({ arguments: args, result }) => [args.file_path.replace(`${fixture.cwd}/`, ''), result]));
     assert.ok(fixture.goal.objective.includes('channel'));
     assert.ok(fixture.goal.acceptanceCriteria.some((criterion) => criterion.includes('channel')));
-    assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal, fixture.goal);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'objective').result.content, fixture.goal.objective);
     const sessionTasks = fixture.tasks.filter(({ goalWorkKey }) => ['storage', 'commands', 'display'].includes(goalWorkKey));
     assert.equal(sessionTasks.length, 3);
     for (const task of sessionTasks) {
@@ -512,4 +529,80 @@ test('final-check input contains direct and child-process consumers and unrelate
   }
   assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6.1-terra' && config.reasoning_effort === 'medium'));
   assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6-luna' && config.reasoning_effort === 'max'));
+});
+
+
+test('pause cases reproduce saved failures, setup identities and current pending state in both languages', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
+      assert.equal(fixture.event.kind, 'completion');
+      assert.equal(input.event.kind, 'task_failed');
+      assert.equal(input.event.result.interrupted, true);
+      assert.equal(fixture.goal.executionStatus, 'active');
+      const task = fixture.readResults.find(({ tool }) => tool === 'takt_list_tasks').result.tasks[0];
+      const saved = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('/tasks.yaml')).result.tasks[0];
+      if (caseId === 'resumed-already-requeued') {
+        assert.equal(task.status, 'pending');
+        assert.equal(saved.failure, undefined);
+        assert.equal(saved.completion, undefined);
+        assert.equal(task.runSlug, undefined);
+        assert.equal(saved.source_run_slug, fixture.event.runSlug);
+        continue;
+      }
+      assert.equal(task.status, 'failed');
+      assert.deepEqual(saved.completion, input.event.result);
+      assert.equal(saved.failure.error, input.event.result.failureReason);
+      if (caseId === 'task-stopped-not-resumed') {
+        assert.match(saved.failure.error, /^Task booking-validation execution 650e8400-e29b-41d4-a716-446655440082 was stopped by manager$/);
+        assert.equal(saved.failure.retryable, false);
+      } else {
+        assert.equal(saved.failure.error, `Goal ${fixture.goal.id} was paused`);
+        assert.notEqual(saved.failure.retryable, false);
+      }
+      if (caseId === 'paused-requeue-before-start') {
+        assert.match(input.event.task.runSlug, /^setup-[0-9a-f-]{36}$/);
+        assert.equal(task.runSlug, undefined);
+        assert.equal(saved.run_slug, undefined);
+        assert.equal(saved.worktree_path, undefined);
+        assert.equal(input.event.result.workflowResult, 'error');
+        assert.equal(input.event.result.sha, undefined);
+        assert.equal(input.event.result.shaUnavailableReason, 'Workflow execution did not start');
+      } else {
+        assert.equal(input.event.result.workflowResult, 'aborted');
+        assert.equal(task.runSlug, fixture.event.runSlug);
+      }
+    }
+  }
+});
+
+test('pause cases use production read-tool arguments and paginated run summaries', async () => {
+  const schemas = await import('../dist/features/mcp/schemas.js');
+  const readSchemas = {
+    takt_get_goal: schemas.getGoalInputSchema,
+    takt_list_tasks: schemas.listTasksInputSchema,
+    takt_get_run: schemas.getRunInputSchema,
+    takt_get_goal_relation: schemas.goalWriteInputSchema,
+    takt_list_workflows: schemas.listGoalsInputSchema.omit({ errorOffset: true }),
+    takt_list_goal_questions: schemas.listGoalQuestionsInputSchema,
+    takt_list_standalone_inquiries: schemas.listStandaloneInquiriesInputSchema,
+  };
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+      const fixture = loadManagerCase(caseId, lang);
+      for (const read of fixture.readResults) {
+        if (!read.tool.startsWith('takt_')) continue;
+        assert.ok(readSchemas[read.tool]?.safeParse(read.arguments).success, `${lang}/${caseId}/${read.tool}`);
+        if (read.tool === 'takt_get_run' && read.arguments.view === undefined) {
+          for (const [field, collection] of [['stepLogPage', 'stepLogs'], ['reportPage', 'reports']]) {
+            assert.equal(read.result[field].collection, collection);
+            assert.equal(read.result[field].returnedCount, read.result[collection].length);
+            assert.equal(read.result[field].nextOffset, null);
+          }
+          assert.ok(read.result.reports.every((report) => !Object.hasOwn(report, 'content')));
+        }
+      }
+    }
+  }
 });

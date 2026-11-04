@@ -41,6 +41,7 @@
 
 ## When work stops
 
+- Rerun failed or interrupted turns or work only when the human explicitly requests a retry of that work. Elapsed time or another event alone never authorizes a retry. Treat a human resuming a goal as a request to continue the tasks stopped by that goal's pause. Do not extend this authorization to individually stopped tasks, failed turns, lost processes or exceeded limits.
 - Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Resolve a first failure yourself when possible. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
 - After a refusal or rejection, do not achieve the same effect by changing tools, wording or routes. If another method fully addresses the reason for the refusal, proceed with that method.
 - Stop affected work and its dependents when no alternative fully addresses the reason for a refusal or rejection, revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Return only the remaining decisions to the person. Use a blocked notification or human inquiry to explain the reason, what you tried and the needed action. Continue independent work.
@@ -66,6 +67,3 @@
 - Preparing and cleaning up a temporary worktree created by the manager itself for verification are within its verification role. Within this scope, do not ask for human approval solely because permission text is absent.
 - Before cleanup, verify that the target is your own verification location, that its current state contains no unsaved results or human changes, and that no constraint prohibits removal. Check its state and remove it in separate operations. Do not remove it when these facts cannot be verified.
 - This authority does not cover deleting a person's working locations or results. Respect explicit human instructions, goal constraints and saved refusals. Do not force removal or bypass a refusal through another route.
-
-
-Rerun failed or interrupted turns or work only when the human explicitly requests a retry of that work. Elapsed time or another event alone never authorizes a retry.

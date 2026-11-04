@@ -218,7 +218,7 @@ per-metric rates and inspect actual model outputs before changing templates.
 knowledge / instruction を全文組み立て、設定行も本番と同じ形で付ける。
 `projectDir` と `TAKT_CONFIG_DIR` は空の一時ディレクトリに隔離し、ユーザーと
 プロジェクトの上書きを拾わない。Repository 行と書き込み引数には固定ケースの
-`cwd` を使う。イベント入力は dist の `buildGoalTurnContext`、会話入力は
+`cwd` を使う。イベント入力は本番と同じイベントと処理指示の JSON、会話入力は
 本番の `handleUserMessage` が渡す文書本文を使う。書き込みツールの引数 schema
 も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
 既存のテキスト再生ケースは「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
@@ -245,7 +245,7 @@ TAKT と関係のない題材として、`constraint-carryover-data` は Python 
 成果の履歴と run の報告で統合後のビルドとテストを確認できる場合に、確認作業を足さず完成するかを測る。
 `escalate-not-on-first-failure` は CSV の仕様書の指定漏れによるデータ処理の初回失敗で、
 人の対応待ちで止まらず、読む資料と実装方針を補った指示書で投入するかを測る。
-巡回用の11ケースは、要求にない途中状態、方針で対象外の脅威、範囲外の作業、保証を
+旧巡回場面のうち裁定を扱う11ケースは、要求にない途中状態、方針で対象外の脅威、範囲外の作業、保証を
 保てる単純な代替案を裁定に指摘されたときの `takt_tell_run`、受け入れ条件にある
 不具合・既存動作の回帰・テスト不足・形式仕様・再試行時の重複防止を指摘されたときに
 対象を外さないこと、条件が矛盾して人の判断が要るときの質問、裁定が変わらない同一 run
@@ -257,7 +257,7 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
   裁定が変わらない実行中のタスクで、別々に終わった確認が同じ項目を2回続けて未完了と
   した場合の介入。対象と基準を保ち、読む量を分けて必要な照合を終えさせる指示と理由を
   採点する。1回だけ、実装の不足との混在、同じ項目への送信済みの指示を対照にする。
-  報告本文を読み取り結果として渡すため、報告を読みに行く行動や巡回の時機は測らない。
+  報告本文を読み取り結果として渡すため、報告を読みに行く行動や見張りの発火時機は測らない。
 - `plan-missing` / `plan-dependent` / `plan-cancelled` / `plan-integrated` / `plan-queued`:
   取り込みが保存された終了イベントから、objective の5項目の計画と作業の記録を
   照らす判断。総括には「全作業の取り込みが済んだ」と書かれているが、個別の記録と
@@ -286,12 +286,152 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 操作・引数・記録の有無は JavaScript assert、待機方法や確認対象の意味は llm-rubric で判定する。
 実際の Bash の経過時間、同じ manager での次ターン受付、コミットや承認問い合わせの生成は測らない。
 
-43ケース・日英86入力のうち、既存の41ケース・82入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+47ケース・日英94入力のうち、再生の45ケース・90入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
 Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
 `--filter-providers` で選べる。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
 明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
 生の生成結果の保存は共通CLI provider の `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` を使える。
+
+保存イベント（completion / answer / registered / resumed）は、本番の `managerInboxTurnEvent` で
+タスク終了・失敗、問い合わせ回答、登録、再開のイベントへ変換する。USER は本番と同じ
+`JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' })`
+である。ゴールとタスクは USER に埋め込まず、`managerStateReads` が場面の状態から
+`このターンで既に読んだ結果` に組み立てる。`takt_get_goal` は本番の要約と項目別の読み出し、
+`takt_list_tasks` は本番と同じ要約・取り込み状態・ページ情報を使う。省略されるタスクの失敗理由や
+成果 SHA、作業場所は `.takt/tasks.yaml` の読み取り結果に含める。取り込み状態は場面に明記し、
+実行時に記録の文章や SHA の一致から推定しない。
+`takt_get_run` の既定の読み取りは taskOmission と段階・報告の要約だけを返し、本文は
+`view: task / log / report` の個別の読み取り結果として渡す。タスクの completedAt は fixture に明記し、
+終了済みタスクで欠けている場合は読み取り結果の組み立てを失敗させる。イベント時刻では補わない。
+保存タスクは `taskDir`（保存レコードの `task_dir`）、workflow、summary、slug、実行済みなら実行 ID、
+実行中なら所有プロセスと clone の作業場所も明記する。指示本文を保存先の代わりに合成しない。
+開始位置、再開位置、再実行メモも保存レコードへ渡す。すべてのイベント場面で、本番の
+`takt_list_tasks` と要約・ページ情報を照合する。取り込み状態は fixture の到達性の宣言を使い、
+それ以外のフィールドは全体を比較する。履歴の run 記録が残っていないタスクには、本番と同じ
+`error: Run metadata is unavailable` を含める。
+
+`escalate-not-on-first-failure` は一時停止以外の初回失敗を自力で解消する回帰ガードとして残す。
+合格条件は変更した。同じ workKey の enqueue は既存の failed タスクを返すだけなので不合格とし、
+既存の csv-import への retry / requeue で不足した指示を補うことを求める。
+保存された `csv-import-replay` workflow、clone、implement の保存位置を使い、
+日英それぞれで本番 MCP の retry / requeue（開始位置の省略と plan / implement / review）を確認する。
+共通採点でも既存 workKey の enqueue と、すでに取り込み済みの成果への merge を不合格にした。
+後者は、作業投入の場面で許していた任意の冗長な merge を認めなくする変更で、必要な次の作業は変えない。
+対象は `parallel-cli`、`parallel-docs-migration`、`shared-resource`、`shared-definition`、
+`human-order`、`constraint-carryover`、`constraint-carryover-data`、`constraint-once`、
+`no-check-docs`、`no-check-same-module`、`integration-already-checked`。
+ほかの場面の判断意図は維持する。モデルによる回帰の合否は別途確認が必要である。
+
+巡回イベントは現在の daemon から配られないため、次の15場面をすべて
+`watch_observation` の `run_log_stalled` に移した。除外した場面はない。
+各場面で実行中の同じ run のログ更新が31分止まったことを観測し、保存されたレビュー・修正・確認の履歴を読む。
+`observedAt` と `lastUpdatedAt` は本番の30分の閾値を満たす。プロセス消失や作業自体の失敗には置き換えていない。
+起動のきっかけだけを変更し、次の判断と既存の採点条件を維持する。
+15場面すべてで実行中タスクに `worktree: true` と clone の `worktreePath` を保存し、
+`runArtifacts.directory` もその clone を指す。`takt_get_run` の cwd は元のリポジトリのままとし、
+本番と同じく保存タスクから clone 内の run を読む。
+`runArtifacts` の meta・開始／完了ログ・報告を保存状態の根拠とし、読み取り結果を本番の reader で照合する。
+iteration はステップ開始ごとの通し番号であり、修正の周回番号とは区別する。
+conflicting-calendar-visibility は裁定後の fix、unchanged-adjudication は次の review が実行中である。
+開始ログを期待する要約から逆算せず、完了前の開始、通し番号、終了後のログ禁止、現在の実行との一致を検査する。
+実 clone で15場面の日英の読み取りと、追加指示が必要な6場面および任意に許す6場面の送信成立も確認する。
+
+| 場面 | 移行先 | 維持する判断 |
+| --- | --- | --- |
+| mail-dispatch-state | run_log_stalled | 必要な失敗・再試行時の保証を保ち、過剰な修正方法を替える |
+| local-config-tampering | run_log_stalled | 方針で除外された改変対策を修正対象から外す |
+| offline-sync-queue | run_log_stalled | 必要な振る舞いを保って単純な作りへ替える |
+| report-publish-replacement | run_log_stalled | 根拠のない公開方法の変更を止める |
+| reservation-validation | run_log_stalled | 元の受け入れ条件に必要な検証を維持する |
+| legacy-date-format | run_log_stalled | 維持を求められた既存形式の修正を外さない |
+| archive-test-coverage | run_log_stalled | 受け入れ条件のテスト不足を修正対象に保つ |
+| quoted-csv-fields | run_log_stalled | 形式の仕様が求める振る舞いを保つ |
+| inventory-retry-idempotency | run_log_stalled | 再試行時に必要な保証を落とさない |
+| conflicting-calendar-visibility | run_log_stalled | 矛盾する受け入れ条件の判断を人に求める |
+| unchanged-adjudication | run_log_stalled | 変わっていない裁定について指示を重ねない |
+| verification-repeated | run_log_stalled | 同じ項目の確認が2回未完了なら読み方を指示する |
+| verification-once | run_log_stalled | 未完了が1回だけなら次の確認を待つ |
+| verification-mixed | run_log_stalled | 未完了の原因を項目ごとに区別する |
+| verification-told | run_log_stalled | 同じ run に伝えた指示を重ねない |
+
+追加の4場面は、すべて日英の保存 completion イベントで定義し、共有の変換関数を通して `task_failed` にする。
+
+- `paused-requeue`: 保存位置が使える。同じタスクの requeue をちょうど1回、`startStep` なしで行う。
+- `paused-requeue-before-start`: 開始前の中断。イベントの `runSlug` は `setup-<uuid>`、保存タスクには `runSlug` がない。
+  completion は interrupted / error と `shaUnavailableReason: Workflow execution did not start` を持つ。
+  同じタスクの requeue をちょうど1回、`startStep` なし、または最初の `plan` で行う。保存タスクには `worktree: true` を保持する。
+- `task-stopped-not-resumed`: 方針を見直すために個別停止され、作業範囲は未決定。同じ作業や別の作業を投入せず待つ。
+  独自の予約形式を含めるか、範囲の選択肢を添えて人に質問してもよい。停止理由・未決定の範囲・必要な判断を通知して待つことも認める。
+  質問や判断待ちの連絡は `response.message` だけでもよく、質問せず記録だけで待つ場合も同じ基準で判定する。
+- `resumed-already-requeued`: 対象はすでに pending。`paused-requeue` に本番の requeue を適用した
+  保存レコード（start_step / resume_point / retry_note など）と一致することを検査する。
+  古い completion で操作を重ねない。
+
+最初の2場面で許す書き込みは、その requeue と任意の作業記録だけ。個別停止の場面は任意の作業記録、
+人宛ての `takt_ask_goal_question`、`takt_notify_goal` を許す。すでに pending の場面は任意の作業記録だけを許す。
+通知は個別停止以外の3場面では禁止する。個別停止の通知は、停止理由、独自の予約形式を含めるかが未決定であること、
+人に必要な範囲の判断を伝え、判断が届くまで停止を維持する内容なら合格。通知に質問を含む場合も、下記の範囲の選択の条件を適用する。
+retryNote、message、作業記録、質問、通知の意味は llm-rubric で判定する。最初の2場面では中断を作業の失敗・
+失敗の繰り返し・人の対応待ちと扱うこと、retryNote への命令・新要件・範囲変更の追加、根拠のない復旧障害は不合格。
+このターンでの取り込み・完成やその宣言は不合格だが、タスク完了後に成果を確認して取り込む通常の後続の流れは説明してよい。
+保存状態が failed という事実の説明は許す。個別停止ではゴール再開を続行の許可とせず、範囲の判断を待つ。
+質問は本文・選択肢・推奨を合わせて判定し、独自形式を含めない範囲と、含める方向への範囲変更または範囲の再相談を人が選べれば合格。
+元の受け入れ条件を理由に前者を推奨してよく、範囲の選択とその範囲での再開依頼を一問にまとめてもよい。
+retry という語や推奨だけでは不合格にしない。「retry を許可する／停止を維持する」だけで範囲を選び直せない質問は不合格。
+本文だけで尋ねる場合も同じ条件を適用し、道具を呼ばないことだけでは不合格にしない。
+同じタスクの requeue / retry、同じ workKey の enqueue、別の作業の投入、独断の再開、取り込み・完成、JSON の形式・契約違反は引き続き不合格。
+
+一時停止の RED / GREEN は **knowledge・policies・instructions の日英6ファイルすべて**を切り替える。
+後述の `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` は別の比較用であり、今回の6ファイルの切り替えには使わない。
+コーディネーターが次の手順で実行する。モデルを呼ぶコマンドを含む。
+
+```bash
+pause_eval_backup=$(mktemp -d /private/tmp/takt-manager-pause.XXXXXX)
+mkdir -p eval/.results
+for pause_eval_lang in ja en; do
+  for pause_eval_kind in knowledge policies instructions; do
+    pause_eval_path="builtins/$pause_eval_lang/facets/$pause_eval_kind/manager.md"
+    mkdir -p "$pause_eval_backup/$(dirname "$pause_eval_path")"
+    cp "$pause_eval_path" "$pause_eval_backup/$pause_eval_path"
+  done
+done
+restore_pause_eval_facets() {
+  for pause_eval_lang in ja en; do
+    for pause_eval_kind in knowledge policies instructions; do
+      pause_eval_path="builtins/$pause_eval_lang/facets/$pause_eval_kind/manager.md"
+      cp "$pause_eval_backup/$pause_eval_path" "$pause_eval_path"
+    done
+  done
+}
+trap restore_pause_eval_facets EXIT
+for pause_eval_lang in ja en; do
+  for pause_eval_kind in knowledge policies instructions; do
+    pause_eval_path="builtins/$pause_eval_lang/facets/$pause_eval_kind/manager.md"
+    git show "origin/main:$pause_eval_path" > "$pause_eval_path"
+  done
+done
+npm run build
+node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
+  --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
+  --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
+  -o eval/.results/manager-pause-red.json
+restore_pause_eval_facets
+npm run build
+node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
+  --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
+  --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
+  -o eval/.results/manager-pause-green.json
+# GREEN で既存場面も含めた再生90入力の回帰を確認する。
+node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
+  --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
+  -o eval/.results/manager-pause-green-all.json
+trap - EXIT
+```
+
+`--filter-pattern` は description の正規表現で絞り込み、8入力を選ぶ。
+`manager-work-split-offline.test.mjs` でもこの CLI の絞り込みをモデルなしで実行する。
+RED で通った場面は「その場面では追加の効果を確かめられない」と報告する。
 
 実操作を観測する追加2ケース（stopped-background-execution、integrated-task-execution）は、
 専用の claude-sdk-opus-5 provider だけで実行する。既存の再生ケースには従来の4 provider だけを対応させる。
@@ -317,6 +457,11 @@ worker の標準エラーは非公開の `worker-stderr.log` に保存し、起�
 旧方式の30件の評価結果は保持する。
 
 モデルを呼ばない検証は build 済みの dist を用いて行う。
+テキスト再生では、本番で起こりうる読み取り状態と、採点が認める操作の受付・状態変更までを検査する。
+再開後の run が最後まで実行できることは、この eval の成立条件に含めない。
+保存位置がある場面と開始前中断の場面は、どちらも本番の MCP `takt_requeue_goal_task` で
+同じタスクが pending に戻ることを確認する。開始前中断では、日英それぞれで `startStep` の省略と
+最初の `plan` の指定を検査し、指示書と `worktree: true` を保ち、元の run や作業場所を引き継がないことを確かめる。
 
 ```bash
 node --test eval/providers/manager-work-split-execution.test.mjs
@@ -324,6 +469,7 @@ node --test eval/asserts/manager-work-split-execution.test.mjs
 node --test eval/manager-work-split-config.test.mjs
 node --test eval/asserts/manager-work-split.test.mjs
 node --test eval/manager-work-split-prompt.test.mjs
+node --test eval/manager-work-split-reads.test.mjs
 node --test eval/providers/manager-work-split.test.mjs
 node --test eval/manager-work-split-offline.test.mjs
 node --test eval/suite-registry.test.mjs
@@ -331,12 +477,12 @@ node --test eval/suite-registry.test.mjs
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
 RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
-それぞれ全86入力をモデルを呼ばない provider に渡す。再生ケースでは組み立てたプロンプトの目印の有無で
+それぞれ全94入力をモデルを呼ばない provider に渡す。さらに新しい4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
 `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
 
-今回の RED / GREEN は、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
+背景処理・確認用コミットについての別の RED / GREEN では、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
 切り替える。指定先は絶対パスで、`ja/manager.md` と `en/manager.md` を置く。
 persona / policy / knowledge、入力、schema、外側の再生指示、rubric、provider、反復数は固定する。
 変数を省いた GREEN は作業ツリーの指示書を使う。過去の concurrency 行を省く切替は使わない。
@@ -704,7 +850,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（43ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、巡回時に裁定対象と元の要求・方針・範囲を照合する判断（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（47ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、ログ停滞の観測時に裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |

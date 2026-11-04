@@ -1,0 +1,622 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: pause-replay
+  mainMerge: auto
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 会議室予約の時間帯を検証する
+    outOfScope:
+      - 外部サービスの変更
+    acceptanceCriteria:
+      - 終了時刻が開始時刻以前の予約を拒否する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/booking-validation
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000001
+        recordedAt: 2026-11-01T00:10:00.000Z
+        summary: 人の依頼でゴールを一時停止しました。
+      - id: 650e8400-e29b-41d4-a716-000000000002
+        recordedAt: 2026-11-01T00:20:00.000Z
+        summary: 人がゴールを再開しました。
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: booking-validation
+    runSlug: run-booking-validation
+    result: &a1
+      success: false
+      interrupted: true
+      workflowResult: aborted
+      failureReason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      branch: takt/task/booking-validation
+      sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    createdAt: 2026-11-01T00:10:00.000Z
+  tasks:
+    - name: booking-validation
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: failed
+      status: failed
+      createdAt: 2026-11-01T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      goalWorkKey: booking-validation
+      goalPurpose: 終了時刻が開始時刻以前の予約を拒否する。
+      workflow: pause-replay
+      startedAt: 2026-11-01T00:02:00.000Z
+      completedAt: 2026-11-01T00:10:00.000Z
+      failure:
+        error: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      completion: *a1
+      runSlug: run-booking-validation
+      worktreePath: /workspace/project/.takt/worktrees/booking-validation
+      goalIntegration: not_integrated
+      executionId: 650e8400-e29b-41d4-a716-446655440080
+      worktree: true
+      branch: takt/task/booking-validation
+      taskDir: .takt/tasks/booking-validation
+      summary: 終了時刻が開始時刻以前の予約を拒否する。
+      baseBranch: takt/goal/booking-validation
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      ownerStartTime: null
+      ownerPid: null
+      slug: booking-validation
+      startStep: review
+      resumePoint:
+        version: 2
+        stack:
+          - workflow: pause-replay
+            workflow_ref: pause-replay
+            step: review
+            kind: agent
+            occurrence: 1
+            step_iterations:
+              plan: 1
+              implement: 1
+              review: 1
+        iteration: 3
+        elapsed_ms: 480000
+        workflow_call_invocations: {}
+        workflow_step_participations: {}
+      exceededCurrentIteration: 3
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/git-state.txt
+      result: ゴールのブランチ takt/goal/booking-validation は main から分岐し、先端は aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。未取り込みのタスク成果だけが作業場所にあります。
+    - tool: takt_list_goal_questions
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        questions: []
+        collection: questions
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/booking-validation
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: pause-replay
+            description: plan、implement、review の順に進め、最初のステップは plan。
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-booking-validation
+      result:
+        runSlug: run-booking-validation
+        workflow: pause-replay
+        status: aborted
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-11-01T00:09:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 60
+          returnedBytes: 0
+          truncated: true
+        stepLogs:
+          - index: 0
+            step: plan
+            persona: coder
+            status: done
+            timestamp: 2026-11-01T00:03:00.000Z
+            iteration: 1
+          - index: 1
+            step: implement
+            persona: coder
+            status: done
+            timestamp: 2026-11-01T00:04:00.000Z
+            iteration: 2
+        reports:
+          - filename: progress.md
+            sizeBytes: 427
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 2
+          returnedCount: 2
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-booking-validation
+        view: report
+        report: progress.md
+      result:
+        runSlug: run-booking-validation
+        workflow: pause-replay
+        status: aborted
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-11-01T00:09:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 60
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: progress.md
+          content: |-
+            plan と implement は終了しました。予約の入力検証と対象テストを実装済みで、review の途中で中断しました。レビューの保存位置は利用でき、作業場所と成果は残っています。
+            記録時刻: plan の終了は 2026-11-01T00:03:00.000Z、implement の終了は 2026-11-01T00:04:00.000Z、review の開始は 2026-11-01T00:09:00.000Z、中断は 2026-11-01T00:10:00.000Z。
+          totalBytes: 427
+          offset: 0
+          returnedBytes: 427
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/booking-validation status --short
+      result: |-
+        exit code: 0
+        stdout:  M src/bookings/validation.ts
+         M tests/bookings-validation.test.ts
+        stderr:
+  runArtifacts:
+    - directory: /workspace/project/.takt/worktrees/booking-validation
+      meta:
+        task: 終了時刻が開始時刻以前の予約を拒否する。
+        workflow: pause-replay
+        runSlug: run-booking-validation
+        runRoot: .takt/runs/run-booking-validation
+        reportDirectory: .takt/runs/run-booking-validation/reports
+        contextDirectory: .takt/runs/run-booking-validation/context
+        logsDirectory: .takt/runs/run-booking-validation/logs
+        status: aborted
+        startTime: 2026-11-01T00:02:00.000Z
+        currentStep: review
+        currentIteration: 3
+        phase: 1
+        endTime: 2026-11-01T00:10:00.000Z
+        resumePoint:
+          version: 2
+          stack:
+            - workflow: pause-replay
+              workflow_ref: pause-replay
+              step: review
+              kind: agent
+              occurrence: 1
+              step_iterations:
+                plan: 1
+                implement: 1
+                review: 1
+          iteration: 3
+          elapsed_ms: 480000
+          workflow_call_invocations: {}
+          workflow_step_participations: {}
+      sessionLog:
+        - type: workflow_start
+          task: 終了時刻が開始時刻以前の予約を拒否する。
+          workflowName: pause-replay
+          startTime: 2026-11-01T00:02:00.000Z
+        - type: step_start
+          step: plan
+          persona: coder
+          iteration: 1
+          timestamp: 2026-11-01T00:02:30.000Z
+        - type: step_complete
+          step: plan
+          persona: coder
+          iteration: 1
+          status: done
+          content: ""
+          instruction: ""
+          timestamp: 2026-11-01T00:03:00.000Z
+        - type: step_start
+          step: implement
+          persona: coder
+          iteration: 2
+          timestamp: 2026-11-01T00:03:30.000Z
+        - type: step_complete
+          step: implement
+          persona: coder
+          iteration: 2
+          status: done
+          content: ""
+          instruction: ""
+          timestamp: 2026-11-01T00:04:00.000Z
+        - type: step_start
+          step: review
+          persona: reviewer
+          iteration: 3
+          timestamp: 2026-11-01T00:09:00.000Z
+        - type: workflow_abort
+          iterations: 3
+          reason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+          endTime: 2026-11-01T00:10:00.000Z
+      reports:
+        - filename: progress.md
+          content: |-
+            plan と implement は終了しました。予約の入力検証と対象テストを実装済みで、review の途中で中断しました。レビューの保存位置は利用でき、作業場所と成果は残っています。
+            記録時刻: plan の終了は 2026-11-01T00:03:00.000Z、implement の終了は 2026-11-01T00:04:00.000Z、review の開始は 2026-11-01T00:09:00.000Z、中断は 2026-11-01T00:10:00.000Z。
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: pause-replay
+  mainMerge: auto
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Validate meeting room booking time ranges
+    outOfScope:
+      - Changes to external services
+    acceptanceCriteria:
+      - Reject bookings whose end time is not after their start time.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/booking-validation
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000001
+        recordedAt: 2026-11-01T00:10:00.000Z
+        summary: Paused the goal at the human's request.
+      - id: 650e8400-e29b-41d4-a716-000000000002
+        recordedAt: 2026-11-01T00:20:00.000Z
+        summary: The human resumed the goal.
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: booking-validation
+    runSlug: run-booking-validation
+    result: &a1
+      success: false
+      interrupted: true
+      workflowResult: aborted
+      failureReason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      branch: takt/task/booking-validation
+      sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    createdAt: 2026-11-01T00:10:00.000Z
+  tasks:
+    - name: booking-validation
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: failed
+      status: failed
+      createdAt: 2026-11-01T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      goalWorkKey: booking-validation
+      goalPurpose: Reject bookings whose end time is not after their start time.
+      workflow: pause-replay
+      startedAt: 2026-11-01T00:02:00.000Z
+      completedAt: 2026-11-01T00:10:00.000Z
+      failure:
+        error: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+      completion: *a1
+      runSlug: run-booking-validation
+      worktreePath: /workspace/project/.takt/worktrees/booking-validation
+      goalIntegration: not_integrated
+      executionId: 650e8400-e29b-41d4-a716-446655440080
+      worktree: true
+      branch: takt/task/booking-validation
+      taskDir: .takt/tasks/booking-validation
+      summary: Reject bookings whose end time is not after their start time.
+      baseBranch: takt/goal/booking-validation
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      ownerStartTime: null
+      ownerPid: null
+      slug: booking-validation
+      startStep: review
+      resumePoint:
+        version: 2
+        stack:
+          - workflow: pause-replay
+            workflow_ref: pause-replay
+            step: review
+            kind: agent
+            occurrence: 1
+            step_iterations:
+              plan: 1
+              implement: 1
+              review: 1
+        iteration: 3
+        elapsed_ms: 480000
+        workflow_call_invocations: {}
+        workflow_step_participations: {}
+      exceededCurrentIteration: 3
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/git-state.txt
+      result: Goal branch takt/goal/booking-validation branches from main at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Only the unintegrated task result is in its working location.
+    - tool: takt_list_goal_questions
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        questions: []
+        collection: questions
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/booking-validation
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: pause-replay
+            description: Steps are plan, implement, review; the first step is plan.
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-booking-validation
+      result:
+        runSlug: run-booking-validation
+        workflow: pause-replay
+        status: aborted
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-11-01T00:09:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 61
+          returnedBytes: 0
+          truncated: true
+        stepLogs:
+          - index: 0
+            step: plan
+            persona: coder
+            status: done
+            timestamp: 2026-11-01T00:03:00.000Z
+            iteration: 1
+          - index: 1
+            step: implement
+            persona: coder
+            status: done
+            timestamp: 2026-11-01T00:04:00.000Z
+            iteration: 2
+        reports:
+          - filename: progress.md
+            sizeBytes: 406
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 2
+          returnedCount: 2
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-booking-validation
+        view: report
+        report: progress.md
+      result:
+        runSlug: run-booking-validation
+        workflow: pause-replay
+        status: aborted
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-11-01T00:09:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 61
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: progress.md
+          content: |-
+            plan and implement finished. Booking validation and its targeted tests are implemented; interruption occurred during review. The saved review position is usable, and the working location and results remain intact.
+            Recorded times: plan finished at 2026-11-01T00:03:00.000Z; implement finished at 2026-11-01T00:04:00.000Z; review started at 2026-11-01T00:09:00.000Z; interruption at 2026-11-01T00:10:00.000Z.
+          totalBytes: 406
+          offset: 0
+          returnedBytes: 406
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/booking-validation status --short
+      result: |-
+        exit code: 0
+        stdout:  M src/bookings/validation.ts
+         M tests/bookings-validation.test.ts
+        stderr:
+  runArtifacts:
+    - directory: /workspace/project/.takt/worktrees/booking-validation
+      meta:
+        task: Reject bookings whose end time is not after their start time.
+        workflow: pause-replay
+        runSlug: run-booking-validation
+        runRoot: .takt/runs/run-booking-validation
+        reportDirectory: .takt/runs/run-booking-validation/reports
+        contextDirectory: .takt/runs/run-booking-validation/context
+        logsDirectory: .takt/runs/run-booking-validation/logs
+        status: aborted
+        startTime: 2026-11-01T00:02:00.000Z
+        currentStep: review
+        currentIteration: 3
+        phase: 1
+        endTime: 2026-11-01T00:10:00.000Z
+        resumePoint:
+          version: 2
+          stack:
+            - workflow: pause-replay
+              workflow_ref: pause-replay
+              step: review
+              kind: agent
+              occurrence: 1
+              step_iterations:
+                plan: 1
+                implement: 1
+                review: 1
+          iteration: 3
+          elapsed_ms: 480000
+          workflow_call_invocations: {}
+          workflow_step_participations: {}
+      sessionLog:
+        - type: workflow_start
+          task: Reject bookings whose end time is not after their start time.
+          workflowName: pause-replay
+          startTime: 2026-11-01T00:02:00.000Z
+        - type: step_start
+          step: plan
+          persona: coder
+          iteration: 1
+          timestamp: 2026-11-01T00:02:30.000Z
+        - type: step_complete
+          step: plan
+          persona: coder
+          iteration: 1
+          status: done
+          content: ""
+          instruction: ""
+          timestamp: 2026-11-01T00:03:00.000Z
+        - type: step_start
+          step: implement
+          persona: coder
+          iteration: 2
+          timestamp: 2026-11-01T00:03:30.000Z
+        - type: step_complete
+          step: implement
+          persona: coder
+          iteration: 2
+          status: done
+          content: ""
+          instruction: ""
+          timestamp: 2026-11-01T00:04:00.000Z
+        - type: step_start
+          step: review
+          persona: reviewer
+          iteration: 3
+          timestamp: 2026-11-01T00:09:00.000Z
+        - type: workflow_abort
+          iterations: 3
+          reason: Goal 650e8400-e29b-41d4-a716-446655440000 was paused
+          endTime: 2026-11-01T00:10:00.000Z
+      reports:
+        - filename: progress.md
+          content: |-
+            plan and implement finished. Booking validation and its targeted tests are implemented; interruption occurred during review. The saved review position is usable, and the working location and results remain intact.
+            Recorded times: plan finished at 2026-11-01T00:03:00.000Z; implement finished at 2026-11-01T00:04:00.000Z; review started at 2026-11-01T00:09:00.000Z; interruption at 2026-11-01T00:10:00.000Z.

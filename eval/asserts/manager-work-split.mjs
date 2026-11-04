@@ -43,6 +43,10 @@ const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const caseWriteTools = {
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
+  'paused-requeue': new Set(['takt_requeue_goal_task']),
+  'paused-requeue-before-start': new Set(['takt_requeue_goal_task']),
+  'task-stopped-not-resumed': new Set(['takt_ask_goal_question', 'takt_notify_goal']),
+  'resumed-already-requeued': new Set(),
   'plan-missing': new Set(['takt_enqueue_goal_task']),
   'stopped-background-check': new Set(),
   'integrated-task-verification': new Set(),
@@ -50,7 +54,7 @@ const caseWriteTools = {
   ...Object.fromEntries([...verificationTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...verificationNoTellCases, ...planWaitCases, ...finalPlanCases].map((caseId) => [caseId, new Set()])),
   'escalate-repeated-failure': new Set(['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question']),
-  'escalate-not-on-first-failure': new Set(['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task']),
+  'escalate-not-on-first-failure': new Set(['takt_requeue_goal_task', 'takt_retry_goal_task']),
   ...Object.fromEntries([...completionCases].map((caseId) => [caseId, completionTools])),
   ...Object.fromEntries([...summaryCases].map((caseId) => [caseId, new Set()])),
   ...Object.fromEntries([...patrolTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
@@ -59,6 +63,10 @@ const caseWriteTools = {
   ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run'])])),
 };
 const commonTools = new Set(['takt_record_goal_work_log', 'takt_notify_goal']);
+const pauseRequeueCases = new Set(['paused-requeue', 'paused-requeue-before-start']);
+const pauseRecordCases = new Set(['task-stopped-not-resumed', 'resumed-already-requeued']);
+const caseCommonTools = Object.fromEntries([...pauseRequeueCases, ...pauseRecordCases]
+  .map((caseId) => [caseId, new Set(['takt_record_goal_work_log'])]));
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseEnvelope(output) {
@@ -95,7 +103,7 @@ export default function assertManagerWorkSplit(output, context) {
   let submitted = false;
   for (const call of parsed.calls) {
     if (!Object.hasOwn(managerWriteSchemas, call.tool)) return result(false, `Unknown writing tool: ${call.tool}`);
-    if (!caseWriteTools[caseId].has(call.tool) && !commonTools.has(call.tool)) {
+    if (!caseWriteTools[caseId].has(call.tool) && !(caseCommonTools[caseId] ?? commonTools).has(call.tool)) {
       return result(false, `Writing tool not allowed for this case: ${call.tool}`);
     }
     const schema = managerWriteSchemas[call.tool];
@@ -103,13 +111,17 @@ export default function assertManagerWorkSplit(output, context) {
     const args = call.arguments;
     if (args.cwd !== fixture.cwd || args.goalId !== fixture.goal?.id) return result(false, 'Wrong repository or goal');
     if (call.tool === 'takt_enqueue_goal_task') {
+      if (args.workKey !== undefined && fixture.tasks.some((task) => task.goalWorkKey === args.workKey)) {
+        return result(false, 'Do not enqueue existing work without changing its state');
+      }
       submitted = true;
       if (!fixture.readResults.some((read) => read.tool === 'takt_list_workflows'
         && read.result.workflows.some(({ name }) => name === args.workflow))) return result(false, 'Unknown workflow');
     }
     if (call.tool === 'takt_merge_goal_task') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (submitted || task === undefined || args.expectedSha !== task.completion.sha) return result(false, 'Wrong task, result SHA or operation order');
+      if (submitted || task === undefined || args.expectedSha !== task.completion?.sha) return result(false, 'Wrong task, result SHA or operation order');
+      if (['pending', 'running'].includes(task.status) || task.goalIntegration === 'integrated') return result(false, 'Choose ended work that is not already integrated');
     }
     if (call.tool === 'takt_requeue_goal_task' || call.tool === 'takt_retry_goal_task') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
@@ -134,6 +146,21 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (pauseRequeueCases.has(caseId)) {
+    if (retries.length !== 1 || retries[0].arguments.taskName !== fixture.event.taskName) {
+      return result(false, 'Requeue the interrupted task exactly once');
+    }
+    const args = managerWriteSchemas.takt_requeue_goal_task.parse(retries[0].arguments);
+    const allowedStart = caseId === 'paused-requeue-before-start' && args.startStep === 'plan';
+    return result(args.startStep === undefined || allowedStart,
+      'Preserve the saved position, or the initial step before a run starts; note and message semantics are graded separately');
+  }
+  if (pauseRecordCases.has(caseId)) {
+    const humanQuestions = questions.every(({ arguments: args }) =>
+      managerWriteSchemas.takt_ask_goal_question.parse(args).recipient === 'human');
+    return result(humanQuestions,
+      'Only permitted work logs, human scope questions or notifications; message, stop reason, scope, notification and stale-event semantics are graded separately');
+  }
   if (verificationPlanCases.has(caseId)) {
     const integrations = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
     return result(workLogs.length > 0 && integrations.length <= 1,
@@ -190,8 +217,10 @@ export default function assertManagerWorkSplit(output, context) {
     && parsed.calls.some(({ tool, arguments: args }) => tool === 'takt_notify_goal' && args.kind === 'blocked')) {
     return result(false, 'Do not stop for human action on a first failure the manager can resolve');
   }
-  if (caseId === 'escalate-not-on-first-failure' && retries.length > 0) {
-    return result(retries.length === 1 && enqueues.length === 0, 'Resume or revise one stopped task; instruction semantics are graded separately');
+  if (caseId === 'escalate-not-on-first-failure') {
+    return result(retries.length === 1 && enqueues.length === 0
+      && (retries[0].arguments.startStep === undefined || ['plan', 'implement', 'review'].includes(retries[0].arguments.startStep)),
+    'Resume or revise one stopped task from an available step; instruction semantics are graded separately');
   }
   const keys = enqueues.map(({ arguments: args }) => args.workKey);
   if (caseId === 'shared-resource') {
