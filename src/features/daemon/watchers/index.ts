@@ -54,11 +54,8 @@ export function startDaemonWatchers(dependencies: {
   };
   register('process', WATCH_INTERVALS.process, () => dependencies.source.runs(), (checks, target, signal) =>
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
-  register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) => {
-    const logPath = target.logPath;
-    if (logPath === null) return Promise.resolve();
-    return checks.log(target, () => readLogStamp(logPath), () => dependencies.source.run(target.targetId));
-  });
+  register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) =>
+    checks.log(target, readLogStamp, () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   register('inquiry', WATCH_INTERVALS.files, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));

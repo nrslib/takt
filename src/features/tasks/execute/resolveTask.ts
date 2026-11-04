@@ -7,6 +7,8 @@ import {
   type TaskInfo,
   type WorktreeResult,
   createSharedCloneAbortable,
+  removeClone,
+  removeCloneMeta,
   resolveBaseBranch,
   branchExists,
   summarizeTaskName,
@@ -376,7 +378,13 @@ export async function resolveTaskExecution(
           issueNumber: data.issue,
         }, abortSignal),
       );
-      options?.onCloneCreated?.(result);
+      try {
+        options?.onCloneCreated?.(result);
+      } catch (error) {
+        removeClone(result.path);
+        removeCloneMeta(defaultCwd, result.branch);
+        throw error;
+      }
       throwIfAborted(abortSignal);
       execCwd = result.path;
       branch = result.branch;
