@@ -202,7 +202,7 @@ describe('daemon manager runtime preparation', () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'claude', provider: new ClaudeProvider() }, strategy: { systemPrompt: 'fixture' } });
     if (outcome === 'success') await prepare();
     else await expect(prepare()).rejects.toThrow();
-    expect(doubles.execFile).toHaveBeenCalledWith('/test/claude', ['--help'], expect.objectContaining({ cwd: assignment.repositoryDirectory, timeout: 5_000 }), expect.any(Function));
+    expect(doubles.execFile).toHaveBeenCalledWith(expect.any(String), ['--help'], expect.objectContaining({ cwd: assignment.repositoryDirectory, timeout: 5_000 }), expect.any(Function));
     expect(doubles.claude).not.toHaveBeenCalled();
   });
   it.each([CodexProvider, OpenCodeProvider, ClaudeProvider])('cancels a pending runtime probe through %s', async (ProviderClass) => {

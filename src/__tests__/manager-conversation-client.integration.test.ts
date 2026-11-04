@@ -1,3 +1,5 @@
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import * as daemonFiles from '../infra/daemon/privateFile.js';
 import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as net from 'node:net';
@@ -16,12 +18,11 @@ import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValu
 import * as privateFiles from '../shared/utils/private-file.js';
 import { answerInquiry, createInquiry } from '../infra/goals/inquiry.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
-import { createConversationService } from '../features/manager/conversationService.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
-import { ConversationStore } from '../infra/conversations/store.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { removeDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { writeLegacyConversation, conversationRecord } from './helpers/conversation-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -52,7 +53,8 @@ let directory: string;
 let repository: string;
 let assignment: ManagerAssignment;
 let server: Awaited<ReturnType<typeof createConversationIpcServer>>;
-let service: ReturnType<typeof createConversationService>;
+let fixture: Awaited<ReturnType<typeof conversationDaemon>>;
+let service: Awaited<ReturnType<typeof conversationDaemon>>['input'];
 let client: ConversationIpcClient;
 const owner = { pid: process.pid, identity: { startTime: 'client-integration-owner' }, version: 'test', cliPath: '/test/cli.js' };
 // 再接続待ち（500ms）と再読込を挟む待機があるため、既定の 1 秒では負荷時に足りない。
@@ -64,50 +66,57 @@ function saveGoal(goal: Goal, goalRepository = repository) {
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.stubEnv('COLUMNS', '100'); vi.stubEnv('LINES', '24');
   doubles.plan.mockReturnValue({ ctx: { providerType: 'mock' } });
   directory = getGlobalConfigDir(); repository = join(directory, 'repository'); mkdirSync(repository, { recursive: true });
   assignment = { kind: 'repository', repositoryDirectory: repository, repositoryDirectories: [repository] };
   doubles.assignment.mockResolvedValue(assignment);
   const selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve(assignment);
   const record = conversationRecord(repository); record.bindings = [selected.binding];
-  new ConversationStore(directory).write(record);
+  writeLegacyConversation(directory, record);
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } });
-  service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(), runtime: { resolve: doubles.resolve, close: async () => {} } });
-  writeDaemonOwner(directory, owner);
+  fixture = await conversationDaemon(directory, { resolve: doubles.resolve, close: async () => {} });
+  service = fixture.input;
+  await writeDaemonOwner(directory, owner);
   server = await createConversationIpcServer(directory, owner, service);
   client = new ConversationIpcClient(assignment, { provider: 'mock', model: 'chosen-model' });
 });
-afterEach(async () => { cleanup(); client.close(); await service.close(); await server.close(); vi.restoreAllMocks(); });
+afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
 
 it.each([
   { size: 'short', text: 'Keep reading while this request is admitted' },
   { size: 'larger than an input batch', text: 'x'.repeat(16 * 1024) },
-])('keeps both snapshots within their deadline while a $size message response is pending', async ({ text }) => {
+])('starts both snapshots independently while a $size message response is pending', async ({ text }) => {
   const second = new ConversationIpcClient(assignment, { provider: 'mock' });
   const pendingReads: Promise<SnapshotRead>[] = [];
   try {
     await client.connect(); await complete(); await second.connect();
     await vi.waitFor(() => expect(second.getSnapshot().readStatus).toBe('complete'));
-    // 実測した各要求の正常な処理時間内で、応答待ちの直列化を識別する。
-    const submitting = vi.spyOn(service, 'submit').mockImplementationOnce(async () => {
-      await new Promise<void>((resolve) => { setTimeout(resolve, 3000); });
+    const released = gate(); const submitted = gate(); const readsEntered = gate();
+    let reads = 0;
+    vi.spyOn(service, 'submit').mockImplementationOnce(async () => {
+      submitted.release(); await released.promise;
       return { kind: 'accepted', operationId: randomUUID() };
     });
     const snapshot = service.snapshot.bind(service);
     vi.spyOn(service, 'snapshot').mockImplementation((id) => {
       const reading = snapshot(id).then(async (read) => {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 3000); });
-        return read;
+        if (++reads >= 2) readsEntered.release();
+        await released.promise; return read;
       });
-      pendingReads.push(reading);
-      return reading;
+      pendingReads.push(reading); return reading;
     });
-    const message = client.submit({ kind: 'message', text });
-    await vi.waitFor(() => expect(submitting).toHaveBeenCalledOnce());
-    await expect(Promise.all([message, client.refresh(), second.refresh()])).resolves.toEqual([
-      { kind: 'accepted', operationId: expect.any(String) }, undefined, undefined,
-    ]);
+    try {
+      const message = client.submit({ kind: 'message', text });
+      await submitted.promise;
+      const snapshots = [client.refresh(), second.refresh()];
+      await readsEntered.promise;
+      released.release();
+      await expect(Promise.all([message, ...snapshots])).resolves.toEqual([
+        { kind: 'accepted', operationId: expect.any(String) }, undefined, undefined,
+      ]);
+    } finally { released.release(); }
     await complete();
     expect(second.getSnapshot().connection).toBe('connected');
   } finally { await Promise.allSettled(pendingReads); second.close(); }
@@ -147,7 +156,7 @@ it('connects to the current daemon when the previous daemon stops during assignm
   const port = createTuiConversationPort(directory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC only' }) });
   doubles.ensure.mockImplementationOnce(async () => {
     if (expired) {
-      writeDaemonOwner(directory, owner);
+      await writeDaemonOwner(directory, owner);
       server = await createConversationIpcServer(directory, owner, service);
       restarted = true;
     }
@@ -155,7 +164,7 @@ it('connects to the current daemon when the previous daemon stops during assignm
   client = new ConversationIpcClient(assignment, undefined, { reconnect: false, port: { ...port, async resolve(selected) {
     const resolved = await port.resolve(selected);
     await server.close();
-    removeDaemonOwner(directory, owner);
+    await removeDaemonOwner(directory, owner, { signal: new AbortController().signal, timeoutMs: 5000 });
     expired = true;
     return resolved;
   } } });
@@ -166,13 +175,14 @@ it('connects to the current daemon when the previous daemon stops during assignm
     expect(execute).not.toHaveBeenCalled();
   } finally {
     if (expired && !restarted) {
-      writeDaemonOwner(directory, owner);
+      await writeDaemonOwner(directory, owner);
       server = await createConversationIpcServer(directory, owner, service);
     }
   }
 });
 
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
+  const outputs: unknown[] = []; client.onOutput((output) => outputs.push(output));
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
   const generate = vi.fn(async () => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
@@ -191,13 +201,18 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   await waitFor(() => expect(submissions.mock.calls.map(([command]) => command)).toEqual([
     { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
   ]));
+  await expect(submissions.mock.results[0]!.value).resolves.toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  expect(generate).toHaveBeenCalledOnce();
+  await waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'Replacement ready' } })));
   await waitFor(() => {
+    expect(client.getSnapshot().state).toMatchObject({ pending: { revision: 5, summary }, approval: null, running: null });
     expect(app.lastFrame()!.split(summary.objective)).toHaveLength(2);
     expect(app.lastFrame()!.split('CSV出力')).toHaveLength(2);
     expect(client.getSnapshot().state).toMatchObject({ pending: { revision: 5, summary }, approval: null, running: null });
   });
   const record = conversationRecord(repository);
-  expect(new ConversationStore(directory).read(record.id, record.assignment)).toMatchObject({
+  expect((await new ConversationStateStore(directory).read(record.id))?.record).toMatchObject({
     pending: { revision: 5, summary }, approval: null, running: null,
   });
   expect(generate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: getLabel('manager.goSummaryRequest', 'en') }));
@@ -208,9 +223,9 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   });
   app.stdin.write('\x1b[A');
   app.stdin.write('\r');
-  await waitFor(() => expect(new ConversationStore(directory).read(record.id, record.assignment)?.approval)
+  await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
     .toMatchObject({ revision: 5, state: 'registered' }));
-  const receipt = new ConversationStore(directory).read(record.id, record.assignment)!.approval!;
+  const receipt = (await new ConversationStateStore(directory).read(record.id))?.record!.approval!;
   const goals = (await new GoalStore(repository).list()).goals;
   expect(goals).toHaveLength(1);
   expect(await new GoalStore(repository).get(receipt.goalId)).toMatchObject(summary);
@@ -252,7 +267,7 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     if (phase === 'response') released.release();
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
     const record = conversationRecord(repository);
-    await waitFor(() => expect(new ConversationStore(directory).read(record.id, record.assignment)?.approval)
+    await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
       .toMatchObject({ revision: 4, state: 'registered' }));
     expect(registration).toHaveBeenCalledOnce();
   } finally { released.release(); await refreshing.catch(() => {}); app.unmount(); }
@@ -401,8 +416,7 @@ it.each([
     await other.read.items[Symbol.asyncIterator]().return?.();
     await service.submit({ attachmentId: other.attachmentId, requestId: randomUUID(), speaker: selected.speaker,
       command: { kind: 'message', text: 'Produce the next proposal' } });
-    const store = new ConversationStore(directory);
-    await waitFor(() => expect(store.read(selected.conversationId, selected.assignment)).toMatchObject({ pending, running: null }));
+    await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending, running: null }));
     expect(client.getSnapshot().state?.pending?.revision).toBe(4);
     vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
       const read = await snapshot(id); const wait = gate(); reads.push({ read, release: wait.release });
@@ -421,7 +435,7 @@ it.each([
     expect(stale).toMatchObject({ kind: 'error', code: 'stale_summary' });
     refreshed ??= client.refresh();
     await waitFor(() => expect(reads).toHaveLength(1));
-    expect(store.read(selected.conversationId, selected.assignment)).toMatchObject({ pending, approval: null, running: null });
+    expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending, approval: null, running: null });
     expect(registration).not.toHaveBeenCalled();
     reads[0]!.release();
     await refreshed;
@@ -435,7 +449,7 @@ it.each([
     expect(transfer.indexOf('transfer_start')).toBeLessThan(transfer.indexOf('transfer_end'));
     expect(transfer).not.toContain('cancel');
     expect(submissions.mock.calls.map(([command]) => command)).toEqual([{ kind, revision: 4 }]);
-    expect(store.read(selected.conversationId, selected.assignment)?.approval).toBeNull();
+    expect((await fixture.store.read(selected.conversationId))?.record?.approval).toBeNull();
     expect(registration).not.toHaveBeenCalled();
     expect((await new GoalStore(repository).list()).goals).toEqual([]);
     if (kind === 'approve_summary') { app.stdin.write('\x1b[A'); app.stdin.write('\r'); }
@@ -443,14 +457,14 @@ it.each([
     await waitFor(() => expect(submissions).toHaveBeenCalledTimes(2));
     expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5 });
     expect(await submissions.mock.results[1]!.value).toMatchObject({ kind: 'accepted' });
-    await waitFor(() => expect(store.read(selected.conversationId, selected.assignment)).toMatchObject({ pending: null, running: null }));
+    await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending: null, running: null }));
     if (kind === 'approve_summary') {
-      const receipt = store.read(selected.conversationId, selected.assignment)!.approval!;
+      const receipt = (await fixture.store.read(selected.conversationId))!.record.approval!;
       expect(receipt).toMatchObject({ revision: 5, state: 'registered' });
       expect((await new GoalStore(repository).get(receipt.goalId)).objective).toBe(pending.summary.objective);
       expect(registration).toHaveBeenCalledOnce();
     } else {
-      expect(store.read(selected.conversationId, selected.assignment)?.approval).toBeNull();
+      expect((await fixture.store.read(selected.conversationId))?.record?.approval).toBeNull();
       expect((await new GoalStore(repository).list()).goals).toEqual([]);
       expect(registration).not.toHaveBeenCalled();
     }
@@ -521,7 +535,7 @@ it('retains the corrupt-record diagnostic and incomplete status until a repaired
 it.each([7, 9])('restores every pending constraint for %i large entries through the production receiver', async (count) => {
   const record = conversationRecord(repository);
   record.pending!.summary.constraints = Array.from({ length: count }, (_, index) => String(index).padEnd(128 * 1024, 'a'));
-  new ConversationStore(directory).write(record);
+  writeLegacyConversation(directory, record);
   await client.connect(); await complete();
   expect(client.getSnapshot().state).toMatchObject({ conversationId: record.id, revision: 4, pending: record.pending });
   const component = vi.mocked(transcriptView.TranscriptView);
@@ -531,7 +545,7 @@ it.each([7, 9])('restores every pending constraint for %i large entries through 
     expect(entries).toHaveLength(1);
     for (const value of record.pending!.summary.constraints) expect(entries[0]!.content).toContain(value);
   });
-  expect(new ConversationStore(directory).read(record.id, record.assignment)?.pending).toEqual(record.pending);
+  expect((await new ConversationStateStore(directory).read(record.id))?.record?.pending).toEqual(record.pending);
 });
 
 it.each([7, 9])('restores the exact IDs, order and objectives of %i large goals through the production receiver', async (count) => {
@@ -599,7 +613,7 @@ it('uses the explicit provider when opening even if the default provider plan is
   });
   await client.connect(); await complete();
   expect(client.getSnapshot()).toMatchObject({ connection: 'connected', state: { conversationId: conversationRecord(repository).id } });
-  expect(doubles.plan).toHaveBeenCalledExactlyOnceWith(repository, { provider: 'mock', model: 'chosen-model' });
+  expect(doubles.plan).not.toHaveBeenCalled();
 });
 
 interface ReceivedSnapshot {
@@ -969,7 +983,7 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
 it('reuses unchanged goal files and reloads modified or deleted goals on the same attachment', async () => {
   const [goal, other] = seedSnapshotGoals(2, 0, 0);
   const connections = observeIpcConnections();
-  const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
+  const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
   const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => path.endsWith('/goal.json'));
   await client.connect(); await complete();
   expect(goalReads()).toHaveLength(2);

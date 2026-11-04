@@ -139,12 +139,12 @@ export async function resolveGitRepositoryDirectory(...args) {
 }
 \` };
     }
-    if (url !== ${JSON.stringify(built('features/manager/conversationService.js'))}) return loaded;
+    if (url !== ${JSON.stringify(built('features/manager/daemonConversationPort.js'))}) return loaded;
     // 呼び出しと返却の間に待機を追加せず、公開 service 操作の所要時間だけを観測する。
-    const source = String(loaded.source).replace('export function createConversationService(', 'function observedConversationService(');
+    const source = String(loaded.source).replace('export function createDaemonConversationInput(', 'function observedConversationService(');
     if (source === String(loaded.source)) throw new Error('Conversation service observation hook did not match');
     return { ...loaded, source: source + \`
-export function createConversationService(input) {
+export function createDaemonConversationInput(input) {
   const service = observedConversationService(input);
   let nextCall = 0;
   for (const method of ['open', 'snapshot', 'submit']) {
@@ -322,7 +322,7 @@ finally { process.disconnect(); }
       pid = undefined;
       state = 'read-daemon-owner';
       log('cleanup-read-daemon-owner:before');
-      const owner = readDaemonOwner(directory);
+      const owner = await readDaemonOwner(directory);
       log('cleanup-read-daemon-owner:after', owner?.pid);
       if (owner !== undefined) {
         pid = owner.pid;

@@ -155,7 +155,6 @@ export const WorkflowCategoryOverlaySchema = z.object({
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
     auto_run: z.boolean().optional(),
-    patrol_interval: z.number().int().positive().optional(),
     default_workflow: z.string().trim().min(1).optional(),
     sensitive_paths: z.array(z.string().trim().min(1)).optional(),
     notifications: z.object({
@@ -166,6 +165,8 @@ const ProjectConfigObjectBaseSchema = z.object({
       blocked: z.boolean().optional(),
       custom: z.boolean().optional(),
     }).strict().optional(),
+    // 廃止した設定。書いてあってもエラーにせず読み飛ばす。
+    patrol_interval: z.unknown().optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
@@ -232,7 +233,7 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
-  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
+  director: z.object({ slack: SlackConfigSchema.optional(), patrol_interval: z.unknown().optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),

@@ -11,8 +11,8 @@ const doubles = vi.hoisted(() => ({
 }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
 vi.mock('cross-spawn', () => ({ default: doubles.crossSpawn }));
-vi.mock('../shared/utils/executable-path.js', () => ({
-  resolveSystem32ExecutablePath: doubles.resolveSystem32ExecutablePath,
+vi.mock('../shared/utils/executable-path-async.js', () => ({
+  resolveSystem32ExecutablePathAsync: doubles.resolveSystem32ExecutablePath,
 }));
 
 const originalPlatform = process.platform;
@@ -115,7 +115,7 @@ describe('bounded command runner', () => {
     const controller = new AbortController();
     const remove = vi.spyOn(controller.signal, 'removeEventListener');
     const running = runBoundedCommand({ ...options, signal: controller.signal });
-    if (reason === 'abort') controller.abort();
+    if (reason === 'abort') { controller.abort(); await vi.advanceTimersByTimeAsync(0); }
     else await vi.advanceTimersByTimeAsync(1000);
     const pid = process.platform === 'win32' ? child.pid : -child.pid;
     expect(process.kill).toHaveBeenCalledWith(pid, 'SIGTERM');
@@ -152,7 +152,7 @@ describe('bounded command runner', () => {
       return result;
     });
 
-    if (reason === 'abort') controller.abort();
+    if (reason === 'abort') { controller.abort(); await vi.advanceTimersByTimeAsync(0); }
     else await vi.advanceTimersByTimeAsync(1000);
 
     expect(doubles.resolveSystem32ExecutablePath).toHaveBeenCalledWith('taskkill.exe');

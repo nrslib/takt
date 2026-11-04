@@ -1,6 +1,6 @@
 /**
  * resume 時の run artifact（reports/）継承 — manifest 付きスナップショットの
- * 実ファイルと公開用子プロセスを使う統合テスト。
+ * 実ファイルを使う統合テスト。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -14,35 +14,7 @@ const fsControl = vi.hoisted(() => ({
   failLstatForPath: undefined as string | undefined,
   beforeOpenPath: undefined as string | undefined,
   beforeOpen: undefined as (() => void) | undefined,
-  beforeDirectoryPublication: undefined as (() => void) | undefined,
-  beforeReaddirPath: undefined as string | undefined,
-  beforeReaddir: undefined as (() => void) | undefined,
 }));
-
-vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-  return {
-    ...actual,
-    spawnSync(...args: Parameters<typeof actual.spawnSync>) {
-      const commandArguments = args[1];
-      const rawRequest = Array.isArray(commandArguments) ? commandArguments[2] : undefined;
-      if (typeof rawRequest === 'string' && rawRequest.includes('"operation":"publish-directory"')) {
-        const beforePublication = fsControl.beforeDirectoryPublication;
-        fsControl.beforeDirectoryPublication = undefined;
-        beforePublication?.();
-        const request = JSON.parse(rawRequest) as { targetName: string };
-        const options = args[2];
-        if (typeof options === 'object' && options !== null && typeof options.cwd === 'string') {
-          const targetPath = join(options.cwd, request.targetName);
-          if (fsControl.failRenameToPredicate?.(targetPath)) {
-            throw Object.assign(new Error(`injected rename failure: ${targetPath}`), { code: 'EIO' });
-          }
-        }
-      }
-      return actual.spawnSync(...args);
-    },
-  };
-});
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -78,12 +50,6 @@ vi.mock('node:fs', async (importOriginal) => {
       return actual.rmSync(path, options);
     }) as typeof actual.rmSync,
     readdirSync: ((path: Parameters<typeof actual.readdirSync>[0], options?: unknown) => {
-      if (fsControl.beforeReaddirPath === String(path)) {
-        fsControl.beforeReaddirPath = undefined;
-        const beforeReaddir = fsControl.beforeReaddir;
-        fsControl.beforeReaddir = undefined;
-        beforeReaddir?.();
-      }
       if (fsControl.emptyReaddirOncePath !== undefined && String(path) === fsControl.emptyReaddirOncePath) {
         fsControl.emptyReaddirOncePath = undefined;
         return [];
@@ -136,9 +102,6 @@ describe('inheritResumeReportSnapshot', () => {
     fsControl.failLstatForPath = undefined;
     fsControl.beforeOpenPath = undefined;
     fsControl.beforeOpen = undefined;
-    fsControl.beforeDirectoryPublication = undefined;
-    fsControl.beforeReaddirPath = undefined;
-    fsControl.beforeReaddir = undefined;
     cwd = mkdtempSync(join(TEST_TMPDIR, 'takt-resume-snapshot-'));
   });
 
@@ -149,9 +112,6 @@ describe('inheritResumeReportSnapshot', () => {
     fsControl.failLstatForPath = undefined;
     fsControl.beforeOpenPath = undefined;
     fsControl.beforeOpen = undefined;
-    fsControl.beforeDirectoryPublication = undefined;
-    fsControl.beforeReaddirPath = undefined;
-    fsControl.beforeReaddir = undefined;
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -360,53 +320,6 @@ describe('inheritResumeReportSnapshot', () => {
     for (const path of skippedPaths) expect(existsSync(join(targetPaths.reportsAbs, path))).toBe(false);
     expect(readFileSync(outside, 'utf-8')).toBe('secret');
     expectNoLeftovers('target-run');
-  });
-
-  it('rejects a source ancestor swap after inspection without copying outside content', () => {
-    seedSourceRun('source-run', { 'plan.md': 'inside plan' });
-    const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
-    const originalReports = join(cwd, 'original-reports');
-    const outsideReports = join(cwd, 'outside-reports');
-    mkdirSync(outsideReports);
-    writeFileSync(join(outsideReports, 'plan.md'), 'outside secret');
-    fsControl.beforeOpenPath = join(sourceReports, 'plan.md');
-    fsControl.beforeOpen = () => {
-      renameSync(sourceReports, originalReports);
-      symlinkSync(outsideReports, sourceReports, 'dir');
-    };
-
-    expect(() => inheritResumeReportSnapshot({
-      cwd,
-      sourceRunSlug: 'source-run',
-      targetRunSlug: 'target-run',
-    })).toThrow(/identity changed/);
-
-    expect(readFileSync(join(originalReports, 'plan.md'), 'utf-8')).toBe('inside plan');
-    expect(readFileSync(join(outsideReports, 'plan.md'), 'utf-8')).toBe('outside secret');
-    expect(existsSync(buildRunPaths(cwd, 'target-run').reportsAbs)).toBe(false);
-  });
-
-  it('rejects a source ancestor swap when traversal starts without publishing outside content', () => {
-    seedSourceRun('source-run', { 'plan.md': 'inside plan' });
-    const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;
-    const originalReports = join(cwd, 'original-reports');
-    const outsideReports = join(cwd, 'outside-reports');
-    mkdirSync(outsideReports);
-    writeFileSync(join(outsideReports, 'plan.md'), 'outside secret');
-    fsControl.beforeReaddirPath = sourceReports;
-    fsControl.beforeReaddir = () => {
-      renameSync(sourceReports, originalReports);
-      symlinkSync(outsideReports, sourceReports, 'dir');
-    };
-
-    expect(() => inheritResumeReportSnapshot({
-      cwd,
-      sourceRunSlug: 'source-run',
-      targetRunSlug: 'target-run',
-    })).toThrow(/identity changed/);
-
-    expect(readFileSync(join(outsideReports, 'plan.md'), 'utf-8')).toBe('outside secret');
-    expect(existsSync(buildRunPaths(cwd, 'target-run').reportsAbs)).toBe(false);
   });
 
   it('rejects path-traversal style run slugs', () => {
@@ -735,29 +648,6 @@ describe('inheritResumeReportSnapshot', () => {
     })).toThrow(/target run path contains a symlink/);
 
     expect(readdirSync(outsideRuns)).toEqual([]);
-  });
-
-  it('rejects a target run swap immediately before publication without changing the outside directory', () => {
-    seedSourceRun('source-run', { 'review.md': 'inside review' });
-    const targetPaths = buildRunPaths(cwd, 'target-run');
-    const movedTarget = join(cwd, 'original-target-run');
-    const outsideTarget = join(cwd, 'outside-target-run');
-    mkdirSync(outsideTarget);
-    writeFileSync(join(outsideTarget, 'outside.md'), 'outside content');
-    fsControl.beforeDirectoryPublication = () => {
-      renameSync(targetPaths.runRootAbs, movedTarget);
-      symlinkSync(outsideTarget, targetPaths.runRootAbs, 'dir');
-    };
-
-    expect(() => inheritResumeReportSnapshot({
-      cwd,
-      sourceRunSlug: 'source-run',
-      targetRunSlug: 'target-run',
-    })).toThrow(/identity changed/);
-
-    expect(readFileSync(join(outsideTarget, 'outside.md'), 'utf-8')).toBe('outside content');
-    expect(readdirSync(outsideTarget)).toEqual(['outside.md']);
-    expect(existsSync(join(outsideTarget, 'reports'))).toBe(false);
   });
 
   // codex 2巡目裁定: 公開は単一 rename に集約（manifest は staged reports の

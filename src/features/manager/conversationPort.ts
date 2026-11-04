@@ -16,7 +16,7 @@ export type ConversationCommand =
       source?: 'tui' | 'slack';
       permission?: { scope: WritablePermissionScope; sentence: string } }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
-  | { kind: 'abort_turn'; operationId: string };
+  | { kind: 'abort_turn'; operationId: string; generation?: number };
 export type QuestionTarget = { goalId: string; repositoryDirectory: string } | { goalId: null; owner: InquiryOwner };
 export interface ConversationState {
   conversationId: string;
@@ -24,7 +24,7 @@ export interface ConversationState {
   revision: number;
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
-  running: { operationId: string; kind: string } | null;
+  running: { operationId: string; kind: string; generation?: number } | null;
   interrupted: boolean;
   queuedMessageCount?: number;
 }
@@ -45,8 +45,8 @@ export interface SnapshotRead extends OutputVersion {
   complete(): void;
   cancel(): void;
 }
-export type Submission = { kind: 'accepted'; operationId: string; queuedMessageCount?: number }
-  | { kind: 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
+export type Submission = { kind: 'accepted'; operationId: string; eventId?: string; acceptedSequence?: number; queuedMessageCount?: number }
+  | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'goal_registered'; goal: Goal }

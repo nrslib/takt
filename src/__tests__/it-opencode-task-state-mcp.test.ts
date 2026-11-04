@@ -10,7 +10,7 @@ import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
-import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { MockEventStream, sessionIdle, successfulSessionAbort } from './helpers/opencode-client-test-helpers.js';
@@ -27,8 +27,8 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class {
   close = managerMcp.close;
   callTool = managerMcp.callTool;
 } }));
-vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class {
-  constructor(options: unknown) { managerMcp.transport(options); }
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({ StreamableHTTPClientTransport: class {
+  constructor(url: URL, options: unknown) { managerMcp.transport(url, options); }
   close = managerMcp.transportClose;
 } }));
 
@@ -263,19 +263,14 @@ describe('OpenCode task-state MCP integration', () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-opencode-manager-mcp-'));
     mkdirSync(join(projectCwd, '.takt'));
     writeFileSync(join(projectCwd, '.takt', 'config.yaml'), 'provider: opencode\nmodel: opencode/big-pickle\nlanguage: en\n');
-    const connection = await connectManagerMcp(projectCwd);
+    const connection = await connectTestManagerMcp(projectCwd);
     const [serverName] = Object.keys(connection.servers);
     if (serverName === undefined) throw new Error('Manager MCP did not return a server');
     expect(serverName).toContain('takt_mgr_');
     const server = connection.servers[serverName];
-    if (server === undefined || server.type !== 'stdio' || server.args === undefined) {
-      throw new Error('Manager MCP did not return a stdio command');
-    }
+    if (server === undefined || server.type !== 'http') throw new Error('Manager MCP did not return an HTTP connection');
     expect(managerMcp.connect).toHaveBeenCalledTimes(1);
-    expect(managerMcp.transport).toHaveBeenCalledWith(expect.objectContaining({
-      command: server.command, args: server.args, cwd: projectCwd,
-    }));
-    expect(server.args).toEqual(expect.arrayContaining(['--tool-set', 'manager']));
+    expect(managerMcp.transport).toHaveBeenCalledWith(new URL(server.url), { requestInit: { headers: server.headers } });
 
     const sessionId = 'manager-first-session';
     const { sessionCreate, promptAsync, permissionReply } = createOpenCodeClientMock(
@@ -291,12 +286,9 @@ describe('OpenCode task-state MCP integration', () => {
 
       expect(getFirstOpenCodeStartConfig().mcp).toEqual({
         [serverName]: {
-          type: 'local', command: [server.command, ...server.args],
-          environment: server.env,
+          type: 'remote', url: server.url, headers: server.headers,
         },
       });
-      expect(server.env).toMatchObject({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR });
-      expect(server.env).not.toHaveProperty('TAKT_MANAGER_GOAL_OWNERS');
       expect(sessionCreate).toHaveBeenCalledTimes(1);
       const sessionOptions = sessionCreate.mock.calls[0]![0] as { permission: OpenCodePermissionRule[] };
       expect(getPermissionRule(sessionOptions.permission, '*')).toEqual({ permission: '*', pattern: '*', action: 'allow' });

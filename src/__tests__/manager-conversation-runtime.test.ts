@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import { deferred } from './helpers/daemon-turn.js';
 import { makeProvider } from './test-helpers.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 
-const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn() }));
+const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn(), execute: vi.fn() }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
 vi.mock('../features/manager/managerMcp.js', () => ({ TAKT_MANAGER_MCP_SERVER_NAME: 'takt', connectManagerMcp: doubles.connect }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ sensitivePaths: [] }) }));
+vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: () => ({ execute: doubles.execute }) }));
 let plan: ManagerConversationPlan;
 let runtime: ReturnType<typeof createConversationRuntime>;
 const assignment = { kind: 'repository' as const, repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] };
@@ -62,4 +64,21 @@ it('waits for MCP disposal during close and reports its failure', async () => {
   doubles.dispose.mockRejectedValueOnce(new Error('cleanup failed'));
   await expect(runtime.close()).rejects.toBeInstanceOf(AggregateError);
   expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
+it('exposes only the active non-aborted director turn to MCP authorization', async () => {
+  const prepared = await runtime.resolve(assignment, signal);
+  const options = doubles.connect.mock.calls[0]![3] as { conversationTurn(): { operationId: string; directorMessage: boolean } | undefined };
+  expect(options.conversationTurn()).toBeUndefined();
+  const controller = new AbortController(); const gate = deferred<void>(); const started = deferred<void>();
+  doubles.execute.mockImplementation(async () => { started.resolve(); await gate.promise; return { message: 'done', summary: null }; });
+  const execution = prepared.executor.execute({ prompt: 'message', instruction: 'message', configDirectory: '/config',
+    sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal,
+    conversationOperationId: 'operation', directorMessage: true });
+  await started.promise;
+  expect(options.conversationTurn()).toEqual({ operationId: 'operation', directorMessage: true });
+  controller.abort();
+  expect(options.conversationTurn()).toBeUndefined();
+  gate.resolve(); await execution;
+  expect(options.conversationTurn()).toBeUndefined();
 });

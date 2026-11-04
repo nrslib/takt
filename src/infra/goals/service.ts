@@ -6,6 +6,7 @@ import { runGoalGit } from './git-command.js';
 import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
+import { FileEventStore } from '../daemon/eventStore.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
@@ -51,7 +52,8 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     }
     if (!readManagerEvents(input.cwd).some(({ event }) => event.goalId === input.id && event.kind === 'registered')
       && existing.workLog.length === 0 && existing.status === 'created'
-      && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)) {
+      && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)
+      && !await new FileEventStore(getGlobalConfigDir()).hasGoalRegistration(input.cwd, input.id)) {
       throw new GoalRegistrationRecoveryError('Goal exists, but registration event delivery cannot be confirmed');
     }
     return existing;

@@ -2,12 +2,9 @@
  * Tests for UI label loader utility (src/shared/i18n/index.ts)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getLabel, getLabelObject, _resetLabelCache } from '../shared/i18n/index.js';
+import { describe, it, expect } from 'vitest';
+import { getLabel, getLabelObject } from '../shared/i18n/index.js';
 
-beforeEach(() => {
-  _resetLabelCache();
-});
 
 describe('getLabel', () => {
   it.each(['ja', 'en'] as const)('expands the manager, operation and result in every director result notice for %s', (lang) => {

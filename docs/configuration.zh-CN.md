@@ -12,7 +12,6 @@
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'
 director:
-  patrol_interval: 900        # director 巡检间隔（秒，正整数，默认：900）
   slack:
     channel_id: C0DIR
     allowed_user_ids: [U0AAA]
@@ -186,7 +185,6 @@ assistant:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 语言 |
-| `director.patrol_interval` | 正整数秒 | `900` | daemon 运行期间定时 director 巡检的间隔。仅限全局配置。 |
 | `director.slack.channel_id` | string | - | director 的 Slack 频道。仅限全局配置，参阅[通过 Slack 与 director 对话](#通过-slack-与-director-对话)。 |
 | `director.slack.allowed_user_ids` | string[] | - | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | 日志级别 |
@@ -567,10 +565,10 @@ takt manager
 
 - 在配置的频道中发消息，manager 会在该消息的消息列中回复；之后请在同一消息列继续交流。该仓库的所有对话消息列都连接到同一个 manager 对话，并与 TUI 共享。回复只发送到发言所在的消息列；对 TUI 发言的回复不会发送到 Slack。
 - 不响应其他频道中的消息、发给机器人的私信，以及不在 `allowed_user_ids` 中的用户发送的消息或按钮操作。
-- 对话正在处理时发送的消息仍会保存并接受，回复中显示等待数量。当前轮次结束后按保存顺序处理，并回复到原消息列。等待中的发言在 daemon 重启后仍然保留，但不会恢复 Slack 回复目标，因此重启后的回复不会送达原消息列。每个对话的等待队列最多保存32条消息，序列化后的完整队列 JSON 的 UTF-8 大小不得超过1 MiB。超出任一上限的消息不会保存。若单条消息本身就超过容量，发送端会提示用户缩短或拆分后发送；若只是暂时超出消息数量或总容量上限，则提示用户稍等后再发送。询问回答、总结批准等非发言操作在处理期间仍会被拒绝。
+- 处理期间仍可持久化接受发言、批准和询问回答。人工输入优先于其他事件，每条队列按接受顺序执行。accepted 表示已保存，不表示处理完成。界面读取和中断不进入模型队列；中断只影响当前轮次，不删除等待输入。等待输入在 daemon 重启后保留，但目前不保证恢复 Slack 回复目标。失败只在人明确要求时重试。Slack ACK 只表示通信接收，不表示业务接受。
 - 每条询问（问题、审批或操作请求）都会在配置的频道中单独发布为新消息，不放入已有消息列。通过按钮选择允许或拒绝、审批范围以及回答选项。如果选择比“仅本次”更广的审批范围，按钮会打开对话框；编辑建议的权限语句并确认后，该语句会追加到权限 Markdown 中。
 - 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
-- Slack 连接时已经待回答的询问不会发布到 Slack，请在 TUI 中按 `Ctrl+R` 回答。连接后出现的新询问每条只发布一次，不会重发。如果消息与询问的关联保存失败或无法读取，该消息列中的回复会作为普通对话处理，不会成为回答。
+- 询问变化通过监测事件送达，Slack 不定期扫描所有询问。连接前的询问可在 TUI 中按 `Ctrl+R` 回答。如果询问关联无法读取，则拒绝该回复，不把它作为普通对话发送。
 - “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
 
 ## 通过 Slack 与 director 对话
@@ -589,7 +587,7 @@ director:
 
 获准用户在 director 频道中的发言会进入 director 对话，不会进入 manager 对话。director 在原消息的消息列中回复。不在 `director.slack.allowed_user_ids` 中的用户发言会被忽略。即使 manager 使用同一频道，普通发言仍交给 director；manager 的询问按钮和对话框操作则使用 `manager.slack.allowed_user_ids`。
 
-director 将一次对话或巡检中新产生的通知汇总为该频道中的一条消息，包括已完成的工作，以及合并审批、未回答的询问等需要人工决定的事项。被现有去重机制抑制的通知不会重复发布。未配置 `director.slack` 时，director 不会向 Slack 发布消息，也不接受 Slack 发言。连接需要同时设置两个令牌环境变量。现有的 `TAKT_NOTIFY_WEBHOOK` 通知路径不变。
+director 将一轮中新产生的通知汇总为该频道中的一条消息，包括已完成的工作，以及合并审批、未回答的询问等需要人工决定的事项。被现有去重机制抑制的通知不会重复发布。未配置 `director.slack` 时，director 不会向 Slack 发布消息，也不接受 Slack 发言。连接需要同时设置两个令牌环境变量。现有的 `TAKT_NOTIFY_WEBHOOK` 通知路径不变。
 
 ## manager 敏感文件设置
 

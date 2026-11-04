@@ -1,5 +1,5 @@
 import { createServer, createConnection, type Socket } from 'node:net';
-import { chmodSync, lstatSync, mkdirSync, rmSync, unlinkSync } from 'node:fs';
+import { chmod, lstat, mkdir, rm, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { conversationIpcEndpoint, readDaemonIpcState, writeDaemonIpcState } from '../../infra/daemon/ipcEndpoint.js';
@@ -7,7 +7,6 @@ import { isDaemonOwnerRunning, type DaemonOwner } from '../../infra/daemon/owner
 import type { ConversationDelivery, ConversationInput, OutputVersion, PortOutput, SnapshotRead } from '../manager/conversationPort.js';
 import { conversationErrorResult, ConversationError } from '../manager/conversationErrors.js';
 import { createTuiConversationPort } from '../manager/tuiConversationPort.js';
-import { createDirectorManagerPort } from '../director/managerPort.js';
 import { ConversationRequestSchema } from './conversationRequests.js';
 import { ConversationFrameDecoder, conversationTransferFrames, snapshotMetadata, writeConversationFrame } from './conversationFrames.js';
 
@@ -27,21 +26,21 @@ async function endpointIsListening(endpoint: string): Promise<boolean> {
 async function prepareEndpoint(configDirectory: string, endpoint: string, owner: DaemonOwner): Promise<void> {
   if (process.platform === 'win32') return;
   const directory = dirname(endpoint);
-  try { mkdirSync(directory, { mode: 0o700 }); }
+  try { await mkdir(directory, { mode: 0o700 }); }
   catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error; }
-  const stat = lstatSync(directory);
+  const stat = await lstat(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid!()) throw new Error('Unsafe IPC endpoint directory');
-  chmodSync(directory, 0o700);
+  await chmod(directory, 0o700);
   let socket;
-  try { socket = lstatSync(endpoint); }
+  try { socket = await lstat(endpoint); }
   catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
   if (socket === undefined) return;
   if (!socket.isSocket() || socket.uid !== process.getuid!()) throw new Error('Existing IPC endpoint is not an owned socket');
-  const previous = readDaemonIpcState(configDirectory);
+  const previous = await readDaemonIpcState(configDirectory);
   if (previous === undefined || previous.endpoint !== endpoint || previous.owner.pid === owner.pid
-    && previous.owner.identity.startTime === owner.identity.startTime || isDaemonOwnerRunning(previous.owner)
+    && previous.owner.identity.startTime === owner.identity.startTime || await isDaemonOwnerRunning(previous.owner, { signal: new AbortController().signal, timeoutMs: 5000 })
     || await endpointIsListening(endpoint)) throw new Error('Existing IPC endpoint cannot be safely removed');
-  unlinkSync(endpoint);
+  await unlink(endpoint);
 }
 
 interface ActiveRead {
@@ -192,8 +191,6 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     },
   };
   const port = createTuiConversationPort(configDirectory, delivery);
-  const directorPort = createDirectorManagerPort(configDirectory, delivery);
-  const directorAttachments = new Set<string>();
   const dispatch = async (raw: unknown): Promise<void> => {
     const request = ConversationRequestSchema.parse(raw);
     const response = (result: unknown) => send({ protocolVersion: 1, type: 'response', requestId: request.requestId, result });
@@ -208,14 +205,13 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       if (request.method === 'open') {
         onInitializingChange(1);
         try {
-          const selectedPort = request.params.binding.port === 'director' ? directorPort : port;
-          const resolved = await selectedPort.resolve(request.params.assignment);
+          if (request.params.binding.port !== 'tui') throw new ConversationError('invalid_input');
+          const resolved = await port.resolve(request.params.assignment);
           if (JSON.stringify(request.params.binding) !== JSON.stringify(resolved.binding)
             || JSON.stringify(request.params.speaker) !== JSON.stringify(resolved.speaker)) throw new ConversationError('invalid_input');
           const opened = await service.open(request.params, port.delivery);
-          if (socket.destroyed) { service.detach(opened.attachmentId); await opened.read.items[Symbol.asyncIterator]().return?.(); return; }
+          if (socket.destroyed) { service.detach(opened.attachmentId); opened.read.cancel(); return; }
           owned.add(opened.attachmentId);
-          if (selectedPort === directorPort) directorAttachments.add(opened.attachmentId);
           await response({ attachmentId: opened.attachmentId, read: snapshotMetadata(opened.read) });
           beginRead(opened.read);
         } finally { onInitializingChange(-1); }
@@ -223,9 +219,6 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
         if (!owned.has(request.params.attachmentId)) throw new ConversationError('unavailable_attachment');
         switch (request.method) {
           case 'submit': {
-            if (directorAttachments.has(request.params.attachmentId) && request.params.command.kind !== 'message') {
-              throw new ConversationError('invalid_input');
-            }
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             await response(result);
             break;
@@ -295,8 +288,8 @@ export async function createConversationIpcServer(configDirectory: string, owner
   });
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(endpoint, resolve); });
-    if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
-    writeDaemonIpcState(configDirectory, { protocolVersion: 1, endpoint, owner, capability });
+    if (process.platform !== 'win32') await chmod(endpoint, 0o600);
+    await writeDaemonIpcState(configDirectory, { protocolVersion: 1, endpoint, owner, capability });
   } catch (error) {
     for (const socket of sockets) socket.destroy();
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -310,8 +303,8 @@ export async function createConversationIpcServer(configDirectory: string, owner
       accepting = false;
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
-      const state = readDaemonIpcState(configDirectory);
-      if (state?.capability === capability) rmSync(join(configDirectory, 'daemon-ipc.json'));
+      const state = await readDaemonIpcState(configDirectory);
+      if (state?.capability === capability) await rm(join(configDirectory, 'daemon-ipc.json'));
     },
   };
 }

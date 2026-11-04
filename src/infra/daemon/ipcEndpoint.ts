@@ -1,16 +1,13 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { z } from 'zod/v4';
-import { readPrivateFileState } from '../../shared/utils/private-file.js';
-import { getGlobalConfigDir } from '../config/paths.js';
+import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
 import type { DaemonOwner } from './owner.js';
-import { writeFileAtomic } from '../config/project/sessionStore.js';
 
-export function resolveDaemonConfigDirectory(): string {
-  const directory = getGlobalConfigDir();
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  return realpathSync(directory);
+export async function resolveDaemonConfigDirectory(directory: string): Promise<string> {
+  await ensurePrivateDirectory(directory);
+  return realpath(directory);
 }
 
 export function conversationIpcEndpoint(directory: string, platform: NodeJS.Platform, uid: number): string {
@@ -29,14 +26,13 @@ export const DaemonIpcStateSchema = z.object({
 }).strict();
 export type DaemonIpcState = z.infer<typeof DaemonIpcStateSchema>;
 
-export function readDaemonIpcState(directory: string): DaemonIpcState | undefined {
-  const snapshot = readPrivateFileState(join(directory, 'daemon-ipc.json'));
-  if (!('content' in snapshot)) return undefined;
-  return DaemonIpcStateSchema.parse(JSON.parse(snapshot.content.toString('utf8')) as unknown);
+export async function readDaemonIpcState(directory: string): Promise<DaemonIpcState | undefined> {
+  const content = await readPrivateFile(join(directory, 'daemon-ipc.json'), 16 * 1024);
+  return content === undefined ? undefined : DaemonIpcStateSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
 }
 
-export function writeDaemonIpcState(directory: string, state: DaemonIpcState): void {
-  writeFileAtomic(join(directory, 'daemon-ipc.json'), JSON.stringify(DaemonIpcStateSchema.parse(state)), 0o600);
+export async function writeDaemonIpcState(directory: string, state: DaemonIpcState, signal?: AbortSignal): Promise<void> {
+  await writePrivateFile(join(directory, 'daemon-ipc.json'), JSON.stringify(DaemonIpcStateSchema.parse(state)), signal);
 }
 
 export function ipcStateMatchesOwner(state: DaemonIpcState, owner: DaemonOwner): boolean {

@@ -20,6 +20,7 @@ import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import type { GoalQuestion, ManagerGoalSummary } from '../infra/goals/schema.js';
+import { DaemonDisplayFiles } from '../infra/daemon/displayFiles.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { appendGoalWorkLog } from '../infra/goals/workLog.js';
@@ -326,24 +327,18 @@ describe('manager polling and answer cancellation', () => {
     let entered!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const started = new Promise<void>((resolve) => { entered = resolve; });
-    const iterate = GoalStore.prototype.iterate;
+    const readGoal = DaemonDisplayFiles.prototype.goal;
     let holdNext = true;
     if (outcome === 'loading') {
       vi.mocked(repositories.resolveGitRepositoryDirectory).mockImplementationOnce(async (directory) => {
-        entered();
-        await held;
-        return directory;
+        entered(); await held; return directory;
       });
-    } else vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* (this: GoalStore, _cache, project) {
-      for await (const item of iterate.call(this)) {
-        if (holdNext) {
-          holdNext = false;
-          entered();
-          await held;
-          if (outcome === 'error') throw new Error('Obsolete read failed');
-          yield project({ ...item, objective: 'Obsolete goal' });
-        } else yield project(item);
-      }
+    } else vi.spyOn(DaemonDisplayFiles.prototype, 'goal').mockImplementation(async function (this: DaemonDisplayFiles, path) {
+      const value = await readGoal.call(this, path);
+      if (!holdNext) return value;
+      holdNext = false; entered(); await held;
+      if (outcome === 'error') throw new Error('Obsolete read failed');
+      return { ...value, objective: 'Obsolete goal' };
     });
     const reading = client.refresh();
     await started;
@@ -390,7 +385,7 @@ describe('manager polling and answer cancellation', () => {
     const goals = await createGoalsWithHistory();
     const goalFile = join(cwd, '.takt', 'goals', goals[1]!.id, 'goal.json');
     const iterator = failure === 'repository'
-      ? vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
+      ? vi.spyOn(DaemonDisplayFiles.prototype, 'goal').mockRejectedValue(new Error('repository read failed')) : undefined;
     if (failure === 'goal') writeFileSync(goalFile, '{}');
     const { client, read } = await mount('en');
     await waitFor(() => {
@@ -423,9 +418,7 @@ describe('manager polling and answer cancellation', () => {
     const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary }));
     if (beforeStartup) await save();
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
-    const iterator = vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () {
-      throw new Error('initial display read rejected');
-    });
+    const iterator = vi.spyOn(DaemonDisplayFiles.prototype, 'goal').mockRejectedValue(new Error('initial display read rejected'));
     const { client, read } = await mount('en');
     await waitFor(() => expect(app!.lastFrame()).toContain('initial display read rejected'));
     expect(client.getSnapshot().readStatus).toBe('incomplete');

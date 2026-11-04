@@ -1,4 +1,4 @@
-import type { DirectorNotification } from '../../infra/conversations/directorNotifications.js';
+import type { DirectorNotification } from '../../infra/daemon/notifications.js';
 
 export interface DirectorNotificationDelivery {
   deliver(notifications: readonly DirectorNotification[]): Promise<void>;

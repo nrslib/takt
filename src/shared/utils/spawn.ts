@@ -9,8 +9,16 @@
 import { spawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import crossSpawnPackage from 'cross-spawn';
-import { resolveSystem32ExecutablePath } from './executable-path.js';
+import { resolveSystem32ExecutablePathAsync } from './executable-path-async.js';
 import { formatProcessExitCause } from './process-exit.js';
+
+const managedProcesses = new Set<ManagedProcess>();
+
+export async function terminateManagedProcesses(): Promise<void> {
+  const results = await Promise.allSettled([...managedProcesses].map((managed) => managed.terminate()));
+  const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+  if (errors.length > 0) throw new AggregateError(errors, 'Managed process cleanup failed');
+}
 
 const TERMINATION_GRACE_MS = 250;
 const TERMINATION_SETTLE_INTERVAL_MS = 10;
@@ -98,35 +106,38 @@ async function waitForWindowsProcessesExit(processIds: number[]): Promise<void> 
 
 export async function forceTerminateWindowsProcess(pid: number | undefined): Promise<void> {
   const targetPid = requireProcessId(pid);
-  const taskkillExecutable = resolveSystem32ExecutablePath('taskkill.exe');
+  const taskkillExecutable = await resolveSystem32ExecutablePathAsync('taskkill.exe');
   const killer = crossSpawn(taskkillExecutable, ['/pid', String(targetPid), '/T', '/F'], {
     stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true,
   });
-  let output = '';
-  killer.stdout?.setEncoding('utf8');
-  killer.stdout?.on('data', (chunk: string) => {
-    output += chunk;
+  const maximumOutputBytes = 64 * 1024;
+  const chunks: Buffer[] = [];
+  let outputBytes = 0;
+  let failure: unknown;
+  const stopKiller = (error: unknown): void => {
+    failure ??= error;
+    try { killer.kill('SIGKILL'); } catch (killError) { failure = new AggregateError([failure, killError], 'taskkill cleanup failed'); }
+  };
+  const timer = setTimeout(() => stopKiller(new Error('taskkill deadline exceeded')), WINDOWS_TERMINATION_SETTLE_TIMEOUT_MS);
+  killer.stdout?.on('data', (chunk: Buffer) => {
+    const keep = Math.min(chunk.length, maximumOutputBytes - outputBytes);
+    if (keep > 0) chunks.push(Buffer.from(chunk.subarray(0, keep)));
+    outputBytes += keep;
+    if (keep < chunk.length) stopKiller(new Error('taskkill output exceeds capacity'));
   });
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    killer.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      killer.once('error', (error) => { failure ??= error; });
+      killer.once('close', (code, signal) => {
+        if (failure !== undefined) { reject(failure); return; }
+        try { if (code === 0 || !isWindowsProcessRunning(targetPid)) { resolve(); return; } }
+        catch (error) { reject(error); return; }
+        reject(new Error(`taskkill for process ${targetPid} exited with ${formatProcessExitCause(code, signal)}`));
+      });
     });
-    killer.once('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(
-        `taskkill for process ${targetPid} exited with ${formatProcessExitCause(code, signal)}`,
-      ));
-    });
-  });
+  } finally { clearTimeout(timer); }
+  const output = Buffer.concat(chunks, outputBytes).toString('utf8');
   await waitForWindowsProcessesExit(taskkilledProcessIds(output, targetPid));
 }
 
@@ -267,7 +278,7 @@ export function spawnManagedProcess(
     requestTermination();
   }
 
-  return {
+  const managed: ManagedProcess = {
     child,
     async waitForExit(): Promise<ManagedProcessExit> {
       const outcome = await leaderExitOutcomePromise;
@@ -284,6 +295,7 @@ export function spawnManagedProcess(
       ]);
       if (outcome.kind === 'spawn-error') {
         signal?.removeEventListener('abort', requestTermination);
+        await closePromise;
         throw outcome.error;
       }
       if (outcome.kind === 'closed') {
@@ -323,4 +335,7 @@ export function spawnManagedProcess(
       await closePromise;
     },
   };
+  managedProcesses.add(managed);
+  child.once('close', () => { managedProcesses.delete(managed); });
+  return managed;
 }

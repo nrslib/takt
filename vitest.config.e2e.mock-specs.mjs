@@ -1,4 +1,5 @@
 export const mockE2eSpecs = [
+  'e2e/specs/daemon.e2e.ts',
   'e2e/specs/direct-task.e2e.ts',
   'e2e/specs/loop-analysis-worker.e2e.ts',
   'e2e/specs/companion-review.e2e.ts',
@@ -57,6 +58,7 @@ export const mockE2eSpecs = [
 
 export const mockE2eShards = [
   [
+    'e2e/specs/daemon.e2e.ts',
     'e2e/specs/list-non-interactive.e2e.ts',
     'e2e/specs/clone-branch-resolution.e2e.ts',
     'e2e/specs/workflow-selection-branches.e2e.ts',
