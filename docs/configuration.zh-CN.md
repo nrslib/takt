@@ -1379,7 +1379,9 @@ provider_options:
 - `Read(` 规则拦截的范围由 Claude Code 决定，而不是由 TAKT 决定。
   根据 [Claude Code 权限文档](https://code.claude.com/docs/en/permissions)，这些规则适用于 Claude 的内置文件工具（Claude 会尽力将 `Read` 规则应用于 Grep、Glob 等工具），以及 Claude Code 在 Bash 中识别的文件命令，如 `cat`、`head`、`tail`、`sed` 和 `tee`。
   它们不适用于不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不适用于自行打开文件的脚本（如 Python 或 Node 脚本）。
-  要阻止所有进程访问某个路径，请启用 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。
+  要在操作系统层面阻止 Claude 运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。
+  没有拒绝规则的路径，sandbox 中的进程仍然可以读取。
+  hooks、MCP server 等在 sandbox 之外运行的进程不会被阻止。
 - Claude 收到的规则是 `deny` 与导入规则的并集，重复项只保留一条。TAKT 将其作为 Claude flag settings 的 `permissions.deny` 传递（`claude-sdk` 使用 SDK 的 `settings` 选项，`claude-headless` 使用 `--settings`），因此对状态判定等隔离的内部调用同样有效。
 - 适用于 `claude-sdk`（包括别名 `claude`）和 `claude-headless`，覆盖 workflow step、内部调用和交互式 assistant。`claude-terminal` 不会收到这些规则，也不会触发下述警告。
 - 用户设置文件固定为当前用户主目录下的 `~/.claude/settings.json`，不会参考 `CLAUDE_CONFIG_DIR`。仅当 `import_user_read_deny` 为 `true` 时才读取，每次启动 Claude 都会读取。两个键都未设置时不读取文件，Claude 的启动参数也与以前相同。
