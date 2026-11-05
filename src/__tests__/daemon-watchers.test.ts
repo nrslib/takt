@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { loopJudgeStepName } from '../core/workflow/loop-judge-step.js';
 import type { Dirent } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Admission, EventInput, WatchObservation } from '../core/daemon/events.js';
@@ -55,7 +56,7 @@ function harness() {
 const base: WatchTarget = { targetId: 'run-1', generation: 'execution-1', conversationId: 'manager-1' };
 const run: RunWatchTarget = { ...base,
   task: { repositoryDirectory: '/repo', goalId: 'goal-1', taskName: 'task-1', runSlug: 'run-1', executionId: 'execution-1' },
-  owner: { pid: 123, startTime: 'start-1' }, running: true, paused: false, awaitingAnswer: false, logPath: '/log',
+  owner: { pid: 123, startTime: 'start-1' }, running: true, paused: false, awaitingAnswer: false, logPath: '/log', metaPath: null,
   startedAt: '2026-11-01T00:00:00.000Z',
 };
 const inquiry: InquiryWatchTarget = { ...base, repositoryDirectory: '/repo', questionId: 'question-1', goalId: 'goal-1',
@@ -246,7 +247,7 @@ describe('ログ停止', () => {
   it('組立済みの見張りもログ未作成の停止を検出し、作成後は通常の監視に戻る', async () => {
     const h = harness();
     const target = { ...run, logPath: null };
-    const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([target]), run: vi.fn().mockResolvedValue(target),
+    const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([target]), run: vi.fn().mockResolvedValue(target),
       pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]),
       launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
     const errors = vi.fn();
@@ -566,14 +567,14 @@ describe('fs.watchと限定照合', () => {
 
 it('組立済みの見張りは各周期で観測し、停止後には再開しない', async () => {
   const h = harness();
-  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
+  const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
     inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
     ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
   await watchers.drain();
-  expect(source.runs).toHaveBeenCalledTimes(2);
+  expect(source.runs).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(15_000);
-  expect(source.runs).toHaveBeenCalledTimes(6);
+  expect(source.runs).toHaveBeenCalledTimes(7);
   expect(source.pullRequests).toHaveBeenCalledTimes(1);
   expect(source.inquiries).toHaveBeenCalledTimes(4);
   expect(source.launches).toHaveBeenCalledTimes(1);
@@ -586,7 +587,7 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
 it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だけを届ける', async () => {
   const h = harness();
   filesystem.stat.mockResolvedValue({ dev: 1, ino: 1, size: 2, mtimeMs: Date.now(), ctimeMs: Date.now(), isFile: () => true });
-  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
+  const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
     pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]),
     launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const errors = vi.fn();
@@ -600,6 +601,30 @@ it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だ
   expect(h.accepted.size).toBe(1);
   expect(errors).not.toHaveBeenCalled();
   await watchers.close();
+});
+
+it('組立済みのrun監視は停止時にreaderへ渡したsignalを中断する', async () => {
+  const h = harness();
+  const entered = deferred<AbortSignal>();
+  const target = { ...run, metaPath: '/meta.json' };
+  const source: DaemonWatchSource = { runs: async () => [target], run: async () => target,
+    readRunProgress: vi.fn((_path: string, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(signal!.reason), { once: true });
+      entered.resolve(signal!);
+    })),
+    pullRequests: async () => [], inquiries: async () => [], goals: async () => [], launches: async () => [], directories: async () => [] };
+  const watchers = startDaemonWatchers({ source, processes: { inspect: async () => ({ kind: 'alive', owner: run.owner! }) },
+    commands: { run: vi.fn() }, records: h.records, ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
+  try {
+    const signal = await entered.promise;
+    expect(signal.aborted).toBe(false);
+    await watchers.close();
+    expect(signal.aborted).toBe(true);
+    expect(source.readRunProgress).toHaveBeenCalledWith(target.metaPath, signal);
+    watchers.changed();
+    await watchers.drain();
+    expect(source.readRunProgress).toHaveBeenCalledOnce();
+  } finally { await watchers.close(); }
 });
 
 it('ゴールの長期停滞は保存時刻から判定し、同じ状態ではイベントを増やさない', async () => {
@@ -627,4 +652,64 @@ it('processes directory files in pages and retains unchanged entries between pag
     expect(changed.mock.calls.every(([change]) => !(change as WatchFileChange).removed)).toBe(true);
     expect(onError).not.toHaveBeenCalled();
   } finally { await loop.close(); }
+});
+
+it('notifies only after two hours and more than five step executions, once per run and step across restart', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  const started = Date.now();
+  const progress = { runSlug: run.task.runSlug!, running: true, startedAt: new Date(started).toISOString(),
+    steps: [{ identity: 'root-review', workflow: 'root', step: 'review', count: 5 }] };
+  const read = vi.fn(async () => progress);
+  const reread = async () => target;
+  vi.setSystemTime(started + WATCH_THRESHOLDS.runDuration - 1);
+  await h.checks.runProgress(target, read, reread);
+  vi.setSystemTime(started + WATCH_THRESHOLDS.runDuration);
+  await h.checks.runProgress(target, read, reread);
+  expect(h.accept).not.toHaveBeenCalled();
+  vi.setSystemTime(Date.now() + 1);
+  progress.steps[0]!.count = 6;
+  await h.checks.runProgress(target, read, reread);
+  const restarted = new WatchChecks(new WatchObservations(h.records, { accept: h.accept }, Date.now), Date.now, h.onError, 'run');
+  // PID の世代や観測できる段階が変わっても同じ run の同じ異常は再通知しない。
+  await restarted.runProgress({ ...target, generation: 'new-owner' }, read, async () => ({ ...target, generation: 'new-owner' }));
+  progress.steps = [];
+  await restarted.runProgress(target, read, reread);
+  progress.steps = [{ identity: 'root-review', workflow: 'root', step: 'review', count: 9 }];
+  await restarted.runProgress(target, read, reread);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated']);
+  progress.steps.push({ identity: 'child-review', workflow: 'child', step: 'review', count: 6 });
+  await restarted.runProgress(target, read, reread);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated', 'run_step_repeated']);
+  const next = { ...target, task: { ...target.task, runSlug: 'next' }, generation: 'next' };
+  progress.runSlug = 'next';
+  await restarted.runProgress(next, read, async () => next);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated', 'run_step_repeated',
+    'run_too_long', 'run_step_repeated', 'run_step_repeated']);
+});
+
+it('discards run progress after completion or replacement and rejects mismatched metadata', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  const progress = { runSlug: run.task.runSlug!, running: true, startedAt: '2020-01-01T00:00:00.000Z',
+    steps: [{ identity: 'child', workflow: 'child', step: 'review', count: 6 }] };
+  await h.checks.runProgress(target, async () => undefined, async () => target);
+  await h.checks.runProgress(target, async () => ({ ...progress, running: false }), async () => target);
+  await h.checks.runProgress(target, async () => progress, async () => undefined);
+  await h.checks.runProgress(target, async () => progress, async () => ({ ...target, running: false }));
+  await h.checks.runProgress(target, async () => progress, async () => ({ ...target, generation: 'new' }));
+  await expect(h.checks.runProgress(target, async () => ({ ...progress, runSlug: 'different' }), async () => target)).rejects.toThrow();
+  expect(h.accept).not.toHaveBeenCalled();
+});
+
+it('ignores synthetic loop judge steps while observing repeated ordinary steps', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  await h.checks.runProgress(target, async () => ({ runSlug: run.task.runSlug!, running: true,
+    startedAt: new Date().toISOString(), steps: [
+      { identity: 'judge', workflow: 'root', step: loopJudgeStepName(['plan', 'review']), count: 20 },
+      { identity: 'review', workflow: 'root', step: 'review', count: 6 },
+    ] }), async () => target);
+  expect(observedKinds(h.accepted)).toEqual(['run_step_repeated']);
+  expect([...h.accepted.values()]).toMatchObject([{ event: { observation: { step: 'review' } } }]);
 });

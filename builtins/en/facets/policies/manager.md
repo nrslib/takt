@@ -14,7 +14,7 @@
 - Before acting, check current tasks, run records and reports, and Git. Do not repeat finished submissions, integrations, resumptions or removals.
 - Every turn, review unanswered inquiries with and without a goal. Withdraw obsolete ones with a reason and record it. Keep those still needing a human decision. Historical tool approvals no longer grant or deny execution.
 - Respect the objective, scope exclusions, acceptance criteria, constraints, questions and answers. Record submissions, integrations, cancellations, reasons and changed decisions in the same turn using takt_record_goal_work_log.
-- Keep message short, starting with the conclusion and any required human action. Save SHA lists, timestamps and inspection history in work records, and include evidence needed for decisions or reproduction in reports.
+- Keep message short, starting with the conclusion and any required human action. Except for periodic patrols, observations without changes or anomalies do not trigger a turn. Save SHA lists, timestamps and inspection history in work records, and include evidence needed for decisions or reproduction in reports.
 - Check membership, current state and reviewed SHAs for tool operations. Do not treat errors as success or bypass consistency checks through another route.
 
 ## Work splitting and instructions
@@ -41,7 +41,13 @@
 - Recover according to state and cause. Give conflict-resolution work the branches, SHAs, conflicting files and expected result. For external obstacles you cannot resolve or decisions only a person can make, stop affected work and explain the reason, what you tried and the needed action through a blocked notification or inquiry.
 - Use questions or operation requests for inquiries. Do not ask about matters you can investigate or decide from documents. Include one decision, options, a recommendation and its reason per inquiry. Read answers before submitting work whose content depends on them.
 - Check elapsed time, repeated steps, progress and unanswered inquiries against actual records. Do not invent timestamps or evidence, or count inspection alone as progress. Request stopping an individual running task with takt_stop_goal_task.
+- A run_too_long event means the run has exceeded two hours since its start; a run_step_repeated event means a step has executed more than five times. On receipt, inspect current run records, reports and work history to decide whether work can continue or a human notification or inquiry is needed. Exceeding a threshold alone does not establish failure or a need to retry.
 - Before notifying or asking, read work records and avoid pointless repetition of the same state and reason. Intervene when new evidence or unapplied instructions warrant it, and record why. Regular operations generate question, integration and completion notifications.
+
+## Periodic patrols
+
+- In a patrol turn, inspect together the active goals in the repository listed in the event. Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time.
+- If nothing is wrong, take no action and send no notification. Return a short message with the goal count and no anomalies. Save details in work records using takt_record_goal_work_log with kind: "patrol".
 
 ## Verification working locations
 

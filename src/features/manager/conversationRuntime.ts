@@ -45,7 +45,11 @@ export function createConversationRuntime(configDirectory: string): Conversation
       if (existing?.contextKey === contextKey) return existing;
       if (existing !== undefined) { await existing.dispose(); entries.delete(id); }
       const turnScope = new TurnToolScope();
-      const mcp = await connectManagerMcp(cwd, identity, plan.ctx.mcpServers, { turnScope });
+      let activeTurn: { patrol: boolean; signal: AbortSignal } | undefined;
+      const mcp = await connectManagerMcp(cwd, identity, plan.ctx.mcpServers, {
+        turnScope,
+        conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined : { patrol: activeTurn.patrol },
+      });
       try {
         await plan.ctx.provider.preflight?.({
           cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
@@ -55,8 +59,9 @@ export function createConversationRuntime(configDirectory: string): Conversation
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
           contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
             turnScope.begin(turn.abortSignal);
+            activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal };
             try { return await executor.execute(turn); }
-            finally { await turnScope.end(); }
+            finally { await turnScope.end(); activeTurn = undefined; }
           } }, dispose: mcp.dispose };
         entries.set(id, entry);
         return entry;

@@ -29,6 +29,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { readRunMeta } from '../core/workflow/run/run-meta.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import {
@@ -2000,12 +2003,12 @@ steps:
       });
     }
 
-    function mockLoopMonitorRunThroughWorkflowCall(): void {
+    function mockLoopMonitorRunThroughWorkflowCall(calls = 1): void {
       // Mirrors engine-loop-monitors.test.ts's mockRunAgentSequence wrapper:
       // a 'supervisor' persona response ('done') needs structuredOutput, or
       // StepExecutor falls back to parsing a ```json``` block from content
       // that was never written to look like one.
-      mockRunAgentSequence([
+      const responses = [
         // child, mirroring engine-loop-monitors.test.ts's first "cycle
         // triggers judge -> unproductive -> reviewers" case:
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -2026,8 +2029,9 @@ steps:
           content: 'approved',
           structuredOutput: { content: 'approved' },
         }),
-      ]);
-      mockRuleEvaluationSequence([
+      ];
+      mockRunAgentSequence(Array.from({ length: calls }, () => responses).flat());
+      const decisions = [
         { index: 0, method: 'phase3_tag' }, // implement -> ai_review
         { index: 1, method: 'phase3_tag' }, // ai_review -> ai_fix (issues found)
         { index: 0, method: 'phase3_tag' }, // ai_fix -> ai_review (fixed)
@@ -2036,7 +2040,9 @@ steps:
         { index: 1, method: 'ai_judge' },   // judge: Unproductive (index 1) -> reviewers
         { index: 0, method: 'phase3_tag' }, // reviewers -> COMPLETE
         { index: 0, method: 'phase3_tag' }, // parent final_review -> COMPLETE
-      ]);
+      ] as const;
+      mockRuleEvaluationSequence(Array.from({ length: calls }, (_, call) => decisions.map((decision, index) =>
+        index === 7 && call < calls - 1 ? { ...decision, index: 1 } : decision)).flat());
     }
 
     it('relays real engine stepIndex/totalSteps through WorkflowCallExecutor.relayChildEvents, including a loop-judge step triggered inside the workflow_call child (not a hand-fed emit)', async () => {
@@ -2072,10 +2078,14 @@ steps:
       ]);
     });
 
-    it('renders the same corrected stepIndex/totalSteps through the real WorkflowRunLoop -> WorkflowCallExecutor.relayChildEvents -> workflowExecutionEvents display path', async () => {
+    it.each([{ nested: false, calls: 1 }, { nested: true, calls: 2 }])('records actual counts through loop monitoring and repeated child calls ($nested, $calls)', async ({ nested, calls }) => {
       const childConfig = buildLoopMonitorChildConfig();
-      const config = buildParentWithDelegateAndFinalReview();
-      mockLoopMonitorRunThroughWorkflowCall();
+      const config = nested ? buildParentWithDelegateAndFinalReview() : childConfig;
+      if (nested) {
+        config.maxSteps = 30;
+        config.steps.find((step) => step.name === 'final_review')!.rules!.push(makeRule('again', 'delegate'));
+      }
+      mockLoopMonitorRunThroughWorkflowCall(calls);
 
       engine = new WorkflowEngine(config, tmpDir, 'Run loop monitor inside workflow_call', createWorkflowCallOptions(tmpDir, {
         workflowCallResolver: () => childConfig,
@@ -2101,6 +2111,9 @@ steps:
         traceReportMode: 'redacted',
       });
       const displayRef: { current: { showInit: (model: string) => void } | null } = { current: null };
+      const runPaths = buildRunPaths(tmpDir, 'meta-loop');
+      const runMetaManager = new RunMetaManager(runPaths, 'task', config.name);
+      const checkpoints: ReturnType<typeof readRunMeta>[] = [];
       const rendered: string[] = [];
       const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation((line: string) => {
         rendered.push(line);
@@ -2133,7 +2146,7 @@ steps:
             onCompanionCall: vi.fn(),
             onCompanionReviewSkipped: vi.fn(),
           } as never,
-          runMetaManager: { updateStep: vi.fn(), updatePhase: vi.fn(), updateResumePoint: vi.fn(), finalize: vi.fn() } as never,
+          runMetaManager,
           shouldNotifyRateLimit: false,
           initialResumePoint: undefined,
           sessionLog,
@@ -2145,7 +2158,8 @@ steps:
         // (re)builds displayRef.current for the new step; this listener runs second
         // in the same synchronous EventEmitter dispatch and immediately renders it,
         // capturing exactly what a live run would have printed at that point.
-        engine.on('step:start', () => {
+        engine.on('step:start', (step) => {
+          if (step.name.startsWith('_loop_judge_')) checkpoints.push(readRunMeta(runPaths.metaAbs));
           displayRef.current?.showInit('gpt-test');
         });
 
@@ -2155,7 +2169,19 @@ steps:
         consoleLogSpy.mockRestore();
       }
 
-      expect(rendered).toEqual([
+      expect(checkpoints).toHaveLength(calls);
+      expect(checkpoints[0]!.stepExecutions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ workflow: 'child', step: 'ai_fix', count: 2 }),
+        expect.objectContaining({ workflow: 'child', step: '_loop_judge_ai_review_ai_fix', count: 1 }),
+      ]));
+      const saved = readRunMeta(runPaths.metaAbs)!;
+      expect(saved.stepExecutions?.find((entry) => entry.step === 'ai_fix')?.count).toBe(2 * calls);
+      expect(saved.stepExecutions?.find((entry) => entry.step === '_loop_judge_ai_review_ai_fix')?.count).toBe(calls);
+      if (nested) expect(saved.stepExecutions?.filter((entry) => entry.workflow === 'parent')).toMatchObject([
+        { step: 'delegate', count: calls }, { step: 'final_review', count: calls },
+      ]);
+      expect(saved.resumePoint?.stack).toHaveLength(1);
+      expect(rendered).toEqual(Array.from({ length: calls }, () => [
         expect.stringContaining('step 1/4'), // implement
         expect.stringContaining('step 2/4'), // ai_review
         expect.stringContaining('step 3/4'), // ai_fix
@@ -2163,8 +2189,8 @@ steps:
         expect.stringContaining('step 3/4'), // ai_fix
         expect.stringContaining('step 3/4'), // loop-judge (triggering step's position)
         expect.stringContaining('step 4/4'), // reviewers
-        expect.stringContaining('step 2/2'), // parent final_review, not step 1/2 or step ?/4
-      ]);
+        ...(nested ? [expect.stringContaining('step 2/2')] : []),
+      ]).flat());
     });
   });
 

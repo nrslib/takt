@@ -2,6 +2,19 @@
 
 `takt manager` is an experimental TUI for discussing goals and coordinating work. Manager and task execution incur provider costs.
 
+## Manager patrols
+
+For each repository with active goals (excluding paused, aborted and completed goals), the manager periodically inspects all active goals together. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+
+```yaml
+manager:
+  patrol_interval: 1800
+```
+
+Patrols enter the non-human event queue. Processing priority is human input, ordinary events, then patrols; a patrol starts only when neither of the first two has waiting input. Accepting human input from the TUI or Slack in the same conversation interrupts a running patrol so the human input can be processed first. The interrupted patrol is not retried; patrols resume at the next interval. Queued input and events remain intact. Human input does not interrupt other running turns. Pending or running patrols do not accumulate, and missed intervals while the daemon is stopped are not replayed. While the TUI is connected, it displays one short result from a completed patrol, such as “Patrol: 2 goals, no anomalies”, without intermediate output. Details remain in work records. Inspection records alone do not count as progress. No Slack or other notification is sent when nothing is wrong. The manager uses existing notification or inquiry tools when a problem requires attention.
+
+Code watchers also notify the manager once per run after more than two hours, and once per run and step after more than five executions of that step. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
+
 ## Discussion and registration
 
 Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the conversation. Review the displayed proposal and use `↑` Approve / `↓` Continue / `Enter` Confirm. Select Approve and press `Enter` to ask the daemon to register the goal. Choose Continue conversation to revise it.
@@ -19,7 +32,7 @@ Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
 
 The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting Approve and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
 
-The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
+The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn. Within the other queue, patrols wait behind ordinary events; acceptance order is preserved among human inputs, among ordinary events and among patrols. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
 
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays notifications and lets you continue the conversation with a manager that receives those events. Work records are not displayed in the TUI. Closing the TUI also leaves an already running run active.
 
@@ -67,7 +80,7 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 ## Events and watchers
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. A clock alone never calls manager or director. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 ## Workspace
 
@@ -115,7 +128,7 @@ Manager listing (`takt_list_managers`) reports unreadable projects with reasons 
 
 ### Events and notifications
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. A clock alone never calls manager or director. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 Set director options in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
 

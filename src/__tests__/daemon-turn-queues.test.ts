@@ -38,6 +38,35 @@ describe('daemon turn queues', () => {
     expect(queue.peekNext(() => true)?.eventId).toBe('1');
   });
 
+  it('selects humans, ordinary events, then patrols while preserving order within each group', () => {
+    const queue = createTurnQueues();
+    for (const id of [5, 4, 3, 2, 1]) {
+      const value = event(id, id === 4 ? 'human' : 'other', 'a');
+      if (id === 1 || id === 3) value.event = { kind: 'patrol', repositoryDirectory: '/repo', goalIds: ['goal'] };
+      queue.add(value); queue.confirm(value.eventId);
+    }
+    const selected: string[] = [];
+    while (true) {
+      const next = queue.peekNext(() => true);
+      if (next === undefined) break;
+      selected.push(next.eventId); queue.markStarted(next.eventId); queue.remove(next.eventId);
+    }
+    expect(selected).toEqual(['4', '2', '5', '1', '3']);
+  });
+
+  it.each(['saving', 'busy'] as const)('blocks patrols while an ordinary event is %s, including in another conversation', (state) => {
+    const queue = createTurnQueues();
+    queue.add({ ...event(1, 'other', 'free'), event: { kind: 'patrol', repositoryDirectory: '/repo', goalIds: ['goal'] } });
+    queue.confirm('1');
+    queue.add(event(2, 'other', 'busy'));
+    if (state === 'busy') queue.confirm('2');
+    expect(queue.peekNext((id) => id !== 'busy')).toBeUndefined();
+    queue.confirm('2');
+    expect(queue.peekNext(() => true)?.eventId).toBe('2');
+    queue.remove('2');
+    expect(queue.peekNext(() => true)?.eventId).toBe('1');
+  });
+
   it('blocks other events while a human waits for a busy conversation', () => {
     const queue = createTurnQueues();
     for (const value of [event(1, 'human', 'busy'), event(2, 'other', 'free')]) { queue.add(value); queue.confirm(value.eventId); }

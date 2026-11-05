@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify } from 'yaml';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
-import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { createWatchSource } from './helpers/daemon-watch-source.js';
 import type { RunWatchTarget } from '../features/daemon/watchers/checks.js';
 import { executeTaskAndCompleteWithDetails, executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -106,7 +106,7 @@ describe('daemon による実際の run ログの検出', () => {
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
       new DaemonNotifications(globalDirectory), async () => {}, errors);
-    const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
+    const source = createWatchSource(conversations, async () => {}, errors);
     const observations: Array<readonly RunWatchTarget[]> = [];
     vi.mocked(provider.fetchPrStatus).mockImplementationOnce(async (_number, _cwd, options) => {
       options?.signal?.throwIfAborted();
@@ -185,7 +185,7 @@ describe('daemon による実際の run ログの検出', () => {
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
       new DaemonNotifications(globalDirectory), async () => {}, errors);
-    const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
+    const source = createWatchSource(conversations, async () => {}, errors);
     const runner = new TaskRunner(project);
     runner.addTask('Write a run log', { goal_id: goalId, worktree, workflow: 'watch-log', slug: 'watch-log' });
     const task = runner.claimNextTasks(1)[0]!;

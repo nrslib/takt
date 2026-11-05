@@ -9,9 +9,13 @@ beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doub
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
 });
-it.each([0, 60, 900, -1, 0.5, '1800'])('ignores removed manager patrol setting %s', (patrol_interval) => {
+it.each([1, 60, 900, 1800])('accepts manager patrol interval %s in seconds', (patrol_interval) => {
   expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
   expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
+});
+it.each([0, -1, 0.5, '1800', null, Number.POSITIVE_INFINITY])('rejects invalid manager patrol interval %s', (patrol_interval) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
+  expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
 });
 it.each([0, 600, 900, -1, 0.5, '600'])('ignores removed director patrol setting %s', (patrol_interval) => {
   expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(true);
@@ -133,13 +137,13 @@ it('resolves director Slack from the already loaded global configuration', () =>
   expect(doubles.project).not.toHaveBeenCalled();
 });
 
-it('serializes supported director and manager settings without restoring patrol configuration', async () => {
+it('serializes manager patrol configuration while leaving director patrol disabled', async () => {
   const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
   const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
-  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false } });
+  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, patrolInterval: 1800 } });
   const parsed = GlobalConfigSchema.parse(serialized);
   expect(parsed.director).toEqual({ slack: { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] } });
   expect(parsed.manager).toMatchObject({ auto_run: false });
-  expect(parsed.manager).not.toHaveProperty('patrol_interval');
+  expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
   expect(parsed.director).not.toHaveProperty('patrol_interval');
 });

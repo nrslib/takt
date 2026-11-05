@@ -26,7 +26,9 @@ export function createTurnQueues(): TurnQueues {
     peekNext(canStart) {
       // 保存中・実行不能の人の発言も、other に追い越させない。
       const waitingHumans = human.filter((entry) => entry.state !== 'running');
-      const lane = waitingHumans.length > 0 ? waitingHumans : other.filter((entry) => entry.state === 'saving' || entry.state === 'queued');
+      const waitingOthers = other.filter((entry) => entry.state === 'saving' || entry.state === 'queued');
+      const waitingEvents = waitingOthers.filter(({ event }) => event.event.kind !== 'patrol');
+      const lane = waitingHumans.length > 0 ? waitingHumans : waitingEvents.length > 0 ? waitingEvents : waitingOthers;
       const blocked = new Set<string>();
       for (const { event, state } of lane) {
         if (blocked.has(event.conversationId)) continue;

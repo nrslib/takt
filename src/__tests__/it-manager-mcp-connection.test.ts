@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectTestManagerMcp } from './helpers/manager-mcp.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { TurnToolScope } from '../features/daemonTurn/toolScope.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { MANAGER_ASSIGNMENT_HEADER, withManagerAssignment } from '../features/manager/assignment.js';
 import { readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
@@ -47,6 +48,27 @@ describe('manager MCP connection confirmation', () => {
     vi.unstubAllEnvs();
     invalidateResolvedConfigCache(cwd);
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('records every patrol entry as inspection and preserves ordinary work kinds on the same MCP connection', async () => {
+    const turnScope = new TurnToolScope();
+    let patrol = true;
+    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined,
+      { turnScope, conversationTurn: () => ({ patrol }) });
+    try {
+      for (const isPatrol of [true, false]) {
+        patrol = isPatrol;
+        turnScope.begin(new AbortController().signal);
+        for (const kind of [undefined, 'patrol'] as const) {
+          const result = await connection.client.callTool({ name: 'takt_record_goal_work_log', arguments: {
+            cwd, goalId, summary: 'inspection details', ...(kind === undefined ? {} : { kind }),
+          } });
+          expect(result.isError).not.toBe(true);
+        }
+        await turnScope.end();
+      }
+      expect((await store.get(goalId)).workLog.map((entry) => entry.kind)).toEqual(['patrol', 'patrol', undefined, 'patrol']);
+    } finally { await turnScope.end(); await connection.dispose(); }
   });
 
   const operations = [

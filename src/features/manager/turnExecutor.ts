@@ -22,6 +22,7 @@ export interface ManagerTurnInput {
   sessionId: string | undefined;
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
+  patrol?: boolean;
   onProviderOutput?: () => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }

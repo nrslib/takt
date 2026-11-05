@@ -58,6 +58,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
+  const displayedResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
@@ -155,6 +156,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
   const showResult = (result: OperationResult, operationId: string): void => {
+    if (displayedResults.current.has(operationId)) return;
+    displayedResults.current.add(operationId);
     const goalOperation = goalOperations.current.get(operationId);
     goalOperations.current.delete(operationId);
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {

@@ -166,8 +166,7 @@ const ProjectConfigObjectBaseSchema = z.object({
       blocked: z.boolean().optional(),
       custom: z.boolean().optional(),
     }).strict().optional(),
-    // 廃止した設定。書いてあってもエラーにせず読み飛ばす。
-    patrol_interval: z.unknown().optional(),
+    patrol_interval: z.number().int().positive().optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),

@@ -3,7 +3,7 @@ import type { ManagerEvent } from '../../infra/goals/events.js';
 
 export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): TurnEvent {
   switch (saved.kind) {
-    case 'patrol': throw new Error('Patrol events are not delivered to the manager');
+    case 'patrol': throw new Error('Legacy goal patrols are retired without delivery');
     case 'completion': return {
       kind: saved.result.success ? 'task_completed' : 'task_failed',
       task: { repositoryDirectory: directory, goalId: saved.goalId, taskName: saved.taskName,

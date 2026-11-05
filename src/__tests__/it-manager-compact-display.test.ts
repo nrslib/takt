@@ -27,7 +27,12 @@ import { appendGoalWorkLog } from '../infra/goals/workLog.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { ManagerClientDouble, cwd as summaryRepository, ENTER, UP } from './helpers/manager-tui-fixtures.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationRecord, writeLegacyConversation } from './helpers/conversation-fixtures.js';
+import { harness, input } from './helpers/controlledDaemon.js';
+import { DaemonConversations } from '../features/daemon/conversationState.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import { DaemonNotifications } from '../infra/daemon/notifications.js';
 
 vi.mock('../features/tui/PromptInput.js', async (original) => {
   const actual = await original<typeof import('../features/tui/PromptInput.js')>();
@@ -116,6 +121,40 @@ describe('manager summary transcript and terminal height', () => {
       },
     };
   }
+
+  it.each(['patrol', 'human'] as const)('displays a %s result once when markSettled fails after delivery and storage is retried', async (kind) => {
+    const context = mountTerminal('ja');
+    const h = await harness();
+    const conversations = new DaemonConversations(new ConversationStateStore(getGlobalConfigDir()),
+      new DaemonRouting(getGlobalConfigDir()), new DaemonNotifications(getGlobalConfigDir()), async (_id, output) => {
+        if (output.kind !== 'snapshot') context.client.output(output);
+      }, (error) => { throw error; });
+    const record = conversationRecord(summaryRepository);
+    writeLegacyConversation(getGlobalConfigDir(), record);
+    h.owner.apply = vi.fn((result) => conversations.apply(result));
+    h.store.beforeSettle = vi.fn().mockRejectedValueOnce(new Error('settlement storage failed')).mockResolvedValue(undefined);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      await h.dispatcher.accept({ ...input('result-retry', record.id, kind === 'patrol' ? 'other' : 'human'),
+        ...(kind === 'patrol' ? { event: { kind: 'patrol' as const, repositoryDirectory: summaryRepository, goalIds: [randomUUID()] } } : {}) });
+      const turn = await h.runner.started(1);
+      const message = '見回り: ゴール1件、異常なし';
+      await h.runner.finish(turn, { kind: 'completed', result: { kind: 'reply', message } });
+      await conversations.close();
+      await waitFor(() => expect(transcript().filter((entry) => entry.content === message)).toHaveLength(1));
+      expect(h.store.records.get('result-retry')?.state).toBe('settling');
+      await h.dispatcher.retryStorage();
+      await conversations.close();
+      await context.text();
+      expect(h.owner.apply).toHaveBeenCalledTimes(2);
+      expect(h.store.records.get('result-retry')?.state).toBe('settled');
+      expect(transcript().filter((entry) => entry.content === message)).toHaveLength(1);
+    } finally {
+      await h.dispatcher.control({ kind: 'stop' });
+      await conversations.close();
+      context.dispose();
+    }
+  });
 
   it.each(['ja', 'en'] as const)('does not accumulate summary text or live headings after twenty updates at 80 by 24 in %s', async (lang) => {
     const summary = makeSummary(4);
