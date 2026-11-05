@@ -622,7 +622,8 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         result: completed.completion, createdAt: expect.any(String) },
     ]);
     expect(processed).toEqual([]);
-    expect((await store.get(goalId)).workLog.filter(({ summary }) => summary === 'Retry result inspected')).toEqual([]);
+    const workLogBeforeEvents = (await store.get(goalId)).workLog;
+    expect(workLogBeforeEvents).toEqual([expect.objectContaining({ summary: expect.stringContaining(taskName) })]);
     const directory = getGlobalConfigDir();
     const daemon = await conversationDaemon(directory, createConversationRuntime(directory));
     const files = new DaemonPersistedFiles(directory);
@@ -645,7 +646,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     expect(processed.map((event) => event.kind)).toEqual(['goal_registered', 'task_completed']);
     const event = processed.find((event) => event.kind === 'task_completed');
     expect(readManagerEvents(cwd)).toEqual([]);
-    expect((await store.get(goalId)).workLog).toContainEqual(expect.objectContaining({ summary: 'Retry result inspected' }));
+    expect((await store.get(goalId)).workLog).toEqual(workLogBeforeEvents);
     expect(event).toMatchObject({ task: { taskName, runSlug: completed.runSlug }, result: { success: true, branch } });
     const stagedOrder = join(clone, '.takt', 'runs', completed.runSlug!, 'context', 'task', 'order.md');
     expect(readFileSync(stagedOrder, 'utf8')).toBe(expectedOrder);
