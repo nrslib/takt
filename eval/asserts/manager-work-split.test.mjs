@@ -903,12 +903,32 @@ for (const lang of ['ja', 'en']) {
       }
     });
 
-    test(`${lang}/${caseId}: rejects unnecessary tasks, approval questions and premature completion`, () => {
+    test(`${lang}/${caseId}: accepts delegated checks and human operation requests with a saved target and method`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const target = caseId === 'verification-before-integration' ? fixture.tasks[0].completion.sha
+        : fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalSha;
+      const summary = lang === 'ja'
+        ? `対象 SHA ${target} を隔離した一時 worktree で対象テストにより確認する。利用者の作業コピーは保持する。manager が SHA と実行結果の証拠を確認するまで未確認。`
+        : `Check target SHA ${target} with targeted tests in an isolated temporary worktree. Preserve the user's checkout. Results remain unconfirmed until the manager reviews the SHA and execution evidence.`;
+      const task = enqueue(fixture, 'verify-import-result');
+      task.arguments.purpose = 'Verify the import result';
+      task.arguments.task = summary;
+      const person = { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, recipient: 'human', kind: 'operation_request', body: summary,
+      } };
+      for (const call of [task, person]) {
+        const output = verificationOutput(fixture, summary);
+        output.calls.unshift(call);
+        assert.equal(score(output, caseId, lang).pass, true, call.tool);
+      }
+    });
+
+    test(`${lang}/${caseId}: rejects premature completion and redundant integration`, () => {
       const fixture = loadManagerCase(caseId, lang);
       const output = verificationOutput(fixture, 'Concrete verification decision; results remain unconfirmed.');
       assert.equal(score(output, caseId, lang).pass, true);
       const calls = writingCalls(fixture, []);
-      const forbidden = ['takt_enqueue_goal_task', 'takt_ask_goal_question', 'takt_complete_goal', 'takt_check_goal_completion'];
+      const forbidden = ['takt_complete_goal', 'takt_check_goal_completion'];
       if (caseId !== 'verification-before-integration') forbidden.push('takt_merge_goal_task');
       for (const tool of forbidden) {
         assert.ok(managerWriteSchemas[tool].safeParse(calls[tool]).success, tool);

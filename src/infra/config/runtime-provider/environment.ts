@@ -371,7 +371,6 @@ function buildInternalAgents(
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
     'review-completion-judge': 'completionRetryJudge',
-    'manager-permission-judge': 'managerPermissionJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {

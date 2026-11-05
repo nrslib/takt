@@ -107,7 +107,7 @@ export interface TaktMcpServerOptions {
   toolSet?: TaktMcpToolSet;
   includeReferenceMarkers?: boolean;
   goalExecutionConnection?: ManagerMcpConnection;
-  conversationTurn?: () => { operationId: string; directorMessage: boolean; patrol?: boolean } | undefined;
+  conversationTurn?: () => { patrol: boolean } | undefined;
 }
 
 function buildMcpOperationDependencies(
@@ -174,17 +174,17 @@ export function createTaktMcpServer(
         }, false);
       server.registerTool('takt_pause_goal', {
         title: 'Pause goal execution',
-        description: 'Pause the selected goal after human confirmation through the permission judge. Running work continues; pending work waits. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        description: 'Pause the selected goal. Running work is interrupted and pending work waits. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
         inputSchema: goalWriteInputSchema,
       }, (input, extra) => goalOperation(input.cwd, 'Goal pause failed', (deps) => pauseTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
       server.registerTool('takt_resume_goal', {
         title: 'Resume goal execution',
-        description: 'Resume the selected paused goal after human confirmation through the permission judge. Aborted goals cannot resume. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        description: 'Resume the selected paused goal. Aborted goals cannot resume. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
         inputSchema: goalWriteInputSchema,
       }, (input, extra) => goalOperation(input.cwd, 'Goal resume failed', (deps) => resumeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
       server.registerTool('takt_abort_goal', {
         title: 'Abort goal execution',
-        description: 'Abort the selected goal with a required reason after human confirmation through the permission judge. Before execution, confirm that abort cannot be undone and that goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        description: 'Abort the selected goal with a required reason. Abort cannot be undone; goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
         inputSchema: abortGoalInputSchema,
       }, (input, extra) => goalOperation(input.cwd, 'Goal abort failed', (deps) => abortTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
     }
@@ -234,7 +234,7 @@ export function createTaktMcpServer(
       title: 'Read manager work', description: 'Read recent manager work in reverse saved order with optional limit (1-50) and offset. Read full entries with takt_get_goal path workLog, recordId, and a text field path. Responses fit 64 KiB, with explicit truncation.', inputSchema: listGoalRecordsInputSchema,
     }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
     server.registerTool('takt_ask_goal_question', {
-      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Approval creation is not allowed for managers; approvals are created through the judgment path. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
+      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Tool approvals are retired and cannot be created. Answers are supplied by people through TUI or Slack. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
       inputSchema: askGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question failed', (deps) => askTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))));
     server.registerTool('takt_list_goal_questions', {
@@ -254,7 +254,7 @@ export function createTaktMcpServer(
       inputSchema: notifyGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal notification failed', (deps) => notifyTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
     server.registerTool('takt_enqueue_goal_task', {
-      title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained and must not request merging. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
+      title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained. Workflow names, scope references and paths are accepted. autoPr and shouldPublishBranchToOrigin default to false and may be specified on submission. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
       inputSchema: enqueueGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_requeue_goal_task', {
@@ -276,23 +276,18 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal task stop failed', (deps) => stopTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_remove_goal_task', {
       title: 'Remove goal work',
-      description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running and unmerged completed tasks are rejected. Responses fit 64 KiB, with explicit truncation. Read removal records with takt_list_goal_work_log offset/limit, and full reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes. Confirm task absence with takt_list_tasks offset/limit.',
+      description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running tasks are rejected. Set discardUnmerged true to explicitly discard an unintegrated completed result. Pending tasks may be cancelled while the goal is paused. Responses fit 64 KiB, with explicit truncation. Read removal records with takt_list_goal_work_log offset/limit, and full reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes. Confirm task absence with takt_list_tasks offset/limit.',
       inputSchema: removeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task removal failed', (deps) => removeTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_complete_goal', {
-      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or pushes and creates/reuses a PR to the saved target branch when awaiting merge; provide humanChecks for the PR. Conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge to the reviewed goal SHA and acceptance evidence. Auto merges or pushes and creates/reuses a PR to the saved target branch when awaiting merge; provide humanChecks for the PR. Conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: completeGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Merge a goal PR',
-      description: 'Run takt merge with the saved PR number in the target repository. Requires the current conversation operation to be an active message from the director conveying an explicit human instruction. Autonomous events, patrols and direct human messages to manager are rejected. manager.main_merge controls automatic goal completion, not this explicit PR merge. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
+      description: 'Run takt merge with the saved PR number in the target repository. manager.main_merge controls automatic goal completion, not this explicit PR merge. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
       inputSchema: mergeGoalPrInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps, assignment) => mergeTaktGoalPr(projectInput(input, deps), {
-      ...deps,
-      managerConversation: assignment === undefined ? undefined : {
-        configDirectory: globalConfigDirectory, assignment, getTurn: options.conversationTurn,
-      },
-    }, turnSignal(extra.signal)), false));
+    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target; use takt_check_goal_completion for an included SHA. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,

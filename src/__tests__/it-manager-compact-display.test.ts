@@ -1,7 +1,7 @@
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { cleanup, render } from 'ink-testing-library';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createElement } from 'react';
@@ -741,9 +741,7 @@ describe('manager polling and answer cancellation', () => {
     describe.each([38, 40, 160])('terminal width %i', (columns) => {
       it.each(['answer', 'goal'] as const)('renders compact %s candidates outside the log and Esc leaves the store unchanged', async (command) => {
         const saved = await store.create({ ...goalRecord(), objective,
-          executionStatus: 'paused', questions: [question({ kind: 'approval', operation: {
-            toolName: 'Bash', args: '{}', cwd, argsDigest: createHash('sha256').update('{}').digest('hex'),
-          } })] });
+          executionStatus: 'paused', questions: [question({ kind: 'question' })] });
         const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
         const before = readFileSync(file, 'utf8');
         const calls = await mount(lang);
@@ -756,11 +754,11 @@ describe('manager polling and answer cancellation', () => {
           const rows = contentRows(selectedBox).filter((row) => row.includes(shortName));
           expect(rows).toHaveLength(1);
           expect(rows[0]).toMatch(command === 'answer'
-            ? (lang === 'ja' ? /承認/u : /approval/iu)
+            ? (lang === 'ja' ? /質問/u : /question/iu)
             : (lang === 'ja' ? /実行|一時停止|停止中/u : /active|paused/iu));
         }
         if (columns === 40) {
-          const prefix = command === 'goal' ? objective.slice(0, 6) : lang === 'ja' ? '承認' : 'Approval';
+          const prefix = command === 'goal' ? objective.slice(0, 6) : lang === 'ja' ? '質問' : 'Question';
           const rows = contentRows(selectedBox).filter((row) => row.startsWith(prefix));
           expect(rows).toHaveLength(1);
           expect(rows[0]).toMatch(/…$/u);

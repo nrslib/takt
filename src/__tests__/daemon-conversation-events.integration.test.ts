@@ -364,9 +364,9 @@ it.each([true, false])('defers a paused task result across restart and handles i
   await restarted.retryStorage();
   await restarted.drain();
   expect(runner.calls).toHaveLength(4);
-  const taskCalls = execute.mock.calls.filter(([input]) => input.instruction.includes(success ? 'task_completed' : 'task_failed'));
+  const taskCalls = execute.mock.calls.filter(([input]) => input.prompt.includes(success ? 'task_completed' : 'task_failed'));
   expect(taskCalls).toHaveLength(1);
-  expect(taskCalls[0]![0].instruction).toContain('paused-task');
+  expect(taskCalls[0]![0].prompt).toContain('paused-task');
   const remaining = [];
   for await (const value of (await new FileEventStore(f.directory).restore()).pending) remaining.push(value);
   expect(remaining).toEqual([]);

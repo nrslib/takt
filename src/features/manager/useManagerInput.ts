@@ -102,7 +102,7 @@ export function useManagerInput({
     if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
     const submitInput = key.return || trailingEnter;
     if (answerTarget !== null) {
-      if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
+      if (questionAnswer.handleInput(key, submitInput, editorRef, saveAnswer)) return;
     }
     if (!registering.current && canApprove && answerTarget === null && pending !== null
       && (key.escape || (editorRef.current.text === ''

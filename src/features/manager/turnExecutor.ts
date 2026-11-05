@@ -5,17 +5,10 @@ import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
-import { createManagerToolPermissionHandler } from './toolPermissionDecision.js';
-import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
-import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 import { getManagerOutputSchema, parseManagerResponse } from './turnResponse.js';
 import { createAgentFailureError, isAgentFailureError } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
-import { createBoundedSensitiveValues, sanitizeSensitiveValueWithKnownValues } from '../../shared/utils/sensitiveText.js';
-
-// Keep the judgment context finite; omitted observations must remain visible as omissions.
-const MAX_OBSERVED_TOOL_EVENT_BYTES = 64 * 1024;
 
 const addRepositoryTools = new Set([
   'takt_add_workspace_repository',
@@ -26,18 +19,11 @@ const addRepositoryTools = new Set([
 
 export interface ManagerTurnInput {
   prompt: string;
-  instruction: string;
   sessionId: string | undefined;
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
-  configDirectory: string;
-  conversationOperationId?: string;
-  directorMessage?: boolean;
   patrol?: boolean;
-  goal?: ManagerPermissionGoal;
   onProviderOutput?: () => void;
-  onNotification?: (message: string) => void;
-  onDenial?: (reason: string) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
@@ -50,9 +36,6 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
         signal.throwIfAborted();
         let assignment = input.assignment;
         let sessionId = input.sessionId;
-        const observedEvents: string[] = [];
-        let observationsTruncated = false;
-        const sensitiveValues = createBoundedSensitiveValues();
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
           Object.entries(plan.ctx.mcpServers).map(([name, config]) => [name,
             assignment === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignment)]),
@@ -66,50 +49,24 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             prepared = await adapter.prepare(resolved, {
               cwd, abortSignal: signal, permissionMode: 'full',
               ...(plan.ctx.providerType === 'codex'
-                ? { toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: TAKT_MCP_MANAGER_TOOL_NAMES } } : {}),
+                ? { toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: [
+                  ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+                ] } } : {}),
             });
           }
           signal.throwIfAborted();
-          const usesJudge = supportsManagerPermissionJudge(plan.ctx.providerType);
-          if (usesJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
-          const onToolPermissionDecision = usesJudge ? createManagerToolPermissionHandler({
-            plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: input.instruction,
-            goal: input.goal, configDirectory: input.configDirectory,
-            get observedToolEvents() {
-              return { events: observedEvents.map((value) => sanitizeSensitiveValueWithKnownValues(JSON.parse(value), sensitiveValues)),
-                truncated: observationsTruncated || sensitiveValues.exhausted };
-            },
-            get owner() { return assignment ?? { kind: 'repository', repositoryDirectory: cwd }; },
-            abortSignal: signal, onNotification: input.onNotification, onDenial: (reason) => { input.onDenial?.(reason); },
-          }) : undefined;
           let usedTools = false;
           const additions = new Set<string>();
           const call = async (prompt: string) => {
             signal.throwIfAborted();
-            const turnPrompt = input.conversationOperationId === undefined ? prompt
-              : `Conversation operation ID: ${input.conversationOperationId}\nFor takt_merge_goal_pr, pass this ID as conversationOperationId. It identifies this turn; merge authorization is checked against the saved conversation.\n\n${prompt}`;
-            const response = await agent.call(turnPrompt, {
+            const response = await agent.call(prompt, {
               cwd, model: plan.ctx.model, sessionId, abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
               outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
               ...(input.recovery === undefined ? {} : { callerManagedSession: true as const }),
               mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
-              ...(onToolPermissionDecision === undefined ? {} : { onToolPermissionDecision }),
               onStream: (event) => {
                 input.onProviderOutput?.();
-                if (usesJudge && (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output')) {
-                  sensitiveValues.collect(event);
-                  const serialized = JSON.stringify(sanitizeSensitiveValueWithKnownValues(event, sensitiveValues));
-                  const bytes = Buffer.byteLength(serialized);
-                  if (bytes > MAX_OBSERVED_TOOL_EVENT_BYTES) observationsTruncated = true;
-                  else {
-                    while (observedEvents.reduce((size, value) => size + Buffer.byteLength(value), bytes) > MAX_OBSERVED_TOOL_EVENT_BYTES) {
-                      observedEvents.shift();
-                      observationsTruncated = true;
-                    }
-                    observedEvents.push(serialized);
-                  }
-                }
                 if (event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
                 if (event.type === 'tool_use') {
                   usedTools = true;

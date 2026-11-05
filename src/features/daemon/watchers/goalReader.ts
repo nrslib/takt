@@ -21,7 +21,7 @@ export class WatchGoalReader {
   private closed = false;
 
   async read(cwd: string, goalId: string): Promise<WatchGoal> {
-    const result = await this.request({ kind: 'goal', cwd, goalId });
+    const result = await this.request({ kind: 'goal', cwd, goalId }, AbortSignal.timeout(WATCH_INTERVALS.long));
     if (result.kind !== 'goal') throw new Error('Unexpected goal reader reply');
     return result.goal;
   }

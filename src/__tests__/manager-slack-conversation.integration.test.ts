@@ -17,11 +17,11 @@ import type { ConversationSnapshot } from '../core/daemon/messages.js';
 import type { SnapshotItem } from '../features/manager/conversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
 
-const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), open: vi.fn() }));
+const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
   on = sdk.on; start = sdk.start; disconnect = sdk.disconnect;
 } }));
-vi.mock('@slack/web-api', () => ({ WebClient: class { chat = { postMessage: sdk.post }; views = { open: sdk.open }; } }));
+vi.mock('@slack/web-api', () => ({ WebClient: class { chat = { postMessage: sdk.post }; } }));
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -45,7 +45,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   sdk.start.mockResolvedValue(undefined); sdk.disconnect.mockResolvedValue(undefined);
   sdk.post.mockImplementation(async () => ({ ok: true, ts: `posted-${sdk.post.mock.calls.length}` }));
-  sdk.open.mockResolvedValue({ ok: true });
   events = []; items = []; sequence = 0; admitted = new Map(); beforeSave = async () => {};
   ingress = {
     accept: vi.fn(async (event) => {
@@ -160,24 +159,6 @@ it('keeps approval revision and conversation identity through a Slack button', a
   expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, requirePending: true } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: 'origin' }));
 });
-it('does not admit a permission sentence from another modal user or team', async () => {
-  const question = createInquiry({ kind: 'approval', body: 'Allow?', operation: { toolName: 'Bash', args: 'npm test', cwd: repositoryDirectory } });
-  const target = { goalId: randomUUID(), repositoryDirectory };
-  items = [{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }];
-  await slack.delivery.deliver(id, { kind: 'inquiry', target, question }, version);
-  await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' }, trigger_id: 'trigger',
-    container: { type: 'message', channel_id: 'C1', message_ts: 'posted-1' }, message: { ts: 'posted-1' },
-    actions: [{ type: 'button', action_id: 'takt_inquiry_answer_allow_project', value: 'allow_project' }] } });
-  const metadata = sdk.open.mock.calls[0]![0].view.private_metadata as string;
-  const modal = (teamId: string, userId: string): SlackEvent => ({ type: 'interactive', body: { type: 'view_submission', team: { id: teamId }, user: { id: userId },
-    view: { callback_id: 'takt_inquiry_permission', private_metadata: metadata,
-      state: { values: { permission: { sentence: { type: 'plain_text_input', value: 'Allow npm test.' } } } } } } });
-  await emit(modal('T1', 'U2')); await emit(modal('other', 'U1'));
-  expect(events).toEqual([]);
-  await emit(modal('T1', 'U1'));
-  expect(events[0]!.event).toMatchObject({ kind: 'inquiry_answer', command: { permission: {
-    scope: { kind: 'project', projectDirectory: repositoryDirectory }, sentence: 'Allow npm test.' } } });
-});
 it('reports failed persistence without claiming business acceptance or retrying', async () => {
   vi.mocked(ingress.accept).mockResolvedValueOnce({ kind: 'rejected', reason: 'storage' });
   await emit(message('not saved'));
@@ -198,9 +179,8 @@ it('routes workspace inquiries only through their repository channel and rejects
     expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB' }));
     await new SlackInquiryBindings(configDirectory, '/a').save({ channelId: 'CA', parentTs: 'forged', target, questionId: question.id });
     await a.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'answer');
-    await a.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'takt_inquiry_answer_allow_once', 'allow_once', 'trigger');
+    await a.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'takt_inquiry_answer_report_completed', 'report_completed');
     expect(events).toEqual([]);
-    expect(sdk.open).not.toHaveBeenCalled();
   } finally { await a.close(); await b.close(); await client.close(); }
 });
 
@@ -217,7 +197,7 @@ it('checks the operation repository for standalone workspace inquiries on delive
   const portB = createSlackConversationPort({ repositoryDirectory: repositories[1]!, configDirectory, resolveAssignment: async () => workspace, channelId: 'CB', input, client, language: 'en' });
   try {
     const target = { goalId: null, owner: { kind: 'workspace' as const, workspaceId: workspace.workspaceId } } as const;
-    const question = createInquiry({ kind: 'approval', body: 'B operation', operation: { toolName: 'Bash', args: 'npm test', cwd: join(b, 'nested') } });
+    const question = createInquiry({ kind: 'operation_request', body: 'B operation', operation: { toolName: 'Bash', args: 'npm test', cwd: join(b, 'nested') } });
     await portA.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
     await portB.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
     expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB' }));
@@ -227,7 +207,7 @@ it('checks the operation repository for standalone workspace inquiries on delive
     await new SlackInquiryBindings(configDirectory, repositories[0]!).save({ channelId: 'CA', parentTs: 'forged', target, questionId: question.id });
     await portA.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'answer');
     expect(events).toEqual([]);
-    await portB.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CB', parentTs: 'posted-1' }, 'takt_inquiry_answer_allow_once', 'allow_once', undefined);
+    await portB.receiveAction({ teamId: 'T1', userId: 'U1', channelId: 'CB', parentTs: 'posted-1' }, 'takt_inquiry_answer_report_completed', 'report_completed');
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toMatchObject({ kind: 'inquiry_answer', command: { target, questionId: question.id } });
   } finally { await portA.close(); await portB.close(); await client.close(); }

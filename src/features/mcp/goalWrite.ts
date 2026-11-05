@@ -35,7 +35,7 @@ export async function goalWrite(
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
     if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr'].includes(tool)) {
-      throw new Error('Goal is paused. Resume it in the manager TUI before continuing work.');
+      throw new Error('Goal is paused. Resume it before continuing work.');
     }
     const options = resolveManagerNotificationOptions(input.cwd);
     const result = await action(options);

@@ -6,7 +6,6 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexPermissionControl } from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
-import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
@@ -27,7 +26,6 @@ export interface CodexCallOptions {
   executionPhase?: 1 | 2 | 3;
   cwd: string;
   callerManagedSession?: true;
-  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   internalAgentIsolation?: InternalAgentIsolation;
   abortSignal?: AbortSignal;
   sessionId?: string;

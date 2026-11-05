@@ -48,9 +48,9 @@ const caseWriteTools = {
   'task-stopped-not-resumed': new Set(['takt_ask_goal_question', 'takt_notify_goal']),
   'resumed-already-requeued': new Set(),
   'plan-missing': new Set(['takt_enqueue_goal_task']),
-  'stopped-background-check': new Set(),
-  'integrated-task-verification': new Set(),
-  'verification-before-integration': new Set(['takt_merge_goal_task']),
+  'stopped-background-check': new Set(['takt_enqueue_goal_task', 'takt_ask_goal_question']),
+  'integrated-task-verification': new Set(['takt_enqueue_goal_task', 'takt_ask_goal_question']),
+  'verification-before-integration': new Set(['takt_merge_goal_task', 'takt_enqueue_goal_task', 'takt_ask_goal_question']),
   ...Object.fromEntries([...verificationTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...verificationNoTellCases, ...planWaitCases, ...finalPlanCases].map((caseId) => [caseId, new Set()])),
   'escalate-repeated-failure': new Set(['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question']),
@@ -164,7 +164,7 @@ export default function assertManagerWorkSplit(output, context) {
   if (verificationPlanCases.has(caseId)) {
     const integrations = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
     return result(workLogs.length > 0 && integrations.length <= 1,
-      'Record the verification target and method without redundant integration; waiting and commit semantics are graded by llm-rubric');
+      'Record the verification target and method without redundant integration; delegation, target SHA, isolation and result semantics are graded by llm-rubric');
   }
   if (verificationTellCases.has(caseId)) {
     return result(tells.length === 1 && workLogs.length > 0,

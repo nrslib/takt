@@ -670,6 +670,38 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     }, 'read-only');
   });
 
+  it('cancels a pending task while paused without resuming its goal', async () => {
+    expect((await call('requeue')).isError).toBeUndefined();
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'paused' }));
+    await withClient(async (client) => {
+      const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: { cwd, goalId, taskName, reason: 'Cancel obsolete planned work' } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    });
+    expect(runner.listTaskStateItems()).toEqual([]);
+    expect((await store.get(goalId)).executionStatus).toBe('paused');
+    expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain('Cancel obsolete planned work');
+    expect(existsSync(clone)).toBe(false);
+  });
+
+  it('requires an explicit discard flag before deleting an unintegrated completed result', async () => {
+    runner.requeueFailedTask(taskName, 'review');
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, { runSlug: 'completed-run', worktreePath: clone, branch });
+    runner.completeTask({ task: running, success: true, response: 'Result ready', executionLog: [], branch, worktreePath: clone,
+      startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z',
+      completion: { success: true, interrupted: false, branch, sha: resultSha, workflowResult: 'completed' } });
+    await withClient(async (client) => {
+      const args = { cwd, goalId, taskName, reason: 'Discard the obsolete result' };
+      expect((await client.callTool({ name: 'takt_remove_goal_task', arguments: args })).isError).toBe(true);
+      expect(existsSync(clone)).toBe(true);
+      const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: { ...args, discardUnmerged: true } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    });
+    expect(runner.listTaskStateItems()).toEqual([]);
+    expect(existsSync(clone)).toBe(false);
+    expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain('discardUnmerged: true');
+  });
+
   it.each(['requeue', 'retry', 'remove'] as const)('retrieves saved %s results through task and work-log read tools', async (kind) => {
     await withClient(async (client) => {
       const read = async (name: string, args: Record<string, unknown> = {}) => {
@@ -680,7 +712,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       await read('takt_record_goal_work_log', { summary: '操作前' });
       const reason = '別の方法に変更'.repeat(3000);
       const result = await read(`takt_${kind}_goal_task`, { taskName,
-        ...(kind === 'retry' ? { task: revisedOrder } : kind === 'remove' ? { reason } : { retryNote: note }),
+        ...(kind === 'retry' ? { task: revisedOrder } : kind === 'remove' ? { reason, discardUnmerged: true } : { retryNote: note }),
       });
       expect(result.status).toBe(kind === 'remove' ? 'removed' : 'pending');
       await read('takt_record_goal_work_log', { summary: '操作後' });
@@ -697,7 +729,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         if (text.nextOffset === null) break;
         textOffset = text.nextOffset;
       }
-      if (kind === 'remove') expect(summary).toBe(`Removed ${taskName}: ${reason}`);
+      if (kind === 'remove') expect(summary).toBe(`Removed ${taskName} (discardUnmerged: true): ${reason}`);
       else expect(summary).toContain(`${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${taskName}`);
       const tasks = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1 } });
       expect(tasks.isError).toBeUndefined();

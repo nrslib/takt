@@ -84,6 +84,62 @@ afterEach(async () => {
 });
 
 describe('durable daemon event storage', () => {
+  it.each([
+    { kind: 'project', projectDirectory: '/repo' },
+    { kind: 'workspace', workspaceId: '650e8400-e29b-41d4-a716-446655440001' },
+    { kind: 'global' },
+  ] as const)('restores legacy permission answers in every lifecycle state (%j)', async (scope) => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const states = ['queued', 'running', 'settling', 'settled'] as const;
+    const answers = states.map((state, index): AcceptedEvent => ({ ...event(state, index + 1),
+      event: { kind: 'inquiry_answer', command: { kind: 'answer_question',
+        questionId: '650e8400-e29b-41d4-a716-446655440001', target: { goalId, repositoryDirectory: '/repo' },
+        answer: { decision: 'allow', scope: scope.kind }, source: 'tui' } },
+    }));
+    for (const [index, answer] of answers.entries()) {
+      await store.accept(answer);
+      if (index > 0) await store.markStarted(answer.eventId, result(answer));
+      if (index > 1) await store.saveResult(answer.eventId, result(answer));
+      if (index > 2) await store.markSettled(answer.eventId, result(answer));
+    }
+    for (const name of await readdir(join(directory, 'daemon-events'))) {
+      if (!name.endsWith('.json')) continue;
+      const path = join(directory, 'daemon-events', name);
+      const saved = JSON.parse(await readFile(path, 'utf8'));
+      saved.event.event.command.permission = { scope, sentence: 'Allow this operation' };
+      if (saved.result) saved.result.event.event.command.permission = { scope, sentence: 'Allow this operation' };
+      await writePrivateFile(path, JSON.stringify(saved));
+    }
+
+    const restarted = new FileEventStore(directory);
+    const restored = await restarted.restore();
+    const pending = [];
+    for await (const value of restored.pending) pending.push(value);
+    expect(restored.lastAcceptedSequence).toBe(4);
+    expect(pending.map(({ state }) => state).sort()).toEqual(['queued', 'running', 'settling']);
+    for (const answer of answers) {
+      expect(await restarted.accept(answer)).toEqual({ kind: 'duplicate', event: answer, state: answer.eventId });
+      const record = pending.find(({ event }) => event.eventId === answer.eventId);
+      if (record) {
+        expect(record.event).toEqual(answer);
+        if (record.state === 'settling') expect(record.result).toEqual(result(answer));
+      }
+    }
+  });
+
+  it('rejects legacy permission fields on newly accepted answers', async () => {
+    const store = new FileEventStore(await root());
+    const answer = { ...event('new-answer', 1), event: { kind: 'inquiry_answer', command: {
+      kind: 'answer_question', questionId: '650e8400-e29b-41d4-a716-446655440001',
+      target: { goalId, repositoryDirectory: '/repo' }, answer: { decision: 'allow' },
+      permission: { scope: { kind: 'global' }, sentence: 'Allow this operation' },
+    } } };
+    await expect(store.accept(answer as AcceptedEvent)).rejects.toThrow();
+    const restored = await store.restore();
+    expect(restored.lastAcceptedSequence).toBe(0);
+  });
+
   it('restores queued, running, and settling records while excluding settled records', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

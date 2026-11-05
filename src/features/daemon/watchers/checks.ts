@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { isLoopJudgeStepName } from '../../../core/workflow/loop-judge-step.js';
 import type { TaskRef } from '../../../core/daemon/events.js';
 import type { IoOptions, ProcessOwner, ProcessPort } from '../../../core/daemon/io.js';
 import { WATCH_THRESHOLDS } from './loop.js';
@@ -164,7 +165,7 @@ export class WatchChecks {
         task: target.task, startedAt: progress.startedAt });
     }
     for (const step of progress.steps) {
-      if (step.step.startsWith('_loop_judge_')) continue;
+      if (isLoopJudgeStepName(step.step)) continue;
       if (step.count <= WATCH_THRESHOLDS.stepRepetitions) continue;
       const repeated = { ...run, targetId: createHash('sha256').update(JSON.stringify([target.targetId, step.identity])).digest('hex') };
       await this.observations.abnormal(repeated, { ...this.observations.evidence(repeated), kind: 'run_step_repeated',

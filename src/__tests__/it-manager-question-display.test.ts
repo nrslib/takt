@@ -151,11 +151,9 @@ function expectGoalMemory(memory: string, goal: Goal): void {
   });
 }
 
-function expectConversationInput(prompt: string, text: string, goal: Goal, operationId: string): void {
+function expectConversationInput(prompt: string, text: string, goal: Goal): void {
   const [conversation, context] = prompt.split('\n\nBusiness context (not approval): ');
-  const [turnContext, ...paragraphs] = conversation!.split('\n\n');
-  expect(turnContext!.split('\n')[0]).toBe(`Conversation operation ID: ${operationId}`);
-  expect(paragraphs.join('\n\n')).toBe(text);
+  expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), goal);
 }
 
@@ -589,7 +587,7 @@ it.each([
   expect(submit).toHaveBeenCalledOnce();
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
-  expectConversationInput(call.mock.calls[0]![0], text, saved, submission.operationId);
+  expectConversationInput(call.mock.calls[0]![0], text, saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
 });
@@ -827,7 +825,7 @@ it.each([
   expect(submit).toHaveBeenCalledOnce();
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
-  expectConversationInput(call.mock.calls[0]![0], text, saved, submission.operationId);
+  expectConversationInput(call.mock.calls[0]![0], text, saved);
   expect(await store.get(goalId)).toEqual(saved);
 });
 

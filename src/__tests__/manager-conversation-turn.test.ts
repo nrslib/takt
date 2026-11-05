@@ -22,15 +22,13 @@ vi.mock('node:net', () => ({ createServer: () => ({
 }) }));
 afterEach(() => { resetSharedServerPool(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
-const operationId = '550e8400-e29b-41d4-a716-446655440002';
-const nextOperationId = '550e8400-e29b-41d4-a716-446655440003';
 const assignment = { kind: 'repository' as const, repositoryDirectory: '/repository' };
 const response = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'done', summary: null } };
-const input = { prompt: 'merge', instruction: 'merge', sessionId: undefined, abortSignal: new AbortController().signal,
-  assignment, configDirectory: '/config' };
+const input = { prompt: 'merge', sessionId: undefined, abortSignal: new AbortController().signal,
+  assignment };
 
-it('preserves operation identity and JSON business context when reconstructing a rejected session', async () => {
+it('preserves JSON business context when reconstructing a rejected session', async () => {
   const call = vi.fn<ProviderAgent['call']>()
     .mockResolvedValueOnce({ ...response, status: 'error', failureCategory: 'session_continuation_unsupported', error: 'cannot resume' })
     .mockResolvedValueOnce({ ...response, sessionId: 'fresh-session' });
@@ -39,7 +37,7 @@ it('preserves operation identity and JSON business context when reconstructing a
   const context = { pending: { revision: 4 } };
   const invalidateSession = vi.fn(async () => {});
 
-  expect(await executor.execute({ ...input, sessionId: 'prior-session', conversationOperationId: operationId,
+  expect(await executor.execute({ ...input, sessionId: 'prior-session',
     recovery: { context: JSON.stringify(context), invalidateSession } })).toMatchObject({ message: 'done', sessionId: 'fresh-session' });
 
   expect(invalidateSession).toHaveBeenCalledOnce();
@@ -47,7 +45,6 @@ it('preserves operation identity and JSON business context when reconstructing a
   expect(call.mock.calls[0]![1].sessionId).toBe('prior-session');
   expect(call.mock.calls[1]![1].sessionId).toBeUndefined();
   for (const [prompt] of call.mock.calls) {
-    expect(prompt).toContain(operationId);
     expect(prompt).toContain(input.prompt);
   }
   expect(JSON.parse(call.mock.calls[1]![0].split('Business context (not approval): ')[1]!)).toEqual(context);
@@ -64,10 +61,8 @@ it.each(['claude', 'codex'] as const)('keeps %s MCP configuration and disposal u
   const original = structuredClone(config);
   const executor = createManagerTurnExecutor('/repository', { ctx: { providerType, lang: 'en', model: undefined,
     provider: makeProvider({ setup: () => ({ call }) }), mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: config } },
-    permissionJudge: { resolution: { provider: providerType, model: undefined, providerOptions: {} },
-      language: 'en', systemPrompt: 'judge', managerPersona: 'manager', managerPolicy: 'policy' },
     strategy: { systemPrompt: 'manager' } });
-  for (const id of [operationId, nextOperationId, undefined]) await executor.execute({ ...input, conversationOperationId: id });
+  for (let turn = 0; turn < 3; turn++) await executor.execute(input);
   const expected = { [TAKT_MANAGER_MCP_SERVER_NAME]: withManagerAssignment(config, assignment) };
   expect(prepare.mock.calls.map(([servers]) => servers.identity)).toEqual(Array(3).fill(buildMcpServerSetIdentity(expected)));
   for (const [, options] of call.mock.calls) {
@@ -75,9 +70,6 @@ it.each(['claude', 'codex'] as const)('keeps %s MCP configuration and disposal u
     expect(options.callerManagedMcp).toBe(true);
     expect(options.preparedMcp).toEqual({ dispose });
   }
-  expect(call.mock.calls[0]![0]).toContain(operationId);
-  expect(call.mock.calls[1]![0]).toContain(nextOperationId);
-  expect(call.mock.calls[1]![0]).not.toContain(operationId);
   expect(call.mock.calls[2]![0]).toBe(input.prompt);
   expect(dispose).toHaveBeenCalledTimes(3);
   expect(config).toEqual(original);
@@ -100,8 +92,8 @@ it('reuses one OpenCode server with the main MCP identity across conversation an
   const executor = createManagerTurnExecutor('/repository', { ctx: { providerType: 'opencode', lang: 'en', model: 'probe/model',
     provider: makeProvider({ setup: () => ({ call }) }), mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: config } },
     strategy: { systemPrompt: 'manager' } });
-  for (const id of [operationId, nextOperationId, undefined, operationId]) {
-    await executor.execute({ ...input, conversationOperationId: id, sessionId: 'manager-session' });
+  for (let turn = 0; turn < 4; turn++) {
+    await executor.execute({ ...input, sessionId: 'manager-session' });
   }
   const expected = { [TAKT_MANAGER_MCP_SERVER_NAME]: withManagerAssignment(config, assignment) };
   expect(prepare.mock.calls.map(([servers]) => servers.identity)).toEqual(Array(4).fill(buildMcpServerSetIdentity(expected)));

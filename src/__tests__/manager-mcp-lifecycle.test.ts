@@ -22,7 +22,6 @@ vi.mock('../features/manager/managerMcpConnection.js', async (original) => ({
 
 describe('manager MCP resources', () => {
   const assignment = { kind: 'repository' as const, repositoryDirectory: '/repository' };
-  const conversationTurn = () => undefined;
   const turnScope = new TurnToolScope();
   const config = { type: 'http' as const, url: 'http://127.0.0.1:12345/', headers: {
     authorization: 'Bearer fixture',
@@ -40,8 +39,8 @@ describe('manager MCP resources', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('shares the owned HTTP address and headers between the internal client and provider', async () => {
-    const connection = await connectManagerMcp('/repository', assignment, undefined, { enableGoalExecutionTools: true, conversationTurn, turnScope });
-    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, conversationTurn, true, turnScope);
+    const connection = await connectManagerMcp('/repository', assignment, undefined, { turnScope });
+    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined);
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
     expect(doubles.httpTransport).toHaveBeenCalledWith(new URL(config.url), { requestInit: { headers: config.headers } });
     expect(doubles.transport).not.toHaveBeenCalled();
@@ -53,7 +52,7 @@ describe('manager MCP resources', () => {
   it('preserves user MCP servers and gives its own definition priority on a name collision', async () => {
     const userServers = { browser: { type: 'http' as const, url: 'https://example.test/mcp' },
       [TAKT_MANAGER_MCP_SERVER_NAME]: { command: '/conflicting-user-mcp' } };
-    const connection = await connectManagerMcp('/repository', assignment, userServers, { enableGoalExecutionTools: true, conversationTurn, turnScope });
+    const connection = await connectManagerMcp('/repository', assignment, userServers, { turnScope });
     expect(connection.servers.browser).toEqual(userServers.browser);
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
     expect(userServers[TAKT_MANAGER_MCP_SERVER_NAME].command).toBe('/conflicting-user-mcp');
@@ -67,10 +66,10 @@ describe('manager MCP resources', () => {
     expect(updated).not.toHaveProperty(`headers.${MANAGER_ASSIGNMENT_HEADER}`);
   });
 
-  it('retains turn authorization over HTTP when goal execution tools are disabled', async () => {
+  it('retains turn lifetime checks over HTTP for goal execution tools', async () => {
     const connection = await connectManagerMcp('/repository', assignment, undefined,
-      { enableGoalExecutionTools: false, conversationTurn, turnScope });
-    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, conversationTurn, false, turnScope);
+      { turnScope });
+    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment, turnScope, undefined);
     expect(doubles.transport).not.toHaveBeenCalled();
     expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
     await connection.dispose();
@@ -81,7 +80,7 @@ describe('manager MCP resources', () => {
     if (stage === 'client') doubles.client.mockImplementationOnce(() => { throw failure; });
     if (stage === 'transport') doubles.httpTransport.mockImplementationOnce(() => { throw failure; });
     if (stage === 'connect') doubles.connect.mockRejectedValueOnce(failure);
-    await expect(connectManagerMcp('/repository', assignment, undefined, { enableGoalExecutionTools: true, conversationTurn, turnScope })).rejects.toBe(failure);
+    await expect(connectManagerMcp('/repository', assignment, undefined, { turnScope })).rejects.toBe(failure);
     expect(doubles.invalidate).toHaveBeenCalledOnce();
     expect(doubles.closeOwner).toHaveBeenCalledOnce();
     expect(doubles.close).toHaveBeenCalledTimes(stage === 'client' ? 0 : 1);
@@ -89,7 +88,7 @@ describe('manager MCP resources', () => {
   });
 
   it.each(['close', 'transportClose', 'closeOwner'] as const)('attempts all cleanup when %s fails', async (stage) => {
-    const connection = await connectManagerMcp('/repository', assignment, undefined, { enableGoalExecutionTools: true, conversationTurn, turnScope });
+    const connection = await connectManagerMcp('/repository', assignment, undefined, { turnScope });
     const failure = new Error('close failed');
     doubles[stage].mockRejectedValueOnce(failure);
     await expect(connection.dispose()).rejects.toBe(failure);
@@ -103,7 +102,7 @@ describe('manager MCP resources', () => {
     const cleanup = new Error('client close failed');
     doubles.connect.mockRejectedValueOnce(startup);
     doubles.close.mockRejectedValueOnce(cleanup);
-    await expect(connectManagerMcp('/repository', assignment, undefined, { enableGoalExecutionTools: true, conversationTurn, turnScope })).rejects.toMatchObject({ errors: [startup, cleanup] });
+    await expect(connectManagerMcp('/repository', assignment, undefined, { turnScope })).rejects.toMatchObject({ errors: [startup, cleanup] });
     expect(doubles.transportClose).toHaveBeenCalledOnce();
     expect(doubles.closeOwner).toHaveBeenCalledOnce();
   });

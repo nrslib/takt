@@ -156,7 +156,8 @@ const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
     auto_run: z.boolean().optional(),
     default_workflow: z.string().trim().min(1).optional(),
-    sensitive_paths: z.array(z.string().trim().min(1)).optional(),
+    // Deprecated: accepted for existing configuration files and ignored.
+    sensitive_paths: z.unknown().optional(),
     notifications: z.object({
       question: z.boolean().optional(),
       awaiting_merge: z.boolean().optional(),
@@ -165,7 +166,6 @@ const ProjectConfigObjectBaseSchema = z.object({
       blocked: z.boolean().optional(),
       custom: z.boolean().optional(),
     }).strict().optional(),
-    // 廃止した設定。書いてあってもエラーにせず読み飛ばす。
     patrol_interval: z.number().int().positive().optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),

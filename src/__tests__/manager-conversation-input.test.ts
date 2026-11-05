@@ -29,11 +29,11 @@ function fixture() {
 it('accepts and edits an inquiry answer while a model turn is active', () => {
   const f = fixture();
   f.options.questionAnswer.answerTarget = { pending: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/repo' },
-    question: createInquiry({ body: 'Width?' }) }, stage: 'question', choice: null, scopes: [], answer: {}, bodyOffset: 0 };
+    question: createInquiry({ body: 'Width?' }) }, stage: 'question', choice: null, answer: {}, bodyOffset: 0 };
   const input = f.bind();
   input('', { ...key, return: true });
   expect(f.options.questionAnswer.handleInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ return: true }), true,
-    f.options.editorRef, f.options.edit, f.options.saveAnswer);
+    f.options.editorRef, f.options.saveAnswer);
   const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
   paste('80');
   expect(f.options.questionAnswer.switchToFreeText).toHaveBeenCalledOnce();

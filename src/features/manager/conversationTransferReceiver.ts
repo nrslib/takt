@@ -58,8 +58,7 @@ const operationResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
-  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional(),
-    permissionAppended: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('user_message'), operationId: z.uuid(), message: z.string() }).strict(),

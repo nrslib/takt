@@ -38,7 +38,6 @@ function identityOf(assignment: ConversationDisplayAssignment): ConversationAssi
 
 export function createConversationTurnService(configDirectory: string, runtime: ConversationRuntime): Pick<TurnBusiness, 'execute'> {
   let contextKey: string | undefined;
-  let denials: string[] = [];
   return {
     async execute(input, io): Promise<TurnOutcome> {
       const state = new TurnConversationState(input.state, io);
@@ -129,20 +128,15 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }
             contextKey = resolved.contextKey;
             language = resolved.language;
-            const previousDenials = denials;
-            denials = [];
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
             const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
             const output = await resolved.executor.execute({
-              prompt: [command.text, ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
-                ...(previousDenials.length === 0 ? [] : [`Previous tool permission denials: ${JSON.stringify(previousDenials)}`])].join('\n\n'),
-              instruction: command.text, sessionId: state.current.session.sessionId ?? undefined,
+              prompt: [command.text, ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : [])].join('\n\n'),
+              sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
-              abortSignal: io.signal, configDirectory, conversationOperationId: input.turn.operationId, directorMessage,
+              abortSignal: io.signal,
               patrol: event.kind === 'patrol',
-              ...(eventGoal === undefined ? {} : { goal: { id: eventGoal.goal.id, repositoryDirectory: eventGoal.repositoryDirectory, constraints: eventGoal.goal.constraints } }),
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
-              onNotification: io.progress, onDenial: (reason) => { if (!io.signal.aborted) denials.push(reason); },
             });
             io.signal.throwIfAborted();
             const latest = assignment.kind === 'daemon' ? assignment
@@ -184,7 +178,6 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         return { kind: 'completed', result };
       } catch (error) {
         if (io.signal.aborted) {
-          denials = [];
           return { kind: 'interrupted', change: state.change({ session: { ...state.current.session, sessionId: null } }) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {

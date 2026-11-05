@@ -41,6 +41,16 @@ export const EventInputSchema = z.object({
 }).strict() satisfies z.ZodType<EventInput>;
 export const AcceptedEventSchema = EventInputSchema.extend({ operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']) })
   .strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) as z.ZodType<AcceptedEvent>;
+// 保存済みの許可回答だけを正規化し、新しいコマンドの受付スキーマには許可文を戻さない。
+const storedAnswer = z.object({
+  kind: z.literal('inquiry_answer'),
+  command: z.object({ kind: z.literal('answer_question'), permission: z.unknown().optional() }).passthrough(),
+}).passthrough().transform(({ command: { permission: _legacyPermission, ...answer }, ...event }) => ({ ...event, command: answer }));
+const storedEvent = z.preprocess((input) => {
+  if (typeof input !== 'object' || input === null || !('event' in input)) return input;
+  const answer = storedAnswer.safeParse(input.event);
+  return answer.success ? { ...input, event: answer.data } : input;
+}, AcceptedEventSchema);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
@@ -54,7 +64,8 @@ const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: text }).strict(),
-  z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict()
+    .transform(({ permissionAppended: _legacyPermission, ...result }) => result),
 ]);
 const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('deferred') }).strict(),
@@ -62,10 +73,10 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('failed'), message: text, change: ConversationChangeSchema.optional() }).strict(),
   z.object({ kind: z.literal('interrupted'), change: ConversationChangeSchema.optional() }).strict(),
 ]);
-export const StoredResultSchema: z.ZodType<TurnResult> = z.object({ ...StoredTurnSchema.shape, event: AcceptedEventSchema, outcome }).strict();
+export const StoredResultSchema: z.ZodType<TurnResult> = z.object({ ...StoredTurnSchema.shape, event: storedEvent, outcome }).strict();
 export const EventRecordSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('queued'), event: AcceptedEventSchema }).strict(),
-  z.object({ state: z.literal('running'), event: AcceptedEventSchema, turn: StoredTurnSchema }).strict(),
-  z.object({ state: z.enum(['settling', 'settled']), event: AcceptedEventSchema, result: StoredResultSchema }).strict(),
+  z.object({ state: z.literal('queued'), event: storedEvent }).strict(),
+  z.object({ state: z.literal('running'), event: storedEvent, turn: StoredTurnSchema }).strict(),
+  z.object({ state: z.enum(['settling', 'settled']), event: storedEvent, result: StoredResultSchema }).strict(),
 ]);
 export type EventRecord = z.infer<typeof EventRecordSchema>;
