@@ -99,6 +99,9 @@ function copyWorkspace(destination, paths) {
   if (!existsSync(join(repo, 'dist'))) throw new Error('Run npm run build before comparing facets');
   cpSync(join(repo, 'dist'), join(destination, 'dist'), { recursive: true });
   symlinkSync(join(repo, 'node_modules'), join(destination, 'node_modules'), 'junction');
+  if (existsSync(join(repo, 'eval/node_modules'))) {
+    symlinkSync(join(repo, 'eval/node_modules'), join(destination, 'eval/node_modules'), 'junction');
+  }
 }
 
 async function main() {

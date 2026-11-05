@@ -1,5 +1,22 @@
 # Prompt Quality Eval
 
+## 依存関係のセットアップ
+
+ルートの依存関係をインストールした後、リポジトリのルートで次を実行する。
+初回セットアップ時と、eval 用 SDK の指定バージョンの更新時に必要となる。
+
+```sh
+npm run eval:prompts:setup
+```
+
+promptfoo 0.125.1 の `openai:codex-sdk` は `@openai/codex-sdk@^0.156.1` を要求する。
+設定ファイルのディレクトリから SDK を探索するため、このコマンドは互換版 0.156.1 を
+`eval/node_modules/` にインストールする。ルートの TAKT 用 SDK 0.164.0 は維持する。
+`--no-save --package-lock=false` により `eval/package.json` と `eval/package-lock.json` は作らず、バージョンは上記
+npm script で固定する。生成される `node_modules/` はコミットしない。
+`eval/package.json` は置かず、ルートの ESM 設定と `#faceted-prompting` の import 定義を継承する。
+promptfoo の SDK 要求範囲が変わった場合は、npm script の固定バージョンを合わせて更新する。
+
 ## TAKT でファセット改修を進める
 
 このリポジトリ専用の `.takt/workflows/takt-prompt-engineering.yaml` を追加した。
@@ -40,7 +57,9 @@ node eval/scripts/compare-facets.mjs \
 
 出力先は新しい `.tmp/` または `eval/.results/` 配下を指定する。既存の出力先は上書きしない。
 追跡ファイルの現在の内容（未コミット変更を含む）、未追跡の `eval/` 入力、明示した追加ファセット、
-ビルド済み `dist/` を `input-workspace/` に写し、依存パッケージだけをシンボリックリンクで共有する。
+ビルド済み `dist/` を `input-workspace/` に写し、ルートの `node_modules/` と、存在する場合は
+`eval/node_modules/` をシンボリックリンクで共有する。`eval/node_modules/` がなくても比較は開始するが、
+`openai:codex-sdk` を使う場合は事前に `npm run eval:prompts:setup` を実行する。
 未追跡の eval 入力は無視設定の対象外だけを含める。入力コピーの作成中は編集とビルドを止め、
 使う新しいケースを `eval/` に置く。コピー後の実行で元の作業ツリーのファイルを書き換えることはない。
 
