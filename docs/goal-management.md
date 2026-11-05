@@ -19,9 +19,9 @@ Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
 
 The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting Approve and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
 
-The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed conversation operations are retried only on an explicit human request.
+The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
 
-After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI also leaves an already running run active.
+After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays notifications and lets you continue the conversation with a manager that receives those events. Work records are not displayed in the TUI. Closing the TUI also leaves an already running run active.
 
 By default, required runs start automatically. Disable this to start `takt run` / `takt watch` yourself.
 
@@ -42,25 +42,11 @@ Use these tools for inquiries that do not belong to a goal.
 
 Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
 
-The daemon runs both manager conversations and event processing with `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers, subject to the tool review for claude (claude-sdk) or codex described here. Configured provider options are preserved.
+Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers with `full` permissions, preserving configured provider options. There is no manager-specific permission judge, read-scope review or execution control based on saved approvals.
 
-In manager conversations with the claude (claude-sdk) or codex provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
+Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. PR merge instructions include deletion of that PR branch; instructions already given are not reconfirmed. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
 
-With claude (claude-sdk), `Read`, `Glob`, and `Grep` run without review only when their resolved targets are readable, ordinary files inside the manager's assigned repositories (the workspace members, or the current repository when it has no workspace). Relative paths use the tool's actual working directory; `~`, `..`, and symlinks are resolved before comparison. Targets outside the assignment, sensitive files, and targets or search ranges that cannot be determined are sent to the judge. Sensitive defaults cover `.env`, `.env.*`, SSH private key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), and `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`. Global and project `manager.sensitive_paths` add to these defaults and cannot remove them. `ToolSearch` and the manager's own TAKT MCP tools continue to run without review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools, including unknown tools and external MCP tools, are reviewed when no saved approval applies. Shell execution, including `Bash`, is reviewed every time no saved approval applies, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
-
-When an operation is denied, the reason returns to the manager, which takes it into account in its next response. An “ask a person” decision also denies the operation for now and notifies the TUI and Slack that human confirmation is pending, with the reason. The operation is not held open while waiting. These notifications use existing kinds; no new notification kind is added.
-
-Saved approvals apply only when the tool name, digest of the original arguments, working directory and target SHA match. Goal operations are bound to the current goal branch SHA. A usable approval allows the operation without calling the judge. A `once` approval allows one use only after consumption is saved; subsequent uses require confirmation again, and a consumption save failure denies the operation. Saved denials return the human reason. Pending inquiries deny with the same inquiry ID. Answers, consumption and assignment changes are reloaded for each request.
-
-The source of approval records is the target repository's `.takt/goals/<UUID>/goal.json` for a goal, or the current assignment's `~/.takt/workspaces/<UUID>/inquiries/` or `~/.takt/projects/<project-id>/inquiries/` otherwise. Answers from other goals or assignments are not reused.
-
-Each judgment receives the original global `~/.takt/manager-permissions.md`, current workspace `~/.takt/workspaces/<UUID>/manager-permissions.md`, target project `~/.takt/manager-permissions/projects/<project-id>.md`, and allowed goal answers with scope `goal`, with their scope and actual source path. The project ID is the SHA-256 of the canonical repository path. These paths use `TAKT_CONFIG_DIR` when set. Human-edited Markdown remains limited to three scopes; no goal Markdown or repository permission file is added. No AI tool can edit permission files.
-
-Read failures, invalid UTF-8, or exceeding 8KiB per source or 32KiB in total are reported to the judge and require human confirmation. Goal limits count the selected permission answer texts together, excluding unrelated goal fields. Source text is not truncated to allow an operation, and saved approval cannot bypass read failures. Existing prohibitions and goal constraints take precedence, followed by denial, confirmation every time, then permission. Goal pause, resume and abort tool requests normally require human confirmation, including the irreversible nature of abort.
-
-Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
-
-The judge has a 30-second deadline. A timeout follows the same human confirmation flow as an “ask a person” decision: an approval inquiry is saved, the operation is stopped pending confirmation, and a notification is sent. Exceptions and invalid decision formats still deny the operation. The judgment is not retried automatically.
+Legacy `manager.sensitive_paths` and runtime `provider.targets.internal_agents.manager-permission-judge` are deprecated. Existing configuration files remain readable, but these settings are ignored and have no effect. Old permission Markdown and approval answers do not decide execution. Historical inquiry records remain readable and withdrawable.
 
 Assign user MCP servers through the existing `runtime.yaml` rules. For example, to assign a browser MCP server you have installed:
 
@@ -88,6 +74,13 @@ Code watchers observe process loss, stalled logs, and PR state changes and emit 
 Ask to add `/path/to/web`, remove a repository from the assignment, or rename the workspace. Starting from any member repository opens the same workspace. Each goal proceeds in one repository.
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
+
+
+Workflows may use names, scope references or file paths, including workflows with merge_pr / close_pr. Set `autoPr` and `shouldPublishBranchToOrigin` on submission when needed; both default to false, retaining worktree isolation and the goal branch as the base.
+
+`takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain.
+
+`takt_merge_goal_pr` takes `cwd`, `goalId` and a `prNumber` matching the saved PR, without a conversation ID or director-only authorization. Stopped-state, saved PR and SHA checks remain. Manager may investigate and recover push or PR preparation failures itself; calling `takt_complete_goal` again retries preparation when `awaiting_merge` has no saved PR. Final verification may be delegated, with manager responsible for checking target SHA, methods and result evidence.
 
 ## Director responsibilities
 
@@ -147,8 +140,6 @@ You can talk to manager from one configured Slack channel using Socket Mode, wit
 
 A post outside a thread receives a reply in that post's thread. Continue there; all conversation threads share the repository's manager conversation with the TUI. Replies go only to the originating thread, and replies to TUI messages do not appear in Slack. Messages sent during processing receive durable acceptance; human input takes priority, and results return to the originating thread. Only the configured channel and `allowed_user_ids` are accepted; DMs to the bot are ignored.
 
-Each inquiry (a question, approval, or operation request) is a new post outside any thread in the configured channel. Answer approval decisions (Allow or Deny and scope) and choices with buttons. Choosing an approval scope broader than this time only opens a modal; edit and confirm the proposed sentence to append it to permission Markdown. Answer free-text inquiries in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer rather than a manager conversation message. Answers are saved with source `slack`. See the [configuration guide](./configuration.md#slack-conversations-with-manager) for pending inquiries and binding failure behavior.
-
 Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`, separately from conversation replies. Both can be enabled together.
 
 ## Answers, pause and abort
@@ -168,11 +159,7 @@ Aborting is irreversible. Goal records and branches remain. Answers are saved fo
 
 Press `Ctrl+R` to open unanswered inquiries with and without a goal together. Use `↑↓` to select an inquiry and `Enter` to open its details and answer. The list shows up to 10 inquiries at a time; the visible range shifts with the arrow keys for additional items. Use the arrow keys to scroll details that do not fit on screen. `Esc` in the details returns to the list; `Esc` in the list closes it without saving an answer.
 
-Each list row shows the kind, short goal name ("No goal" for inquiries without a goal), and summary. The body, options and recommendation appear after selection. Questions accept an option or free text. Approvals require explicit Allow or Deny with an optional comment, including denial without a comment. Operation requests display the procedure and offer Completed or Unable with an optional comment. Comments alone never imply approval or completion.
-
-Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
-
-For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. The TUI sends the confirmed sentence to the daemon, and the conversation child appends it to permission Markdown before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
+Each row shows the inquiry kind, short goal name and summary; select it for details. Questions accept choices or free text. Operation requests save Completed / Unable and an optional comment. Historical tool approvals remain readable and withdrawable but are not answer targets. Permission scope and permission-text saving UI have been removed.
 
 ### Reading notifications
 
@@ -180,11 +167,11 @@ Notifications flowing onto the normal screen show only the key points: the headi
 
 ## Goal operations in conversation
 
-With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Goal registration still requires approval in the TUI.
+With any provider supporting the required MCP capability, ask manager to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Goal registration still requires approval in the TUI.
 
-Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Pausing also stops running tasks, which remain as retryable failures. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
+Pausing also stops running tasks, which remain as retryable failures. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
-Providers without the permission judge do not expose conversation state tools. Open the TUI goal menu with `Ctrl+G` to choose pause, resume or abort.
+Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available.
 
 ## Integration and completion
 
@@ -199,7 +186,7 @@ manager:
   main_merge: approve
 ```
 
-The default `approve` waits for a human merge and displays steps. After merging, ask manager to check completion. `auto` integrates automatically, but waits for a person when the target is checked out.
+The default `main_merge: approve` prepares a PR and waits. Merge instructions may be given directly to manager or relayed by director. `auto` is a continuing integration instruction set by the person and merges automatically; a checked-out target results in PR preparation.
 
 A completion request that enters `awaiting_merge` pushes the reviewed SHA to `origin` and creates or reuses a PR from the goal branch to its saved integration branch. If push or PR creation fails, the error is saved in the work log and `pullRequestFailure`; the goal remains `awaiting_merge` without a PR. The first failure also saves a `blocked` notification with the cause and automatic retry guidance, displayed in the TUI and Slack according to notification settings. Retrying the same failure does not add more notifications. The daemon watcher sends the manager up to six retry events: one minute after the initial failure, then 5, 15, 30, 30, and 30 minutes after the preceding event. Each event includes the attempt count, limit, and expectedSha. The manager checks the key failure and calls takt_complete_goal again with that SHA. The watcher does not launch a dedicated child process. Events count when accepted, regardless of manager results or whether they are processed. Counts, acceptance timestamps and limit notification state are persisted across daemon restarts and workspace assignment. PR failures left in older work logs are also eligible.
 
@@ -211,7 +198,7 @@ Manager can request a stop for one running task with `takt_stop_goal_task` (`man
 
 Manager inspects reports and the working location, then chooses requeue, retry with revised instructions, new work or removal. If it cannot resolve the issue, it explains the reason, what it tried and the needed human action through a notification or question, and stops affected work and its dependents. Independent work continues.
 
-Notifications appear in the TUI and Slack and can be switched by kind in [notification settings](./configuration.md#manager-notification-settings). Failed event processing or TUI conversation sends `blocked`. Repeated failures still notify; no failure-state file is created. After resolving the cause, retry the conversation action. Failed conversation operations are retried only on an explicit human request.
+Notifications appear in the TUI and Slack and can be switched by kind in [notification settings](./configuration.md#manager-notification-settings). Failed event processing or TUI conversation sends `blocked`. Repeated failures still notify; no failure-state file is created. After resolving the cause, retry the conversation action. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
 
 Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusions, acceptance criteria, work constraints, questions and answers, and short records of submissions, integrations, cancellations and reasons. Workspaces are under `~/.takt/workspaces/`, and pending events under `~/.takt/manager-inbox/`. These use `TAKT_CONFIG_DIR` when set.
 

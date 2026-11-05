@@ -176,11 +176,10 @@ it.each([false, true])('recovers through the real Claude adapter only before too
   });
   const executor = createManagerTurnExecutor('/tmp/project', {
     ctx: { providerType: 'claude', provider: new ClaudeProvider(), lang: 'en', model: undefined },
-    permissionJudge: { resolution: { provider: 'claude', model: undefined, providerOptions: {} }, language: 'en', systemPrompt: 'judge', managerPersona: 'manager', managerPolicy: 'policy' },
     strategy: { systemPrompt: 'manager' },
   });
-  const result = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: new AbortController().signal,
-    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' }, configDirectory: '/tmp/config',
+  const result = executor.execute({ prompt: 'continue', sessionId, abortSignal: new AbortController().signal,
+    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' },
     recovery: { context: 'pending revision 4; current goals', invalidateSession } });
   if (tools) await expect(result).rejects.toMatchObject({ failureCategory: 'session_continuation_unsupported' });
   else expect(await result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });

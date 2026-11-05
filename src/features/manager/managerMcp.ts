@@ -4,14 +4,12 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { McpServerConfig } from '../../core/models/index.js';
 import { packageVersion } from '../../shared/package-info.js';
 import type { ManagerAssignmentIdentity } from './assignment.js';
-import { startManagerMcpConnection, type ManagerConversationTurn } from './managerMcpConnection.js';
+import { startManagerMcpConnection } from './managerMcpConnection.js';
 
 export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08ee7ad09';
 
 interface ManagerMcpOptions {
-  enableGoalExecutionTools: boolean;
   turnScope: TurnToolScope;
-  conversationTurn(): ManagerConversationTurn | undefined;
 }
 
 export async function connectManagerMcp(
@@ -20,7 +18,7 @@ export async function connectManagerMcp(
   userServers: Record<string, McpServerConfig> | undefined,
   options: ManagerMcpOptions,
 ) {
-  const connection = await startManagerMcpConnection(cwd, assignment, options.conversationTurn, options.enableGoalExecutionTools, options.turnScope);
+  const connection = await startManagerMcpConnection(cwd, assignment, options.turnScope);
   let client: Client | undefined;
   let transport: StreamableHTTPClientTransport | undefined;
   const dispose = async (): Promise<void> => {

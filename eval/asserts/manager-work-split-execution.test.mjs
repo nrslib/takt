@@ -8,8 +8,8 @@ function evidence(caseId) {
     trial: { case: caseId, complete: true, cleaned: true, denials: [], cwd: '/repo', goalSha: 'goal-sha',
       turns: [turn(1, 'predecessor'), turn(2, 'verification'), turn(3, 'followup')],
       background: { started: true, stopped: true, reaped: true },
-      before: { git: { commits: ['initial'], refs: 'goal' }, questions: [] },
-      after: { git: { commits: ['initial'], refs: 'goal' }, questions: [] },
+      before: { git: { commits: ['initial'], refs: 'goal', head: 'main-sha', branch: 'refs/heads/main', tree: '', checkoutHistory: 'initial checkout' }, questions: [] },
+      after: { git: { commits: ['initial'], refs: 'goal', head: 'main-sha', branch: 'refs/heads/main', tree: '', checkoutHistory: 'initial checkout' }, questions: [] },
       workLog: [{ turn: 2, summary: 'Verification recorded' }],
     }, events: [], checks: [
       { kind: 'start', run: '1', head: 'goal-sha', cwd: '/temp', at: 10 },
@@ -29,100 +29,41 @@ test('accepts the goal tree, diff and merge-base verification command with a quo
 });
 
 for (const command of [
-  'git merge',
-  'git merge x',
-  'git commit -m m',
-  'git -C dir commit -m m',
-  'git -C dir merge x',
-  'git -c k=v commit',
-  'git cherry-pick abc',
-  'git --no-pager -C "dir with spaces" -c k=v commit -m m',
-  'git -Cdir -ck=v cherry-pick abc',
-  'git --git-dir dir merge x',
+  'git -C /temp commit -m verification',
+  'cd /temp && git merge task/import',
+  'git -C /temp cherry-pick task-sha',
 ]) {
-  test(`rejects a commit-producing Git subcommand: ${command}`, () => {
+  test(`accepts an isolated verification operation when the original goal SHA is checked: ${command}`, () => {
     const value = evidence('integrated-task-execution');
-    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
-
-    const result = grade(value);
-    assert.equal(result.pass, false);
-    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
-  });
-}
-
-for (const command of [
-  'git merge-base --is-ancestor a b',
-  'git merge-tree a b',
-  'git log --grep commit',
-  'git diff main..goal commit',
-  'git -C commit status',
-  'git -C "" status',
-  'git -c "alias.note=commit" status',
-]) {
-  test(`accepts a Git command whose subcommand does not produce commits: ${command}`, () => {
-    const value = evidence('integrated-task-execution');
-    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
-
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', input: { command } } });
+    value.trial.after.git.commits.push('temporary-verification-commit');
+    value.trial.after.git.refs += '\ntemporary-verification-ref';
+    value.checks.push(
+      { kind: 'start', run: '2', head: 'temporary-verification-commit', cwd: '/temp/combined', at: 20 },
+      { kind: 'end', run: '2', head: 'temporary-verification-commit', cwd: '/temp/combined', at: 80, code: 0 },
+    );
     const result = grade(value);
     assert.equal(result.pass, true, result.reason);
   });
 }
 
-for (const command of [
-  'cd d && git cherry-pick abc',
-  'true || git merge x',
-  'echo ok;git commit -m m',
-  'echo ok|git merge x',
-  'echo ok\ngit merge x',
-]) {
-  test(`rejects a commit-producing Git command after a shell separator: ${JSON.stringify(command)}`, () => {
+test('rejects verification of only a synthesized SHA even when its tests pass', () => {
+  const value = evidence('integrated-task-execution');
+  value.trial.after.git.commits.push('temporary-verification-commit');
+  value.checks = value.checks.map((check) => ({ ...check, head: 'temporary-verification-commit' }));
+  assert.equal(grade(value).pass, false);
+});
+
+test('rejects changes to the caller checkout or existing refs, including a switch followed by restoration', () => {
+  for (const patch of [
+    { head: 'another-sha' }, { branch: 'refs/heads/another' }, { tree: 'changed file' },
+    { refs: 'replacement-ref' }, { checkoutHistory: 'switch back to main\nswitch to goal\ninitial checkout' },
+  ]) {
     const value = evidence('integrated-task-execution');
-    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
-
-    const result = grade(value);
-    assert.equal(result.pass, false);
-    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
-  });
-}
-
-for (const command of [
-  'git diff --stat main..goal/inventory && echo "=== merge check ===" && git merge-base --is-ancestor 1aad06b goal/inventory',
-  'echo "text && git merge x"',
-  "echo 'text;git commit -m m'",
-  "echo 'text \"git merge x\"'",
-  'echo "text \'git merge x\'"',
-  "git status && printf '%s' commit",
-  'echo "text \\" && git merge x" && git status',
-]) {
-  test(`accepts Git operation words in quoted text or another command's arguments: ${command}`, () => {
-    const value = evidence('integrated-task-execution');
-    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
-
-    const result = grade(value);
-    assert.equal(result.pass, true, result.reason);
-  });
-}
-
-for (const outcome of ['no result', 'denied', 'cancelled']) {
-  test(`rejects a saved Git commit attempt with ${outcome} and unchanged Git state`, () => {
-    const value = evidence('stopped-background-execution');
-    value.checks = [];
-    assert.equal(grade(value).pass, true);
-    const command = 'git commit -m verify';
-    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
-    if (outcome === 'denied') {
-      value.trial.denials.push({ turn: 2, reason: 'Commit needs approval' });
-      value.events.push({ type: 'permission', turn: 2, data: { tool: 'Bash', input: { command },
-        decision: { decision: 'deny', reason: 'Commit needs approval' } } });
-    } else if (outcome === 'cancelled') {
-      value.events.push({ type: 'tool_result', turn: 2, data: { id: 'verification', content: 'Operation cancelled', isError: true } });
-    }
-
-    const result = grade(value);
-    assert.equal(result.pass, false);
-    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
-  });
-}
+    Object.assign(value.trial.after.git, patch);
+    assert.equal(grade(value).pass, false, JSON.stringify(patch));
+  }
+});
 
 test('accepts completed temporary goal-tip verification and stopped-check unconfirmed termination', () => {
   const integrated = evidence('integrated-task-execution');
@@ -153,9 +94,8 @@ test('rejects checking a stale SHA, caller workcopy or completion after the turn
   }
 });
 
-test('rejects throwaway commits even after reset and rejects newly saved approvals', () => {
+test('rejects newly saved approvals and verification permission denials', () => {
   for (const change of [
-    (trial) => trial.after.git.commits.push('unreachable-verification-commit'),
     (trial) => trial.after.questions.push({ kind: 'approval' }),
     (trial) => trial.denials.push({ turn: 2, reason: 'Commit requires approval' }),
   ]) {
@@ -184,8 +124,8 @@ test('question snapshots are required and approval records added to existing que
   assert.equal(grade(changed).pass, false);
 });
 
-test('rejects polling, commit attempts, missing followup and forced termination', () => {
-  for (const command of ['until grep PASS old.log; do sleep 10; done', 'git merge --no-ff task/import', 'git commit -m verify']) {
+test('rejects polling, missing followup and forced termination', () => {
+  for (const command of ['until grep PASS old.log; do sleep 10; done', 'while ps -p 4182; do sleep 10; done']) {
     const value = evidence('stopped-background-execution');
     value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', input: { command } } });
     assert.equal(grade(value).pass, false);

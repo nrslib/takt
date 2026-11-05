@@ -231,8 +231,8 @@ describe('callClaudeHeadless', () => {
     ]);
     const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
       mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
-    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId: 'saved-session',
-      abortSignal: new AbortController().signal, assignment: undefined, configDirectory: '/tmp/config' });
+    const running = executor.execute({ prompt: 'continue', sessionId: 'saved-session',
+      abortSignal: new AbortController().signal, assignment: undefined });
     if (tools) await expect(running).rejects.toThrow();
     else expect(await running).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
     expect(spawn).toHaveBeenCalledTimes(tools ? 1 : 2);
@@ -261,8 +261,7 @@ describe('callClaudeHeadless', () => {
     const invalidateSession = vi.fn(() => invalidation);
     const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
       mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
-    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: controller.signal, assignment: undefined,
-      configDirectory: '/tmp/config', recovery: { context: 'pending revision 4', invalidateSession } });
+    const running = executor.execute({ prompt: 'continue', sessionId, abortSignal: controller.signal, assignment: undefined, recovery: { context: 'pending revision 4', invalidateSession } });
     const observed = expect(running).rejects.toThrow();
     try {
       await vi.waitFor(() => expect(when === 'running' ? spawn : invalidateSession).toHaveBeenCalledOnce());

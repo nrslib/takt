@@ -155,7 +155,10 @@ const TargetsSchema = z
     personas: z.record(z.string(), AssignmentSchema).optional(),
     tags: z.record(z.string(), AssignmentSchema).optional(),
     steps: z.record(z.string(), AssignmentSchema).optional(),
-    internal_agents: z.record(z.string(), AssignmentSchema).optional(),
+    internal_agents: z.preprocess((value) => {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+      return Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'manager-permission-judge'));
+    }, z.record(z.string(), AssignmentSchema)).optional(),
     companions: z.record(z.string(), CompanionAssignmentSchema).optional(),
   })
   .strict();

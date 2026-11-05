@@ -22,15 +22,9 @@ export function completeTaktGoal(input: CompleteGoalInput, deps: McpOperationDep
 
 export function mergeTaktGoalPr(input: MergeGoalPrInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async () => {
-    const conversation = deps.managerConversation;
-    if (conversation === undefined) throw new Error('Goal PR merge requires a director conversation turn');
     const goal = await new GoalStore(input.cwd).get(input.goalId);
     if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a merge');
     if (goal.pullRequest?.number !== input.prNumber) throw new Error('PR number does not match the saved goal PR');
-    const turn = conversation.getTurn?.();
-    if (turn?.operationId !== input.conversationOperationId || !turn.directorMessage) {
-      throw new Error('Goal PR merge requires an active message from the director');
-    }
     signal.throwIfAborted();
     return mergeGoalPr(input.cwd, input.prNumber, goal.branch, goal.completion.goalSha, signal);
   }, 'Goal PR merge failed', 'merge_pr');

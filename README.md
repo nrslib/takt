@@ -308,7 +308,7 @@ Manager conversations run in the daemon; the TUI sends requests and displays res
 
 Previous messages and replies are not redisplayed when you reopen the TUI. Conversation history is managed by the provider's session. TAKT saves message text and full results in `daemon-events` and retains them after completion. These records are not automatically deleted. Pending goal summaries and goal records are saved separately.
 
-The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed work is retried only on an explicit human request.
+The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. After failure or interruption, manager checks current state and side effects, then decides whether to resume, correct and retry, or submit new work.
 
 The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
 
@@ -351,26 +351,14 @@ Before processing each project's events, the daemon recovers interrupted tasks t
 
 The ordinary `takt` assistant conversation has the same read-only task-state view when its provider supports MCP. Use `/go` to turn a new task into an execution or queued task, `/tell` to select and confirm an additional instruction for a running worktree clone, and `/requeue` or `/retry` to return a failed task to the queue after confirmation.
 
-### Manager tool permissions
+### Manager judgment and work
 
-Add sensitive paths in global `~/.takt/config.yaml` or project `.takt/config.yaml`:
+Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers with `full` permissions, preserving configured provider options. There is no manager-specific permission judge, read-scope review or execution control based on saved approvals.
 
-```yaml
-manager:
-  sensitive_paths: [private, config/credentials.json]
-```
+Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. PR merge instructions include deletion of that PR branch; instructions already given are not reconfirmed. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
 
-Both lists extend the defaults, including when either list is empty. Entries name files or directories; see [sensitive read targets](./docs/configuration.md#manager-sensitive-read-targets).
+Legacy `manager.sensitive_paths` and runtime `provider.targets.internal_agents.manager-permission-judge` are deprecated. Existing configuration files remain readable, but these settings are ignored and have no effect. Old permission Markdown and approval answers do not decide execution. Historical inquiry records remain readable and withdrawable.
 
-In `takt manager` conversations with the claude (claude-sdk) or codex provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
-
-With claude (claude-sdk), `Read` runs without review only when its resolved target is a readable, non-sensitive, ordinary file inside the manager's assigned repositories. `Glob` takes a directory as its search root and runs without review only when the candidate files, together with the directories and symlinks it walks, are inside the assignment, contain no sensitive target, and can be confirmed safe to search. `Grep` runs without review for searches over ordinary files that meet the same conditions as `Read`, and for directory searches that pass the same safety check as `Glob`. The assignment is the workspace member repositories, or the current repository when there is no workspace. Relative paths use the tool's actual working directory; `~`, `..`, and symlinks are resolved before comparison. Targets outside the assignment, sensitive files, and targets or search ranges that cannot be determined are sent to the judge. Sensitive defaults cover `.env`, `.env.*`, SSH private key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), and `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`. Global and project `manager.sensitive_paths` add to these defaults and cannot remove them. `ToolSearch` and the manager's own TAKT MCP tools continue to run without review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools, including unknown tools and external MCP tools, are reviewed when no saved approval applies. Shell execution, including `Bash`, is reviewed every time no saved approval applies, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
-
-When an operation is denied, the reason returns to the manager, which takes it into account in its next response. An “ask a person” decision also denies the operation for now and notifies the TUI and Slack that human confirmation is pending, with the reason. The operation is not held open while waiting. These notifications use existing kinds; no new notification kind is added.
-
-Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
-
-The judge has a 30-second deadline. A timeout follows the same human confirmation flow as an “ask a person” decision: an approval inquiry is saved, the operation is stopped pending confirmation, and a notification is sent. Exceptions and invalid decision formats still deny the operation. The judgment is not retried automatically.
 
 ### Instant exec mode
 

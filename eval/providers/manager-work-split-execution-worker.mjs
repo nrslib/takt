@@ -36,7 +36,7 @@ function git(cwd, ...args) {
 function gitState(cwd) {
   return {
     refs: git(cwd, 'show-ref'), head: git(cwd, 'rev-parse', 'HEAD'), branch: git(cwd, 'symbolic-ref', 'HEAD'),
-    // Includes unreachable commits, so a reset after a throwaway commit cannot hide it.
+    checkoutHistory: git(cwd, 'reflog', 'show', '--format=%H %gs', 'HEAD'),
     commits: git(cwd, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname) %(objecttype)').split('\n').filter((line) => line.endsWith(' commit')).sort(),
     tree: git(cwd, 'diff', 'HEAD', '--', '.'),
   };
@@ -202,9 +202,6 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     state = { cwd, goal, store, goalSha, resultSha, task, workLog: trial.workLog, turn: 0 };
     connection = await startLocalMcpConnection(() => localServer(state, event));
     const plan = createManagerConversationPlan(cwd, { provider: 'claude-sdk', model: config.model, language: config.lang });
-    // The production judge deadline remains unchanged; use a fixed effort for this eval seat.
-    plan.permissionJudge.resolution.providerOptions = { ...plan.permissionJudge.resolution.providerOptions,
-      claude: { ...plan.permissionJudge.resolution.providerOptions.claude, effort: config.judge_effort } };
     plan.ctx.mcpServers = { [TAKT_MANAGER_MCP_SERVER_NAME]: connection.config };
     const provider = suppliedProvider ?? plan.ctx.provider;
     plan.ctx.provider = new Proxy(provider, {
@@ -218,11 +215,7 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
             try {
               const response = await agent.call(prompt, { ...options,
                 onStream: (value) => { event(value); options.onStream?.(value); },
-                onToolPermissionDecision: async (request) => {
-                  const decision = await options.onToolPermissionDecision(request);
-                  event({ type: 'permission', data: { tool: request.toolName, input: request.toolInput, decision } });
-                  return decision;
-                },
+
               });
               event({ type: 'provider_return', data: { status: response.status, contentCharacters: response.content.length,
                 hasStructuredOutput: response.structuredOutput !== undefined } });
@@ -247,10 +240,8 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
       const timer = setTimeout(() => { record.timedOut = true; deadline.abort(new Error('Evaluation turn deadline')); }, config.timeout_ms);
       state.signal = AbortSignal.any([signal, deadline.signal]);
       try {
-        record.response = await executor.execute({ prompt, instruction: prompt, sessionId: undefined,
+        record.response = await executor.execute({ prompt, sessionId: undefined,
           abortSignal: state.signal, assignment: { kind: 'repository', repositoryDirectory: cwd },
-          configDirectory: configDir, goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
-          onDenial: (reason) => { trial.denials.push({ turn: state.turn, reason }); },
         });
         record.finishedAt = Date.now();
         event({ type: 'executor_return', data: { messageCharacters: record.response.message.length } });

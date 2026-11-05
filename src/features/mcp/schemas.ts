@@ -86,7 +86,7 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
 });
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
 export const abortGoalInputSchema = goalWriteInputSchema.extend({
-  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. Included in the operation submitted for human confirmation.'),
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. This tool does not save the reason; use takt_record_goal_work_log to record it.'),
 });
 export type AbortGoalInput = z.infer<typeof abortGoalInputSchema>;
 export const reopenGoalInputSchema = goalWriteInputSchema.extend({
@@ -105,13 +105,15 @@ export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
     .describe('Stable work key used to find work already submitted to this goal.'),
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
-  task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
-  workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
+  task: taskContentSchema.describe('Self-contained instructions for ready goal work.'),
+  workflow: workflowSchema.describe('Workflow name, scope reference or file path selected by the manager.'),
+  autoPr: z.boolean().optional().describe('Push and create a PR after successful worktree execution. Omission saves false.'),
+  shouldPublishBranchToOrigin: z.boolean().optional().describe('Publish the task branch to origin. Omission saves false; autoPr true also publishes it.'),
 });
 export const askGoalQuestionInputSchema = goalWriteInputSchema.extend({
   ...GoalQuestionInputSchema.shape,
   kind: z.enum(['question', 'operation_request'], {
-    error: 'Only question and operation_request are allowed. Approvals cannot be created by the manager; they are created through the judgment path.',
+    error: 'Tool approvals are retired. Only question and operation_request are supported; human answers cannot be issued by the manager.',
   }).default('question'),
   targetSha: GoalInquiryInputSchema.shape.targetSha,
 });
@@ -150,7 +152,6 @@ export const completeGoalInputSchema = goalWriteInputSchema.extend({
   humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR.'),
 });
 export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
-  conversationOperationId: z.uuid().describe('Current conversation operation ID supplied with this turn. Never reuse an ID from an earlier turn.'),
   prNumber: z.number().int().safe().positive().describe('Saved goal PR number to pass to takt merge.'),
 });
 export type MergeGoalPrInput = z.infer<typeof mergeGoalPrInputSchema>;

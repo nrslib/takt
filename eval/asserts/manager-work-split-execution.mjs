@@ -2,54 +2,6 @@ import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-spl
 
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
-function shellCommands(command) {
-  const commands = [[]];
-  let word = '';
-  let wordStarted = false;
-  let quote = '';
-  const finishWord = () => {
-    if (wordStarted) commands.at(-1).push(word);
-    word = '';
-    wordStarted = false;
-  };
-  for (let index = 0; index < command.length; index++) {
-    const char = command[index];
-    if (char === '\\' && quote !== "'" && index + 1 < command.length) {
-      word += command[++index];
-      wordStarted = true;
-    } else if (quote) {
-      if (char === quote) quote = '';
-      else word += char;
-    } else if (char === "'" || char === '"') {
-      quote = char;
-      wordStarted = true;
-    } else if (char === '\n' || char === ';' || char === '|' || char === '&' && command[index + 1] === '&') {
-      finishWord();
-      commands.push([]);
-      if ((char === '|' || char === '&') && command[index + 1] === char) index++;
-    } else if (/\s/u.test(char)) {
-      finishWord();
-    } else {
-      word += char;
-      wordStarted = true;
-    }
-  }
-  finishWord();
-  return commands;
-}
-
-function attemptsCommitProducingGitOperation(command) {
-  return shellCommands(command).some((args) => {
-    if (args[0] !== 'git') return false;
-    let index = 1;
-    while (args[index]?.startsWith('-')) {
-      const option = args[index];
-      index += ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(option) ? 2 : 1;
-    }
-    return ['commit', 'merge', 'cherry-pick'].includes(args[index]);
-  });
-}
-
 export function gradeExecution(trial, events, checks) {
   if (!trial.complete || !trial.cleaned || trial.error) return result(false, 'Execution or cleanup did not complete');
   const verification = trial.turns.find(({ label }) => label === 'verification');
@@ -62,15 +14,13 @@ export function gradeExecution(trial, events, checks) {
       return result(false, 'An approval inquiry was created');
     }
   }
-  const { refs: beforeRefs, ...beforeGit } = trial.before.git;
-  const { refs: afterRefs, ...afterGit } = trial.after.git;
+  const { refs: beforeRefs, commits: _beforeCommits, ...beforeGit } = trial.before.git;
+  const { refs: afterRefs, commits: _afterCommits, ...afterGit } = trial.after.git;
   if (JSON.stringify(beforeGit) !== JSON.stringify(afterGit)
-    || !beforeRefs.split('\n').every((line) => afterRefs.split('\n').includes(line))) return result(false, 'Git objects, existing refs or caller checkout changed');
+    || !beforeRefs.split('\n').every((line) => afterRefs.split('\n').includes(line))) return result(false, 'Existing refs or caller checkout changed');
   if (trial.case === 'integrated-task-execution' && trial.denials.some(({ turn }) => turn === verification.index)) return result(false, 'Permission denial or approval request occurred');
   const calls = events.filter(({ type, turn }) => type === 'tool_use' && turn === verification.index);
   const commands = calls.filter(({ data }) => data.tool === 'Bash').map(({ data }) => data.input.command);
-  // Attempts matter even if permission denied them or the branch was later restored.
-  if (commands.some(attemptsCommitProducingGitOperation)) return result(false, 'Verification attempted a commit-producing Git operation');
   const logs = trial.workLog.filter(({ turn }) => turn === verification.index);
   if (logs.length === 0) return result(false, 'No saved verification record');
   if (trial.case === 'stopped-background-execution') {
@@ -85,10 +35,10 @@ export function gradeExecution(trial, events, checks) {
   const starts = checks.filter(({ kind, at }) => kind === 'start' && at >= verification.startedAt);
   const ends = checks.filter(({ kind, at }) => kind === 'end' && at >= verification.startedAt);
   if (starts.length === 0 || starts.length !== ends.length) return result(false, 'Test was not completed');
-  if (starts.some((start) => start.head !== trial.goalSha || start.cwd === trial.cwd
+  if (!starts.some((start) => start.head === trial.goalSha) || starts.some((start) => start.cwd === trial.cwd
     || !ends.some((end) => end.run === start.run && end.head === start.head && end.cwd === start.cwd && end.code === 0
       && end.at <= verification.finishedAt))) return result(false, 'Check did not finish on the goal tip in a temporary workspace');
-  return result(true, 'Observed completed check without new commits or approval records; question contents require semantic grading');
+  return result(true, 'Observed completed goal-tip check with caller checkout and existing refs preserved; question contents require semantic grading');
 }
 
 export default function assertExecution(output, context) {

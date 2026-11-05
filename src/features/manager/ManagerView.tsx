@@ -169,7 +169,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       summaryOperation.current = null;
       setSummarizing(false);
     }
-    if (result.kind === 'error' && result.permissionAppended) append(getLabel('manager.conversation.permission_appended', lang));
     if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
@@ -232,16 +231,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const selectTarget = (target: ManagerSelectedTarget): void => {
     if (target.kind === 'answer') {
       editAnswer(createEditorState(''));
-      beginAnswer(target.target, currentAssignment, target.onCancel);
+      beginAnswer(target.target, target.onCancel);
     } else void changeGoal(target.kind, target.target);
   };
-  const saveAnswer: SaveManagerAnswer = async (target, answer, permission) => {
+  const saveAnswer: SaveManagerAnswer = async (target, answer) => {
     if (savingAnswer.current) return;
     const saving: { operationId: string | null } = { operationId: null };
     savingAnswer.current = saving;
     const operationId = await send({ kind: 'answer_question', target: target.goalId === null
       ? { goalId: null, owner: target.owner } : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory },
-      questionId: target.question.id, answer, ...(permission === undefined ? {} : { permission }) },
+      questionId: target.question.id, answer },
     (id) => {
       saving.operationId = id;
       pendingAnswers.current.set(id, { text: answer.text ?? '', questionId: target.question.id });

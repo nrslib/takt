@@ -30,6 +30,7 @@ export function useManagerSelection() {
   const open = (kind: ManagerSelectionCommand, snapshot: {
     questions: readonly PendingQuestion[]; goals: readonly ManagerDisplayGoal[];
   }): boolean => {
+    snapshot = { ...snapshot, questions: snapshot.questions.filter(({ question }) => question.kind !== 'approval') };
     latest.current = snapshot;
     if (kind === 'answer') {
       if (snapshot.questions.length === 0) { update(null); return false; }
@@ -42,6 +43,7 @@ export function useManagerSelection() {
     return true;
   };
   const refresh = (snapshot: Parameters<typeof open>[1]): void => {
+    snapshot = { ...snapshot, questions: snapshot.questions.filter(({ question }) => question.kind !== 'approval') };
     latest.current = snapshot;
     const target = current.current;
     if (target === null) return;

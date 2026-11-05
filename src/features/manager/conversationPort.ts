@@ -1,7 +1,6 @@
 import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/schema.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
-import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
@@ -13,8 +12,7 @@ export type ConversationCommand =
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
-      source?: 'tui' | 'slack';
-      permission?: { scope: WritablePermissionScope; sentence: string } }
+      source?: 'tui' | 'slack' }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
   | { kind: 'abort_turn'; operationId: string; generation?: number };
 export type QuestionTarget = { goalId: string; repositoryDirectory: string } | { goalId: null; owner: InquiryOwner };
@@ -51,7 +49,7 @@ export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'goal_registered'; goal: Goal }
   | { kind: 'answer_saved'; answerSaved: boolean; message: string }
-  | { kind: 'error'; code: string; message: string; answerSaved?: boolean; permissionAppended?: boolean };
+  | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
   | { kind: 'user_message'; operationId: string; message: string }

@@ -20,7 +20,6 @@ const endpoint = { teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: 
 function fixture() {
   const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
   const client: SlackClient = { start: vi.fn(), postMessage: vi.fn().mockResolvedValue({ kind: 'delivered', parentTs: endpoint.parentTs }),
-    openModal: vi.fn().mockResolvedValue({ kind: 'delivered' }),
     postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
   const resolveAssignment = vi.fn<() => Promise<ManagerAssignment>>(async () => ({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }));
   const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', resolveAssignment, channelId: 'C0123', input, client, language: 'ja' });
@@ -32,7 +31,7 @@ function read(items: SnapshotItem[] = []): SnapshotRead {
 }
 it.each(['invalid', '{}', '{"conversationId":"other","revision":4}', '{"conversationId":"other","revision":-1}'])('ignores an invalid or mismatched goal button value %s', async (value) => {
   const { port, input } = fixture();
-  await port.receiveAction(endpoint, SLACK_GOAL_APPROVE, value, undefined);
+  await port.receiveAction(endpoint, SLACK_GOAL_APPROVE, value);
   expect(input.open).not.toHaveBeenCalled();
   expect(input.submit).not.toHaveBeenCalled();
 });
@@ -178,27 +177,5 @@ it('rejects an unreadable inquiry binding without misrouting its answer as conve
   await expect(port.isInquiryThread(endpoint.channelId, endpoint.parentTs)).rejects.toThrow();
   await expect(port.receive(endpoint, '80')).rejects.toThrow();
   expect(input.submit).not.toHaveBeenCalled();
-  await port.close();
-});
-
-it('opens a permission modal but submits only after the originating user confirms its sentence', async () => {
-  const { port, input, client } = fixture();
-  const question = createInquiry({ kind: 'approval', body: 'Allow?', operation: { toolName: 'Bash', args: 'npm test', cwd: '/canonical' } });
-  const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/canonical' };
-  inquiries.find.mockReturnValue({ channelId: endpoint.channelId, parentTs: endpoint.parentTs, questionId: question.id, target });
-  vi.mocked(input.open).mockImplementation(async () => ({ attachmentId: 'read-attachment', read: read([{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }]) }));
-  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
-  await port.receiveAction(endpoint, 'takt_inquiry_answer_allow_project', 'allow_project', 'trigger');
-  expect(input.submit).not.toHaveBeenCalled();
-  const metadata = vi.mocked(client.openModal).mock.calls[0]![1].private_metadata!;
-  expect(port.modalEndpoint(metadata)).toEqual(endpoint);
-  await port.receiveModal({ ...endpoint, userId: 'U0BBB' }, metadata, 'Allow npm test.');
-  expect(input.submit).not.toHaveBeenCalled();
-  await port.receiveModal(endpoint, metadata, 'Allow npm test.');
-  expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: {
-    kind: 'answer_question', target, questionId: question.id, source: 'slack', answer: { decision: 'allow', scope: 'project' },
-    permission: { scope: { kind: 'project', projectDirectory: '/canonical' }, sentence: 'Allow npm test.' },
-  } }));
-  expect(port.modalEndpoint(metadata)).toBeUndefined();
   await port.close();
 });

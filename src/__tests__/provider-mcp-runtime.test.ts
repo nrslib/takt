@@ -10,7 +10,6 @@ import { createTaskStateMcpServers } from '../features/interactive/taskStateMcp.
 import { McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
-import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../infra/codex/tool-permission-hook-protocol.js';
 import { markConversationMcpServers } from '../infra/providers/mcp/task-state.js';
 
 /**
@@ -250,32 +249,6 @@ describe('Codex runtime header environment references', () => {
           github: { type: 'stdio', command: 'github-mcp' },
         },
       });
-    } finally {
-      await prepared.dispose();
-    }
-  });
-
-  it.each([
-    CODEX_TOOL_PERMISSION_ENDPOINT_ENV,
-    CODEX_TOOL_PERMISSION_TOKEN_ENV,
-  ])('warns and excludes a Codex server that references reserved hook credential %s', async (name) => {
-    vi.stubEnv(name, 'fixture-hook-credential');
-    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const servers = runtimeServers({ Authorization: `Bearer \${env:${name}}` });
-    const prepared = await createMcpAdapter('codex').prepare(servers, baseContext());
-    try {
-      expect(prepared.config?.mcp_servers?.datadog).toBeUndefined();
-      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
-      expect(prepared.excludedServerNames).toEqual(['datadog']);
-      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ [name]: 'exclude' });
-      const session = buildCodexSessionConfig({
-        cwd: '/tmp/test', preparedMcp: prepared, childProcessEnv: { [name]: 'fixture-parent-credential' },
-      });
-      expect(session.env[name]).toBeUndefined();
-      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
-      expect(messages.some((message) => message.includes('datadog') && message.includes('reserved'))).toBe(true);
-      expectNoSecretValues([messages, prepared.config, session.config]);
     } finally {
       await prepared.dispose();
     }

@@ -394,17 +394,16 @@ describe('manager goal execution tools through MCP', () => {
     for (const name of names) expect(TAKT_MCP_MANAGER_TOOL_NAMES.some((allowed) => allowed === name)).toBe(false);
   });
 
-  it.each([false, true])('transfers goal execution exposure to the actual MCP child: %s', async (enableGoalExecutionTools) => {
+  it('exposes goal execution tools through the actual MCP child', async () => {
     const connect: (
       cwd: string,
       assignment: Parameters<typeof connectTestManagerMcp>[1],
       servers: Parameters<typeof connectTestManagerMcp>[2],
-      options: { enableGoalExecutionTools: boolean },
     ) => ReturnType<typeof connectTestManagerMcp> = connectTestManagerMcp;
-    const connection = await connect(cwd, undefined, undefined, { enableGoalExecutionTools });
+    const connection = await connect(cwd, undefined, undefined);
     try {
       const tools = (await connection.client.listTools()).tools.map(({ name }) => name);
-      for (const name of names) expect(tools.includes(name)).toBe(enableGoalExecutionTools);
+      for (const name of names) expect(tools).toContain(name);
       expect(tools).toContain('takt_list_goals');
     } finally { await connection.dispose(); }
   }, 30_000);

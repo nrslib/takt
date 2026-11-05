@@ -16,7 +16,6 @@ import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { callClaudeCustom } from '../infra/claude/client.js';
 import { resolveNonWorkflowProviderOptions } from '../infra/config/index.js';
 import { runCodexMcpList } from '../infra/codex/mcp-list.js';
-import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../infra/codex/tool-permission-hook-protocol.js';
 import { invalidateGlobalConfigCache,loadGlobalConfig,saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { loadProjectConfig,saveProjectConfig } from '../infra/config/project/projectConfig.js';
@@ -25,8 +24,7 @@ import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
 
-const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn(), trust: vi.fn() }));
-vi.mock('../infra/codex/hook-trust.js', () => ({ resolveCodexHookTrust: codex.trust }));
+const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
   constructor(options: CodexOptions) { codex.constructor(options); }
   startThread = codex.startThread;
@@ -40,9 +38,9 @@ vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCode
 vi.mock('../infra/claude/client.js', () => ({ callClaude: vi.fn(), callClaudeCustom: vi.fn() }));
 
 
-async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor>, input: { text: string; onNotification?: (message: string) => void }, assignment?: ManagerAssignmentIdentity) {
-  return executor.execute({ prompt: input.text, instruction: input.text, sessionId: undefined, assignment,
-    abortSignal: new AbortController().signal, configDirectory: getGlobalConfigDir(), onNotification: input.onNotification });
+async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor>, input: { text: string }, assignment?: ManagerAssignmentIdentity) {
+  return executor.execute({ prompt: input.text, sessionId: undefined, assignment,
+    abortSignal: new AbortController().signal });
 }
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -50,7 +48,6 @@ describe('manager conversation configuration and provider boundary', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    codex.trust.mockReset().mockResolvedValue({ key: '/<session-flags>/config.toml:pre_tool_use:0:0', trustedHash: 'sha256:fixture-current' });
     const root = join(process.cwd(), '.tmp');
     mkdirSync(root, { recursive: true });
     cwd = mkdtempSync(join(root, 'manager-plan-'));
@@ -81,6 +78,20 @@ describe('manager conversation configuration and provider boundary', () => {
 
     expect(plan.ctx.providerType).toBe(expected.provider);
     expect(plan.ctx.model).toBe(expected.model);
+  });
+
+  it('starts with retired manager settings present without constructing a judge', async () => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'language: en\nmanager:\n  sensitive_paths: [private]\n');
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
+      'version: 1', 'provider:', '  profiles:', '    manager: { provider: mock, model: legacy-compatible }',
+      '  defaults: { profile: manager }', '  targets:', '    internal_agents:',
+      '      manager-permission-judge: { profile: no-longer-installed }',
+    ].join('\n'));
+    const plan = createManagerConversationPlan(cwd, {});
+    expect(plan.ctx.model).toBe('legacy-compatible');
+    expect(plan).not.toHaveProperty('permissionJudge');
+    expect(resolveManagerConfig(cwd)).not.toHaveProperty('sensitivePaths');
+    expect((await executeTurn(createManagerTurnExecutor(cwd, plan), { text: 'Continue' })).summary).toBeNull();
   });
 
   it('uses the default concurrency and resolves project concurrency ahead of global configuration', () => {
@@ -155,7 +166,7 @@ describe('manager conversation configuration and provider boundary', () => {
 
   it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
     const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
-    const heading = language === 'ja' ? '## 道具' : '## Tools';
+    const heading = language === 'ja' ? '## 道具と復旧' : '## Tools and recovery';
     const paragraph = knowledge.split(heading)[1]?.trim().split('\n\n')[0];
     expect(paragraph).toBeDefined();
     const terms = paragraph?.match(/[A-Za-z_]+/g);
@@ -348,24 +359,9 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(sdkOptions.config?.mcp_servers).toMatchObject({
         [TAKT_MANAGER_MCP_SERVER_NAME]: { url: 'http://127.0.0.1:12345/', http_headers: managerHeaders }, browser: { command: '/browser-mcp' },
       });
-      expect(codex.trust).toHaveBeenCalledOnce();
-      expect(sdkOptions.config?.features).toMatchObject({ hooks: true });
-      const definitions = (sdkOptions.config!.hooks as { PreToolUse: { matcher?: string; hooks: { command: string; timeout: number }[] }[] }).PreToolUse;
-      expect(definitions.length).toBe(1);
-      expect(definitions[0]!.hooks.length).toBe(1);
-      expect(definitions[0]!.hooks[0]!.command.trim().length).toBeGreaterThan(0);
-      const trustInput = codex.trust.mock.calls[0]![0];
-      expect(trustInput.definition.command === definitions[0]!.hooks[0]!.command).toBe(true);
-      expect(trustInput.definition.timeout).toBe(definitions[0]!.hooks[0]!.timeout);
-      expect(trustInput.definition.matcher).toBe(definitions[0]!.matcher);
-      expect(trustInput.executablePath).toBe(sdkOptions.codexPathOverride);
-      const stateOverrides = sdkOptions.configOverrides?.filter((override) => override.startsWith('hooks.state='));
-      expect(stateOverrides).toHaveLength(1);
-      expect(stateOverrides![0]).toContain('/<session-flags>/config.toml:pre_tool_use:0:0');
-      expect(stateOverrides![0]).toMatch(/"\/<session-flags>\/config\.toml:pre_tool_use:0:0"\s*=\s*\{\s*"?trusted_hash"?\s*=\s*"sha256:fixture-current"/u);
-      expect(sdkOptions.configOverrides?.some((override) => override.startsWith('hooks.state.'))).toBe(false);
+      expect(sdkOptions.config?.hooks).toBeUndefined();
       const manager = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>)[TAKT_MANAGER_MCP_SERVER_NAME]!;
-      expect(manager.tools).toEqual(Object.fromEntries(TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.tools).toEqual(Object.fromEntries([...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'].map((name) => [name, { approval_mode: 'approve' }])));
       expect(manager.default_tools_approval_mode).toBeUndefined();
       const browser = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>).browser!;
       expect(browser.tools).toBeUndefined();
@@ -377,37 +373,6 @@ describe('manager conversation configuration and provider boundary', () => {
     }
     expect(readFileSync(configPath, 'utf8')).toBe(config);
     expect(readFileSync(authPath, 'utf8')).toBe(auth);
-  });
-
-  it('returns a manager error without credentials when SDK stderr echoes the hook command', async () => {
-    const codexHome = join(cwd, 'codex-home');
-    mkdirSync(codexHome);
-    vi.stubEnv('CODEX_HOME', codexHome);
-    vi.stubEnv('TAKT_CODEX_CLI_PATH', process.execPath);
-    let command = '';
-    codex.constructor.mockImplementationOnce((options: CodexOptions) => {
-      const hooks = options.config!.hooks as { PreToolUse: { hooks: { command: string }[] }[] };
-      command = hooks.PreToolUse[0]!.hooks[0]!.command;
-    });
-    codex.startThread.mockReturnValue({ runStreamed: async () => {
-      throw new Error(`Codex Exec exited with code 1: fixture diagnostic ${command}`);
-    } });
-    const plan = createManagerConversationPlan(cwd, { provider: 'codex' });
-    const session = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: {} } });
-    const onNotification = vi.fn();
-    {
-      let failure: unknown;
-      try { await executeTurn(session, { text: '相談', onNotification }); } catch (error) { failure = error; }
-      expect(failure).toBeInstanceOf(Error);
-      const result = { message: (failure as Error).message };
-      expect('message' in result && result.message.includes('fixture diagnostic')).toBe(true);
-      expect(onNotification).not.toHaveBeenCalled();
-      for (const name of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
-        const secret = new RegExp(`${name}='([^']+)'`, 'u').exec(command)?.[1];
-        expect(secret !== undefined).toBe(true);
-        expect(JSON.stringify(result).includes(secret!)).toBe(false);
-      }
-    }
   });
 
   it.each(['claude', 'codex', 'opencode'] as const)('accepts %s manager conversations', (provider) => {
@@ -435,7 +400,7 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(optionsResolved?.codex).toMatchObject(expected);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('passes owned HTTP headers and the permission hook through the %s SDK adapter', async (provider) => {
+  it.each(['claude', 'claude-sdk'] as const)('passes owned HTTP headers without a manager permission hook through the %s SDK adapter', async (provider) => {
     vi.mocked(callClaudeCustom).mockResolvedValue({
       persona: 'manager', status: 'done', timestamp: new Date(), content: JSON.stringify({ message: '確認', summary: null }),
     });
@@ -452,7 +417,7 @@ describe('manager conversation configuration and provider boundary', () => {
       const options = buildSdkOptions(vi.mocked(callClaudeCustom).mock.calls[0]![3]);
       expect(options.permissionMode).toBe('bypassPermissions');
       expect(options.mcpServers).toEqual(servers);
-      expect(options.hooks?.PreToolUse?.some(({ hooks }) => hooks.length > 0)).toBe(true);
+      expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
       expect(options.allowedTools).toBeUndefined();
     }
   });

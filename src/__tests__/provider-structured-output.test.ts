@@ -299,22 +299,19 @@ describe('ClaudeProvider — structured output', () => {
 describe('CodexProvider — structured output', () => {
   it.each([undefined, 'judge system prompt'])('isolates the judge from a manager hook and disables hooks at the SDK configuration boundary (system prompt: %s)', async (systemPrompt) => {
     vi.clearAllMocks();
-    mockCallCodex.mockResolvedValue(doneResponse('manager-permission-judge'));
-    mockCallCodexCustom.mockResolvedValue(doneResponse('manager-permission-judge'));
-    const onToolPermissionDecision = vi.fn();
-    await new CodexProvider().setupIsolatedStructured({ name: 'manager-permission-judge', systemPrompt }).call('judge', {
+    mockCallCodex.mockResolvedValue(doneResponse('structured-output-fixture'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('structured-output-fixture'));
+    await new CodexProvider().setupIsolatedStructured({ name: 'structured-output-fixture', systemPrompt }).call('judge', {
       cwd: '/tmp', sessionId: 'manager-session', permissionMode: 'full', outputSchema: SCHEMA,
-      onToolPermissionDecision, providerOptions: { codex: { fastMode: true } },
+      providerOptions: { codex: { fastMode: true } },
       preparedMcp: { dispose: async () => {}, config: { mcp_servers: { manager: { command: 'node' } } } },
     });
     const calls = systemPrompt === undefined ? mockCallCodex.mock.calls : mockCallCodexCustom.mock.calls;
     const options = calls[0]![systemPrompt === undefined ? 2 : 3];
-    expect(options.onToolPermissionDecision).toBeUndefined();
     expect(options).toMatchObject({ internalAgentIsolation: 'strict-readonly', sessionId: undefined, permissionMode: 'readonly', preparedMcp: undefined });
     const { config } = buildCodexSessionConfig(options);
     expect(config.features).toMatchObject({ hooks: false, fast_mode: true });
     expect(config.mcp_servers).toBeUndefined();
-    expect(onToolPermissionDecision).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {

@@ -5,7 +5,6 @@ import { createSlackClient, type SlackClient, type SlackEvent } from '../../infr
 import { reportDaemonError } from '../../infra/daemon/diagnostics.js';
 import { createSlackConversationPort, SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS } from '../manager/slackConversationPort.js';
 import type { ConversationInput } from '../manager/conversationPort.js';
-import { SLACK_PERMISSION_BLOCK, SLACK_PERMISSION_INPUT, SLACK_PERMISSION_CALLBACK } from '../manager/slackInquiryBlocks.js';
 import { createDirectorSlackConversationPort } from '../director/slackConversationPort.js';
 import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
 import type { GlobalConfig } from '../../core/models/config-types.js';
@@ -14,7 +13,7 @@ import type { Language } from '../../core/models/types.js';
 
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
 interface RepositoryPort { allowedUserIds: readonly string[];
-  port: Pick<SlackPort, 'receive' | 'isInquiryThread' | 'receiveAction' | 'modalEndpoint' | 'receiveModal'> }
+  port: Pick<SlackPort, 'receive' | 'isInquiryThread' | 'receiveAction'> }
 interface DirectorPort { channelId: string; allowedUserIds: readonly string[];
   port: ReturnType<typeof createDirectorSlackConversationPort> }
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,18 +26,8 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
   const message = event.type === 'events_api' ? body.event : body;
   if (!isRecord(message)) return;
   const teamId = event.type === 'events_api' ? body.team_id : isRecord(body.team) ? body.team.id : undefined;
-  let channelId = event.type === 'events_api' ? message.channel : isRecord(body.channel) ? body.channel.id : undefined;
+  const channelId = event.type === 'events_api' ? message.channel : isRecord(body.channel) ? body.channel.id : undefined;
   const userId = event.type === 'events_api' ? message.user : isRecord(body.user) ? body.user.id : undefined;
-  const view = isRecord(body.view) ? body.view : undefined;
-  const metadata = view?.private_metadata;
-  if (event.type === 'interactive' && (body.type === 'view_submission' || body.type === 'view_closed')) {
-    if (view?.callback_id !== SLACK_PERMISSION_CALLBACK || typeof metadata !== 'string') return;
-    const endpoints = [...ports.values()].map(({ port }) => port.modalEndpoint(metadata)).filter((endpoint) => endpoint !== undefined);
-    if (endpoints.length !== 1) return;
-    const endpoint = endpoints[0]!;
-    if (endpoint.teamId !== teamId || endpoint.userId !== userId || (channelId !== undefined && channelId !== endpoint.channelId)) return;
-    channelId = endpoint.channelId;
-  }
   if (typeof teamId !== 'string' || typeof channelId !== 'string' || typeof userId !== 'string') return;
   const selected = ports.get(channelId);
   const requestId = createHash('sha256').update(JSON.stringify(event.type === 'events_api'
@@ -67,17 +56,7 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
           ? body.message.thread_ts : body.container.message_ts;
         if (typeof parentTs !== 'string') return;
         await selected.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
-          action.value, typeof body.trigger_id === 'string' ? body.trigger_id : undefined, requestId);
-      } else if (view !== undefined && typeof metadata === 'string' && (body.type === 'view_submission' || body.type === 'view_closed')) {
-        const endpoint = selected.port.modalEndpoint(metadata);
-        if (endpoint === undefined) return;
-        const state = isRecord(view.state) ? view.state : undefined;
-        const values = isRecord(state?.values) ? state.values : undefined;
-        const block = values !== undefined && Object.hasOwn(values, SLACK_PERMISSION_BLOCK) ? values[SLACK_PERMISSION_BLOCK] : undefined;
-        const input = isRecord(block) && Object.hasOwn(block, SLACK_PERMISSION_INPUT) ? block[SLACK_PERMISSION_INPUT] : undefined;
-        const sentence = body.type === 'view_submission' && isRecord(input) && input.type === 'plain_text_input' && typeof input.value === 'string'
-          ? input.value : undefined;
-        await selected.port.receiveModal(endpoint, metadata, sentence, requestId);
+          action.value, requestId);
       }
       return;
     }

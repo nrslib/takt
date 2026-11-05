@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoalStore } from '../infra/goals/store.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
 import {
-  addGoalQuestion, answerGoalQuestion, consumeGoalApproval, isGoalApprovalUsable,
-  isSameGoalOperation, withdrawGoalQuestion,
+  addGoalQuestion, answerGoalQuestion,
+  withdrawGoalQuestion,
 } from '../infra/goals/questions.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
@@ -173,36 +173,5 @@ describe('inquiry persistence through GoalStore', () => {
 
     expect((await store.get(goalId)).questions).toEqual(saved.questions);
     expect(saved.questions?.[0]).toMatchObject({ status: 'withdrawn', withdrawalReason: '不要になりました', withdrawnAt: expect.any(String) });
-  });
-
-  it('keeps a consumed approval unusable after saving and restoring the same record', async () => {
-    const created = addGoalQuestion(goalRecord(), { kind: 'approval', body: '操作を許可しますか', operation });
-    const store = new GoalStore('/project');
-    await store.create(created.goal);
-    const allowed = await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow' }));
-    expect(isGoalApprovalUsable(allowed.questions![0]!)).toBe(true);
-
-    await store.update(goalId, (current) => consumeGoalApproval(current, created.questionId, now));
-    const restored = await store.get(goalId);
-
-    expect(restored.questions?.[0]).toMatchObject({ id: created.questionId, consumedAt: now, answer: { decision: 'allow', scope: 'once' } });
-    expect(isGoalApprovalUsable(restored.questions![0]!)).toBe(false);
-    await expect(store.update(goalId, (current) => consumeGoalApproval(current, created.questionId, now))).rejects.toThrow();
-    expect((await store.get(goalId)).questions).toEqual(restored.questions);
-  });
-
-  it('preserves operation identity through repeated validation of redacted saved arguments', async () => {
-    const input = { kind: 'approval' as const, body: '操作を許可しますか', operation: { ...operation, args: '{"token":"alpha"}' } };
-    const created = addGoalQuestion(goalRecord(), input);
-    const store = new GoalStore('/project');
-    await store.create(created.goal);
-    const restored = (await store.get(goalId)).questions![0]!;
-    const parsedAgain = GoalQuestionSchema.parse(JSON.parse(JSON.stringify(restored)));
-    const same = addGoalQuestion(goalRecord(), input).goal.questions![0]!;
-    const different = addGoalQuestion(goalRecord(), { ...input, operation: { ...operation, args: '{"token":"beta"}' } }).goal.questions![0]!;
-
-    expect(restored.operation?.args).toBe('{"token":"[REDACTED]"}');
-    expect(isSameGoalOperation(parsedAgain, same)).toBe(true);
-    expect(isSameGoalOperation(parsedAgain, different)).toBe(false);
   });
 });

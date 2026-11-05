@@ -10,11 +10,10 @@ import type { SlackClient, SlackThread, SlackDeliveryResult } from '../../infra/
 import { getLabel } from '../../shared/i18n/index.js';
 import { ConversationError } from './conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, ConversationPort, ConversationCommand, QuestionTarget } from './conversationPort.js';
-import { SlackInquiryBindings, slackInquiryKey, type SlackInquiryBinding } from '../../infra/slack/inquiryBindings.js';
-import { createPermissionProposal, type PendingQuestion } from './inquiryAnswer.js';
-import { buildSlackInquiry, buildSlackPermissionModal, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
+import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiryBindings.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
+import { buildSlackInquiry, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
 import { formatGoalName } from './goalDisplay.js';
-import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { KnownBlock } from '@slack/types';
 
 export const SLACK_GOAL_APPROVE = 'takt_goal_approve';
@@ -29,10 +28,9 @@ export function createSlackConversationPort(options: {
   const attachments = new Set<string>();
   const bindings = new SlackInquiryBindings(options.configDirectory, options.repositoryDirectory);
   const attempted = new Map<string, Promise<SlackDeliveryResult>>();
-  const messageFor = (current: { pending: PendingQuestion; assignment: Parameters<typeof buildSlackInquiry>[1] }) => {
-    return buildSlackInquiry(current.pending, current.assignment, options.language, randomUUID());
+  const messageFor = (current: { pending: PendingQuestion; assignment: ManagerAssignment }) => {
+    return buildSlackInquiry(current.pending, options.language, randomUUID());
   };
-  const modals = new Map<string, { endpoint: SlackEndpoint; binding: SlackInquiryBinding; scope: WritablePermissionScope }>();
   let accepting = true;
   const detach = (id: string): void => { attachments.delete(id); options.input.detach(id); };
   const ownsInquiry = (target: QuestionTarget, assignment: ConversationAssignment): boolean => target.goalId === null
@@ -239,7 +237,7 @@ export function createSlackConversationPort(options: {
       await submitCommand(endpoint, { kind: 'answer_question', target: binding.target, questionId: binding.questionId,
         answer: { text }, source: 'slack' }, false, undefined, requestId);
     },
-    async receiveAction(endpoint: SlackEndpoint, actionId: string, value: string, triggerId: string | undefined, requestId?: string): Promise<void> {
+    async receiveAction(endpoint: SlackEndpoint, actionId: string, value: string, requestId?: string): Promise<void> {
       if (!accepting) return;
       if (actionId === SLACK_GOAL_APPROVE || actionId === SLACK_GOAL_DISMISS) {
         let decoded: unknown;
@@ -262,38 +260,13 @@ export function createSlackConversationPort(options: {
       const message = messageFor(current);
       const action = message.actions.get(value);
       if (action === undefined) return;
-      if (action.kind === 'answer') {
-        await submitCommand(endpoint, { kind: 'answer_question', target: binding.target, questionId: binding.questionId,
-          answer: action.answer, source: 'slack' }, false, undefined, requestId);
-        return;
-      }
-      if (triggerId === undefined || action.choice.permission === undefined) return;
-      const metadata = randomUUID();
-      modals.set(metadata, { endpoint, binding, scope: action.choice.permission });
-      const proposal = createPermissionProposal(current.pending.question.operation!);
-      const result = await options.client.openModal(triggerId, buildSlackPermissionModal(proposal, metadata, options.language));
-      if (result.kind !== 'delivered') modals.delete(metadata);
-    },
-    modalEndpoint(metadata: string): SlackEndpoint | undefined {
-      const endpoint = modals.get(metadata)?.endpoint;
-      return endpoint === undefined ? undefined : { ...endpoint };
-    },
-    async receiveModal(endpoint: SlackEndpoint, metadata: string, sentence: string | undefined, requestId?: string): Promise<void> {
-      if (!accepting) return;
-      const modal = modals.get(metadata);
-      if (modal === undefined || modal.endpoint.teamId !== endpoint.teamId || modal.endpoint.userId !== endpoint.userId
-        || modal.endpoint.channelId !== endpoint.channelId) return;
-      modals.delete(metadata);
-      if (await loadInquiry(endpoint, modal.binding.target, modal.binding.questionId) === undefined) return;
-      if (sentence === undefined || sentence.trim().length === 0) return;
-      await submitCommand(endpoint, { kind: 'answer_question', target: modal.binding.target, questionId: modal.binding.questionId,
-        answer: { decision: 'allow', scope: modal.scope.kind }, source: 'slack', permission: { scope: modal.scope, sentence } }, false, undefined, requestId);
+      await submitCommand(endpoint, { kind: 'answer_question', target: binding.target, questionId: binding.questionId,
+        answer: action.answer, source: 'slack' }, false, undefined, requestId);
     },
     stopAccepting() { accepting = false; },
     close() {
       accepting = false;
       targets.clear();
-      modals.clear();
       for (const id of attachments) detach(id);
     },
   };
@@ -308,7 +281,6 @@ export function createSlackConversationPort(options: {
   return { ...receiver,
     receive: (...args: Parameters<typeof receiver.receive>) => track(() => receiver.receive(...args)),
     receiveAction: (...args: Parameters<typeof receiver.receiveAction>) => track(() => receiver.receiveAction(...args)),
-    receiveModal: (...args: Parameters<typeof receiver.receiveModal>) => track(() => receiver.receiveModal(...args)),
     async close(): Promise<void> {
       accepting = false;
       await Promise.allSettled([...active, ...attempted.values()]);
