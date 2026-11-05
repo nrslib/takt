@@ -30,6 +30,7 @@ import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermis
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { Goal } from '../infra/goals/schema.js';
+import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import { getLabel } from '../shared/i18n/index.js';
 
@@ -794,24 +795,37 @@ it('[SCN-SNAP-SIZE-P2] initially receives all thirty goals and pending inquiries
   expect(displayedInquiries(client)).toHaveLength(30);
 });
 
-it('[SCN-SNAP-DELTA-P1] transfers only a newly appended work event and changed goal and displays the work exactly once', async () => {
+it('[SCN-SNAP-DELTA-P1] hides appended work logs while displaying the changed goal, notification and manager reply', async () => {
   const [goal] = seedSnapshotGoals(2, 1, 1);
   const connections = observeIpcConnections();
   await client.connect(); await complete();
   const app = await snapshotView();
   const record = { id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'New work after attachment' };
-  saveGoal({ ...goal!, executionStatus: 'paused', workLog: [...goal!.workLog, record] });
+  saveGoal({ ...goal!, workLog: [...goal!.workLog, record] });
+  const workOnly = await refreshSnapshot(client, connections[0]!);
+  expect(workOnly.items).toEqual([]);
+  expect(app.lastFrame()).not.toContain(record.summary);
+  const notification = { id: randomUUID(), recordedAt: record.recordedAt, kind: 'progress' as const, body: 'Visible progress after attachment' };
+  saveGoal({ ...goal!, executionStatus: 'paused', workLog: [...goal!.workLog, record],
+    notifications: [...goal!.notifications!, notification] });
 
   const received = await refreshSnapshot(client, connections[0]!);
 
   expect.soft(received.items.filter((item) => item.kind !== 'state')).toEqual([
     { kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
       executionStatus: 'paused', repositoryDirectory: repository } },
-    { kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` } },
+    { kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
+      message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } },
   ]);
-  await vi.waitFor(() => expect(app.lastFrame()!.split(record.summary)).toHaveLength(2));
+  await vi.waitFor(() => expect(app.lastFrame()!.split(notification.body)).toHaveLength(2));
+  expect(await client.submit({ kind: 'message', text: 'Reply after recording internal work' })).toMatchObject({ kind: 'accepted' });
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('finished'));
   await refreshSnapshot(client, connections[0]!);
-  await vi.waitFor(() => expect(app.lastFrame()!.split(record.summary)).toHaveLength(2));
+  await vi.waitFor(() => expect(app.lastFrame()!.split(notification.body)).toHaveLength(2));
+  for (const [props] of vi.mocked(transcriptView.TranscriptView).mock.calls) {
+    expect(props.entries.some((entry) => entry.content.includes(record.summary))).toBe(false);
+  }
+  expect((await new GoalStore(repository).get(goal!.id)).workLog).toEqual([...goal!.workLog, record]);
   expect(displayedGoals(client)).toHaveLength(2);
 });
 
@@ -858,7 +872,11 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
   try {
     await entered.promise;
     const duringDisconnect = { id: randomUUID(), recordedAt: new Date(Date.now() - 1).toISOString(), summary: 'Work while disconnected' };
-    saveGoal({ ...goal!, workLog: [...goal!.workLog, duringDisconnect] });
+    const disconnectedNotification = { id: randomUUID(), recordedAt: duringDisconnect.recordedAt,
+      kind: 'progress' as const, body: 'Progress while disconnected' };
+    const disconnectedGoal = { ...goal!, workLog: [...goal!.workLog, duringDisconnect],
+      notifications: [...goal!.notifications!, disconnectedNotification] };
+    saveGoal(disconnectedGoal);
     const added = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440000', objective: 'Added while disconnected' };
     saveGoal(added);
     released.release();
@@ -870,6 +888,20 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
     expect.soft(received.items.map((item) => item.kind).filter((kind) => !['state', 'assignment', 'goal', 'inquiry'].includes(kind))).toEqual([]);
     await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', questions: '1' })));
     expect(app.lastFrame()).not.toContain(duringDisconnect.summary);
+    expect(app.lastFrame()).not.toContain(disconnectedNotification.body);
+    const notification = { id: randomUUID(), recordedAt: new Date().toISOString(),
+      kind: 'progress' as const, body: 'Progress after reconnection' };
+    saveGoal({ ...disconnectedGoal, notifications: [...disconnectedGoal.notifications, notification] });
+    const refreshed = await refreshSnapshot(client, connections[1]!);
+    expect(refreshed.items.flatMap((item) => item.kind === 'display_event' ? [item.event] : [])).toEqual([
+      { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
+        message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') },
+    ]);
+    await vi.waitFor(() => expect(app.lastFrame()!.split(notification.body)).toHaveLength(2));
+    const unchanged = await refreshSnapshot(client, connections[1]!);
+    expect(unchanged.items).toEqual([]);
+    expect(app.lastFrame()!.split(notification.body)).toHaveLength(2);
+    expect(app.lastFrame()).not.toContain(disconnectedNotification.body);
     app.stdin.write('\x07');
     await vi.waitFor(() => expect(app.lastFrame()).toContain(added.objective));
   } finally { released.release(); unsubscribe(); }
@@ -893,22 +925,22 @@ it('keeps events for identical goals in different workspace repositories across 
   const events = received.items.flatMap((item) => item.kind === 'display_event' ? [item.event] : []);
   expect(received.complete).toBe(true);
   expect(events.map((event) => event.id).sort()).toEqual([repository, secondRepository].flatMap((path) => [
-    JSON.stringify([path, goal.id, 'work-log', record.id]), JSON.stringify([path, goal.id, 'notification', notification.id]),
+    JSON.stringify([path, goal.id, 'notification', notification.id]),
   ]).sort());
   expect(client.getSnapshot().items.filter((item) => item.kind === 'goal')).toHaveLength(2);
-  expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(4);
+  expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(2);
 
   const unchanged = await refreshSnapshot(client, connections[0]!);
   expect(unchanged.items).toEqual([]);
-  saveGoal({ ...goal, workLog: [] }, repository);
+  saveGoal({ ...goal, workLog: [], notifications: [] }, repository);
   const changed = await refreshSnapshot(client, connections[0]!);
-  expect(changed.items).toContainEqual({ kind: 'remove', key: JSON.stringify(['display_event', JSON.stringify([repository, goal.id, 'work-log', record.id])]) });
+  expect(changed.items).toContainEqual({ kind: 'remove', key: JSON.stringify(['display_event', JSON.stringify([repository, goal.id, 'notification', notification.id])]) });
   expect(client.getSnapshot().readStatus).toBe('complete');
   expect(client.getSnapshot().items.flatMap((item) => item.kind === 'display_event' ? [item.event.id] : []).sort())
-    .toEqual(events.map((event) => event.id).filter((id) => id !== JSON.stringify([repository, goal.id, 'work-log', record.id])).sort());
+    .toEqual(events.map((event) => event.id).filter((id) => id !== JSON.stringify([repository, goal.id, 'notification', notification.id])).sort());
 });
 
-it('[SCN-SNAP-MULTI-N1] delivers the same new work once to each attachment when the second client refreshes first', async () => {
+it('[SCN-SNAP-MULTI-N1] delivers the same new notification once to each attachment when the second client refreshes first', async () => {
   const [goal] = seedSnapshotGoals(1, 0, 0);
   const connections = observeIpcConnections();
   await client.connect(); await complete();
@@ -917,12 +949,14 @@ it('[SCN-SNAP-MULTI-N1] delivers the same new work once to each attachment when 
     await second.connect();
     await vi.waitFor(() => expect(second.getSnapshot().readStatus).toBe('complete'));
     const record = { id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'Work for both attachments' };
-    saveGoal({ ...goal!, workLog: [record] });
+    const notification = { id: randomUUID(), recordedAt: record.recordedAt, kind: 'progress' as const, body: 'Progress for both attachments' };
+    saveGoal({ ...goal!, workLog: [record], notifications: [notification] });
 
     const fromSecond = await refreshSnapshot(second, connections[1]!);
     const fromFirst = await refreshSnapshot(client, connections[0]!);
 
-    const expected = [{ id: JSON.stringify([repository, goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` }];
+    const expected = [{ id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
+      message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') }];
     for (const received of [fromFirst, fromSecond]) {
       expect(received.items.flatMap((item) => item.kind === 'display_event' ? [item.event] : [])).toEqual(expected);
     }
@@ -975,8 +1009,9 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   await client.connect(); await complete();
   const previousInquiries = displayedInquiries(client);
   const record = { id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'Work retained after failed transfer' };
+  const notification = { id: randomUUID(), recordedAt: record.recordedAt, kind: 'progress' as const, body: 'Progress retained after failed transfer' };
   const updated = { ...goal!, executionStatus: 'paused' as const,
-    questions: [answerInquiry(goal!.questions![0]!, 'CSV')], workLog: [record] };
+    questions: [answerInquiry(goal!.questions![0]!, 'CSV')], workLog: [record], notifications: [notification] };
   saveGoal(updated);
   const released = vi.fn();
   const snapshot = service.snapshot.bind(service);
@@ -1007,8 +1042,8 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
 
   expect(received.items).toContainEqual({ kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
     executionStatus: 'paused', repositoryDirectory: repository } });
-  expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'work-log', record.id]),
-    message: `${goal!.id}: ${record.summary}` } });
+  expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
+    message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } });
   expect(displayedInquiries(client)).toEqual([previousInquiries[1]]);
   expect(displayedGoals(client)).toHaveLength(2);
   expect(released).toHaveBeenCalledTimes(2);

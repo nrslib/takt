@@ -1,17 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatGoalName, formatInquirySummary, formatPatrolSummary, formatPendingQuestion } from '../features/manager/goalDisplay.js';
+import { formatGoalName, formatInquirySummary, formatPendingQuestion } from '../features/manager/goalDisplay.js';
 import { getLabel } from '../shared/i18n/index.js';
-
-describe('manager patrol summaries', () => {
-  it.each(['', '変化なし'])('keeps a short summary %j without an ellipsis', (summary) => {
-    expect(formatPatrolSummary(summary)).toBe(summary);
-  });
-
-  it('normalizes whitespace and shortens without splitting graphemes', () => {
-    expect(formatPatrolSummary(' 変化なし\r\n\t' + 'e\u0301👩‍💻'.repeat(30)))
-      .toBe('変化なし ' + 'e\u0301👩‍💻'.repeat(17) + '…');
-  });
-});
 
 describe('manager goal names', () => {
   it('normalizes line breaks and repeated whitespace before shortening', () => {

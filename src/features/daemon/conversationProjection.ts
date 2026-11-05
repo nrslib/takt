@@ -35,9 +35,8 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
           if (cancelled()) return;
           if (question.status === 'pending') yield { kind: 'inquiry', inquiry: { target: { goalId: goal.id, repositoryDirectory: directory }, question, objective: goal.objective } };
         }
-        const dates = new Map([...goal.workLog.map((record) => [JSON.stringify([directory, goal.id, 'work-log', record.id]), record.recordedAt] as const),
-          ...(goal.notifications ?? []).map((notice) => [JSON.stringify([directory, goal.id, 'notification', notice.id]), notice.recordedAt] as const)]);
-        for (const event of projectManagerDisplayEvents(goal, directory, configuration.language ?? global.language ?? 'en', undefined, -Infinity, policy)) {
+        const dates = new Map((goal.notifications ?? []).map((notice) => [JSON.stringify([directory, goal.id, 'notification', notice.id]), notice.recordedAt]));
+        for (const event of projectManagerDisplayEvents(goal, directory, configuration.language ?? global.language ?? 'en', -Infinity, policy)) {
           if (cancelled()) return;
           yield { kind: 'display_event', event, recordedAt: dates.get(event.id) };
         }

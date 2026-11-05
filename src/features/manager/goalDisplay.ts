@@ -4,7 +4,6 @@ import type { PendingQuestion } from './inquiryAnswer.js';
 
 const GOAL_NAME_LIMIT = 24;
 const INQUIRY_SUMMARY_LIMIT = 40;
-const PATROL_SUMMARY_LIMIT = 40;
 const ELLIPSIS = '…';
 
 function formatShortText(raw: string, limit: number): string {
@@ -26,10 +25,6 @@ export function formatGoalName(objective: string): string {
 
 export function formatInquirySummary(body: string): string {
   return formatShortText(body, INQUIRY_SUMMARY_LIMIT);
-}
-
-export function formatPatrolSummary(summary: string): string {
-  return formatShortText(summary, PATROL_SUMMARY_LIMIT);
 }
 
 export function formatPendingQuestion(pending: PendingQuestion, lang: 'en' | 'ja'): string {
