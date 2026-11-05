@@ -1,15 +1,23 @@
 import { Worker } from 'node:worker_threads';
+import { join } from 'node:path';
+import type { IoOptions } from '../../../core/daemon/io.js';
+import type { Language } from '../../../core/models/types.js';
+import { FileAsyncLock } from '../../../infra/daemon/lock.js';
 import type { Goal } from '../../../infra/goals/schema.js';
 import type { RunProgress } from './runProgress.js';
 import { WATCH_INTERVALS } from './loop.js';
+import { watchGoalDirectory } from './goalPaths.js';
 
 export type WatchGoal = Pick<Goal, 'id' | 'status' | 'executionStatus' | 'questions' | 'pullRequest' | 'branch' | 'integrationBranch'> & {
   lastUpdatedAt: string | undefined;
   blockedNotifications: string[];
+  pullRequestRetry: { failure: NonNullable<Goal['pullRequestFailure']>; generation: string } | undefined;
 };
-type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string } | { kind: 'run'; path: string };
+type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string } | { kind: 'run'; path: string }
+  | { kind: 'pr-retry-limit'; cwd: string; goalId: string; failureId: string; expectedSha: string; language: Language };
 export type WatchReadRequest = { id: number } & WatchReadOperation;
-type WatchReadResult = { kind: 'goal'; goal: WatchGoal } | { kind: 'run'; progress: RunProgress | undefined };
+type WatchReadResult = { kind: 'goal'; goal: WatchGoal } | { kind: 'run'; progress: RunProgress | undefined }
+  | { kind: 'pr-retry-limit'; saved: boolean };
 export type WatchReadReply = { id: number } & (({ ok: true } & WatchReadResult) | { ok: false; message: string });
 
 /** daemon ごとに1ワーカー、未完了の依頼は最大32件に制限する。 */
@@ -32,6 +40,19 @@ export class WatchGoalReader {
     const result = await this.request({ kind: 'run', path }, cancellation);
     if (result.kind !== 'run') throw new Error('Unexpected run reader reply');
     return result.progress;
+  }
+
+  async savePullRequestRetryLimit(cwd: string, goalId: string, failureId: string, expectedSha: string,
+    language: Language, options: IoOptions): Promise<boolean> {
+    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]);
+    const path = join(await watchGoalDirectory(cwd, goalId), 'goal.json');
+    const lock = new FileAsyncLock();
+    // GoalStore と同じ順序で取得し、ワーカーの強制終了が完了してから解放する。
+    return lock.exclusive(`${path}.lock`, () => lock.exclusive(join(cwd, '.takt', 'goal-execution.lock'), async () => {
+      const result = await this.request({ kind: 'pr-retry-limit', cwd, goalId, failureId, expectedSha, language }, signal);
+      if (result.kind !== 'pr-retry-limit') throw new Error('Unexpected retry limit reply');
+      return result.saved;
+    }, { ...options, signal }), { ...options, signal });
   }
 
   private async request(operation: WatchReadOperation, signal?: AbortSignal): Promise<WatchReadResult> {

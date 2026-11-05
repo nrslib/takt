@@ -450,6 +450,8 @@ director:
   managerInterrupted: "Manager {managerId} message was interrupted (operation ID: {operationId}): {message}"
 manager:
   goalPr:
+    retryLimitReached: "Automatic PR preparation retries stopped after reaching the limit of six events. Check the cause and submit completion again if needed. Reason: {reason}"
+    preparationFailed: "PR preparation failed. TAKT will retry automatically after a delay. Reason: {reason}"
     objective: "Objective"
     changes: "Changes"
     verification: "Verification"

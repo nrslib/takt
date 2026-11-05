@@ -3,7 +3,8 @@ import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema, type Goal } from '../goals/schema.js';
+import type { IoOptions } from '../../core/daemon/io.js';
 import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
 import { FileAsyncLock } from './lock.js';
@@ -33,17 +34,25 @@ export class DaemonPersistedFiles {
   }
 
   async saveTurnFailure(repositoryDirectory: string, goalId: string, operationId: string, message: string, language: Language): Promise<void> {
+    await this.updateGoal(repositoryDirectory, goalId, (goal) => {
+      if (goal.notifications?.some((notice) => notice.id === operationId)) return goal;
+      const notification = { ...managerTurnFailureNotification(goalId, message, language), id: operationId, recordedAt: new Date().toISOString() };
+      return { ...goal, notifications: [...(goal.notifications ?? []), notification] };
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
+  }
+
+  private async updateGoal(repositoryDirectory: string, goalId: string, transform: (goal: Goal) => Goal, options: IoOptions): Promise<Goal> {
     const path = join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
     const lock = new FileAsyncLock();
-    const io = { signal: new AbortController().signal, timeoutMs: 5000 };
-    await lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
+    return lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
       const goal = GoalSchema.parse(await readDisplayFile(path));
       if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
-      if (goal.notifications?.some((notice) => notice.id === operationId)) return;
-      const notification = { ...managerTurnFailureNotification(goalId, message, language), id: operationId, recordedAt: new Date().toISOString() };
-      const saved = GoalSchema.parse({ ...goal, notifications: [...(goal.notifications ?? []), notification] });
-      await writePrivateFile(path, JSON.stringify(saved), io.signal);
-    }, io), io);
+      const updated = transform(goal);
+      if (updated === goal) return goal;
+      const saved = GoalSchema.parse(updated);
+      await writePrivateFile(path, JSON.stringify(saved), options.signal);
+      return saved;
+    }, options), options);
   }
 
   async readTasks(repositoryDirectory: string) {

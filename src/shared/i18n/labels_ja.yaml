@@ -450,6 +450,8 @@ director:
   managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
   goalPr:
+    retryLimitReached: "PR の準備の自動再試行は上限の 6 回に達したため停止しました。原因を確認し、必要なら完成申請をやり直してください。原因: {reason}"
+    preparationFailed: "PR の準備に失敗しました。TAKT が時間を空けて自動で再試行します。原因: {reason}"
     objective: "目的"
     changes: "変更"
     verification: "確かめたこと"

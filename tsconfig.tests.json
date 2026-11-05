@@ -134,6 +134,8 @@
     "src/__tests__/daemon-conversation-ipc.integration.test.ts",
     "src/__tests__/daemon-conversation-port.test.ts",
     "src/__tests__/daemon-dispatcher.integration.test.ts",
+    "src/__tests__/daemon-goal-pr-retry.integration.test.ts",
+    "src/__tests__/daemon-goal-pr-retry.test.ts",
     "src/__tests__/daemon-io.test.ts",
     "src/__tests__/daemon-lifecycle.test.ts",
     "src/__tests__/daemon-lint.test.ts",

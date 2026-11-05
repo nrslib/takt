@@ -64,7 +64,7 @@ export class WatchChecks {
     private readonly observations: WatchObservations,
     private readonly now: () => number,
     private readonly onError: (target: WatchTarget, error: unknown) => void,
-    private readonly scope: 'process' | 'log' | 'run' | 'pr' | 'inquiry' | 'goal' | 'launch',
+    private readonly scope: 'process' | 'log' | 'run' | 'pr' | 'pr_retry' | 'inquiry' | 'goal' | 'launch',
   ) {}
 
   retain(targets: readonly WatchTarget[]): void {

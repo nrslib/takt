@@ -26,6 +26,8 @@ export type WatchObservation = {
   | { kind: 'run_too_long'; task: TaskRef; startedAt: string }
   | { kind: 'run_step_repeated'; task: TaskRef; workflow: string; step: string; stepIdentity: string; count: number }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
+  | { kind: 'goal_pr_retry'; repositoryDirectory: string; goalId: string; failureId: string; expectedSha: string; reason: string;
+      attempt: number; maxAttempts: number }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
   | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
   | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }

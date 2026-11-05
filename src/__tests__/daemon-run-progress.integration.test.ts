@@ -130,7 +130,7 @@ it('reuses the resident worker across consecutive run observations and reads upd
     task: { repositoryDirectory: directory, goalId: 'goal', taskName: 'task', runSlug: 'run' },
     running: true, paused: false, awaitingAnswer: false, owner: { pid: 123, startTime: 'start' }, logPath: null, metaPath: path,
     startedAt: '2026-11-06T00:00:00.000Z' };
-  const source: DaemonWatchSource = { runs: async () => [target], run: async () => target,
+  const source: DaemonWatchSource = { pullRequestRetries: async () => [], pullRequestRetry: vi.fn(), notifyPullRequestRetryLimit: vi.fn(), runs: async () => [target], run: async () => target,
     readRunProgress: vi.fn((path, signal) => reader.readRunProgress(path, signal)),
     pullRequests: async () => [], inquiries: async () => [], goals: async () => [], launches: async () => [], directories: async () => [] };
   const post = vi.spyOn(Worker.prototype, 'postMessage');

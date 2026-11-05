@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +13,10 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { FileAsyncLock } from '../infra/daemon/lock.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { deferred } from './helpers/controlledDaemon.js';
 
 let directory: string;
 let reader: WatchGoalReader;
@@ -79,6 +81,105 @@ it('keeps goals larger than 4 MiB eligible for patrol, progress observation and 
   expect(observed).not.toHaveProperty('workLog');
   expect(observed).not.toHaveProperty('objective');
   expect(errors).not.toHaveBeenCalled();
+});
+
+it.each(['legacy', 'structured'] as const)('collects %s PR retries and saves one limit notification for goals over 4 MiB through the worker', async (kind) => {
+  const failure = { id: randomUUID(), recordedAt: '2026-11-06T00:00:00.000Z', goalSha: 'a'.repeat(40),
+    error: 'Goal PR push failed: commit_refs' };
+  const goal = GoalSchema.parse({ ...goalRecord(), status: 'awaiting_merge',
+    workLog: [...Array.from({ length: 42 }, () => ({ id: randomUUID(), summary: 'retry-history'.repeat(10_000), recordedAt: failure.recordedAt })),
+      { id: failure.id, summary: failure.error, recordedAt: failure.recordedAt }],
+    ...(kind === 'structured' ? { pullRequestFailure: failure } : {}),
+    completion: { goalBranch: goalRecord().branch, goalSha: failure.goalSha, targetBranch: 'main', summary: 'verified',
+      humanChecks: 'Open result', instructions: [],
+      changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  });
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  const text = JSON.stringify(goal);
+  expect(Buffer.byteLength(text)).toBeGreaterThan(4 * 1024 * 1024);
+  await writeFile(join(path, 'goal.json'), text);
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  const parse = vi.spyOn(JSON, 'parse');
+  const stringify = vi.spyOn(JSON, 'stringify');
+  const [target] = await source.pullRequestRetries();
+  expect(target).toMatchObject({ goalId: goal.id, failureId: failure.id, expectedSha: failure.goalSha, error: failure.error,
+    generation: createHash('sha256').update(JSON.stringify([failure.id, failure.goalSha, goal.branch, goal.integrationBranch, goal.completion])).digest('hex') });
+  expect(await source.pullRequestRetry(target!)).toEqual(target);
+  expect(await source.patrolGoalIds(directory)).toEqual([goal.id]);
+  const observed = await reader.read(directory, goal.id);
+  expect(observed.pullRequestRetry).toEqual({ failure, generation: target!.generation });
+  expect(observed).not.toHaveProperty('workLog');
+  expect(observed).not.toHaveProperty('completion');
+  const options = { signal: new AbortController().signal, timeoutMs: 10_000 };
+  expect(await source.notifyPullRequestRetryLimit(target!, options)).toBe(true);
+  const notified = await reader.read(directory, goal.id);
+  expect(notified.blockedNotifications).toHaveLength(1);
+  expect(await source.notifyPullRequestRetryLimit(target!, options)).toBe(true);
+  expect((await reader.read(directory, goal.id)).blockedNotifications).toEqual(notified.blockedNotifications);
+  expect(parse.mock.calls.some(([value]) => typeof value === 'string' && value.includes('retry-history'))).toBe(false);
+  expect(stringify.mock.calls.some(([value]) => typeof value === 'object' && value !== null && 'workLog' in value)).toBe(false);
+  parse.mockRestore(); stringify.mockRestore();
+  const saved = GoalSchema.parse(JSON.parse(await readFile(join(path, 'goal.json'), 'utf8')) as unknown);
+  expect(saved).toEqual({ ...goal, notifications: [expect.objectContaining({ kind: 'blocked', severity: 'error' })] });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('rereads only the requested PR retry goal and reports its latest eligibility', async () => {
+  const goal = GoalSchema.parse({ ...goalRecord(), status: 'awaiting_merge',
+    pullRequestFailure: { id: randomUUID(), recordedAt: '2026-11-06T00:00:00.000Z', goalSha: 'a'.repeat(40), error: 'commit_refs' },
+    completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified',
+      humanChecks: 'Open result', instructions: [],
+      changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  });
+  const other = { ...goal, id: randomUUID() };
+  for (const value of [goal, other]) {
+    const path = join(directory, '.takt', 'goals', value.id);
+    await mkdir(path, { recursive: true }); await writeFile(join(path, 'goal.json'), JSON.stringify(value));
+  }
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  const target = (await source.pullRequestRetries()).find((value) => value.goalId === goal.id)!;
+  // 他のゴールが壊れていても、対象の再確認では読み込まない。
+  await writeFile(join(directory, '.takt', 'goals', other.id, 'goal.json'), '{invalid');
+  const read = vi.spyOn(WatchGoalReader.prototype, 'read');
+  expect(await source.pullRequestRetry(target)).toEqual(target);
+  expect(read.mock.calls).toEqual([[directory, goal.id]]);
+  read.mockClear();
+  await writeFile(join(directory, '.takt', 'goals', goal.id, 'goal.json'), JSON.stringify({ ...goal, executionStatus: 'paused' }));
+  expect(await source.pullRequestRetry(target)).toBeUndefined();
+  expect(read.mock.calls).toEqual([[directory, goal.id]]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it.each(['goal', 'execution'] as const)('rechecks eligibility after waiting for the existing %s save lock', async (kind) => {
+  const failure = { id: randomUUID(), recordedAt: '2026-11-06T00:00:00.000Z', goalSha: 'a'.repeat(40), error: 'commit_refs' };
+  const goal = GoalSchema.parse({ ...goalRecord(), status: 'awaiting_merge', pullRequestFailure: failure,
+    completion: { goalBranch: goalRecord().branch, goalSha: failure.goalSha, targetBranch: 'main', summary: 'verified',
+      humanChecks: 'Open result', instructions: [],
+      changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  });
+  const path = join(directory, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  const lockPath = kind === 'goal' ? `${path}.lock` : join(directory, '.takt', 'goal-execution.lock');
+  const options = { signal: new AbortController().signal, timeoutMs: 10_000 };
+  const acquired = deferred<void>(); const release = deferred<void>(); const waiting = deferred<void>();
+  const held = new FileAsyncLock().exclusive(lockPath, async () => { acquired.resolve(); await release.promise; }, options);
+  await Promise.race([acquired.promise, held]);
+  const exclusive = FileAsyncLock.prototype.exclusive;
+  vi.spyOn(FileAsyncLock.prototype, 'exclusive').mockImplementation(function (this: FileAsyncLock, path, action, options) {
+    if (path === lockPath) waiting.resolve();
+    return exclusive.call(this, path, action, options);
+  });
+  const saving = reader.savePullRequestRetryLimit(directory, goal.id, failure.id, failure.goalSha, 'en', options);
+  try {
+    await waiting.promise;
+    expect(await readFile(path, 'utf8')).toBe(JSON.stringify(goal));
+    await writeFile(path, JSON.stringify({ ...goal, executionStatus: 'paused' }));
+  } finally { release.resolve(); await held; }
+  expect(await saving).toBe(false);
+  expect(GoalSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown)).toEqual({ ...goal, executionStatus: 'paused' });
 });
 
 it('reports invalid goals and continues observing valid goals', async () => {
