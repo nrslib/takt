@@ -170,7 +170,14 @@ export async function probeMcpHeaders(
     let secretInArtifacts = false;
     for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
       if (!entry.isFile()) continue;
-      const contents = await readFile(join(entry.parentPath, entry.name));
+      let contents: Buffer;
+      try {
+        contents = await readFile(join(entry.parentPath, entry.name));
+      } catch (error) {
+        // CLI descendants can remove temporary artifacts after the CLI itself has exited.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
       if (['synthetic-access-fragment', 'signature-fragment', 'synthetic-key-fragment'].some((fragment) => contents.includes(fragment))) {
         secretInArtifacts = true;
       }

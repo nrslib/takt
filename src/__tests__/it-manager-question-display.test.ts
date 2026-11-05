@@ -366,7 +366,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
     });
     expect(answer).not.toHaveBeenCalled();
     finish();
-    await waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
+    await waitFor(() => expect(app!.lastFrame()).toContain('Registration finished'));
     await openMenu('answer');
     await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
     app!.stdin.write('\r');

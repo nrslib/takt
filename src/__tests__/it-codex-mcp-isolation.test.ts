@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from '../infra/codex/mcp-isolation.js';
@@ -11,6 +11,15 @@ import { interpolateMcpEnv } from '../infra/config/runtime-provider/mcp-schema.j
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
 import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
 import { probeMcpHeaders } from './helpers/mcp-env-probe.js';
+
+const beforeArtifactRead = vi.hoisted(() => vi.fn<(path: unknown) => void>());
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: (...args: Parameters<typeof actual.readFile>) => {
+    beforeArtifactRead(args[0]);
+    return actual.readFile(...args);
+  } };
+});
 
 describe('Codex CLI effective MCP configuration without API calls', () => {
   let cwd: string;
@@ -28,7 +37,25 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     writeFileSync(join(cwd, 'config.toml'), config);
   });
 
-  afterEach(() => { vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
+  afterEach(() => { beforeArtifactRead.mockReset(); vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
+
+  it('scans remaining artifacts for secrets when a listed temporary file disappears before reading', async () => {
+    const readArtifacts: string[] = [];
+    const result = await probeMcpHeaders('codex', resolveCodexSdkCli(undefined).executablePath, async (_url, _environment, probeCwd) => {
+      const temporary = join(probeCwd, 'disappearing-artifact');
+      const persistent = join(probeCwd, 'persistent-artifact');
+      writeFileSync(temporary, 'temporary content');
+      writeFileSync(persistent, 'synthetic-key-fragment');
+      beforeArtifactRead.mockImplementation((path) => {
+        if (path === temporary || path === persistent) readArtifacts.push(String(path));
+        if (path === temporary) rmSync(temporary);
+      });
+      return { config: { shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude', MCP_HEADER_KEY: 'exclude' } } } };
+    });
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.secretInArtifacts).toBe(true);
+    expect(readArtifacts.map((path) => basename(path)).sort()).toEqual(['disappearing-artifact', 'persistent-artifact']);
+  }, 30_000);
 
   it.each(['user', 'project'] as const)('disables only excluded ambient servers in normal %s configuration without persisting the decision', async (source) => {
     const workspace = join(cwd, 'workspace');
