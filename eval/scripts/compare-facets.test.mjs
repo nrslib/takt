@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -107,6 +107,10 @@ test('compares the baseline and candidate with uncached preparation, preserves f
   const manifest = fixture.manifest();
   assert.equal(manifest.base, revision);
   assert.equal(manifest.runs.length, 4);
+  assert.equal(existsSync(join(manifest.inputWorkspace, 'eval/node_modules')), false);
+  for (const run of manifest.runs) {
+    assert.equal(existsSync(join(run.workspace, 'eval/node_modules')), false);
+  }
   assert.notEqual(manifest.files[0].baselineSha256, manifest.files[0].candidateSha256);
   assert.equal(readFileSync(join(fixture.directory, facet), 'utf8'), candidate);
   for (const phase of ['red', 'green']) {
@@ -117,6 +121,34 @@ test('compares the baseline and candidate with uncached preparation, preserves f
       assert.equal(readFileSync(join(workspace, path), 'utf8'), expected);
     }
     assert.equal(readFileSync(join(fixture.directory, '.tmp/result/facets', phase, facet), 'utf8'), expected);
+  }
+});
+
+test('shares eval dependencies in input and phase workspaces and resolves the eval SDK', (t) => {
+  const fixture = setup(t);
+  writeFileSync(join(fixture.directory, '.gitignore'), 'node_modules/\n');
+  const dependencies = join(fixture.directory, 'eval/node_modules');
+  const sdk = join(dependencies, '@openai/codex-sdk');
+  mkdirSync(sdk, { recursive: true });
+  writeFileSync(join(sdk, 'package.json'), JSON.stringify({ name: '@openai/codex-sdk', version: '0.156.1' }));
+  writeFileSync(join(fixture.directory, 'eval/scripts/run-evals.mjs'), `
+    import { readFileSync, writeFileSync } from 'node:fs';
+    import { createRequire } from 'node:module';
+    const require = createRequire(new URL('../scenarios/sample/config.yaml', import.meta.url));
+    const sdk = JSON.parse(readFileSync(require.resolve('@openai/codex-sdk/package.json'), 'utf8'));
+    const args = process.argv.slice(2);
+    writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify({ version: sdk.version }));
+  `);
+  const result = fixture.run();
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = fixture.manifest();
+  for (const workspace of [manifest.inputWorkspace, ...manifest.runs.map((run) => run.workspace)]) {
+    const shared = join(workspace, 'eval/node_modules');
+    assert.equal(lstatSync(shared).isSymbolicLink(), true);
+    assert.equal(realpathSync(shared), realpathSync(dependencies));
+  }
+  for (const run of manifest.runs) {
+    assert.equal(JSON.parse(readFileSync(run.resultFile, 'utf8')).version, '0.156.1');
   }
 });
 
