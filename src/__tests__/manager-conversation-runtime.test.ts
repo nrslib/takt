@@ -65,18 +65,25 @@ it('waits for MCP disposal during close and reports its failure', async () => {
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it('keeps the tool scope active only during the current non-aborted turn', async () => {
+it.each([false, true])('keeps the tool scope and patrol metadata active only during the current non-aborted turn (patrol: %s)', async (patrol) => {
   const prepared = await runtime.resolve(assignment, signal);
-  const { turnScope } = doubles.connect.mock.calls[0]![3] as { turnScope: import('../features/daemonTurn/toolScope.js').TurnToolScope };
+  const { turnScope, conversationTurn } = doubles.connect.mock.calls[0]![3] as {
+    turnScope: import('../features/daemonTurn/toolScope.js').TurnToolScope;
+    conversationTurn(): { patrol: boolean } | undefined;
+  };
+  expect(conversationTurn()).toBeUndefined();
   await expect(turnScope.run(async () => 'outside')).rejects.toThrow('No active tool turn');
   const controller = new AbortController(); const gate = deferred<void>(); const started = deferred<void>();
   doubles.execute.mockImplementation(async () => { started.resolve(); await gate.promise; return { message: 'done', summary: null }; });
   const execution = prepared.executor.execute({ prompt: 'message',
-    sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal });
+    sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal, patrol });
   await started.promise;
   await expect(turnScope.run(async () => 'inside')).resolves.toBe('inside');
+  expect(conversationTurn()).toEqual({ patrol });
   controller.abort();
+  expect(conversationTurn()).toBeUndefined();
   await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
   gate.resolve(); await execution;
+  expect(conversationTurn()).toBeUndefined();
   await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
 });

@@ -7,11 +7,13 @@ import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange 
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './loop.js';
 import { WatchObservations, type WatchRecordStore, type WatchTarget } from './observations.js';
 import { observePullRequest, type PullRequestWatchTarget } from './pullRequests.js';
+import type { RunProgress } from './runProgress.js';
 
 /** 観測対象を取得する。1回の観測件数はループ側で区切る。 */
 export interface DaemonWatchSource {
   runs(): Promise<readonly RunWatchTarget[]>;
   run(targetId: string): Promise<RunWatchTarget | undefined>;
+  readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined>;
   pullRequests(): Promise<readonly PullRequestWatchTarget[]>;
   pullRequestRetries(): Promise<readonly GoalPullRequestRetryTarget[]>;
   pullRequestRetry(targetId: string): Promise<GoalPullRequestRetryTarget | undefined>;
@@ -41,7 +43,7 @@ export function startDaemonWatchers(dependencies: {
   const observations = new WatchObservations(dependencies.records, dependencies.ingress, dependencies.now);
   const loops: WatchLoop[] = [];
   const retries = new GoalPullRequestRetries(dependencies.source, dependencies.commands, dependencies.records, observations, dependencies.now);
-  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'pr' | 'pr_retry' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
+  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'run' | 'pr' | 'pr_retry' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
     observe: (checks: WatchChecks, target: T, signal: AbortSignal) => Promise<void>): void => {
     const checks = new WatchChecks(observations, dependencies.now, dependencies.onError, scope);
     let offset = 0;
@@ -61,6 +63,8 @@ export function startDaemonWatchers(dependencies: {
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
   register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) =>
     checks.log(target, readLogStamp, () => dependencies.source.run(target.targetId)));
+  register('run', WATCH_INTERVALS.long, () => dependencies.source.runs(), (checks, target, signal) =>
+    checks.runProgress(target, (path) => dependencies.source.readRunProgress(path, signal), () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   register('pr_retry', WATCH_INTERVALS.long, () => dependencies.source.pullRequestRetries(), (_checks, target, signal) =>

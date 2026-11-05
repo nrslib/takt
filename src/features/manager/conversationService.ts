@@ -52,7 +52,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const priorPending = state.current.pending;
       const directorMessage = event.kind === 'director_message';
       const human = event.kind === 'human_command';
-      const command = human || event.kind === 'inquiry_answer' ? event.command
+      let command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' }) };
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
@@ -61,6 +61,19 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
+        if (event.kind === 'patrol') {
+          const store = new GoalStore(event.repositoryDirectory);
+          const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          io.signal.throwIfAborted();
+          const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
+          const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
+          const patrolEvent = { ...event,
+            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id),
+            ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
+          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'reply', message: '' } };
+          command = { kind: 'message', text: JSON.stringify({ event: patrolEvent,
+            instruction: 'Inspect all listed active goals together in this patrol turn. Check run duration, repeated steps, progress toward each objective, and unanswered inquiries using current evidence and work records. If unreadableGoalIds are listed, report those goals as unreadable and do not claim that they have no anomalies; continue inspecting the readable goals. Do not propose a new registration. If nothing is wrong, take no action and send no notification; return a short message with the goal count and no anomalies. Record inspection details for each goal using takt_record_goal_work_log with kind: "patrol". If a problem needs attention, use the existing notification or inquiry tools without repeating an earlier notice for the same state and reason.' }) };
+        }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
           reconcileLostRun(event.observation, io.signal);
           return { kind: 'completed', result: { kind: 'reply', message: '' } };
@@ -122,6 +135,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
+              patrol: event.kind === 'patrol',
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
             io.signal.throwIfAborted();

@@ -44,7 +44,7 @@ Prepare temporary verification locations without switching a person's working co
 
 Once required results are collected, perform or delegate final verification at the goal tip. Select tests from acceptance criteria, diffs and existing verification procedures, following project procedures and human constraints. Record selected tests and reasons, SHA, environment, method and results. If execution is unavailable, record why and mark it unverified. Never count unverified work as passed; wait to request completion while necessary decisions remain. Verify the new tip again after adding results.
 
-Record operations, reasons and evidence in the same turn using takt_record_goal_work_log. Keep message short, starting with the conclusion and any needed human action. Include per-criterion results and evidence in completion reports.
+Record operations, reasons and evidence in the same turn using takt_record_goal_work_log. Keep message short, starting with the conclusion and any needed human action. Include per-criterion results and evidence in completion reports. Except for periodic patrols, observations without changes or anomalies do not trigger a turn.
 
 ## Completion requests and PRs
 

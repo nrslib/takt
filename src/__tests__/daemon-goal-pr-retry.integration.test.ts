@@ -11,7 +11,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { FileWatchRecords } from '../infra/daemon/watchRecords.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
-import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { createWatchSource } from './helpers/daemon-watch-source.js';
 import { watchKey, WatchObservations } from '../features/daemon/watchers/observations.js';
 import { GoalPullRequestRetries } from '../features/daemon/watchers/goalPullRequestRetries.js';
 import { GOAL_PR_RETRY_DELAYS } from '../infra/goals/pull-request-failure.js';
@@ -53,7 +53,7 @@ it('finds legacy PR failures, keeps their generation stable, and excludes paused
   const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
   await mkdir(join(path, '..'), { recursive: true });
   const save = (value: Goal) => writeFile(path, JSON.stringify(value));
-  const source = new FileDaemonWatchSource(f.conversations, async () => {}, (error) => { throw error; });
+  const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
   await save(goal);
   const [target] = await source.pullRequestRetries();
   expect(target).toMatchObject({ expectedSha: sha, failureId: failure.id, error: failure.summary });
@@ -105,7 +105,7 @@ async function retryFixture() {
   const goalDirectory = join(repository, '.takt', 'goals', goal.id);
   await mkdir(goalDirectory, { recursive: true });
   await writeFile(join(goalDirectory, 'goal.json'), JSON.stringify(goal));
-  let source = new FileDaemonWatchSource(daemon.conversations, async () => {}, (error) => { throw error; });
+  let source = createWatchSource(daemon.conversations, async () => {}, (error) => { throw error; });
   const target = (await source.pullRequestRetries())[0]!;
   const run = vi.fn(async () => ({ code: 0, signal: null, truncated: false,
     stdout: Buffer.from(target.expectedSha), stderr: Buffer.alloc(0) }));
@@ -130,11 +130,12 @@ async function retryFixture() {
   const readGoal = () => new DaemonPersistedFiles(directory).readGoal(repository, goal.id);
   const saveGoal = (value: Goal) => writeFile(join(goalDirectory, 'goal.json'), JSON.stringify(value));
   const reboot = async () => {
+    await source.close();
     await daemon.close();
     daemons.splice(daemons.indexOf(daemon), 1);
     daemon = await conversationDaemon(directory, provider);
     daemons.push(daemon);
-    source = new FileDaemonWatchSource(daemon.conversations, async () => {}, (error) => { throw error; });
+    source = createWatchSource(daemon.conversations, async () => {}, (error) => { throw error; });
   };
   return { directory, repository, get daemon() { return daemon; }, target, run, accept, execute, restart, options, addWorkspace, saved,
     readGoal, saveGoal, reboot };

@@ -164,6 +164,49 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
   }
 });
 
+it('inspects active patrol goals together using the saved conversation and no registration proposal', async () => {
+  const f = fixture();
+  const active = goalRecord(); const paused = { ...goalRecord(), id: randomUUID(), executionStatus: 'paused' };
+  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : paused);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, paused.id] };
+  const message = 'Patrol: 1 goal, no anomalies';
+  f.execute.mockResolvedValue({ message, summary: null, sessionId: 'next', assignment: undefined });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message },
+    change: { session: { sessionId: 'next' } } });
+  const turn = f.execute.mock.calls[0]![0];
+  expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
+    instruction: expect.any(String) });
+  expect(turn).toMatchObject({ patrol: true, sessionId: 'shared-session' });
+  expect(doubles.updateGoal).not.toHaveBeenCalled();
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each(['paused', 'aborted', 'completed'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
+  const f = fixture();
+  const goal = goalRecord();
+  doubles.getGoal.mockResolvedValue(status === 'completed' ? { ...goal, status } : { ...goal, executionStatus: status });
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
+  const f = fixture();
+  const active = goalRecord(); const unreadable = randomUUID();
+  doubles.getGoal.mockImplementation(async (id: string) => {
+    if (id === unreadable) throw new Error('unreadable goal');
+    return active;
+  });
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: readable ? [unreadable, active.id] : [unreadable] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
+    goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
 it.each(['human', 'event'] as const)('executes the saved goal PR merge during a %s manager turn', async (source) => {
   const f = fixture();
   const goal = { ...goalRecord(), status: 'awaiting_merge' as const,

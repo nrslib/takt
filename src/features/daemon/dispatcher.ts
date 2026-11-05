@@ -58,6 +58,9 @@ export async function createDaemonDispatcher(dependencies: DispatcherDependencie
 export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   get activeTurnCount(): number { return this.active.size; }
   get hasPendingEvents(): boolean { return this.eventAdmissions.size > 0; }
+  hasPendingPatrol(conversationId: string): boolean {
+    return this.queues.pending(conversationId).some(({ event }) => event.kind === 'patrol');
+  }
   private readonly queues = createTurnQueues();
   private readonly active = new Map<string, ActiveTurn>();
   private readonly admissions = new Map<string, PendingAdmission>();
@@ -349,6 +352,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       }
     }
     const accepted = saved.kind === 'stored' ? admission.event : saved.event;
+    if (accepted.lane === 'human' && (saved.kind === 'stored' || saved.state === 'queued')) {
+      const active = this.active.get(accepted.conversationId);
+      if (active?.event.event.kind === 'patrol' && active.phase !== 'settling') this.interrupt(active, effects);
+    }
     const observed = accepted.event;
     if (observed.kind === 'watch_observation' && observed.observation.kind === 'director_state_changed' && observed.observation.goalId !== null) {
       this.queues.resumeGoal({ repositoryDirectory: observed.observation.repositoryDirectory, goalId: observed.observation.goalId });
@@ -413,8 +420,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       const outcome = active.interrupted && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
       active.finishReply = response;
       this.finish(active, outcome, effects);
-    } else if (active.interrupted) response.resolve();
-    else {
+    } else if (active.interrupted || active.event.event.kind === 'patrol') {
+      // 見回りは完了結果だけを表示し、後から中断したターンの途中結果を残さない。
+      response.resolve();
+    } else {
       const id = ++this.nextId;
       active.progress.set(id, response);
       const { turn } = active;

@@ -10,6 +10,7 @@ export const TAKT_MANAGER_MCP_SERVER_NAME = 'takt_mgr_9f92c6ea76364b51a45846a08e
 
 interface ManagerMcpOptions {
   turnScope: TurnToolScope;
+  conversationTurn?: () => { patrol: boolean } | undefined;
 }
 
 export async function connectManagerMcp(
@@ -18,7 +19,7 @@ export async function connectManagerMcp(
   userServers: Record<string, McpServerConfig> | undefined,
   options: ManagerMcpOptions,
 ) {
-  const connection = await startManagerMcpConnection(cwd, assignment, options.turnScope);
+  const connection = await startManagerMcpConnection(cwd, assignment, options.turnScope, options.conversationTurn);
   let client: Client | undefined;
   let transport: StreamableHTTPClientTransport | undefined;
   const dispose = async (): Promise<void> => {

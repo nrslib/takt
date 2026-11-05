@@ -14,6 +14,8 @@ const repositoryGoal = { repositoryDirectory: z.string(), goalId: id };
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('run_log_stalled'), task, lastUpdatedAt: z.iso.datetime() }).strict(),
+  z.object({ ...observed, kind: z.literal('run_too_long'), task, startedAt: z.iso.datetime() }).strict(),
+  z.object({ ...observed, kind: z.literal('run_step_repeated'), task, workflow: z.string().min(1), step: z.string().min(1), stepIdentity: z.string().min(1), count: z.number().int().positive() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
   z.object({ ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: z.string(),
     failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
@@ -34,6 +36,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
+  z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
 ]);
 export const EventInputSchema = z.object({
   eventId: id, requestId: id, conversationId: id, source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']),

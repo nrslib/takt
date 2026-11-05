@@ -11,9 +11,15 @@ import { internalAgentSeatOverride } from './internal-agent-seat.js';
  */
 export const LOOP_JUDGE_ROUTING_KEY = 'loop-judge';
 
+const LOOP_JUDGE_STEP_PREFIX = '_loop_judge_';
+
 /** 実行時に合成される judge ステップ名。検証と実行で同じ名前を使う（routing が step 名で引けるため）。 */
 export function loopJudgeStepName(cycle: readonly string[]): string {
-  return `_loop_judge_${cycle.join('_')}`;
+  return `${LOOP_JUDGE_STEP_PREFIX}${cycle.join('_')}`;
+}
+
+export function isLoopJudgeStepName(name: string): boolean {
+  return name.startsWith(LOOP_JUDGE_STEP_PREFIX);
 }
 
 /**

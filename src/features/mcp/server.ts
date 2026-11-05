@@ -107,6 +107,7 @@ export interface TaktMcpServerOptions {
   toolSet?: TaktMcpToolSet;
   includeReferenceMarkers?: boolean;
   goalExecutionConnection?: ManagerMcpConnection;
+  conversationTurn?: () => { patrol: boolean } | undefined;
 }
 
 function buildMcpOperationDependencies(
@@ -227,7 +228,8 @@ export function createTaktMcpServer(
       withdrawTaktStandaloneInquiry(input, globalConfigDirectory, assignment ?? await currentAssignment()), false));
     server.registerTool('takt_record_goal_work_log', {
       title: 'Record manager work', description: 'Append a short account of submitted, integrated or abandoned work and its reasons. Available in conversation and event turns. Returns the saved entry and count within 64 KiB, with explicit truncation. Read the entry with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.', inputSchema: recordGoalWorkLogInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal work log failed', (deps) => recordTaktGoalWorkLog(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    }, (input, extra) => operation(input.cwd, 'Goal work log failed', (deps) => recordTaktGoalWorkLog(
+      projectInput(options.conversationTurn?.()?.patrol === true ? { ...input, kind: 'patrol' } : input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_list_goal_work_log', {
       title: 'Read manager work', description: 'Read recent manager work in reverse saved order with optional limit (1-50) and offset. Read full entries with takt_get_goal path workLog, recordId, and a text field path. Responses fit 64 KiB, with explicit truncation.', inputSchema: listGoalRecordsInputSchema,
     }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
