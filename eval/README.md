@@ -386,6 +386,7 @@ retry という語や推奨だけでは不合格にしない。「retry を許�
 後述の `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` は別の比較用であり、今回の6ファイルの切り替えには使わない。
 コーディネーターが次の手順で実行する。モデルを呼ぶコマンドを含む。
 ブロック全体を貼り付けて実行する。バックアップなどが失敗したらサブシェル内で中断し、利用者のシェル設定は変更しない。
+評価コマンドが非ゼロで終了しても比較を続け、最後に各評価の終了コードを表示する。
 
 ```bash
 (
@@ -415,20 +416,25 @@ for pause_eval_lang in ja en; do
   done
 done
 npm run build
+pause_eval_red_status=0
 node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
   --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
-  -o eval/.results/manager-pause-red.json
+  -o eval/.results/manager-pause-red.json || pause_eval_red_status=$?
 restore_pause_eval_facets
 npm run build
+pause_eval_green_status=0
 node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
   --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
-  -o eval/.results/manager-pause-green.json
+  -o eval/.results/manager-pause-green.json || pause_eval_green_status=$?
 # GREEN で既存場面も含めた再生90入力の回帰を確認する。
+pause_eval_green_all_status=0
 node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
-  -o eval/.results/manager-pause-green-all.json
+  -o eval/.results/manager-pause-green-all.json || pause_eval_green_all_status=$?
+printf 'RED=%s GREEN=%s GREEN_ALL=%s\n' \
+  "$pause_eval_red_status" "$pause_eval_green_status" "$pause_eval_green_all_status"
 trap - EXIT
 )
 ```
