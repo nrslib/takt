@@ -1077,16 +1077,22 @@ it('preserves an existing approval and notifies the first PR failure on a repeat
 it.each([
   'Goal PR push failed: commit_refs',
   'Goal PR creation failed: GitHub unavailable',
-])('saves one visible notification across automatic retries for %s', async (failure) => {
+])('saves one visible failure notification across repeated completion requests for %s', async (failure) => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError(failure));
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   const notification = goal.notifications?.find((saved) => saved.kind === 'blocked');
   expect(notification).toMatchObject({ id: goal.pullRequestFailure?.id, severity: 'error', body: expect.stringContaining(failure) });
-  const events = [...projectManagerDisplayEvents(goal, '/project', 'ja', Date.parse(now), Date.parse(now), policy)]
-    .filter((event) => JSON.parse(event.id)[2] === 'notification');
-  expect(events.some((event) => event.message.includes(failure))).toBe(true);
+  const events = [...projectManagerDisplayEvents(goal, '/project', 'ja', Date.parse(now), policy)];
+  expect(events.filter((event) => event.message.includes(failure))).toEqual([
+    expect.objectContaining({
+      id: JSON.stringify(['/project', goal.id, 'notification', notification!.id]),
+      message: expect.stringContaining(failure),
+    }),
+  ]);
   for (let attempt = 0; attempt < 6; attempt++) {
     await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+    expect(goal.notifications?.filter((saved) => saved.kind === 'blocked')).toEqual([notification]);
+    expect([...projectManagerDisplayEvents(goal, '/project', 'ja', Date.parse(now), policy)]).toEqual(events);
   }
   expect(goal.notifications?.filter((saved) => saved.kind === 'blocked')).toEqual([notification]);
   expect(prepareGoalPullRequest).toHaveBeenCalledTimes(7);
