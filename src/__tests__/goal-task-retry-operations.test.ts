@@ -42,9 +42,10 @@ it('rejects another goal and invalid exceeded restart choices', async () => {
   expect((await requeueTaktGoalTask({ ...input, startStep: 'other' }, {}, signal)).isError).toBe(true);
   expect(doubles.exceeded).not.toHaveBeenCalled();
 });
-it('removes stopped work with the existing task deletion function and records the reason', async () => {
+it.each(['failed', 'exceeded'] as const)('removes stopped %s work without a saved result and records the reason', async (status) => {
+  state = { ...state, kind: status, status };
   expect((await removeTaktGoalTask({ ...input, reason: '別の方法に変更' }, {}, signal)).isError).toBeUndefined();
-  expect(doubles.remove).toHaveBeenCalledWith(expect.objectContaining({ name: 'task-a', kind: 'exceeded' }), { quiet: true, requireCleanupSuccess: true });
+  expect(doubles.remove).toHaveBeenCalledWith(expect.objectContaining({ name: 'task-a', kind: status }), { quiet: true, requireCleanupSuccess: true });
   expect(goal.workLog).toEqual([expect.objectContaining({ summary: expect.stringContaining('別の方法に変更') })]);
   doubles.states.mockReturnValue([]);
   expect((await removeTaktGoalTask({ ...input, reason: '別の方法に変更' }, {}, signal)).isError).toBeUndefined();
@@ -56,8 +57,64 @@ it.each(['running', 'unmerged', 'other goal'] as const)('rejects removal of %s w
   if (condition === 'unmerged') { state = { ...state, kind: 'completed', status: 'completed', completion: { success: true, interrupted: false, sha: 'a'.repeat(40) } }; doubles.included.mockResolvedValue(false); }
   expect((await removeTaktGoalTask({ ...input, reason: '片付け' }, {}, signal)).isError).toBe(true); expect(doubles.remove).not.toHaveBeenCalled();
 });
-it('checks Git containment before cleaning up completed work', async () => {
-  state = { ...state, kind: 'completed', status: 'completed', completion: { success: true, interrupted: false, sha: 'a'.repeat(40) } };
+it.each(['completed', 'pr_failed', 'failed', 'exceeded'] as const)('checks Git containment before cleaning up a saved %s result', async (status) => {
+  state = { ...state, kind: status, status, completion: { success: status === 'completed', interrupted: false, sha: 'a'.repeat(40) } };
   expect((await removeTaktGoalTask({ ...input, reason: '取り込み済み' }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.sha).toHaveBeenCalledExactlyOnceWith(input.cwd, goal.branch, signal);
   expect(doubles.included).toHaveBeenCalledWith('/project', 'a'.repeat(40), 'b'.repeat(40), signal);
+  expect(doubles.remove).toHaveBeenCalledWith(expect.objectContaining({ name: input.taskName, kind: status }), { quiet: true, requireCleanupSuccess: true });
+});
+
+it('cancels pending work while its goal is paused and records the reason', async () => {
+  goal.executionStatus = 'paused';
+  state = { ...state, kind: 'pending', status: 'pending' };
+  doubles.tasks.mockReturnValue([{ name: input.taskName, kind: 'pending', content: '予定作業' }]);
+  expect((await removeTaktGoalTask({ ...input, reason: '不要になった予定を取消' }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.remove).toHaveBeenCalledWith(expect.objectContaining({ kind: 'pending' }), { quiet: true, requireCleanupSuccess: true });
+  expect(goal.executionStatus).toBe('paused');
+  expect(goal.workLog.at(-1)!.summary).toContain('不要になった予定を取消');
+});
+
+it.each(['completed', 'pr_failed', 'failed', 'exceeded'] as const)('discards an unintegrated %s result only with an explicit discard flag', async (status) => {
+  state = { ...state, kind: status, status, completion: { success: status === 'completed', interrupted: false, sha: 'a'.repeat(40) } };
+  doubles.included.mockResolvedValue(false);
+  expect((await removeTaktGoalTask({ ...input, reason: '不要な成果' }, {}, signal)).isError).toBe(true);
+  expect((await removeTaktGoalTask({ ...input, reason: '不要な成果', discardUnmerged: false }, {}, signal)).isError).toBe(true);
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect((await removeTaktGoalTask({ ...input, reason: '人の破棄指示', discardUnmerged: true }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.remove).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: input.taskName, kind: status }), { quiet: true, requireCleanupSuccess: true });
+  expect(goal.workLog.at(-1)!.summary).toContain('discardUnmerged: true');
+  expect(goal.workLog.at(-1)!.summary).toContain('人の破棄指示');
+});
+
+it.each([
+  ['completed', undefined],
+  ['pr_failed', undefined],
+  ['failed', 'completed'],
+] as const)('requires explicit discard for a %s result without a saved SHA (workflow: %s)', async (status, workflowResult) => {
+  state = { ...state, kind: status, status, completion: { success: status === 'completed', interrupted: false, workflowResult, shaUnavailableReason: 'SHA unavailable' } };
+  expect((await removeTaktGoalTask({ ...input, reason: '片付け' }, {}, signal)).isError).toBe(true);
+  expect(doubles.included).not.toHaveBeenCalled();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect((await removeTaktGoalTask({ ...input, reason: '人の破棄指示', discardUnmerged: true }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.remove).toHaveBeenCalledOnce();
+  expect(goal.workLog.at(-1)!.summary).toContain('discardUnmerged: true');
+});
+
+it.each(['running', 'other goal', 'cleanup failure'] as const)('does not bypass %s with the discard flag', async (condition) => {
+  if (condition === 'running') state = { ...state, kind: 'running', status: 'running' };
+  if (condition === 'other goal') state = { ...state, goalId: 'other' };
+  if (condition === 'cleanup failure') doubles.remove.mockReturnValue(false);
+  expect((await removeTaktGoalTask({ ...input, reason: '片付け', discardUnmerged: true }, {}, signal)).isError).toBe(true);
+  expect(goal.workLog).toHaveLength(0);
+  if (condition !== 'cleanup failure') expect(doubles.remove).not.toHaveBeenCalled();
+});
+
+it('rejects a removal record exceeding the saved text limit before deleting resources', async () => {
+  const result = await removeTaktGoalTask({ ...input, reason: 'x'.repeat(128 * 1024), discardUnmerged: true }, {}, signal);
+  expect(result.isError).toBe(true);
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(goal.workLog).toHaveLength(0);
 });

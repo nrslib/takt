@@ -3,7 +3,6 @@ import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_PROFILE, type CodexCallOptions, type CodexSpawnEnvironment } from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
-import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from './tool-permission-hook-protocol.js';
 
 function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
   for (const key of Object.keys(environment)) {
@@ -66,10 +65,6 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     if (options.configProfile !== undefined) {
       codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
     }
-  }
-  // Hook credentials are supplied only by its command, never by the Codex process environment.
-  for (const key of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
-    delete codexEnvironment[key];
   }
   const shellPath = codexEnvironment.PATH;
   const excludesPath = hasCodexShellEnvironmentFilter(headerFilters, 'PATH');

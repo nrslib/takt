@@ -7,9 +7,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 export function ManagerAnswerDialog({ answerTarget, bodyText, lang }: {
   answerTarget: AnswerTarget; bodyText: string; lang: 'en' | 'ja';
 }): ReactElement {
-  const choices = answerTarget.stage === 'decision' ? ['allow', 'deny']
-    : answerTarget.stage === 'report' ? ['completed', 'unable']
-    : answerTarget.stage === 'scope' ? answerTarget.scopes.map((scope) => scope.label) : null;
+  const choices = answerTarget.stage === 'report' ? ['completed', 'unable'] : null;
   return (
     <Box borderStyle="round" flexDirection="column">
       <Text bold>{bodyText}</Text>
@@ -28,7 +26,7 @@ export function ManagerAnswerDialog({ answerTarget, bodyText, lang }: {
           ))}
           <Text dimColor>{getLabel('manager.answerChoiceHint', lang)}</Text>
         </>
-      ) : answerTarget.stage === 'comment' || answerTarget.stage === 'permission'
+      ) : answerTarget.stage === 'comment'
         ? <Text>{getLabel(`manager.answerStages.${answerTarget.stage}`, lang)}</Text>
         : answerTarget.choice !== null ? (
         <>

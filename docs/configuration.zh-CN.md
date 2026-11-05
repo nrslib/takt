@@ -565,8 +565,8 @@ takt manager
 
 - 在配置的频道中发消息，manager 会在该消息的消息列中回复；之后请在同一消息列继续交流。该仓库的所有对话消息列都连接到同一个 manager 对话，并与 TUI 共享。回复只发送到发言所在的消息列；对 TUI 发言的回复不会发送到 Slack。
 - 不响应其他频道中的消息、发给机器人的私信，以及不在 `allowed_user_ids` 中的用户发送的消息或按钮操作。
-- 处理期间仍可持久化接受发言、批准和询问回答。人工输入优先于其他事件，每条队列按接受顺序执行。accepted 表示已保存，不表示处理完成。界面读取和中断不进入模型队列；中断只影响当前轮次，不删除等待输入。等待输入在 daemon 重启后保留，但目前不保证恢复 Slack 回复目标。失败只在人明确要求时重试。Slack ACK 只表示通信接收，不表示业务接受。
-- 每条询问（问题、审批或操作请求）都会在配置的频道中单独发布为新消息，不放入已有消息列。通过按钮选择允许或拒绝、审批范围以及回答选项。如果选择比“仅本次”更广的审批范围，按钮会打开对话框；编辑建议的权限语句并确认后，该语句会追加到权限 Markdown 中。
+- 处理期间仍可持久化接受发言、批准和询问回答。人工输入优先于其他事件，每条队列按接受顺序执行。accepted 表示已保存，不表示处理完成。界面读取和中断不进入模型队列；中断只影响当前轮次，不删除等待输入。等待输入在 daemon 重启后保留，但目前不保证恢复 Slack 回复目标。失败或中断后，manager 检查当前状态和副作用，自行判断恢复、修正后重试或提交新工作。Slack ACK 只表示通信接收，不表示业务接受。
+- 问题和操作请求会发送到配置的频道。使用按钮选择选项或报告结果，使用线程回复填写自由文本。不再提供权限范围选择或权限文本保存。
 - 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
 - 询问变化通过监测事件送达，Slack 不定期扫描所有询问。连接前的询问可在 TUI 中按 `Ctrl+R` 回答。如果询问关联无法读取，则拒绝该回复，不把它作为普通对话发送。
 - “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
@@ -591,18 +591,7 @@ director 将一轮中新产生的通知汇总为该频道中的一条消息，�
 
 ## manager 敏感文件设置
 
-通过全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中的 `manager.sensitive_paths`，可以添加即使位于负责仓库内也需要交给 manager 权限判断 agent 的文件和目录。
-
-```yaml
-manager:
-  sensitive_paths:
-    - private
-    - config/credentials.json
-```
-
-默认项为 `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。两个配置列表都会追加到默认项，省略或设置为空列表也不能删除默认项。单独的名称适用于任意目录深度。包含目录部分的相对路径以各个负责仓库为基准，也支持绝对路径和 `~/` 路径。目录项包含其所有下级文件和目录。名称模式支持在开头或末尾使用单个 `*`；此设置不用于定义允许规则。
-
-Claude 的 `Read`、`Glob` 和 `Grep` 只有在路径和符号链接解析后的目标全部是负责范围内可读取的普通目标时，才能跳过权限判断 agent。搜索候选通过路径和元数据检查，不会读取敏感文件的内容。搜索模式支持使用 `*`、`**` 和 `?` 的简单形式；排除、花括号展开、字符类、转义或无法确定范围的指定都会交给权限判断 agent。隐藏路径、遍历的目录和符号链接会被保守地检查，因此即使搜索条件较严格，也仍可能需要审查。Codex 的内置工具仍然需要审查。
+`manager.sensitive_paths` 和 `provider.targets.internal_agents.manager-permission-judge` 已弃用并被忽略。保留旧配置不会导致启动失败，但这些设置不再保护文件或决定工具执行权限。manager 按照 facets 处理人的指令和秘密值，不再读取权限 Markdown。
 
 ## API Key 配置
 
@@ -806,8 +795,6 @@ provider:
         profile: router
       review-completion-judge:
         profile: router
-      manager-permission-judge:
-        profile: router
 
   auto_routing:
     strategy: balanced
@@ -962,7 +949,7 @@ defaults
   < steps
 ```
 
-内部 `selector`、`assistant`、`loop-judge`、`review-completion-judge` 和 `manager-permission-judge` 使用单独的解析顺序。`manager-permission-judge` 在 manager 使用 claude（claude-sdk）或 codex provider 的对话中，负责工具执行前的权限审查。可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定其 provider 和 model，使用 `profile` 或 `ladder`，不能使用 `pool`。所有 seat 都是可选的；未分配时使用普通默认解析。不过，`manager-permission-judge` 未分配时使用与 manager 相同的 provider、model 和 provider options：
+内部 `selector`、`assistant`、`loop-judge` 和 `review-completion-judge` 使用单独的解析顺序。`selector` 选择动态工作，`assistant` 支持交互会话，`loop-judge` 判断 loop monitor，`review-completion-judge` 判断已启用的 reviewer 是否需要再次审查。各 seat 都可省略，未指定时使用普通默认解析。已废弃的 `manager-permission-judge` 会被忽略。
 
 ```text
 defaults

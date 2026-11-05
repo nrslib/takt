@@ -1,14 +1,8 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { warn } from '../../../shared/ui/LogManager.js';
-import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../../codex/tool-permission-hook-protocol.js';
 import { buildMcpServerSetIdentity } from '../../config/runtime-provider/mcp-schema.js';
 import { getMcpHeaderEnvRefs, type McpHeaderPart } from '../../config/runtime-provider/mcp-header-env.js';
 import type { McpServerConfig, ResolvedMcpServers } from './types.js';
-
-const codexToolPermissionEnvNames = new Set([
-  CODEX_TOOL_PERMISSION_ENDPOINT_ENV,
-  CODEX_TOOL_PERMISSION_TOKEN_ENV,
-]);
 
 export function getCodexHeaderEnvRef(parts: McpHeaderPart[]): { name: string; bearer: boolean } | undefined {
   const variables = parts.filter((part) => typeof part !== 'string');
@@ -42,9 +36,6 @@ function unsupportedReason(provider: ProviderType, server: McpServerConfig): str
     const ref = getCodexHeaderEnvRef(parts);
     if (ref === undefined || (ref.bearer && header.toLowerCase() !== 'authorization')) {
       return 'header environment reference cannot be represented by Codex';
-    }
-    if (codexToolPermissionEnvNames.has(ref.name)) {
-      return 'tool permission hook environment names are reserved';
     }
   }
   return undefined;

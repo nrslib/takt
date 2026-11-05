@@ -19,8 +19,8 @@ function fixture() {
     ctx: { provider: makeProvider({ setup }), providerType: 'mock', model: 'model', lang: 'ja' } },
   { type: 'http', url: 'http://127.0.0.1:12345/', headers: { authorization: 'test-only' } });
   const invalidateSession = vi.fn(async () => {});
-  const input: ManagerTurnInput = { prompt: 'message', instruction: 'message', sessionId: 'prior-session',
-    assignment: undefined, configDirectory: '/config', abortSignal: new AbortController().signal,
+  const input: ManagerTurnInput = { prompt: 'message', sessionId: 'prior-session',
+    assignment: undefined, abortSignal: new AbortController().signal,
     recovery: { context: '', invalidateSession } };
   return { call, dispose, prepare, setup, executor, input, invalidateSession };
 }

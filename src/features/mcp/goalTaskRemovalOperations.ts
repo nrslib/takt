@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { GoalStore } from '../../infra/goals/store.js';
+import { GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { isGoalCommitIncluded, resolveGoalBranchSha } from '../../infra/goals/git-command.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -18,23 +19,26 @@ export function removeTaktGoalTask(input: RemoveGoalTaskInput, deps: McpOperatio
     if (target === undefined) return result;
     if (target.goalId !== goal.id) throw new Error('Task does not belong to this goal');
     if (target.status === 'running') throw new Error('Cannot remove a running task');
-    if (target.status === 'completed') {
+    const hasResult = target.status === 'completed' || target.status === 'pr_failed'
+      || target.completion?.sha !== undefined || target.completion?.workflowResult === 'completed';
+    if (hasResult && input.discardUnmerged !== true) {
       const sha = target.completion?.sha;
       const goalSha = await resolveGoalBranchSha(input.cwd, goal.branch, signal);
       if (sha === undefined || !await isGoalCommitIncluded(input.cwd, sha, goalSha, signal)) {
-        throw new Error('Completed task has not been merged into the goal');
+        throw new Error('Completed task has not been merged into the goal; use discardUnmerged to discard it explicitly');
       }
     }
-    if (target.status === 'pending' && (goal.status !== 'created' || goal.executionStatus !== 'active')) {
-      throw new Error('Pending tasks can only be cancelled for an active goal');
+    if (target.status === 'pending' && goal.status !== 'created') {
+      throw new Error('Pending tasks can only be cancelled for a created goal');
     }
+    const workLog = GoalWorkLogInputSchema.parse({
+      summary: `Removed ${input.taskName}${input.discardUnmerged === true ? ' (discardUnmerged: true)' : ''}: ${input.reason}`,
+    });
     signal.throwIfAborted();
     const task = runner.listAllTaskItems().find((item) => item.name === input.taskName);
     if (task === undefined || task.kind !== target.status) throw new Error('Task is not available for removal');
     if (!deleteTaskResources(task, { quiet: true, requireCleanupSuccess: true })) throw new Error('Task branch cleanup failed');
-    await store.update(goal.id, (current) => appendGoalWorkLog(current, {
-      summary: `Removed ${input.taskName}: ${input.reason}`,
-    }));
+    await store.update(goal.id, (current) => appendGoalWorkLog(current, workLog));
     return result;
   }, 'Goal task removal failed', 'remove');
 }

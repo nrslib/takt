@@ -17,7 +17,6 @@ import { GoalStore } from '../infra/goals/store.js';
 import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
@@ -555,8 +554,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
 it('removes a withdrawn standalone permission inquiry from the open menu on the same screen', async () => {
   const fixture = managerDaemonFixture('en');
   const owner = { kind: 'repository' as const, repositoryDirectory: fixture.repository };
-  const inquiry = await saveManagerToolPermissionInquiry({ configDirectory: fixture.directory, owner,
-    request: { toolName: 'Bash', toolInput: { command: 'git status' }, cwd: fixture.repository }, reason: 'Allow inspection of this repository?' });
+  const inquiry = await new StandaloneInquiryStore(fixture.directory, owner).create({ body: 'Allow inspection of this repository?' });
   fixture.release();
   try {
     const tui = await fixture.start(fixture.repository, undefined);

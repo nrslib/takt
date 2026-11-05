@@ -18,8 +18,6 @@ function mockPort(receive: ReturnType<typeof vi.fn>) {
     receive: receive as SlackPort['receive'],
     isInquiryThread: vi.fn<SlackPort['isInquiryThread']>().mockResolvedValue(false),
     receiveAction: vi.fn<SlackPort['receiveAction']>(),
-    modalEndpoint: vi.fn<SlackPort['modalEndpoint']>(),
-    receiveModal: vi.fn<SlackPort['receiveModal']>(),
   };
 }
 function message(overrides: Record<string, unknown> = {}): SlackEvent {
@@ -81,27 +79,13 @@ it('dispatches an authorized button with its exact parent and action while rejec
     actions: [{ type: 'button', action_id: 'action', value: 'choice' }] };
   for (const userId of ['U0BBB', 'U0AAA']) await dispatchSlackEvent({ type: 'interactive', body: { ...body, user: { id: userId } } }, ports);
   expect(port.receiveAction).toHaveBeenCalledExactlyOnceWith({ teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: '1700000000.000001' },
-    'action', 'choice', 'trigger', expect.any(String));
-  expect(port.receive).not.toHaveBeenCalled();
-});
-
-it('restores the channel of a modal only from a known originating endpoint and applies the allowlist', async () => {
-  const port = mockPort(vi.fn());
-  const endpoint = { teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: '1700000000.000001' };
-  port.modalEndpoint.mockImplementation((metadata: string) => metadata === 'known' ? endpoint : undefined);
-  const ports = new Map([['C0123', { allowedUserIds: ['U0AAA'], port }]]);
-  for (const [userId, metadata] of [['U0BBB', 'known'], ['U0AAA', 'unknown'], ['U0AAA', 'known']]) {
-    await dispatchSlackEvent({ type: 'interactive', body: { type: 'view_submission', team: { id: 'T1' }, user: { id: userId },
-      view: { callback_id: 'takt_inquiry_permission', private_metadata: metadata,
-        state: { values: { permission: { sentence: { type: 'plain_text_input', value: 'Allow npm test.' } } } } } } }, ports);
-  }
-  expect(port.receiveModal).toHaveBeenCalledExactlyOnceWith(endpoint, 'known', 'Allow npm test.', expect.any(String));
+    'action', 'choice', expect.any(String));
   expect(port.receive).not.toHaveBeenCalled();
 });
 
 function directorFixture() {
   const client = { start: vi.fn<SlackClient['start']>(), postMessage: vi.fn<SlackClient['postMessage']>(),
-    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(), openModal: vi.fn<SlackClient['openModal']>(),
+    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
     stopAccepting: vi.fn(), close: vi.fn<SlackClient['close']>() };
   client.start.mockResolvedValue(undefined);
   client.postMessage.mockResolvedValue({ kind: 'delivered', parentTs: 'posted' });
@@ -272,28 +256,7 @@ it.each(['U0AAA', 'U0BBB'])('uses the manager allowlist for shared-channel butto
       actions: [{ type: 'button', action_id: 'action', value: 'choice' }],
     } });
     expect(managerPort.receiveAction).toHaveBeenCalledExactlyOnceWith(
-      { teamId: 'T1', channelId: 'C0DIR', userId: allowedUser, parentTs: '1700000000.000001' }, 'action', 'choice', 'trigger', expect.any(String));
-    expect(input.open).not.toHaveBeenCalled();
-    expect(managerPort.receive).not.toHaveBeenCalled();
-  } finally { await ports.close(); }
-});
-
-it.each(['view_submission', 'view_closed'])('restores shared-channel %s with manager authorization and origin checks', async (type) => {
-  const { client, options } = directorFixture();
-  doubles.config.mockReturnValue({ manager: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0BBB', 'U0CCC'] } } });
-  const managerPort = { ...mockPort(vi.fn()), stopAccepting: vi.fn(), close: vi.fn() };
-  const endpoint = { teamId: 'T1', channelId: 'C0DIR', userId: 'U0BBB', parentTs: '1700000000.000001' };
-  managerPort.modalEndpoint.mockImplementation((metadata: string) => metadata === 'known' ? endpoint : undefined);
-  doubles.port.mockReturnValue(managerPort);
-  const config = doubles.config();
-  const repositories = config.manager?.slack === undefined ? [] : options.repositories.map((repository) => ({ ...repository, ...config.manager.slack }));
-  const ports = await createDaemonSlackPorts({ ...options, repositories });
-  try {
-    for (const userId of ['U0AAA', 'U0CCC', 'U0BBB']) await client.start.mock.calls[0]![0]({ type: 'interactive', body: {
-      type, team: { id: 'T1' }, user: { id: userId }, view: { callback_id: 'takt_inquiry_permission', private_metadata: 'known',
-        state: { values: { permission: { sentence: { type: 'plain_text_input', value: 'Allow npm test.' } } } } },
-    } });
-    expect(managerPort.receiveModal).toHaveBeenCalledExactlyOnceWith(endpoint, 'known', type === 'view_submission' ? 'Allow npm test.' : undefined, expect.any(String));
+      { teamId: 'T1', channelId: 'C0DIR', userId: allowedUser, parentTs: '1700000000.000001' }, 'action', 'choice', expect.any(String));
     expect(input.open).not.toHaveBeenCalled();
     expect(managerPort.receive).not.toHaveBeenCalled();
   } finally { await ports.close(); }

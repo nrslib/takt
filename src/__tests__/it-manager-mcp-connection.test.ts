@@ -68,7 +68,7 @@ describe('manager MCP connection confirmation', () => {
 
   it.each(operations)('executes $name over the owned HTTP server using the provider configuration', async ({ name, executionStatus, expected }) => {
     await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
-    const connection = await connectTestManagerMcp(cwd, undefined, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, undefined, undefined);
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const reader = new Client({ name: 'provider-manager-test', version: '1' });
@@ -133,7 +133,7 @@ describe('manager MCP connection confirmation', () => {
     initializeGitFixture(other, []);
     const otherStore = new GoalStore(other);
     await otherStore.create(goalRecord());
-    const connection = await connectTestManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined);
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const readers: { client: Client; transport: StreamableHTTPClientTransport }[] = [];
@@ -173,7 +173,7 @@ describe('manager MCP connection confirmation', () => {
 
   it('restores the assignment changed in the provider turn into the next turn HTTP configuration', async () => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
-    const connection = await connectTestManagerMcp(cwd, assignment, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, assignment, undefined);
     const other = join(cwd, '担当B');
     mkdirSync(other); initializeGitFixture(other, []);
     const observed: ManagerAssignmentIdentity[] = [];
@@ -201,15 +201,13 @@ describe('manager MCP connection confirmation', () => {
     const executor = createManagerTurnExecutor(cwd, {
       ctx: { provider, providerType: 'claude', lang: 'ja', model: undefined, mcpServers: connection.servers },
       strategy: { systemPrompt: 'manager fixture' },
-      permissionJudge: { resolution: { provider: 'mock', model: undefined, providerOptions: {} }, language: 'ja',
-        systemPrompt: 'judge fixture', managerPersona: 'manager fixture', managerPolicy: 'policy fixture' },
     });
     try {
       const input = { prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
         configDirectory: getGlobalConfigDir(), abortSignal: new AbortController().signal };
       const first = await executor.execute(input);
       expect(first.message).toBe('担当を更新しました');
-      expect(await executor.execute({ ...input, assignment: first.assignment, prompt: '担当を確認', instruction: '担当を確認' }))
+      expect(await executor.execute({ ...input, assignment: first.assignment, prompt: '担当を確認' }))
         .toMatchObject({ message: '担当を更新しました' });
       const workspace = (await readWorkspaceRegistry(getGlobalConfigDir()))[0]!;
       expect(observed).toEqual([assignment, { kind: 'workspace', workspaceId: workspace.id }]);

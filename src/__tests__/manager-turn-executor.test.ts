@@ -13,9 +13,8 @@ function fixture() {
   const executor = createManagerTurnExecutor('/repository', { ctx: { providerType: 'mock', lang: 'en', model: undefined,
     provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
   const invalidateSession = vi.fn(async () => {});
-  const input: ManagerTurnInput = { prompt: 'user text', instruction: 'user text', sessionId: 'prior-session',
-    abortSignal: new AbortController().signal, assignment: { kind: 'repository', repositoryDirectory: '/repository' },
-    configDirectory: '/config', recovery: { context: '{"pending":{"revision":4}}', invalidateSession } };
+  const input: ManagerTurnInput = { prompt: 'user text', sessionId: 'prior-session',
+    abortSignal: new AbortController().signal, assignment: { kind: 'repository', repositoryDirectory: '/repository' }, recovery: { context: '{"pending":{"revision":4}}', invalidateSession } };
   return { call, executor, input, invalidateSession };
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),

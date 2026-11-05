@@ -6,7 +6,7 @@ import {
   type LegacyProviderEnvironmentInput,
 } from '../infra/config/runtime-provider/environment.js';
 import { collectLegacyProviderSignals } from '../infra/config/runtime-provider/legacy-signals.js';
-import type { RuntimeProviderSection } from '../infra/config/runtime-provider/schema.js';
+import { RuntimeProviderFileSchema, type RuntimeProviderSection } from '../infra/config/runtime-provider/schema.js';
 import type { RuntimeProviderResolutionContext } from '../infra/config/runtime-provider/resolution-context.js';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo } from '../core/workflow/auto-routing/resolver.js';
@@ -725,21 +725,6 @@ describe('compileRuntimeProviderEnvironment fail-fast on structural inconsistenc
 });
 
 describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
-  it('compiles the manager-permission-judge seat from its assigned profile', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'base' },
-      profiles: {
-        base: { provider: 'codex', model: 'base-model' },
-        judge: { provider: 'claude', model: 'judge-model' },
-      },
-      targets: { internal_agents: { 'manager-permission-judge': { profile: 'judge' } } },
-    });
-
-    expect(env.internalAgents?.managerPermissionJudge).toEqual({
-      provider: 'claude', model: 'judge-model',
-    });
-  });
-
   it('compiles the loop-judge seat', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },
@@ -761,42 +746,6 @@ describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
     expect(env.internalAgents).not.toHaveProperty('managerPermissionJudge');
   });
 
-  it('rejects a pool assigned to the manager-permission-judge seat', () => {
-    const section: RuntimeProviderSection = {
-      defaults: { profile: 'base' },
-      profiles: {
-        base: { provider: 'codex', model: 'base-model' },
-        router: { provider: 'codex', model: 'router-model' },
-      },
-      targets: { internal_agents: { 'manager-permission-judge': { pool: 'judge-pool' } } },
-      auto_routing: {
-        router_profile: 'router',
-        pools: {
-          'judge-pool': { candidates: [{ profile: 'base', tier: 'low' }], fallback_profile: 'base' },
-        },
-      },
-    };
-
-    expect(() => compileRuntimeProviderEnvironment(section))
-      .toThrow(/internal_agents\.manager-permission-judge.*cannot use a `pool`/);
-  });
-
-  it('compiles the first ladder stage for the manager-permission-judge seat', () => {
-    const env = compileRuntimeProviderEnvironment({
-      defaults: { profile: 'base' },
-      profiles: {
-        base: { provider: 'codex', model: 'base-model' },
-        first: { provider: 'claude', model: 'first-model' },
-        second: { provider: 'codex', model: 'second-model' },
-      },
-      targets: { internal_agents: { 'manager-permission-judge': { ladder: ['first', 'second'] } } },
-    });
-
-    expect(env.internalAgents?.managerPermissionJudge).toEqual({
-      provider: 'claude', model: 'first-model',
-    });
-  });
-
   it('leaves every seat unset when internal_agents is omitted', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },
@@ -815,7 +764,7 @@ describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
 
     expect(compile).toThrow(/internal_agents.*supports only/);
     expect(compile).toThrow(`got "${key}"`);
-    for (const allowed of ['selector', 'assistant', 'loop-judge', 'review-completion-judge', 'manager-permission-judge']) {
+    for (const allowed of ['selector', 'assistant', 'loop-judge', 'review-completion-judge']) {
       expect(compile).toThrow(`\`${allowed}\``);
     }
   });
@@ -1017,4 +966,20 @@ describe('collectLegacyProviderSignals', () => {
     // No takt_providers at all → no signal.
     expect(collectLegacyProviderSignals(base, 'default')).toEqual([]);
   });
+});
+
+it.each([
+  { profile: 'removed-profile' },
+  { ladder: ['removed-first', 'removed-second'] },
+  { pool: 'removed-pool' },
+])('ignores the retired manager-permission-judge assignment %j', (assignment) => {
+  const file = RuntimeProviderFileSchema.parse({ version: 1, provider: {
+    defaults: { profile: 'base' },
+    profiles: { base: { provider: 'codex', model: 'manager-model' } },
+    targets: { internal_agents: { 'manager-permission-judge': assignment } },
+  } });
+  const env = compileRuntimeProviderEnvironment(file.provider!);
+  expect(env.provider).toBe('codex');
+  expect(env.model).toBe('manager-model');
+  expect(env.internalAgents).toBeUndefined();
 });

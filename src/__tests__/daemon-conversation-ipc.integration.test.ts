@@ -22,7 +22,6 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
 import type { Goal } from '../infra/goals/schema.js';
-import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as goalService from '../infra/goals/service.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
@@ -413,8 +412,7 @@ it.each([7, 9])('transfers all %i large options created through the real goal-qu
 
 it('transfers the exact normal standalone approval and removes that inquiry on refresh after withdrawal', async () => {
   const owner = { kind: 'repository' as const, repositoryDirectory: repository };
-  const question = await saveManagerToolPermissionInquiry({ configDirectory: directory, owner,
-    request: { cwd: repository, toolName: 'Bash', toolInput: { command: 'git status' } }, reason: 'Confirm this operation' });
+  const question = await new StandaloneInquiryStore(directory, owner).create({ body: 'Confirm this operation' });
   const value = await authenticated(); const first = await opened(value);
   const before = (await value.items(first.read.transferId)) as Array<{ kind: string; inquiry: unknown }>;
   expect(before.filter(({ kind }) => kind === 'inquiry').map(({ inquiry }) => inquiry)).toEqual([{ target: { goalId: null, owner }, question }]);
@@ -443,7 +441,7 @@ it('queues a simultaneous message and completes both operations after both clien
   expect(input!.abortSignal.aborted).toBe(false); expect(fixture.activeOperationCount).toBe(1);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['accepted', 'queued']);
+  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
   expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
   const saved = (await new ConversationStateStore(directory).read(selected.conversationId))?.record;
@@ -510,7 +508,7 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
     expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
     release!(); await fixture.settled();
     expect(fixture.activeOperationCount).toBe(0);
-    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(requestIds);
+    expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(requestIds);
     expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })).sort((a, b) => requestIds.indexOf(a.id) - requestIds.indexOf(b.id)))
       .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
@@ -536,7 +534,7 @@ it('accepts a complete message spanning input batches and queues concurrent mess
   expect(execute.mock.calls[0]![0].prompt).toBe(text);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual([text, 'second', 'third']);
+  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
 

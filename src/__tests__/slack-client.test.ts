@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
 
-const sdk = vi.hoisted(() => ({ start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), open: vi.fn(), on: vi.fn(), socket: vi.fn(), web: vi.fn(), error: vi.fn() }));
+const sdk = vi.hoisted(() => ({ start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), on: vi.fn(), socket: vi.fn(), web: vi.fn(), error: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
   constructor(options: unknown) { sdk.socket(options); }
   on = sdk.on;
@@ -11,7 +11,6 @@ vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeC
 vi.mock('@slack/web-api', () => ({ WebClient: class {
   constructor(token: string, options: unknown) { sdk.web(token, options); }
   chat = { postMessage: sdk.post };
-  views = { open: sdk.open };
 } }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: sdk.error }) }));
 beforeEach(() => { vi.resetAllMocks(); sdk.start.mockResolvedValue({ ok: true }); sdk.disconnect.mockResolvedValue(undefined); sdk.post.mockResolvedValue({ ok: true }); });
@@ -34,23 +33,12 @@ it.each([{ ok: true }, { ok: false }, { ok: true, ts: 123 }])('does not claim a 
   await client.close();
 });
 
-it('opens the supplied modal using the trigger from the interaction', async () => {
-  const client = createSlackClient({ appToken: 'app', botToken: 'bot' });
-  sdk.open.mockResolvedValueOnce({ ok: true, view: { id: 'V1' } });
-  const view = { type: 'modal' as const, title: { type: 'plain_text' as const, text: 'Permission' }, blocks: [] };
-  expect(await client.openModal('trigger', view)).toEqual({ kind: 'delivered' });
-  expect(sdk.open).toHaveBeenCalledExactlyOnceWith({ trigger_id: 'trigger', view });
-  await client.close();
-});
-
-it.each(['post', 'modal'] as const)('contains credentials in a failed %s operation without retrying', async (operation) => {
+it('contains credentials in a failed post without retrying', async () => {
   const client = createSlackClient({ appToken: 'xapp-test-1', botToken: 'xoxb-test-2' });
   sdk.post.mockRejectedValueOnce(new Error('xapp-test-1 xoxb-test-2'));
-  sdk.open.mockRejectedValueOnce(new Error('xapp-test-1 xoxb-test-2'));
-  const result = operation === 'post' ? await client.postMessage('C0123', 'Question', [])
-    : await client.openModal('trigger', { type: 'modal', title: { type: 'plain_text', text: 'Permission' }, blocks: [] });
+  const result = await client.postMessage('C0123', 'Question', []);
   expect(result.kind).toBe('unavailable');
-  expect(operation === 'post' ? sdk.post : sdk.open).toHaveBeenCalledOnce();
+  expect(sdk.post).toHaveBeenCalledOnce();
   for (const value of [result, ...sdk.error.mock.calls]) {
     expect(JSON.stringify(value)).not.toContain('xapp-test-1');
     expect(JSON.stringify(value)).not.toContain('xoxb-test-2');

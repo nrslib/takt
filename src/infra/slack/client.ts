@@ -1,6 +1,6 @@
 import { SocketModeClient, LogLevel, type Logger } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
-import type { KnownBlock, ModalView } from '@slack/types';
+import type { KnownBlock } from '@slack/types';
 import { reportDaemonError } from '../daemon/diagnostics.js';
 
 export interface SlackEvent { type: string; body: unknown }
@@ -11,7 +11,6 @@ export interface SlackClient {
   start(receive: (event: SlackEvent) => Promise<void>): Promise<void>;
   postThreadMessage(thread: SlackThread, text: string, blocks?: KnownBlock[]): Promise<SlackDeliveryResult>;
   postMessage(channelId: string, text: string, blocks: KnownBlock[]): Promise<SlackPostResult>;
-  openModal(triggerId: string, view: ModalView): Promise<SlackDeliveryResult>;
   stopAccepting(): void;
   close(): Promise<void>;
 }
@@ -72,16 +71,6 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
       } catch {
         reportDaemonError('Cannot post Slack inquiry');
         return { kind: 'unavailable', reason: 'Slack inquiry unavailable' };
-      }
-    },
-    async openModal(triggerId, view) {
-      try {
-        const response = await bounded(web.views.open({ trigger_id: triggerId, view }));
-        if (!response.ok) throw new Error('Slack modal unavailable');
-        return { kind: 'delivered' };
-      } catch {
-        reportDaemonError('Cannot open Slack modal');
-        return { kind: 'unavailable', reason: 'Slack modal unavailable' };
       }
     },
     stopAccepting() { accepting = false; },

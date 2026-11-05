@@ -296,7 +296,7 @@ manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮
 
 重新打开 TUI 时，不会重新显示之前的发言和回复。对话历史由 provider 的会话管理。等待中的发言正文由 TAKT 保存到开始执行为止。等待批准的目标摘要和目标记录会单独保存。
 
-daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮优先处理人工输入，每条队列按接受顺序执行。发言、批准和询问回答在处理期间仍可持久化接受；accepted 表示已保存，不表示完成。读取界面和中断不进入模型队列。中断只影响当前轮次，等待输入会保留。人工输入和事件共用一个对话与会话。失败的工作只在人明确要求时重试。
+daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮优先处理人工输入，每条队列按接受顺序执行。发言、批准和询问回答在处理期间仍可持久化接受；accepted 表示已保存，不表示完成。读取界面和中断不进入模型队列。中断只影响当前轮次，等待输入会保留。人工输入和事件共用一个对话与会话。失败或中断后，manager 检查当前状态和副作用，自行判断恢复、修正后重试或提交新工作。
 
 只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
 
@@ -333,26 +333,13 @@ daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 
 
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
 
-### manager 工具执行前的权限审查
+### manager 的判断与工作
 
-可以在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中添加敏感文件或目录。
+manager 是熟悉 TAKT、负责完成指定目标的工程师。它自行调查、实现、验证、执行 Git 操作，并在需要时委派任务。它以 `full` 权限使用普通 provider 工具及分配的 MCP 服务，保留配置的 provider options。manager 不再使用专门的权限判断 agent、读取范围审查或基于已保存批准的执行控制。
 
-```yaml
-manager:
-  sensitive_paths: [private, config/credentials.json]
-```
+Facet 方针要求：向 main 等集成目标反映变更、force push、删除远程分支或未保存成果、中止目标以及在请求范围外发布新内容时，必须有明确说明对象和作用的人工指令。指令可以直接发给 manager、由 director 转达，或作为已保存的持续指令。创建 PR、普通 push 和已配置的通知属于请求的工作。合并 PR 的指令包含删除该 PR 分支；不重复确认已给出的指令。读取秘密值需要涵盖该必要性的人工指令，秘密值不得写入回复、记录或成果。
 
-两个列表都会在默认项的基础上追加，即使其中一个列表为空也不会改变默认项。每一项指定文件名或目录名。详情请参阅 [manager 敏感文件设置](./configuration.zh-CN.md#manager-敏感文件设置)。
-
-在 `takt manager` 使用 claude（claude-sdk）或 codex provider 的对话中，AI 权限判断 agent 会在工具执行前进行审查，代替每次都向用户请求批准。判断结果为允许、拒绝并附带理由，或请求人工确认。审查默认启用，没有开关设置。
-
-使用 claude（claude-sdk）时，`Read` 只有在解析后的目标是 manager 负责的仓库内非敏感且可读取的普通文件时，才能跳过审查。`Glob` 以目录为搜索根目录，只有确认搜索候选文件、遍历的目录和符号链接都在负责范围内、不涉及敏感目标且可以安全搜索时，才能跳过审查。`Grep` 对普通文件的搜索需满足与 `Read` 相同的条件，对目录的搜索需通过与 `Glob` 相同的安全检查，才能跳过审查。负责范围为 workspace 的成员仓库；没有 workspace 时则为当前仓库。相对路径以工具实际的工作目录为基准，`~`、`..` 和符号链接会在比较前解析。范围外的目标、敏感文件，以及无法确定目标或搜索范围的操作都会交给权限判断 agent。默认敏感文件包括 `.env`、`.env.*`、SSH 私钥名称（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`），以及 `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。全局和项目的 `manager.sensitive_paths` 只能追加到这些默认项，不能删除默认项。`ToolSearch` 和 manager 自身的 TAKT MCP 工具仍然可以跳过审查。使用 Codex 时，只有 manager 自身的 TAKT MCP 工具可以跳过审查，所有内置工具都需要审查。对于这两种 provider，其他所有工具（包括未知工具和外部 MCP 工具）在没有适用的已保存批准时都需要审查。Shell 执行（包括 `Bash`）在没有适用的已保存批准时每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。使用 Codex 时，`spawn_agent` 也一律拒绝，不经过权限判断 agent 审查。
-
-拒绝理由会返回给 manager，供其在下一次回复中考虑。判定为请求人工确认时，操作也会先被拒绝，并通过 TUI 和 Slack 通知正在等待人工确认及其理由。不会挂起工具操作来等待确认。通知使用现有类型，不增加新的通知类型。
-
-判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
-
-判断的期限为30秒。超时与请求人工确认采用相同流程：保存批准询问，停止操作并等待确认，同时发送通知。异常或判断格式不符合要求时仍会拒绝操作。不会自动重试判断。
+旧设置 `manager.sensitive_paths` 和 runtime 的 `provider.targets.internal_agents.manager-permission-judge` 已弃用。保留旧配置不会导致启动失败，但这些设置被忽略且不再生效。旧权限 Markdown 和批准回答不再决定执行。历史询问记录仍可读取和撤回。
 
 ### 即时 exec 模式
 
