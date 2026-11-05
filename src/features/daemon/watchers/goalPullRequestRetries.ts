@@ -17,7 +17,7 @@ export interface GoalPullRequestRetryTarget extends WatchTarget {
 export class GoalPullRequestRetries {
   constructor(
     private readonly source: {
-      pullRequestRetry(targetId: string): Promise<GoalPullRequestRetryTarget | undefined>;
+      pullRequestRetry(target: GoalPullRequestRetryTarget): Promise<GoalPullRequestRetryTarget | undefined>;
       notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean>;
     },
     private readonly commands: CommandPort,
@@ -27,7 +27,7 @@ export class GoalPullRequestRetries {
   ) {}
 
   private async current(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<GoalPullRequestRetryTarget | undefined> {
-    const current = await this.source.pullRequestRetry(target.targetId);
+    const current = await this.source.pullRequestRetry(target);
     if (current?.generation !== target.generation) return undefined;
     const head = await this.commands.run({ executable: 'git',
       args: ['rev-parse', '--verify', `${toLocalBranchRef(current.headBranch)}^{commit}`],
@@ -37,7 +37,7 @@ export class GoalPullRequestRetries {
     }, options);
     options.signal.throwIfAborted();
     if (head.code !== 0 || head.signal !== null || head.truncated) throw new Error('Goal PR retry cannot read the branch tip');
-    const latest = await this.source.pullRequestRetry(target.targetId);
+    const latest = await this.source.pullRequestRetry(target);
     return latest?.generation === current.generation && Buffer.from(head.stdout).toString('utf8').trim() === current.expectedSha
       ? latest : undefined;
   }

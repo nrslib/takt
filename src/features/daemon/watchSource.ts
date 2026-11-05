@@ -20,7 +20,7 @@ import { globalDaemonConfiguration, readDaemonConfiguration } from './configurat
 import type { IoOptions } from '../../core/daemon/io.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import type { ManagerPatrolTarget } from './patrols.js';
-import { WatchGoalReader } from './watchers/goalReader.js';
+import { WatchGoalReader, type WatchGoal } from './watchers/goalReader.js';
 import type { RunProgress } from './watchers/runProgress.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -28,6 +28,15 @@ const safeName = (name: string): string => {
   if (!/^[a-zA-Z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error('Invalid run slug');
   return name;
 };
+
+function pullRequestRetryTarget(goal: WatchGoal, project: { repositoryDirectory: string; conversationId: string }): GoalPullRequestRetryTarget | undefined {
+  const retry = goal.pullRequestRetry;
+  if (retry === undefined) return undefined;
+  const { failure } = retry;
+  return { targetId: digest([project.repositoryDirectory, goal.id]), generation: retry.generation,
+    conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory, goalId: goal.id,
+    expectedSha: failure.goalSha, failureId: failure.id, failedAt: failure.recordedAt, error: failure.error, headBranch: goal.branch };
+}
 
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
@@ -152,21 +161,22 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for await (const project of this.projects()) {
       try {
         for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError, this.goalReader)) {
-          const retry = goal.pullRequestRetry;
-          if (retry === undefined) continue;
-          const { failure } = retry;
-          targets.push({ targetId: digest([project.repositoryDirectory, goal.id]),
-            generation: retry.generation,
-            conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory, goalId: goal.id,
-            expectedSha: failure.goalSha, failureId: failure.id, failedAt: failure.recordedAt, error: failure.error, headBranch: goal.branch });
+          const target = pullRequestRetryTarget(goal, project);
+          if (target !== undefined) targets.push(target);
         }
       } catch (error) { this.onError(error); }
     }
     return targets;
   }
 
-  async pullRequestRetry(targetId: string): Promise<GoalPullRequestRetryTarget | undefined> {
-    return (await this.pullRequestRetries()).find((target) => target.targetId === targetId);
+  async pullRequestRetry(target: GoalPullRequestRetryTarget): Promise<GoalPullRequestRetryTarget | undefined> {
+    for await (const project of this.projects()) {
+      if (project.repositoryDirectory !== target.repositoryDirectory) continue;
+      try {
+        return pullRequestRetryTarget(await readWatchGoal(project.repositoryDirectory, target.goalId, this.goalReader), project);
+      } catch (error) { this.onError(error); }
+    }
+    return undefined;
   }
 
   async notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean> {
@@ -174,7 +184,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     const global = await globalDaemonConfiguration(directory);
     const config = await readDaemonConfiguration(join(target.repositoryDirectory, '.takt', 'config.yaml'));
     if ((config.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked) === false) return true;
-    return new DaemonPersistedFiles(directory).savePullRequestRetryLimit(target.repositoryDirectory, target.goalId,
+    return this.goalReader.savePullRequestRetryLimit(target.repositoryDirectory, target.goalId,
       target.failureId, target.expectedSha, config.language ?? global.language ?? 'en', options);
   }
 

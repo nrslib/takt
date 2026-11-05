@@ -5,9 +5,6 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
 import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema, type Goal } from '../goals/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
-import { getLabel } from '../../shared/i18n/index.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
-import { goalPullRequestFailure } from '../goals/pull-request-failure.js';
 import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
 import { FileAsyncLock } from './lock.js';
@@ -42,22 +39,6 @@ export class DaemonPersistedFiles {
       const notification = { ...managerTurnFailureNotification(goalId, message, language), id: operationId, recordedAt: new Date().toISOString() };
       return { ...goal, notifications: [...(goal.notifications ?? []), notification] };
     }, { signal: new AbortController().signal, timeoutMs: 5000 });
-  }
-
-  async savePullRequestRetryLimit(repositoryDirectory: string, goalId: string, failureId: string, expectedSha: string,
-    language: Language, options: IoOptions): Promise<boolean> {
-    // A failure keeps the same notification identity even if saving the watch record is interrupted.
-    const hash = createHash('sha256').update(JSON.stringify(['goal-pr-retry-limit', repositoryDirectory, goalId, failureId])).digest('hex');
-    const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-    const saved = await this.updateGoal(repositoryDirectory, goalId, (goal) => {
-      const failure = goalPullRequestFailure(goal);
-      if (failure?.id !== failureId || failure.goalSha !== expectedSha || goal.notifications?.some((notice) => notice.id === id)) return goal;
-      return { ...goal, notifications: [...(goal.notifications ?? []), {
-        id, recordedAt: new Date().toISOString(), kind: 'blocked', severity: 'error',
-        body: getLabel('manager.goalPr.retryLimitReached', language, { reason: sanitizeSensitiveText(failure.error).replace(/\s+/gu, ' ').trim() }),
-      }] };
-    }, options);
-    return saved.notifications?.some((notice) => notice.id === id) === true;
   }
 
   private async updateGoal(repositoryDirectory: string, goalId: string, transform: (goal: Goal) => Goal, options: IoOptions): Promise<Goal> {

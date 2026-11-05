@@ -16,7 +16,7 @@ export interface DaemonWatchSource {
   readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined>;
   pullRequests(): Promise<readonly PullRequestWatchTarget[]>;
   pullRequestRetries(): Promise<readonly GoalPullRequestRetryTarget[]>;
-  pullRequestRetry(targetId: string): Promise<GoalPullRequestRetryTarget | undefined>;
+  pullRequestRetry(target: GoalPullRequestRetryTarget): Promise<GoalPullRequestRetryTarget | undefined>;
   notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean>;
   inquiries(): Promise<readonly InquiryWatchTarget[]>;
   goals(): Promise<readonly GoalWatchTarget[]>;

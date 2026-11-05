@@ -14,6 +14,7 @@ import { DaemonRouting } from '../features/daemon/routing.js';
 import { createWatchSource } from './helpers/daemon-watch-source.js';
 import { watchKey, WatchObservations } from '../features/daemon/watchers/observations.js';
 import { GoalPullRequestRetries } from '../features/daemon/watchers/goalPullRequestRetries.js';
+import { WatchGoalReader } from '../features/daemon/watchers/goalReader.js';
 import { GOAL_PR_RETRY_DELAYS } from '../infra/goals/pull-request-failure.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { EventInput } from '../core/daemon/events.js';
@@ -57,7 +58,7 @@ it('finds legacy PR failures, keeps their generation stable, and excludes paused
   await save(goal);
   const [target] = await source.pullRequestRetries();
   expect(target).toMatchObject({ expectedSha: sha, failureId: failure.id, error: failure.summary });
-  expect(await source.pullRequestRetry(target!.targetId)).toEqual(target);
+  expect(await source.pullRequestRetry(target!)).toEqual(target);
   await save({ ...goal, pullRequestFailure: { id: failure.id, recordedAt: failure.recordedAt, goalSha: sha, error: 'Goal PR creation failed: unavailable' } });
   expect((await source.pullRequestRetries())[0]?.generation).toBe(target!.generation);
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.parse(failure.recordedAt) + 60_000);
@@ -73,7 +74,7 @@ it('finds legacy PR failures, keeps their generation stable, and excludes paused
   ]) {
     await save(changed);
     expect(await source.pullRequestRetries()).toEqual([]);
-    expect(await source.pullRequestRetry(target!.targetId)).toBeUndefined();
+    expect(await source.pullRequestRetry(target!)).toBeUndefined();
     await retries.observe(target!, { signal: new AbortController().signal, timeoutMs: 60_000 });
   }
   expect(accept).not.toHaveBeenCalled();
@@ -306,8 +307,8 @@ it('leaves the limit notification pending when the goal pauses before notificati
     await h.restart().observe(h.target, h.options);
     await h.daemon.settled();
   }
-  const notify = DaemonPersistedFiles.prototype.savePullRequestRetryLimit;
-  vi.spyOn(DaemonPersistedFiles.prototype, 'savePullRequestRetryLimit').mockImplementationOnce(async function (this: DaemonPersistedFiles, ...args) {
+  const notify = WatchGoalReader.prototype.savePullRequestRetryLimit;
+  vi.spyOn(WatchGoalReader.prototype, 'savePullRequestRetryLimit').mockImplementationOnce(async function (this: WatchGoalReader, ...args) {
     await h.saveGoal({ ...(await h.readGoal())!, executionStatus: 'paused' });
     return notify.apply(this, args);
   });
