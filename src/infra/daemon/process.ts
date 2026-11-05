@@ -86,6 +86,7 @@ export async function observeProcess(owner: ProcessOwner, options: IoOptions): P
       ? { kind: 'dead' } : { kind: 'unknown', reason: 'Unrecognized process identity format' };
   } catch (error) {
     scope.signal.throwIfAborted();
+    if (hasCode(error, 'ESRCH')) return { kind: 'dead' };
     return { kind: 'unknown', reason: String(error) };
   } finally { scope.close(); }
 }

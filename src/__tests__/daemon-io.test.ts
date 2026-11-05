@@ -137,6 +137,101 @@ describe('asynchronous process identity observations', () => {
     } finally { Object.defineProperty(process, 'platform', original); }
   });
 
+  it.each([false, true])('reports a Linux stat ESRCH as dead even when PID reuse is %s', async (reused) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+        if (reused) return true;
+        throw Object.assign(new Error('missing'), { code: 'ESRCH' });
+      }).mockReturnValueOnce(true);
+      const error = Object.assign(new Error('process disappeared during read'), { code: 'ESRCH' });
+      vi.mocked(readPrivateFile).mockImplementation(async (path: string) => {
+        if (path === '/proc/sys/kernel/random/boot_id') return Buffer.from('01234567-1234-1234-1234-0123456789ab');
+        expect(path).toBe('/proc/123/stat');
+        throw error;
+      });
+      const options = { signal: new AbortController().signal, timeoutMs: 1000 };
+      const owner = { pid: 123, startTime: 'linux-start-v3:01234567-1234-1234-1234-0123456789ab:456' };
+      await expect(readProcessOwner(owner.pid, options)).rejects.toBe(error);
+      expect(await new AsyncProcess().inspect(owner, options)).toEqual({ kind: 'dead' });
+      expect(kill).toHaveBeenCalledExactlyOnceWith(owner.pid, 0);
+      expect(readPrivateFile).toHaveBeenCalledWith('/proc/123/stat', 16 * 1024);
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
+
+  it.each([false, true])('rechecks liveness when Linux stat is unavailable and PID reuse is %s', async (reused) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+        if (reused) return true;
+        throw Object.assign(new Error('missing'), { code: 'ESRCH' });
+      }).mockReturnValueOnce(true);
+      vi.mocked(readPrivateFile).mockImplementation(async (path: string) => {
+        if (path === '/proc/sys/kernel/random/boot_id') return Buffer.from('01234567-1234-1234-1234-0123456789ab');
+        expect(path).toBe('/proc/123/stat');
+        // readPrivateFile は open 時の ENOENT を undefined に変換する。
+        return undefined;
+      });
+      const options = { signal: new AbortController().signal, timeoutMs: 1000 };
+      const owner = { pid: 123, startTime: 'linux-start-v3:01234567-1234-1234-1234-0123456789ab:456' };
+      await expect(readProcessOwner(owner.pid, options)).resolves.toBeUndefined();
+      expect(await new AsyncProcess().inspect(owner, options)).toMatchObject({ kind: reused ? 'unknown' : 'dead' });
+      expect(kill).toHaveBeenCalledTimes(2);
+      expect(kill).toHaveBeenNthCalledWith(1, owner.pid, 0);
+      expect(kill).toHaveBeenNthCalledWith(2, owner.pid, 0);
+      expect(readPrivateFile).toHaveBeenCalledWith('/proc/123/stat', 16 * 1024);
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EIO'])('keeps a Linux stat read failure %s unknown', async (code) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      const error = Object.assign(new Error('stat read failed'), { code });
+      vi.mocked(readPrivateFile).mockImplementation(async (path: string) => {
+        if (path === '/proc/sys/kernel/random/boot_id') return Buffer.from('01234567-1234-1234-1234-0123456789ab');
+        throw error;
+      });
+      await expect(readProcessOwner(123, { signal: new AbortController().signal, timeoutMs: 1000 })).rejects.toBe(error);
+      expect(await observeProcess({ pid: 123, startTime: 'linux-start-v3:01234567-1234-1234-1234-0123456789ab:456' },
+        { signal: new AbortController().signal, timeoutMs: 1000 })).toMatchObject({ kind: 'unknown' });
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
+
+  it.each(['ENOENT', undefined])('keeps a missing Linux boot ID unknown when the read returns %s', async (code) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      vi.mocked(readPrivateFile).mockImplementation(async () => {
+        if (code === undefined) return undefined;
+        throw Object.assign(new Error('boot ID unavailable'), { code });
+      });
+      expect(await observeProcess({ pid: 123, startTime: 'linux-start-v3:01234567-1234-1234-1234-0123456789ab:456' },
+        { signal: new AbortController().signal, timeoutMs: 1000 })).toMatchObject({ kind: 'unknown' });
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
+
+  it('propagates cancellation during a Linux process disappearance', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      const abort = new AbortController();
+      const reason = new DOMException('cancel', 'AbortError');
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      vi.mocked(readPrivateFile).mockImplementation(async (path: string) => {
+        if (path === '/proc/sys/kernel/random/boot_id') return Buffer.from('01234567-1234-1234-1234-0123456789ab');
+        abort.abort(reason);
+        throw Object.assign(new Error('process disappeared during read'), { code: 'ESRCH' });
+      });
+      await expect(observeProcess({ pid: 123, startTime: 'linux-start-v3:01234567-1234-1234-1234-0123456789ab:456' },
+        { signal: abort.signal, timeoutMs: 1000 })).rejects.toBe(reason);
+    } finally { Object.defineProperty(process, 'platform', original); }
+  });
+
   it('launches a process with a verified owner and keeps cancellation attached to its lifetime', async () => {
     const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
