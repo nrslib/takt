@@ -42,7 +42,13 @@ function fakeProvider(action) {
       const transport = new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } });
       await client.connect(transport);
       try {
-        const context = JSON.parse(prompt.split('\n\n')[0]);
+        const input = JSON.parse(prompt.split('\n\n')[0]);
+        assert.deepEqual(Object.keys(input), ['event', 'instruction']);
+        assert.equal(input.event.kind, 'goal_resumed');
+        assert.equal(input.instruction, 'Handle this event for the existing goals. Do not propose a new registration.');
+        const read = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId } });
+        const logs = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId, path: 'workLog' } });
+        const context = { ...input, goal: { ...JSON.parse(read.content[0].text).goal, workLog: JSON.parse(logs.content[0].text).items } };
         const goalRead = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: context.goal.id, path: 'objective' } });
         assert.equal(JSON.parse(goalRead.content[0].text).path, 'objective');
         const history = await client.callTool({ name: 'takt_get_goal_history', arguments: { cwd: options.cwd, goalId: context.goal.id, limit: 1 } });

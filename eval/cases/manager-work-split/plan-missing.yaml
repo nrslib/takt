@@ -73,6 +73,20 @@ ja:
         workflowResult: completed
       goalWorkKey: foundation
       goalPurpose: 共有の設定を用意する
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: 共有の設定を用意する
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440244
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -89,6 +103,20 @@ ja:
         workflowResult: completed
       goalWorkKey: storage
       goalPurpose: 索引の保存処理を作る
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:11:30.000Z
+      taskDir: .takt/tasks/result-2
+      summary: 索引の保存処理を作る
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440245
     - name: result-3
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -105,6 +133,20 @@ ja:
         workflowResult: completed
       goalWorkKey: commands
       goalPurpose: 索引を操作する CLI を作る
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:12:30.000Z
+      taskDir: .takt/tasks/result-3
+      summary: 索引を操作する CLI を作る
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-3
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-3
+      executionId: 650e8400-e29b-41d4-a716-446655440246
     - name: result-4
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -116,6 +158,20 @@ ja:
       completion: *a1
       goalWorkKey: display
       goalPurpose: 索引を表示する画面を作る
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:13:30.000Z
+      taskDir: .takt/tasks/result-4
+      summary: 索引を表示する画面を作る
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-4
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-4
+      executionId: 650e8400-e29b-41d4-a716-446655440247
   readResults:
     - tool: takt_get_goal
       arguments:
@@ -249,6 +305,20 @@ en:
         workflowResult: completed
       goalWorkKey: foundation
       goalPurpose: Prepare shared configuration
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: Prepare shared configuration
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440244
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -265,6 +335,20 @@ en:
         workflowResult: completed
       goalWorkKey: storage
       goalPurpose: Implement index storage
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:11:30.000Z
+      taskDir: .takt/tasks/result-2
+      summary: Implement index storage
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440245
     - name: result-3
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -281,6 +365,20 @@ en:
         workflowResult: completed
       goalWorkKey: commands
       goalPurpose: Implement index CLI commands
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:12:30.000Z
+      taskDir: .takt/tasks/result-3
+      summary: Implement index CLI commands
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-3
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-3
+      executionId: 650e8400-e29b-41d4-a716-446655440246
     - name: result-4
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -292,6 +390,20 @@ en:
       completion: *a3
       goalWorkKey: display
       goalPurpose: Implement the index display
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:13:30.000Z
+      taskDir: .takt/tasks/result-4
+      summary: Implement the index display
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-4
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-4
+      executionId: 650e8400-e29b-41d4-a716-446655440247
   readResults:
     - tool: takt_get_goal
       arguments:

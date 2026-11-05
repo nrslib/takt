@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
-import { buildGoalTurnContext } from '../dist/features/manager/turnContext.js';
-import { GoalSchema } from '../dist/infra/goals/schema.js';
+import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { ManagerEventSchema } from '../dist/infra/goals/events.js';
+import { managerStateReads } from './manager-work-split-reads.mjs';
 import * as schemas from '../dist/features/mcp/schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRemovalSchemas.js';
@@ -37,10 +38,14 @@ export function loadManagerCase(caseId, lang) {
   if (!['ja', 'en'].includes(lang)) throw new Error(`Invalid language: ${lang}`);
   const fixture = parse(readFileSync(join(repoRoot, 'eval', 'cases', 'manager-work-split', `${caseId}.yaml`), 'utf8'))[lang];
   if (fixture?.lang !== lang) throw new Error(`Missing ${lang} case: ${caseId}`);
-  if (fixture.event?.kind !== 'patrol') return fixture;
-  const offset = Date.now() - Date.parse(fixture.event.createdAt);
-  return JSON.parse(JSON.stringify(fixture).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g,
-    (timestamp) => new Date(Date.parse(timestamp) + offset).toISOString()));
+  let current = fixture;
+  if (fixture.event?.kind === 'watch_observation') {
+    const offset = Date.now() - Date.parse(fixture.event.observation.observedAt);
+    current = JSON.parse(JSON.stringify(fixture).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g,
+      (timestamp) => new Date(Date.parse(timestamp) + offset).toISOString()));
+  }
+  if (current.turn === 'event') current.readResults = managerStateReads(current);
+  return current;
 }
 
 export function buildManagerSystemPrompt(fixture) {
@@ -83,12 +88,18 @@ export function buildManagerSystemPrompt(fixture) {
   }
 }
 
+export function buildManagerEventInput(cwd, saved) {
+  if (saved.kind === 'patrol') throw new Error('Patrol events are not delivered to the manager');
+  const event = saved.kind === 'watch_observation' ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
+  return JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
+}
+
 export default function buildManagerWorkSplitPrompt({ vars }) {
   const fixture = loadManagerCase(vars.case, vars.lang);
   if (fixture.execution === true) return JSON.stringify({ case: vars.case, lang: fixture.lang, user: fixture.user });
   const system = buildManagerSystemPrompt(fixture);
   const user = fixture.turn === 'event'
-    ? buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks)
+    ? buildManagerEventInput(fixture.cwd, fixture.event)
     : fixture.user;
   if (typeof user !== 'string' || user.length === 0) throw new Error('Missing turn input');
   const tools = Object.fromEntries(Object.entries(managerWriteSchemas).map(([name, schema]) => [name,

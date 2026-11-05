@@ -260,9 +260,10 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     ['gpt-6.1-terra', 'medium'],
     ['claude-opus-5', undefined],
   ]);
-  assert.equal(config.tests.length, 86);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 43);
+  assert.equal(config.tests.length, 94);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 47);
   for (const caseId of [
+    'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
     'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
     'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
@@ -274,5 +275,10 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'stopped-background-execution', 'integrated-task-execution',
   ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
+    if (['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued'].includes(caseId)) {
+      for (const entry of config.tests.filter(({ vars }) => vars.case === caseId)) {
+        assert.deepEqual(entry.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      }
+    }
   }
 });

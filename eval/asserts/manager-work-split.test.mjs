@@ -81,10 +81,12 @@ function goodOutput(caseId, lang) {
       : 'Clarify help text in src/admin/help.ts and check that text only. Exclude payment or order-storage implementation and checks and checkout-guide updates.';
   }
   if (caseId === 'escalate-not-on-first-failure') {
-    output.calls[0].arguments.purpose = fixture.readResults[0].result.work[0].purpose;
-    output.calls[0].arguments.task = lang === 'ja'
+    const task = lang === 'ja'
       ? 'docs/sales-csv.md と data/sales_sample.csv を読んでから sales/loader.py を実装する。sale_date、amount、channel と既存の日付形式を使い、見本データで読み込みと入力検証を確認する。'
       : 'Read docs/sales-csv.md and data/sales_sample.csv before implementing sales/loader.py. Use sale_date, amount, channel and the existing date format; verify loading and validation with the sample data.';
+    output.calls = [{ tool: 'takt_retry_goal_task', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import', task,
+    } }];
   }
   if (caseId === 'integration-check') {
     output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
@@ -251,7 +253,7 @@ for (const lang of ['ja', 'en']) {
       const allowed = caseId === 'escalate-repeated-failure'
         ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_work_log']
         : caseId === 'escalate-not-on-first-failure'
-          ? ['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
+          ? ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
         : patrolTellCases.has(caseId) ? ['takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
           : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
             : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal']
@@ -564,7 +566,7 @@ test('validates production tool names, arguments, goal identity, workflow and re
     assert.equal(score(output, 'parallel-cli').pass, false);
   }
 });
-test('validates integration taskName, reviewed SHA and ordering before new submissions', () => {
+test('rejects integration of an already integrated result, even with the matching task and SHA', () => {
   const fixture = loadManagerCase('parallel-cli', 'ja');
   const task = fixture.tasks[0];
   const retry = { tool: 'takt_merge_goal_task', arguments: {
@@ -572,7 +574,7 @@ test('validates integration taskName, reviewed SHA and ordering before new submi
   } };
   const output = goodOutput('parallel-cli', 'ja');
   output.calls.unshift(structuredClone(retry));
-  assert.equal(score(output, 'parallel-cli').pass, true);
+  assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls[0].arguments.taskName = 'unknown-task';
   assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls[0] = structuredClone(retry);
@@ -756,7 +758,8 @@ for (const lang of ['ja', 'en']) {
       output.calls.push(enqueue(fixture, key));
       const blocked = score(output, caseId, lang);
       assert.equal(blocked.pass, false);
-      assert.equal(blocked.reason, 'Unexpected or repeated work key');
+      assert.equal(blocked.reason, key === 'payment-check'
+        ? 'Do not enqueue existing work without changing its state' : 'Unexpected or repeated work key');
       output.calls.pop();
     }
     delete output.calls[0].arguments.body;
@@ -793,6 +796,7 @@ for (const lang of ['ja', 'en']) {
     const caseId = 'escalate-not-on-first-failure';
     const fixture = loadManagerCase(caseId, lang);
     const task = fixture.tasks.find(({ name }) => name === 'csv-import');
+    assert.equal(score({ ...goodOutput(caseId, lang), calls: [enqueue(fixture, 'csv-import')] }, caseId, lang).pass, false);
     for (const tool of ['takt_retry_goal_task', 'takt_requeue_goal_task']) {
       const output = goodOutput(caseId, lang);
       output.calls = [{ tool, arguments: {
@@ -802,11 +806,23 @@ for (const lang of ['ja', 'en']) {
           : { retryNote: 'Read docs/sales-csv.md before continuing.' }),
       } }];
       assert.equal(score(output, caseId, lang).pass, true);
+      for (const step of ['plan', 'implement', 'review']) {
+        for (const startStep of [step, ` \t${step}\n `]) {
+          output.calls[0].arguments.startStep = startStep;
+          assert.equal(score(output, caseId, lang).pass, true, `${tool}: ${JSON.stringify(startStep)}`);
+        }
+      }
+      delete output.calls[0].arguments.startStep;
       output.calls[0].arguments.taskName = 'foundation';
       assert.equal(score(output, caseId, lang).pass, false);
       output.calls[0].arguments.taskName = task.name;
       output.calls.push(enqueue(fixture, 'csv-import'));
       assert.equal(score(output, caseId, lang).pass, false);
+      output.calls.pop();
+      for (const startStep of ['unknown-step', ' unknown-step ', ' \t\n ']) {
+        output.calls[0].arguments.startStep = startStep;
+        assert.equal(score(output, caseId, lang).pass, false, `${tool}: ${JSON.stringify(startStep)}`);
+      }
     }
   });
 }
@@ -970,5 +986,137 @@ for (const lang of ['ja', 'en']) {
       { tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Next work.' } },
     ] };
     assert.equal(score(output, 'plan-missing', lang).pass, false);
+  });
+}
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+    const resuming = caseId.startsWith('paused-requeue');
+    test(`${lang}/${caseId}: permits only its allowed writes`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+      const requeue = { tool: 'takt_requeue_goal_task', arguments: { ...base, taskName: fixture.event.taskName } };
+      const output = { response: { message: 'Current state checked.', summary: null }, calls: resuming ? [requeue] : [] };
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      output.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Recorded the current task state and decision.' } });
+      assert.equal(score(output, caseId, lang).pass, true);
+      const otherCalls = writingCalls(loadManagerCase('escalate-not-on-first-failure', lang), []);
+      for (const [tool, args] of Object.entries(otherCalls)) {
+        if (tool === 'takt_record_goal_work_log' || resuming && tool === 'takt_requeue_goal_task') continue;
+        if (caseId === 'task-stopped-not-resumed' && ['takt_ask_goal_question', 'takt_notify_goal'].includes(tool)) continue;
+        const invalid = structuredClone(output);
+        const target = Object.hasOwn(args, 'taskName') ? { taskName: fixture.event.taskName } : {};
+        invalid.calls.push({ tool, arguments: { ...args, ...base, ...target } });
+        assert.equal(score(invalid, caseId, lang).pass, false, tool);
+      }
+      if (resuming) {
+        assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+        assert.equal(score({ ...output, calls: [requeue, requeue] }, caseId, lang).pass, false);
+        assert.equal(score({ ...output, calls: [{ ...requeue, arguments: { ...requeue.arguments, taskName: 'other-task' } }] }, caseId, lang).pass, false);
+        for (const step of ['plan', 'implement', 'review', 'unknown-step', '']) {
+          for (const startStep of [step, ` \t${step}\n `]) {
+            const explicit = { ...requeue, arguments: { ...requeue.arguments, startStep } };
+            assert.equal(score({ ...output, calls: [explicit] }, caseId, lang).pass,
+              caseId === 'paused-requeue-before-start' && step === 'plan', JSON.stringify(startStep));
+          }
+        }
+      }
+    });
+    if (resuming) test(`${lang}/${caseId}: note meaning is graded semantically rather than with a wording whitelist`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      for (const retryNote of [undefined, 'Interrupted by a goal pause.', 'Change the task to add a new export format.']) {
+        const output = { response: { message: 'Resuming.', summary: null }, calls: [{ tool: 'takt_requeue_goal_task', arguments: {
+          cwd: fixture.cwd, goalId: fixture.goal.id, taskName: fixture.event.taskName, ...(retryNote === undefined ? {} : { retryNote }),
+        } }] };
+        assert.equal(score(output, caseId, lang).pass, true);
+      }
+      assertSemanticGrader(caseId, lang);
+    });
+  }
+
+  test(`${lang}/task-stopped-not-resumed: permits a human scope question with optional recording`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const fixture = loadManagerCase(caseId, lang);
+    const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+    const question = { tool: 'takt_ask_goal_question', arguments: {
+      ...base,
+      body: lang === 'ja'
+        ? '独自の予約形式を作業範囲に含めますか？ 回答まで個別停止した作業は再開しません。'
+        : 'Should a custom booking format be included in scope? The individually stopped work will wait for your answer.',
+      options: lang === 'ja'
+        ? ['既存の予約形式を使い、時間帯だけを検証する', '独自の予約形式も追加する']
+        : ['Use the existing booking format and validate time ranges only', 'Also add a custom booking format'],
+      recommendation: lang === 'ja'
+        ? '既存の予約形式を推奨します。受け入れ条件は時間帯の検証だけを求めているためです。'
+        : 'Use the existing booking format because the acceptance criterion only requires time-range validation.',
+    } };
+    const output = { response: { message: question.arguments.body, summary: null }, calls: [question] };
+    for (const recipient of [undefined, 'human']) {
+      const addressed = structuredClone(output);
+      if (recipient !== undefined) addressed.calls[0].arguments.recipient = recipient;
+      assert.equal(score(addressed, caseId, lang).pass, true);
+      addressed.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: question.arguments.body } });
+      assert.equal(score(addressed, caseId, lang).pass, true);
+    }
+    const director = structuredClone(output);
+    director.calls[0].arguments.recipient = 'director';
+    assert.equal(score(director, caseId, lang).pass, false);
+    const invalid = structuredClone(output);
+    invalid.calls[0].arguments.options = [123];
+    assert.equal(score(invalid, caseId, lang).pass, false);
+    const sameWork = structuredClone(output);
+    sameWork.calls.push(enqueue(fixture, fixture.tasks[0].goalWorkKey));
+    assert.equal(score(sameWork, caseId, lang).pass, false);
+  });
+
+  test(`${lang}/task-stopped-not-resumed: permits notifications while still rejecting work submission and invalid envelopes`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const fixture = loadManagerCase(caseId, lang);
+    const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+    const body = lang === 'ja'
+      ? '独自の予約形式を追加する方針を見直すため個別停止しました。独自形式を含めるかは未決定です。人の範囲の判断が届くまで停止を維持します。'
+      : 'The task was individually stopped to reconsider adding a custom booking format. Its inclusion remains undecided. Work stays stopped until the human decides the scope.';
+    const notification = { tool: 'takt_notify_goal', arguments: { ...base, kind: 'blocked', body } };
+    const output = { response: { message: body, summary: null }, calls: [notification] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    const recorded = structuredClone(output);
+    recorded.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: body } });
+    assert.equal(score(recorded, caseId, lang).pass, true);
+    const questioned = structuredClone(output);
+    questioned.calls.push({ tool: 'takt_ask_goal_question', arguments: { ...base, body } });
+    assert.equal(score(questioned, caseId, lang).pass, true);
+    const calls = writingCalls(fixture, []);
+    for (const forbidden of [
+      { tool: 'takt_requeue_goal_task', arguments: calls.takt_requeue_goal_task },
+      { tool: 'takt_retry_goal_task', arguments: calls.takt_retry_goal_task },
+      enqueue(fixture, fixture.tasks[0].goalWorkKey),
+      enqueue(fixture, 'other-work'),
+      { tool: 'takt_merge_goal_task', arguments: calls.takt_merge_goal_task },
+      { tool: 'takt_complete_goal', arguments: calls.takt_complete_goal },
+    ]) {
+      assert.equal(score({ ...output, calls: [...output.calls, forbidden] }, caseId, lang).pass, false, forbidden.tool);
+    }
+    const invalidNotification = structuredClone(output);
+    invalidNotification.calls[0].arguments.body = 123;
+    assert.equal(score(invalidNotification, caseId, lang).pass, false);
+    assert.equal(score({ ...output, response: body }, caseId, lang).pass, false);
+    assert.equal(score(JSON.stringify(output).slice(0, -1), caseId, lang).pass, false);
+  });
+
+  test(`${lang}/task-stopped-not-resumed: accepts message-only scope decisions structurally and delegates meaning to the rubric`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const messages = lang === 'ja' ? [
+      '独自形式を検討するため個別停止した作業は、範囲の判断待ちです。停止を維持します。',
+      '受け入れ条件に沿う元の範囲での retry を推奨します。独自形式を含めずその範囲で再開しますか、それとも独自形式を含めるよう範囲を見直しますか？ 回答まで停止を維持します。',
+    ] : [
+      'Work individually stopped to reconsider the custom format awaits a scope decision and remains stopped.',
+      'I recommend retry under the original scope based on the acceptance criterion. Resume without the custom format, or revise scope to include it? Work stays stopped until your answer.',
+    ];
+    for (const message of messages) {
+      assert.equal(score({ response: { message, summary: null }, calls: [] }, caseId, lang).pass, true);
+    }
+    assertSemanticGrader(caseId, lang);
   });
 }
