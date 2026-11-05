@@ -12,6 +12,7 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 import { captureOwnedChild,ownedProcessMarkerScript,readOwnedProcessMarker,terminateOwnedProcess,type OwnedProcess } from './helpers/owned-process.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 
@@ -275,8 +276,20 @@ await ensureManagerRun(cwd);
     daemon.stderr!.on('data', (chunk) => { daemonErrors += String(chunk); });
     await vi.waitFor(async () => {
       expect(readManagerEvents(cwd), daemonErrors).toEqual([]);
-      expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
+      const directory = join(configDirectory, 'daemon-events');
+      const records = readdirSync(directory).filter((file) => file.endsWith('.json'))
+        .map((file) => EventRecordSchema.parse(JSON.parse(readFileSync(join(directory, file), 'utf8'))))
+        .filter(({ event }) => event.event.kind === 'goal_registered' || event.event.kind === 'task_completed')
+        .sort((left, right) => left.event.acceptedSequence - right.event.acceptedSequence);
+      expect(records).toMatchObject([
+        { state: 'settled', event: { event: { kind: 'goal_registered', repositoryDirectory: cwd, goalId: goal.id } },
+          result: { outcome: { kind: 'completed', result: { kind: 'reply', message: 'ready work saved' } } } },
+        { state: 'settled', event: { event: { kind: 'task_completed', task: { repositoryDirectory: cwd, goalId: goal.id,
+          taskName: task.name, runSlug: completedGoalTask.runSlug }, result: completedGoalTask.completion } },
+          result: { outcome: { kind: 'completed', result: { kind: 'reply', message: 'ready work saved' } } } },
+      ]);
     }, { timeout: 15000 });
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual([]);
   } catch (error) {
     errors.push(error);
   } finally {

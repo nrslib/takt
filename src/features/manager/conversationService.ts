@@ -23,7 +23,6 @@ import { createWorkspaceManagerContext } from './startupResolution.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
-import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 
 function nextRevision(revision: number): number {
   if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
@@ -147,9 +146,6 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               if (!latest.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
               validateManagerSummary(summary);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
-            }
-            if (!human && !directorMessage && event.kind !== 'watch_observation' && assignment.kind !== 'daemon' && eventGoal !== undefined) {
-              await new GoalStore(eventGoal.repositoryDirectory).update(eventGoal.goal.id, (goal) => appendGoalWorkLog(goal, { summary: output.message }));
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },

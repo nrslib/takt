@@ -84,6 +84,40 @@ beforeEach(async () => {
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
 
+it('shows a goal event reply once while connected and does not copy it to workLog', async () => {
+  const goal = goalRecord();
+  saveGoal(goal);
+  const message = 'Goal event reply';
+  execute.mockResolvedValueOnce({ message, summary: null, sessionId: 'event-session', assignment });
+  const connections = observeIpcConnections();
+  const outputs = vi.fn();
+  client.onOutput(outputs);
+  await client.connect(); await complete();
+  await snapshotView();
+  const observation = connections[0]!;
+  const previous = observation.snapshots.length;
+  const refreshMarker = 'Goal notification after connecting';
+  // スナップショットの転送と、その内容の画面への反映を両方待つための通知。
+  saveGoal({ ...goal, notifications: [{ id: randomUUID(), kind: 'custom', body: refreshMarker, recordedAt: new Date().toISOString() }] });
+
+  expect(await fixture.dispatcher.accept({ eventId: randomUUID(), requestId: randomUUID(),
+    conversationId: conversationRecord(repository).id, source: 'daemon', occurredAt: new Date().toISOString(),
+    event: { kind: 'goal_registered', repositoryDirectory: repository, goalId: goal.id } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message } })));
+  await waitFor(() => {
+    expect(observation.snapshots.length).toBeGreaterThan(previous);
+    expect(observation.snapshots.at(-1)!.complete).toBe(true);
+  });
+  await waitFor(() => {
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    expect(entries.some((entry) => entry.content.includes(refreshMarker))).toBe(true);
+    expect(entries.filter((entry) => entry.content.includes(message))).toHaveLength(1);
+  });
+  expect((await new GoalStore(repository).get(goal.id)).workLog).toEqual([]);
+  expect(execute).toHaveBeenCalledOnce();
+});
+
 it.each([
   { size: 'short', text: 'Keep reading while this request is admitted' },
   { size: 'larger than an input batch', text: 'x'.repeat(16 * 1024) },
