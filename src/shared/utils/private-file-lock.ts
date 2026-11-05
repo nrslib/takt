@@ -141,7 +141,9 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
     }
   }
   try { recoverUnchangedDeadHolder(lockPath); } catch (error) {
-    if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
+    // A holder can release the lock between the recovery snapshot's stat and open.
+    if (!(error instanceof PrivateArtifactPublicationConflictError)
+      && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   return undefined;
 }
