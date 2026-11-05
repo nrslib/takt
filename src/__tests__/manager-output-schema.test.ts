@@ -47,14 +47,9 @@ describe('manager provider output schema', () => {
         ctx: { providerType: 'codex', lang: 'ja', model: undefined,
           provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
         strategy: { systemPrompt: 'manager fixture' },
-        permissionJudge: {
-          resolution: { provider: 'codex', model: undefined, providerOptions: {} },
-          language: 'ja', systemPrompt: 'permission judge fixture',
-          managerPersona: 'manager fixture', managerPolicy: 'manager policy fixture',
-        },
       });
-      await executor.execute({ prompt: '相談', instruction: '相談', sessionId: undefined,
-        assignment: undefined, abortSignal: new AbortController().signal, configDirectory: '/test/config' });
+      await executor.execute({ prompt: '相談', sessionId: undefined,
+        assignment: undefined, abortSignal: new AbortController().signal });
     } catch (error) { failure = error; }
     expect(conversion).toHaveBeenCalled();
     expect(failure).toBeInstanceOf(StructuredOutputSchemaError);

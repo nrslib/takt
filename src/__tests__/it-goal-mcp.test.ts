@@ -177,12 +177,30 @@ describe('manager goal task enqueue', () => {
     });
   });
 
+  it.each(['relative', 'absolute'] as const)('executes a workflow given as a %s path from a goal worktree', async (kind) => {
+    const identifier = kind === 'relative' ? './.takt/workflows/safe.yaml' : join(cwd, '.takt/workflows/safe.yaml');
+    await withEnqueue(async (client) => {
+      expect((await enqueue(client, { workflow: identifier })).isError).toBeUndefined();
+      const claimed = new TaskRunner(cwd).claimNextTasks(1)[0]!;
+      const resolved = await resolveTaskExecution({ ...claimed, data: { ...claimed.data!, worktree: join(cwd, 'clones') } }, cwd);
+      expect(loadWorkflowByIdentifier(resolved.workflowIdentifier, cwd, { lookupCwd: resolved.execCwd })?.name).toBe('safe');
+      expect(resolved.baseBranch).toBe(goalBranch);
+    });
+  });
+
+  it.each([{ autoPr: true }, { shouldPublishBranchToOrigin: true }])('saves explicit goal task publication settings %j', async (extra) => {
+    await withEnqueue(async (client) => {
+      expect((await enqueue(client, extra)).isError).toBeUndefined();
+      const task = pendingTasks()[0]!;
+      expect(task.data).toMatchObject({ worktree: true, base_branch: goalBranch,
+        auto_pr: 'autoPr' in extra, should_publish_branch_to_origin: 'shouldPublishBranchToOrigin' in extra });
+    });
+  });
+
   it.each([
     { baseBranch: 'release' },
     { taskContext: { baseBranch: 'release' } },
     { issue: { number: 123 } },
-    { autoPr: true },
-    { shouldPublishBranchToOrigin: true },
   ])('does not accept caller-controlled execution context: %j', async (extra) => {
     await withEnqueue(async (client) => {
       const result = await enqueue(client, extra);
@@ -197,7 +215,7 @@ describe('manager goal task enqueue', () => {
     });
   });
 
-  it.each(['merge_pr', 'close_pr'] as const)('rejects a direct %s effect before enqueue', async (effect) => {
+  it.each(['merge_pr', 'close_pr'] as const)('accepts a direct %s effect before enqueue', async (effect) => {
     writeWorkflow('forbidden', [
       '  - name: work', '    kind: system',
       `    effects: [{type: ${effect}, pr: 1}]`,
@@ -205,12 +223,12 @@ describe('manager goal task enqueue', () => {
     ].join('\n'));
     expect(loadWorkflowByIdentifier('forbidden', cwd)).not.toBeNull();
     await withEnqueue(async (client) => {
-      expect((await enqueue(client, { workflow: 'forbidden' })).isError).toBe(true);
-      expect(pendingTasks()).toEqual([]);
+      expect((await enqueue(client, { workflow: 'forbidden' })).isError).toBeUndefined();
+      expect(pendingTasks()).toHaveLength(1);
       const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(listed.isError).toBeUndefined();
       const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
-      expect(workflows.map(({ name }) => name)).not.toContain('forbidden');
+      expect(workflows.map(({ name }) => name)).toContain('forbidden');
     });
   });
 
@@ -244,7 +262,7 @@ describe('manager goal task enqueue', () => {
     });
   });
 
-  it('rejects a forbidden effect in a workflow_call target before enqueue', async () => {
+  it('accepts a PR effect in a workflow_call target before enqueue', async () => {
     writeWorkflow('child', [
       '  - name: work', '    kind: system', '    effects:',
       '      - type: close_pr', '        pr: 1',
@@ -260,12 +278,12 @@ describe('manager goal task enqueue', () => {
     if (delegate.kind !== 'workflow_call') throw new Error('Fixture must call a child workflow');
     expect(resolveWorkflowCallTarget(parent, delegate, cwd, cwd)).not.toBeNull();
     await withEnqueue(async (client) => {
-      expect((await enqueue(client, { workflow: 'parent' })).isError).toBe(true);
-      expect(pendingTasks()).toEqual([]);
+      expect((await enqueue(client, { workflow: 'parent' })).isError).toBeUndefined();
+      expect(pendingTasks()).toHaveLength(1);
       const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(listed.isError).toBeUndefined();
       const { workflows } = JSON.parse(firstTextContent(listed.content)) as { workflows: Array<{ name: string }> };
-      expect(workflows.map(({ name }) => name)).not.toContain('parent');
+      expect(workflows.map(({ name }) => name)).toContain('parent');
     });
   });
 
@@ -1643,11 +1661,9 @@ describe('goal PR publication and merge through manager MCP', () => {
     }));
   }
 
-  const operationId = '550e8400-e29b-41d4-a716-446655440002';
 
   async function withMerge(action: (client: Client) => Promise<void>) {
     await withServer(cwd, 'manager', async (client) => {
-      currentTurns.set(client, { operationId, directorMessage: true });
       expect((await client.listTools()).tools.map(({ name }) => name)).toContain(mergeTool);
       await saveWaitingGoal();
       await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, pullRequest }));
@@ -1657,7 +1673,7 @@ describe('goal PR publication and merge through manager MCP', () => {
   }
 
   function merge(client: Client, overrides: Record<string, unknown> = {}) {
-    return client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: pullRequest.number, conversationOperationId: operationId, ...overrides } });
+    return client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: pullRequest.number, ...overrides } });
   }
 
   function captureMergeProcess(code: number) {
@@ -1997,33 +2013,19 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
-  it.each(['human', 'event during director turn', 'finished director turn', 'stale turn'] as const)(
-    'rejects merging in a %s without spawning takt merge', async (turn) => {
-      const spawn = captureMergeProcess(0);
-      await withMerge(async (client) => {
-        if (turn === 'human') currentTurns.set(client, { operationId, directorMessage: false });
-        else if (turn === 'finished director turn') currentTurns.delete(client);
-        else if (turn === 'stale turn') currentTurns.set(client, { operationId: '550e8400-e29b-41d4-a716-446655440003', directorMessage: true });
-        const before = await new GoalStore(cwd).get(goalId);
-        if (turn === 'event during director turn') {
-          await withServer(cwd, 'manager', async (eventClient) => { expect((await merge(eventClient, { conversationOperationId: undefined })).isError).toBe(true); });
-        } else expect((await merge(client)).isError).toBe(true);
-        expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toEqual([]);
-        expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
-      });
-    },
-  );
-
-  it('reuses one MCP session across director turns and rejects the previous operation ID', async () => {
+  it.each(['direct human instruction', 'event'] as const)('allows the merge tool during a %s turn', async (_source) => {
     const spawn = captureMergeProcess(0);
     await withMerge(async (client) => {
       expect((await merge(client)).isError).toBeUndefined();
-      const nextOperationId = '550e8400-e29b-41d4-a716-446655440003';
-      currentTurns.set(client, { operationId: nextOperationId, directorMessage: true });
-      expect((await merge(client)).isError).toBe(true);
-      expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBeUndefined();
-      currentTurns.delete(client);
-      expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBe(true);
+      expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toHaveLength(1);
+    });
+  });
+
+  it('reuses one MCP session without conversation operation IDs', async () => {
+    const spawn = captureMergeProcess(0);
+    await withMerge(async (client) => {
+      expect((await merge(client)).isError).toBeUndefined();
+      expect((await merge(client)).isError).toBeUndefined();
       expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toHaveLength(2);
     });
   });
@@ -2118,7 +2120,7 @@ describe('goal PR publication and merge through manager MCP', () => {
     await withMerge(async (client) => {
       const before = await new GoalStore(cwd).get(goalId);
       const controller = new AbortController();
-      const request = client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: 1950, conversationOperationId: operationId } }, undefined, { signal: controller.signal });
+      const request = client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: 1950 } }, undefined, { signal: controller.signal });
       const rejected = expect(request).rejects.toBeDefined();
       await started;
       controller.abort();
@@ -2241,7 +2243,6 @@ describe('task integration status through MCP with real Git', () => {
   });
 });
 
-const currentTurns = new WeakMap<Client, { operationId: string; directorMessage: boolean }>();
 
 async function withServer<T>(
   cwd: string,
@@ -2249,7 +2250,7 @@ async function withServer<T>(
   action: (client: Client) => Promise<T>,
 ): Promise<T> {
   const client = new Client({ name: 'goal-test-client', version: '1.0.0' });
-  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet, conversationTurn: () => currentTurns.get(client) };
+  const options = { allowedProjectRoot: cwd, toolSet: toolSet as TaktMcpToolSet };
   const server = createTaktMcpServer({}, options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {

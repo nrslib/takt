@@ -17,7 +17,6 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { directorConversationRecord } from './helpers/conversation-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { listPendingInquiries } from '../infra/goals/pending-inquiries.js';
-import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
 import { createDaemonConversationRuntime } from '../features/director/conversationRuntime.js';
@@ -129,8 +128,7 @@ it('lists all repository and workspace managers and reuses the existing paged go
   await new GoalStore(c).update(goalC.id, (goal) => ({ ...goal, questions: [createInquiry({ body: 'Earlier question', options: ['A', 'B'] })]
     .map((question) => ({ ...question, createdAt: '2026-01-01T00:00:00.000Z' })) }));
   const standaloneStore = new StandaloneInquiryStore(directory, { kind: 'workspace', workspaceId: workspace.id });
-  const approval = await saveManagerToolPermissionInquiry({ configDirectory: directory, owner: { kind: 'workspace', workspaceId: workspace.id },
-    request: { toolName: 'Write', toolInput: { file_path: join(b, 'result.txt'), content: 'hello' }, cwd: b }, reason: 'Approve a decision' });
+  const approval = await new StandaloneInquiryStore(directory, { kind: 'workspace', workspaceId: workspace.id }).create({ body: 'Approve a decision' });
   const list = vi.spyOn(readers, 'listTaktGoals');
   const detail = vi.spyOn(readers, 'getTaktGoal');
   const run = vi.spyOn(readers, 'getTaktRun');
@@ -234,8 +232,7 @@ it.each(['legacy', 'runtime'] as const)('disables director skills after resolvin
   const runtime = createDaemonConversationRuntime(directory, actions);
   cleanups.push(runtime.close);
   const prepared = await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
-  await prepared.executor.execute({ prompt: 'task', instruction: 'task', sessionId: undefined, assignment: undefined,
-    configDirectory: directory, abortSignal: signal() });
+  await prepared.executor.execute({ prompt: 'task', sessionId: undefined, assignment: undefined, abortSignal: signal() });
   for (const options of [preflight.mock.calls[0]![0], call.mock.calls[0]![1]]) {
     expect(options).toMatchObject({ providerOptions: expected, permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST });
   }

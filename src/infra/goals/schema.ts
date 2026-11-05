@@ -18,6 +18,7 @@ const GoalOperationInputSchema = z.object({
   args: z.string(),
   cwd: z.string().refine(isAbsolute),
 }).strict();
+// Approval fields remain readable for historical manager records; they no longer authorize tool execution.
 export const GoalInquiryInputSchema = GoalQuestionInputSchema.extend({
   kind: z.enum(['question', 'approval', 'operation_request']).default('question'),
   operation: GoalOperationInputSchema.optional(),

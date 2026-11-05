@@ -280,8 +280,8 @@ describe('OpenCode task-state MCP integration', () => {
     const executor = createManagerTurnExecutor(projectCwd, { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } });
     try {
       expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
-      expect(await executor.execute({ prompt: 'ゴールを相談したい', instruction: 'ゴールを相談したい', sessionId: undefined,
-        assignment: undefined, configDirectory: process.env.TAKT_CONFIG_DIR!, abortSignal: new AbortController().signal }))
+      expect(await executor.execute({ prompt: 'ゴールを相談したい', sessionId: undefined,
+        assignment: undefined, abortSignal: new AbortController().signal }))
         .toMatchObject({ message: 'What is your goal?', summary: null });
 
       expect(getFirstOpenCodeStartConfig().mcp).toEqual({

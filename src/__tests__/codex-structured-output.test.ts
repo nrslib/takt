@@ -155,7 +155,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
       cwd: '/tmp', fastMode: true, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
       outputSchema: { type: 'object', additionalProperties: false },
     };
-    expect((await new CodexClient().call('manager-permission-judge', 'judge', options)).status).toBe('done');
+    expect((await new CodexClient().call('structured-output-fixture', 'judge', options)).status).toBe('done');
     expect(lastCodexConstructorOptions?.config?.features).toMatchObject({ hooks: false, fast_mode: true });
     expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
   });

@@ -56,7 +56,6 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
     mcpOnlySideEffects: options.mcpOnlySideEffects !== undefined,
-    onToolPermissionDecision: options.onToolPermissionDecision,
     internalAgentIsolation: options.internalAgentIsolation,
   };
 }
@@ -120,7 +119,6 @@ export class CodexProvider implements Provider {
         ...options,
         sessionId: undefined,
         internalAgentIsolation: 'strict-readonly',
-        onToolPermissionDecision: undefined,
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,

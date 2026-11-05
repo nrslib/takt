@@ -18,7 +18,7 @@ function fixture() {
   input.open.mockResolvedValue({ attachmentId: 'attachment', read });
   input.submit.mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   const client = { start: vi.fn<SlackClient['start']>(), postMessage: vi.fn<SlackClient['postMessage']>(),
-    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(), openModal: vi.fn<SlackClient['openModal']>(),
+    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(),
     stopAccepting: vi.fn(), close: vi.fn<SlackClient['close']>() };
   client.postMessage.mockResolvedValue({ kind: 'delivered', parentTs: 'posted' });
   client.postThreadMessage.mockResolvedValue({ kind: 'delivered' });

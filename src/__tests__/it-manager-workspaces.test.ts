@@ -363,8 +363,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const executor = createManagerTurnExecutor(repositoryA, {
       ctx: { provider, providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
       strategy: { systemPrompt: 'manager fixture' } });
-    const input: ManagerTurnInput = { prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
-      configDirectory: globalDirectory, abortSignal: new AbortController().signal };
+    const input: ManagerTurnInput = { prompt: '担当を追加', assignment, sessionId: undefined, abortSignal: new AbortController().signal };
     const scenario = (tool: string, args: Record<string, unknown>, removeOriginal = false) => setMockScenario([{ persona: 'manager', status: 'done',
       content: JSON.stringify({ message: '担当を更新', summary: null }),
       streamEvents: [{ type: 'tool_use', tool, id: 'workspace-operation', input: args }],
@@ -380,7 +379,7 @@ describe('manager workspace storage and repository boundaries', () => {
       if (!sameTurn) {
         expect((await readWorkspaceRegistry(globalDirectory))[0]!.repositoryDirectories).toEqual([repositoryA, repositoryB]);
         scenario('takt_remove_workspace_repository', { repositoryDirectory: repositoryA });
-        const second = await executor.execute({ ...input, assignment: current, prompt: '元の担当を削除', instruction: '元の担当を削除' });
+        const second = await executor.execute({ ...input, assignment: current, prompt: '元の担当を削除' });
         expect(second.message).toBe('担当を更新');
         current = second.assignment!;
       }
@@ -389,7 +388,7 @@ describe('manager workspace storage and repository boundaries', () => {
       expect(await resolveCurrentManagerAssignment(current, globalDirectory)).toEqual({ kind: 'workspace', workspaceId: workspace.id,
         name: workspace.name, repositoryDirectories: [repositoryB] });
       scenario('takt_list_goals', { cwd: repositoryB });
-      expect(await executor.execute({ ...input, assignment: current, prompt: '現在の担当を確認', instruction: '現在の担当を確認' }))
+      expect(await executor.execute({ ...input, assignment: current, prompt: '現在の担当を確認' }))
         .toMatchObject({ message: '担当を更新' });
     } finally { await mcp.dispose(); }
   });
@@ -408,8 +407,7 @@ describe('manager workspace storage and repository boundaries', () => {
         setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '追加できません', summary: null }),
           streamEvents: [{ type: 'tool_use', tool: 'takt_add_workspace_repository', id: 'add-repository', input: { repositoryDirectory } }],
         }]);
-        const turnResult = await executor.execute({ prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
-          configDirectory: globalDirectory, abortSignal: new AbortController().signal });
+        const turnResult = await executor.execute({ prompt: '担当を追加', assignment, sessionId: undefined, abortSignal: new AbortController().signal });
         expect(turnResult.message).toBe('追加できません');
         expect(await resolveCurrentManagerAssignment(turnResult.assignment!, globalDirectory)).toEqual(assignment);
         expect(await readWorkspaceRegistry(globalDirectory)).toEqual([other]);

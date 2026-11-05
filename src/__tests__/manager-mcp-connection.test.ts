@@ -60,6 +60,9 @@ describe('owned manager MCP sessions', () => {
       expect(await request({ ...owner.config.headers!, 'mcp-session-id': firstId })).toBe(200);
       expect(await request({ ...owner.config.headers!, 'mcp-session-id': secondId })).toBe(200);
       expect(doubles.createMcp).toHaveBeenCalledTimes(2);
+      for (const [options] of doubles.createMcp.mock.calls) {
+        expect(options.goalExecutionConnection).toBeDefined();
+      }
     } finally { await owner.dispose(); }
     expect(doubles.serverClose).toHaveBeenCalledTimes(2);
     expect(doubles.transportClose).toHaveBeenCalledTimes(2);

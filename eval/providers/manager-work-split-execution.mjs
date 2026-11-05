@@ -12,7 +12,6 @@ export function executionConfig(config, vars) {
   if (!executionCases.has(vars.case) || !['ja', 'en'].includes(vars.lang)) throw new Error('Invalid execution case');
   if (typeof config.model !== 'string' || !config.model.trim()) throw new Error('Execution model is required');
   if (!Number.isSafeInteger(config.timeout_ms) || config.timeout_ms <= 0) throw new Error('Positive timeout_ms is required');
-  if (config.judge_effort !== 'low') throw new Error('Execution judge_effort must be low');
   return { ...config, case: vars.case, lang: vars.lang };
 }
 

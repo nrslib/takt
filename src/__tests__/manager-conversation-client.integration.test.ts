@@ -26,7 +26,6 @@ import { writeLegacyConversation, conversationRecord } from './helpers/conversat
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { Goal } from '../infra/goals/schema.js';
@@ -614,8 +613,7 @@ it.each([7, 9])('restores every option created by the real question operation fo
 
 it('removes the same standalone approval after withdrawal and refresh on the same client', async () => {
   const connections = observeIpcConnections();
-  const inquiry = await saveManagerToolPermissionInquiry({ configDirectory: directory, owner: { kind: 'repository', repositoryDirectory: repository },
-    request: { toolName: 'Bash', toolInput: { command: 'git status' }, cwd: repository }, reason: 'Please confirm the operation' });
+  const inquiry = await new StandaloneInquiryStore(directory, { kind: 'repository', repositoryDirectory: repository }).create({ body: 'Please confirm the operation' });
   await client.connect(); await complete();
   const inquiries = () => client.getSnapshot().items.flatMap((item) => item.kind === 'inquiry' ? [item.inquiry] : []);
   expect(inquiries()).toEqual([{ target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: repository } }, question: inquiry }]);

@@ -7,7 +7,6 @@ import type { ManagerConversationPlan } from '../features/manager/conversationPl
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), preflight: vi.fn(), dispose: vi.fn(), execute: vi.fn() }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
 vi.mock('../features/manager/managerMcp.js', () => ({ TAKT_MANAGER_MCP_SERVER_NAME: 'takt', connectManagerMcp: doubles.connect }));
-vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ sensitivePaths: [] }) }));
 vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: () => ({ execute: doubles.execute }) }));
 let plan: ManagerConversationPlan;
 let runtime: ReturnType<typeof createConversationRuntime>;
@@ -66,19 +65,18 @@ it('waits for MCP disposal during close and reports its failure', async () => {
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it('exposes only the active non-aborted director turn to MCP authorization', async () => {
+it('keeps the tool scope active only during the current non-aborted turn', async () => {
   const prepared = await runtime.resolve(assignment, signal);
-  const options = doubles.connect.mock.calls[0]![3] as { conversationTurn(): { operationId: string; directorMessage: boolean } | undefined };
-  expect(options.conversationTurn()).toBeUndefined();
+  const { turnScope } = doubles.connect.mock.calls[0]![3] as { turnScope: import('../features/daemonTurn/toolScope.js').TurnToolScope };
+  await expect(turnScope.run(async () => 'outside')).rejects.toThrow('No active tool turn');
   const controller = new AbortController(); const gate = deferred<void>(); const started = deferred<void>();
   doubles.execute.mockImplementation(async () => { started.resolve(); await gate.promise; return { message: 'done', summary: null }; });
-  const execution = prepared.executor.execute({ prompt: 'message', instruction: 'message', configDirectory: '/config',
-    sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal,
-    conversationOperationId: 'operation', directorMessage: true });
+  const execution = prepared.executor.execute({ prompt: 'message',
+    sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal });
   await started.promise;
-  expect(options.conversationTurn()).toEqual({ operationId: 'operation', directorMessage: true });
+  await expect(turnScope.run(async () => 'inside')).resolves.toBe('inside');
   controller.abort();
-  expect(options.conversationTurn()).toBeUndefined();
+  await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
   gate.resolve(); await execution;
-  expect(options.conversationTurn()).toBeUndefined();
+  await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
 });

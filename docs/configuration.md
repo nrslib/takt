@@ -572,8 +572,8 @@ The Slack ACK acknowledges transport receipt. Business acceptance is reported on
 
 - Post a message in the configured channel. Manager replies in that post's thread; continue the exchange there. All conversation threads connect to the same manager conversation for the repository, shared with the TUI. Replies go only to the thread where the message was sent. Replies to TUI messages are not sent to Slack.
 - Messages in other channels, DMs to the bot, and messages or button actions from users outside `allowed_user_ids` receive no response.
-- The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed work is retried only on an explicit human request.
-- Each inquiry (a question, approval, or operation request) appears as a separate new post outside any thread in the configured channel. Use buttons for approval decisions (Allow or Deny and scope) and choices. For an approval scope broader than this time only, the button opens a modal: edit the proposed permission sentence and confirm it to append the sentence to the permission Markdown.
+- The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn; each queue preserves acceptance order. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Manager inspects current state and side effects before deciding recovery.
+- Questions and operation requests are posted in the configured channel. Use buttons for choices or operation reports, or reply in the inquiry thread for free text. Answers preserve Slack provenance. Permission scope and permission-text saving UI have been removed.
 - Answer free-text inquiries by replying in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer, not a manager conversation message. Answers are saved with source `slack`.
 - Inquiry changes arrive through watcher events; Slack does not periodically scan every inquiry. Use `Ctrl+R` in the TUI for inquiries predating the connection. An unreadable inquiry binding rejects the reply without redirecting it into the conversation.
 - Notices such as goal completion are not posted through the conversation connection. They continue to arrive through `TAKT_NOTIFY_WEBHOOK`.
@@ -592,24 +592,13 @@ director:
 
 Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Follow [Create the Slack App](#create-the-slack-app), invite the bot to the director channel, and set both variables in the shell that starts `takt daemon`. Tokens belong in environment variables, not configuration files. Restart the daemon after changing Slack settings.
 
-Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons and modals use `manager.slack.allowed_user_ids`.
+Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons use `manager.slack.allowed_user_ids`.
 
 Director groups new notices from one turn into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
 ## Manager sensitive read targets
 
-In global `~/.takt/config.yaml` or project `.takt/config.yaml`, `manager.sensitive_paths` adds files and directories that require the manager permission judge even inside assigned repositories:
-
-```yaml
-manager:
-  sensitive_paths:
-    - private
-    - config/credentials.json
-```
-
-Defaults are `.env`, `.env.*`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, and `*.pfx`. Both configuration lists are added to the defaults; omission or an empty list cannot remove them. A bare name applies at any directory depth. Relative paths with a directory component are relative to each assigned repository; absolute paths and `~/` paths are also supported. A directory entry includes its descendants. Name patterns support a single leading or trailing `*`; this setting does not define allow rules.
-
-With Claude, `Read`, `Glob`, and `Grep` bypass the judge only for readable ordinary targets inside the assignment after path and symlink resolution. Search candidates are checked using paths and metadata, without reading sensitive contents. Simple search patterns with `*`, `**`, and `?` are supported; exclusion, brace expansion, character classes, escapes, or ranges that cannot be established go to the judge. Hidden paths and traversed directories or symlinks are checked conservatively, so an otherwise restrictive search can still require review. Codex built-in tools continue to require review.
+`manager.sensitive_paths` and `provider.targets.internal_agents.manager-permission-judge` are deprecated and ignored. Existing configurations continue to load. Neither setting protects files or changes tool execution. Manager follows its facets for human instructions and secret handling; permission Markdown is no longer read.
 
 ## Manager Notification Settings
 
@@ -972,8 +961,6 @@ provider:
         profile: router
       review-completion-judge:
         profile: router
-      manager-permission-judge:
-        profile: router
 
   auto_routing:
     strategy: balanced
@@ -1142,7 +1129,7 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, `loop-judge`, `review-completion-judge`, and `manager-permission-judge` agents resolve through a separate ladder. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. `manager-permission-judge` reviews tool use before execution in manager conversations with the claude (claude-sdk) or codex provider. Set its provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`, using `profile` or `ladder`; `pool` is not allowed. Every seat is optional; an unassigned seat uses the ordinary default resolution. However, an unassigned `manager-permission-judge` seat uses the same provider, model, and provider options as the manager.
+The internal `selector`, `assistant`, `loop-judge` and `review-completion-judge` agents resolve separately. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Each seat is optional and uses normal defaults when unassigned. The retired `manager-permission-judge` seat is ignored.
 
 ```text
 defaults

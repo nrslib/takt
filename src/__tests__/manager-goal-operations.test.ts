@@ -7,14 +7,14 @@ const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), states: vi.fn
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.states; listAllTaskItems = doubles.tasks; } }));
 vi.mock('../infra/task/enqueueService.js', () => ({ enqueueTask: doubles.enqueue }));
-vi.mock('../features/mcp/goalWorkflowValidation.js', () => ({ validateGoalWorkflow: doubles.workflow, GoalWorkflowNotAllowedError: class extends Error {} }));
+vi.mock('../infra/config/index.js', () => ({ loadWorkflowByIdentifier: doubles.workflow }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }), sendSavedGoalNotifications: vi.fn() }));
 vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
 let goal: Goal;
 const input = { cwd: '/project', goalId: goalRecord().id, purpose: 'CSVを実装する', task: 'CSVを実装する', workflow: 'safe', workKey: 'csv' };
 const signal = new AbortController().signal;
-beforeEach(() => { vi.resetAllMocks(); goal = goalRecord(); doubles.get.mockImplementation(async () => goal); doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => { goal = transform(goal); return goal; }); doubles.states.mockReturnValue([]); doubles.enqueue.mockResolvedValue({ taskName: 'task-a', tasksFile: '/project/.takt/tasks.yaml', workflow: 'safe' }); });
+beforeEach(() => { vi.resetAllMocks(); goal = goalRecord(); doubles.get.mockImplementation(async () => goal); doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => { goal = transform(goal); return goal; }); doubles.states.mockReturnValue([]); doubles.workflow.mockReturnValue({ steps: [] }); doubles.enqueue.mockResolvedValue({ taskName: 'task-a', tasksFile: '/project/.takt/tasks.yaml', workflow: 'safe' }); });
 it('submits isolated goal work and records its purpose in the shared memory', async () => {
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
   expect(doubles.enqueue).toHaveBeenCalledWith(expect.objectContaining({ goalId: goal.id, goalPurpose: input.purpose, goalWorkKey: 'csv', worktree: true, autoPr: false, shouldPublishBranchToOrigin: false, taskContext: { baseBranch: goal.branch }, abortSignal: signal }), expect.any(Function));
@@ -29,8 +29,8 @@ it('lets the manager decide which work can proceed while a question is pending',
   goal.questions = [{ id: '550e8400-e29b-41d4-a716-446655440001', recipient: 'human', body: '確認', status: 'pending' }];
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBeUndefined(); expect(doubles.enqueue).toHaveBeenCalledOnce();
 });
-it('rejects a prohibited workflow before enqueueing', async () => {
-  doubles.workflow.mockImplementation(() => { throw new Error('prohibited workflow'); });
+it('rejects a missing workflow before enqueueing', async () => {
+  doubles.workflow.mockReturnValue(null);
   expect((await enqueueTaktGoalTask(input, {}, signal)).isError).toBe(true); expect(doubles.enqueue).not.toHaveBeenCalled();
 });
 it.each(['paused', 'aborted'] as const)('does not enqueue work for a %s goal', async (executionStatus) => {
@@ -68,4 +68,11 @@ it('returns a bounded enqueue result without the accumulated goal histories', as
   expect(result.isError).toBeUndefined();
   expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
   expect(goal.workLog).toHaveLength(201);
+});
+
+it.each(['./work.yaml', '/work/custom.yml', '@owner/repo/work'])('accepts a workflow identifier %s with PR effects and explicit publication', async (workflow) => {
+  doubles.workflow.mockReturnValue({ steps: [{ kind: 'system', effects: [{ type: 'merge_pr' }, { type: 'close_pr' }] }] });
+  expect((await enqueueTaktGoalTask({ ...input, workflow, autoPr: true, shouldPublishBranchToOrigin: true }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.workflow).toHaveBeenCalledWith(workflow, input.cwd);
+  expect(doubles.enqueue).toHaveBeenCalledWith(expect.objectContaining({ workflow, autoPr: true, shouldPublishBranchToOrigin: true, worktree: true, taskContext: { baseBranch: goal.branch } }), expect.any(Function));
 });

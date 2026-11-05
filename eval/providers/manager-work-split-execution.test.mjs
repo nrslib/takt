@@ -13,11 +13,10 @@ import { runManagerExecution } from './manager-work-split-execution-worker.mjs';
 import ManagerExecutionProvider, { executionConfig, runExecutionWorker } from './manager-work-split-execution.mjs';
 import assertExecution, { gradeExecution } from '../asserts/manager-work-split-execution.mjs';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
-import { getProvider } from '../../dist/infra/providers/index.js';
 import { GoalStore } from '../../dist/infra/goals/store.js';
 
 const lines = (dir, path) => readFileSync(join(dir, path), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000, judge_effort: 'low' });
+const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000 });
 
 function runPassingCheck(options) {
   const workspace = join(dirname(options.cwd), 'check');
@@ -35,7 +34,7 @@ function fakeProvider(action) {
       calls++;
       assert.equal(options.sessionId, undefined);
       assert.equal(options.permissionMode, 'full');
-      assert.equal(typeof options.onToolPermissionDecision, 'function');
+      assert.equal(options.onToolPermissionDecision, undefined);
       options.abortSignal.throwIfAborted();
       const server = Object.values(options.mcpServers)[0];
       const client = new Client({ name: 'fake-manager', version: '1' });
@@ -221,7 +220,10 @@ test('grading rejects a goal-tip check in the caller checkout even under a symli
     });
     const trial = await runManagerExecution(config('integrated-task-execution'), join(root, 'artifacts'), new AbortController().signal, provider);
     assert.equal(trial.error, undefined);
-    assert.deepEqual(trial.after.git, trial.before.git);
+    const { checkoutHistory: beforeHistory, ...beforeGit } = trial.before.git;
+    const { checkoutHistory: afterHistory, ...afterGit } = trial.after.git;
+    assert.deepEqual(afterGit, beforeGit);
+    assert.notEqual(afterHistory, beforeHistory);
     const checks = lines(join(root, 'artifacts'), 'checks.jsonl');
     assert.equal(checks[0].cwd, trial.cwd);
     assert.equal(checks[0].head, trial.goalSha);
@@ -357,19 +359,15 @@ test('direct questions persist their kind, details and notification and reuse th
   }
 });
 
-test('permission decisions are delegated and an approval inquiry is persisted rather than auto-approved', async (t) => {
+test('manager execution uses normal provider tools without a permission callback', async () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-execution-test-'));
-  t.mock.method(getProvider('claude-sdk'), 'setupIsolatedStructured', () => ({ call: async () => ({ status: 'done', content: '', structuredOutput: { decision: 'ask', reason: 'Commit needs approval' } }) }));
   try {
     const provider = fakeProvider(async ({ options }) => {
-      const decision = await options.onToolPermissionDecision({ toolName: 'Bash', toolInput: { command: 'git commit -m verify' }, cwd: options.cwd, abortSignal: options.abortSignal });
-      assert.equal(decision.decision, 'deny');
+      assert.equal(options.onToolPermissionDecision, undefined);
     });
     const trial = await runManagerExecution(config('integrated-task-execution'), root, new AbortController().signal, provider);
     assert.equal(trial.error, undefined);
-    assert.equal(trial.after.questions.length, 1);
-    assert.equal(trial.after.questions[0].kind, 'approval');
-    assert.equal(gradeExecution(trial, lines(root, 'events.jsonl'), []).pass, false);
+    assert.equal(trial.after.questions.length, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

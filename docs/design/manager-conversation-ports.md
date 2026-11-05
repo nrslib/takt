@@ -14,7 +14,7 @@ Watchers use asynchronous, bounded observations. They emit events for changes an
 
 `createDaemonConversationInput` adapts the TUI and Slack `ConversationInput` to `DaemonIngress`. Assignment resolution uses registered routing data supplied by composition, not goal/task stores or provider configuration. Client-side repository normalization connects repositories in a workspace to the same conversation.
 
-An attachment fixes its authenticated speaker, assignment, port binding, and optional CLI provider/model overrides. Each human event carries those overrides. Changing the speaker through a later submit is rejected. Director accepts only conversation messages. Inquiry answers retain their target, question ID, source, and permission sentence; the child validates business permissions and current question state.
+An attachment fixes its authenticated speaker, assignment, port binding, and optional CLI provider/model overrides. Each human event carries those overrides. Changing the speaker through a later submit is rejected. Director accepts only conversation messages. Inquiry answers retain their target, question ID, and source; the child validates the target and current question state. New admissions reject the legacy `permission` field, and loading saved records strips it.
 
 `DaemonIngress.accept` durably saves an event before returning `accepted` with event ID, operation ID, and accepted sequence. Capacity, storage, and shutdown rejection never count as acceptance. Admission does not wait for a turn to finish. Proposal approval and dismissal retain the selected revision through the event; the child checks it again when executing, so a stale proposal is never implicitly approved.
 
@@ -36,7 +36,7 @@ Composition passes already-resolved repository assignments, language, channels, 
 
 Socket Mode ACK confirms transport receipt, independently of business acceptance. After the event is durably admitted, its originating thread receives an acceptance reply. Completion is delivered later to that same thread and operation. Requests derived from a Slack event use a stable request ID to deduplicate transport retries. Bot messages, DMs, unconfigured channels, and users outside the destination's allowlist are ignored.
 
-Manager and director channels may be shared. A bound inquiry thread routes only to its manager and uses that manager's allowlist; other speech in a director channel routes to director. Approval buttons carry conversation ID and revision. Modal confirmations are bound to the original team, channel, user, and thread. Wrong-origin confirmations neither grant permission nor consume the original modal.
+Manager and director channels may be shared. A bound inquiry thread routes only to its manager and uses that manager's allowlist; other speech in a director channel routes to director. Goal registration buttons carry conversation ID and revision. Question answers and operation reports retain their Slack origin. Permission modals are no longer supported.
 
 Inquiry changes arrive through `delivery.deliver` from watchers or the state owner. Slack performs no initial or five-second whole-inquiry scan. The posted inquiry uses the delivered question; answering a bound thread reads its current question through the snapshot interface, and the child revalidates it on execution. Binding reads and writes are asynchronous. An unreadable binding fails closed, rather than treating the answer as ordinary conversation. Existing inquiries remain accessible through the TUI.
 

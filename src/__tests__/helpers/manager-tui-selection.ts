@@ -219,26 +219,6 @@ it('sends /make-goal as a free-text inquiry answer without requesting a goal pro
   });
 });
 
-it.each([false, true])('shows partial success with permissionAppended and preserves only an unsaved answer (answerSaved=%s)', async (answerSaved) => {
-  const item = question();
-  const context = mounted([item]);
-  await openAnswer(context);
-  context.app.stdin.write('custom answer');
-  await waitFor(() => expect(promptFrame(context)).toContain('custom answer'));
-  context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.client.commands()).toHaveLength(1));
-  context.client.output({ kind: 'result', operationId: await context.client.operation(),
-    result: { kind: 'error', code: 'operation_failed', message: 'Follow-up failed', permissionAppended: true, answerSaved } });
-  await waitFor(() => {
-    expect(context.app.lastFrame()).toContain('Follow-up failed');
-    expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.permission_appended', 'en'));
-    if (answerSaved) expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.answer_saved', 'en'));
-    else expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.answer_saved', 'en'));
-    expect(promptFrame(context)).toContain(answerSaved ? 'Discuss your goal' : 'custom answer');
-  });
-  expect(context.client.commands()).toHaveLength(1);
-});
-
 it('keeps the standalone owner and does not substitute a goal target when sending an answer', async () => {
   const inquiry = question().inquiry;
   const owner = { kind: 'repository' as const, repositoryDirectory: cwd };

@@ -120,8 +120,8 @@ it('waits for director MCP tool cleanup before completing the turn', async () =>
     void scope.run(async () => { started.resolve(); await cleanup.promise; });
     return { message: 'done' };
   });
-  const execution = prepared.executor.execute({ prompt: 'message', instruction: 'message', sessionId: undefined,
-    assignment: undefined, configDirectory: '/config', abortSignal: signal() });
+  const execution = prepared.executor.execute({ prompt: 'message', sessionId: undefined,
+    assignment: undefined, abortSignal: signal() });
   await started.promise;
   let completed = false; void execution.then(() => { completed = true; });
   await Promise.resolve(); expect(completed).toBe(false); expect(doubles.dispose).not.toHaveBeenCalled();

@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  addGoalQuestion, answerGoalQuestion, consumeGoalApproval, isGoalApprovalUsable,
-  isSameGoalOperation, withdrawGoalQuestion, withdrawPendingGoalQuestions,
+  addGoalQuestion, answerGoalQuestion,
+  withdrawGoalQuestion, withdrawPendingGoalQuestions,
 } from '../infra/goals/questions.js';
 import { GoalQuestionSchema, type Goal, type GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { consumeInquiryApproval } from '../infra/goals/inquiry.js';
 
 const now = '2026-10-19T01:00:00.000Z';
 const later = '2026-10-19T02:00:00.000Z';
@@ -26,7 +25,7 @@ function inquiry(goal: Goal, id: string): GoalQuestion {
   return found;
 }
 
-describe('inquiry creation and operation identity', () => {
+describe('inquiry creation', () => {
   it.each(['question', 'approval', 'operation_request'] as const)('creates an explicit %s kind without changing the input goal', (kind) => {
     const original = goalRecord();
     const before = structuredClone(original);
@@ -38,37 +37,6 @@ describe('inquiry creation and operation identity', () => {
   it('defaults the existing question call to an explicit question kind', () => {
     const created = addGoalQuestion(goalRecord(), { body: '形式はどれですか' });
     expect(inquiry(created.goal, created.questionId)).toMatchObject({ kind: 'question' });
-  });
-
-  it('identifies the same operation after parsing saved data', () => {
-    const saved = approval();
-    const restored = GoalQuestionSchema.parse(JSON.parse(JSON.stringify(inquiry(saved.goal, saved.questionId))));
-    const fresh = approval();
-    expect(isSameGoalOperation(restored, inquiry(fresh.goal, fresh.questionId))).toBe(true);
-  });
-
-  it.each([
-    { toolName: 'Write' }, { args: '{"command":"git diff"}' }, { cwd: '/other-project' },
-  ])('distinguishes a changed operation field %j', (change) => {
-    const original = approval();
-    const changed = approval(change);
-    expect(isSameGoalOperation(inquiry(original.goal, original.questionId), inquiry(changed.goal, changed.questionId))).toBe(false);
-  });
-
-  it('distinguishes a changed target SHA', () => {
-    const original = approval();
-    const changed = approval({}, 'b'.repeat(40));
-    expect(isSameGoalOperation(inquiry(original.goal, original.questionId), inquiry(changed.goal, changed.questionId))).toBe(false);
-  });
-
-  it('distinguishes different arguments even when their saved redactions are equal', () => {
-    const first = approval({ args: '{"token":"alpha"}' });
-    const second = approval({ args: '{"token":"beta"}' });
-    const left = inquiry(first.goal, first.questionId);
-    const right = inquiry(second.goal, second.questionId);
-    expect(left.operation?.args).toBe('{"token":"[REDACTED]"}');
-    expect(right.operation?.args).toBe(left.operation?.args);
-    expect(isSameGoalOperation(left, right)).toBe(false);
   });
 
   it.each(['toolName', 'args', 'cwd'] as const)('rejects approval without %s', (field) => {
@@ -142,7 +110,7 @@ describe('structured inquiry answers', () => {
   });
 });
 
-describe('withdrawal and approval consumption', () => {
+describe('inquiry withdrawal', () => {
   it('records a withdrawal reason and time and preserves them on a repeated withdrawal', () => {
     const created = approval();
     const withdrawn = withdrawGoalQuestion(created.goal, created.questionId, '操作が不要になりました');
@@ -189,35 +157,5 @@ describe('withdrawal and approval consumption', () => {
 
   it('accepts a goal without inquiries in bulk withdrawal', () => {
     expect(withdrawPendingGoalQuestions(goalRecord(), 'ゴールを中止しました', now)).toEqual(goalRecord());
-  });
-
-  it.each(['once', 'global'] as const)('consumes a %s approval exactly once', (scope) => {
-    const created = approval();
-    const allowed = answerGoalQuestion(created.goal, created.questionId, { decision: 'allow', scope });
-    expect(isGoalApprovalUsable(inquiry(allowed, created.questionId))).toBe(true);
-    const before = structuredClone(allowed);
-
-    const consumed = consumeGoalApproval(allowed, created.questionId, now);
-
-    expect(consumeInquiryApproval(inquiry(allowed, created.questionId), now)).toEqual(inquiry(consumed, created.questionId));
-    expect(inquiry(consumed, created.questionId).consumedAt).toBe(now);
-    expect(isGoalApprovalUsable(inquiry(consumed, created.questionId))).toBe(false);
-    expect(() => consumeGoalApproval(consumed, created.questionId, later)).toThrow();
-    expect(allowed).toEqual(before);
-  });
-
-  it.each(['pending', 'denied', 'withdrawn', 'question', 'operation_request'] as const)('does not use or consume a %s inquiry as approval', (state) => {
-    const created = state === 'question' || state === 'operation_request'
-      ? addGoalQuestion(goalRecord(), { kind: state, body: '確認してください' }) : approval();
-    let goal = created.goal;
-    if (state === 'denied') goal = answerGoalQuestion(goal, created.questionId, { decision: 'deny' });
-    if (state === 'withdrawn') goal = withdrawGoalQuestion(goal, created.questionId);
-    if (state === 'question') goal = answerGoalQuestion(goal, created.questionId, 'OK');
-    if (state === 'operation_request') goal = answerGoalQuestion(goal, created.questionId, { report: 'completed' });
-    const before = structuredClone(goal);
-    expect(isGoalApprovalUsable(inquiry(goal, created.questionId))).toBe(false);
-    expect(() => consumeGoalApproval(goal, created.questionId, now)).toThrow();
-    expect(() => consumeInquiryApproval(inquiry(goal, created.questionId), now)).toThrow();
-    expect(goal).toEqual(before);
   });
 });
