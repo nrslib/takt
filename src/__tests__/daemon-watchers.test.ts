@@ -246,7 +246,7 @@ describe('ログ停止', () => {
   it('組立済みの見張りもログ未作成の停止を検出し、作成後は通常の監視に戻る', async () => {
     const h = harness();
     const target = { ...run, logPath: null };
-    const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([target]), run: vi.fn().mockResolvedValue(target),
+    const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([target]), run: vi.fn().mockResolvedValue(target),
       pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]),
       launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
     const errors = vi.fn();
@@ -566,7 +566,7 @@ describe('fs.watchと限定照合', () => {
 
 it('組立済みの見張りは各周期で観測し、停止後には再開しない', async () => {
   const h = harness();
-  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
+  const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
     inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
     ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
@@ -586,7 +586,7 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
 it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だけを届ける', async () => {
   const h = harness();
   filesystem.stat.mockResolvedValue({ dev: 1, ino: 1, size: 2, mtimeMs: Date.now(), ctimeMs: Date.now(), isFile: () => true });
-  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
+  const source: DaemonWatchSource = { readRunProgress: vi.fn(), runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
     pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue([]), goals: vi.fn().mockResolvedValue([]),
     launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const errors = vi.fn();
@@ -600,6 +600,30 @@ it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だ
   expect(h.accepted.size).toBe(1);
   expect(errors).not.toHaveBeenCalled();
   await watchers.close();
+});
+
+it('組立済みのrun監視は停止時にreaderへ渡したsignalを中断する', async () => {
+  const h = harness();
+  const entered = deferred<AbortSignal>();
+  const target = { ...run, metaPath: '/meta.json' };
+  const source: DaemonWatchSource = { runs: async () => [target], run: async () => target,
+    readRunProgress: vi.fn((_path: string, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(signal!.reason), { once: true });
+      entered.resolve(signal!);
+    })),
+    pullRequests: async () => [], inquiries: async () => [], goals: async () => [], launches: async () => [], directories: async () => [] };
+  const watchers = startDaemonWatchers({ source, processes: { inspect: async () => ({ kind: 'alive', owner: run.owner! }) },
+    commands: { run: vi.fn() }, records: h.records, ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
+  try {
+    const signal = await entered.promise;
+    expect(signal.aborted).toBe(false);
+    await watchers.close();
+    expect(signal.aborted).toBe(true);
+    expect(source.readRunProgress).toHaveBeenCalledWith(target.metaPath, signal);
+    watchers.changed();
+    await watchers.drain();
+    expect(source.readRunProgress).toHaveBeenCalledOnce();
+  } finally { await watchers.close(); }
 });
 
 it('ゴールの長期停滞は保存時刻から判定し、同じ状態ではイベントを増やさない', async () => {

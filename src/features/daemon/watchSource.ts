@@ -19,6 +19,7 @@ import { globalDaemonConfiguration, readDaemonConfiguration } from './configurat
 import type { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
+import type { RunProgress } from './watchers/runProgress.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const safeName = (name: string): string => {
@@ -31,6 +32,9 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   private readonly goalReader = new WatchGoalReader();
 
   async close(): Promise<void> { await this.goalReader.close(); }
+  readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined> {
+    return this.goalReader.readRunProgress(path, signal);
+  }
   private readonly inquiriesSeen = new Map<string, string>();
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,

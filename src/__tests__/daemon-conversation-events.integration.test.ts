@@ -2,6 +2,7 @@ import { installDaemonErrorLog, reportDaemonError } from '../infra/daemon/diagno
 import { DaemonLogger } from '../infra/daemon/logger.js';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { Worker } from 'node:worker_threads';
 import type { ChildProcess } from 'node:child_process';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
@@ -1135,13 +1136,16 @@ it.each([false, true])('reads run metadata in the execution directory (merge tas
     goal_id: goal.id, run_slug: 'run', worktree_path: 'clone', merge_task: mergeTask,
     created_at: '2026-11-03T00:00:00Z', started_at: '2026-11-03T00:00:00Z', completed_at: null }] }));
   const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
+  const post = vi.spyOn(Worker.prototype, 'postMessage');
   const [target] = await source.runs();
   expect(target!.metaPath).toBe(join(runDirectory, 'meta.json'));
-  const { readRunProgress } = await import('../features/daemon/watchers/runProgress.js');
   const records = new FileWatchRecords(f.directory);
   const checks = new WatchChecks(new WatchObservations(records, f.dispatcher, () => Date.parse('2026-11-03T02:00:01Z')),
     () => Date.parse('2026-11-03T02:00:01Z'), (error) => { throw error; }, 'run');
-  await checks.runProgress(target!, readRunProgress, () => source.run(target!.targetId));
+  await checks.runProgress(target!, (path) => source.readRunProgress(path), () => source.run(target!.targetId));
+  expect(await source.readRunProgress(target!.metaPath!)).toMatchObject({ runSlug: 'run', running: true });
+  expect(new Set(post.mock.calls.map(([request]) => (request as { kind: string }).kind))).toEqual(new Set(['goal', 'run']));
+  expect(new Set(post.mock.contexts).size).toBe(1);
   const long = await f.runner.started(1);
   expect(long.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'run_too_long' } });
   await f.runner.finish(long);

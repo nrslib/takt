@@ -1,7 +1,5 @@
 import { z } from 'zod/v4';
-import { Worker } from 'node:worker_threads';
 import { runStepIdentity, RunStepExecutionsSchema, type RunStepExecution } from '../../../core/workflow/run/step-executions.js';
-import { WATCH_INTERVALS } from './loop.js';
 
 const frame = z.object({ workflow: z.string().min(1), workflow_ref: z.string().min(1), step: z.string().min(1),
   occurrence: z.number().int().positive(), step_iterations: z.record(z.string().min(1), z.number().int().positive()).optional() });
@@ -35,31 +33,4 @@ export function parseRunProgress(value: unknown): RunProgress {
     }
   }
   return { runSlug: meta.runSlug, running: meta.status === 'running', startedAt: meta.startTime, steps };
-}
-
-/** 増え続ける実行回数の解析はワーカーに隔離し、停止と観測期限で打ち切れるようにする。 */
-export async function readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined> {
-  const deadline = AbortSignal.timeout(WATCH_INTERVALS.long);
-  const cancellation = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-  cancellation.throwIfAborted();
-  const worker = new Worker(new URL('./runProgressWorker.js', import.meta.url), {
-    workerData: path,
-    execArgv: import.meta.url.endsWith('.ts') ? ['--import', 'tsx'] : [],
-  });
-  let abort: (() => void) | undefined;
-  try {
-    return await new Promise<RunProgress | undefined>((resolve, reject) => {
-      abort = () => reject(cancellation.reason);
-      cancellation.addEventListener('abort', abort, { once: true });
-      worker.once('message', (reply: { ok: true; progress: RunProgress | undefined } | { ok: false; message: string }) => {
-        if (reply.ok) resolve(reply.progress);
-        else reject(new Error(reply.message));
-      });
-      worker.once('error', reject);
-      worker.once('exit', (code) => reject(new Error(`Run progress reader exited (${code})`)));
-    });
-  } finally {
-    if (abort !== undefined) cancellation.removeEventListener('abort', abort);
-    await worker.terminate();
-  }
 }
