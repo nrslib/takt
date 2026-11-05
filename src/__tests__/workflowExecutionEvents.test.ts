@@ -91,7 +91,9 @@ function createBridgeHarness(options?: {
     current: options?.display ?? null,
   };
   const runMetaManager = {
+    recordStep: vi.fn(),
     updateStep: vi.fn(),
+    recordWorkflowCall: vi.fn(),
     updatePhase: vi.fn(),
     updateResumePoint: vi.fn(),
     finalize: vi.fn(),
@@ -452,8 +454,8 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
-    const { engine, sessionLogger } = createBridgeHarness();
+  it('workflow_call lifecycle を SessionLogger と run の回数記録へ橋渡しする', () => {
+    const { engine, sessionLogger, runMetaManager } = createBridgeHarness();
     const lifecycle = {
       parentWorkflow: 'project:sha256:parent',
       step: 'delegate',
@@ -475,6 +477,7 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('workflow_call:start', lifecycle);
     engine.emit('workflow_call:complete', complete);
 
+    expect(runMetaManager.recordWorkflowCall).toHaveBeenCalledExactlyOnceWith(lifecycle.stack);
     expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
     expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
   });

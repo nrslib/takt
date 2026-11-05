@@ -30,6 +30,7 @@ import { startWatchLoop, type WatchLoop } from './watchers/loop.js';
 import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
+import { startManagerPatrols } from './patrols.js';
 
 /** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
 export async function startDaemon(options: {
@@ -50,6 +51,8 @@ export async function startDaemon(options: {
   const slackReady = new Promise<typeof slack>((resolve) => { resolveSlack = resolve; });
   let watchers: ReturnType<typeof startDaemonWatchers> | undefined;
   let idleCheck: WatchLoop | undefined;
+  let patrols: WatchLoop | undefined;
+  let source: FileDaemonWatchSource | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
@@ -72,8 +75,8 @@ export async function startDaemon(options: {
   const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
   const resources = { async close() {
     await startupFinished;
-    const results = await Promise.allSettled([idleCheck?.close(), watchers?.close(), slack?.close(), ipc?.close()]);
-    const delivery = await Promise.allSettled([conversations.close()]);
+    const results = await Promise.allSettled([idleCheck?.close(), patrols?.close(), watchers?.close(), slack?.close(), ipc?.close()]);
+    const delivery = await Promise.allSettled([conversations.close(), source?.close()]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
     if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');
@@ -136,17 +139,21 @@ export async function startDaemon(options: {
     options.signal.throwIfAborted();
     const files = new DaemonPersistedFiles(directory);
     const records = new FileWatchRecords(directory);
-    const source = new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
+    const watchSource = source = new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
       new WatchObservations(records, dispatcher, Date.now));
-    watchers = startDaemonWatchers({ source,
+    watchers = startDaemonWatchers({ source: watchSource,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {
         if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
         else {
           for (const assignment of await routing.assignments()) await conversations.ensure(assignment);
           watchers?.changed();
+          patrols?.wake();
         }
       }, now: Date.now, onError: (_target, error) => reportDaemonError(error) });
+    patrols = startManagerPatrols({ targets: () => watchSource.patrols(), goals: (directory) => watchSource.patrolGoalIds(directory),
+      pending: (id) => dispatcher.hasPendingPatrol(id),
+      ingress: dispatcher, now: Date.now, onError: reportDaemonError });
     slack = await createDaemonSlackPorts({ repositories, configDirectory: directory, input, tokens: options.tokens, signal: options.signal,
       director: { language: global.language ?? 'en', slack: global.director?.slack === undefined ? undefined
         : { channelId: global.director.slack.channel_id, allowedUserIds: global.director.slack.allowed_user_ids } } });
@@ -159,7 +166,7 @@ export async function startDaemon(options: {
     idleCheck = startWatchLoop(500, async () => {
       if (Date.now() < idleAfter || !idle()) return;
       await watchers?.drain();
-      if (!await source.hasWork(files) && idle()) void close().catch(reportDaemonError);
+      if (!await watchSource.hasWork(files) && idle()) void close().catch(reportDaemonError);
     }, reportDaemonError);
     return { dispatcher, input, conversations, watchers, stopped, close };
   } catch (error) {

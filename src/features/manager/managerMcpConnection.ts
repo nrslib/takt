@@ -9,6 +9,7 @@ export type ManagerMcpConnection = LocalMcpConnection;
 export interface ManagerConversationTurn {
   operationId: string;
   directorMessage: boolean;
+  patrol?: boolean;
 }
 
 export async function startManagerMcpConnection(cwd: string, assignment?: ManagerAssignmentIdentity, conversationTurn?: () => ManagerConversationTurn | undefined, enableGoalExecutionTools = true, turnScope?: TurnToolScope) {

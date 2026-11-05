@@ -1,4 +1,4 @@
-import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { createWatchSource } from './helpers/daemon-watch-source.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -691,7 +691,7 @@ it.each(['answered', 'withdrawn'] as const)('keeps the TUI attached when the wat
     status: 'pending' as const, createdAt: '2026-11-03T00:00:00Z' };
   const goal = { ...goalRecord(), questions: [question] }; saveGoal(goal);
   const value = await authenticated(); const attachment = await opened(value); await value.items(attachment.read.transferId);
-  const source = new FileDaemonWatchSource(fixture.conversations, (notice) => fixture.dispatcher.inquiry(notice), (error) => { throw error; });
+  const source = createWatchSource(fixture.conversations, (notice) => fixture.dispatcher.inquiry(notice), (error) => { throw error; });
   await source.inquiries(); await fixture.conversations.close();
   saveGoal({ ...goal, questions: [{ ...question, status, ...(status === 'answered'
     ? { answer: { text: 'answer', source: 'tui' as const, answeredAt: '2026-11-03T00:01:00Z' } }

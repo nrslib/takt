@@ -1,8 +1,10 @@
 import { stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import type { TaskRef } from '../../../core/daemon/events.js';
 import type { IoOptions, ProcessOwner, ProcessPort } from '../../../core/daemon/io.js';
 import { WATCH_THRESHOLDS } from './loop.js';
 import { watchKey, WatchObservations, type WatchTarget } from './observations.js';
+import type { RunProgress } from './runProgress.js';
 
 export interface RunWatchTarget extends WatchTarget {
   task: TaskRef;
@@ -11,6 +13,7 @@ export interface RunWatchTarget extends WatchTarget {
   paused: boolean;
   awaitingAnswer: boolean;
   logPath: string | null;
+  metaPath: string | null;
   startedAt: string | null;
 }
 
@@ -60,7 +63,7 @@ export class WatchChecks {
     private readonly observations: WatchObservations,
     private readonly now: () => number,
     private readonly onError: (target: WatchTarget, error: unknown) => void,
-    private readonly scope: 'process' | 'log' | 'pr' | 'inquiry' | 'goal' | 'launch',
+    private readonly scope: 'process' | 'log' | 'run' | 'pr' | 'inquiry' | 'goal' | 'launch',
   ) {}
 
   retain(targets: readonly WatchTarget[]): void {
@@ -145,6 +148,27 @@ export class WatchChecks {
       ...this.observations.evidence(target), kind: 'inquiry_stalled', repositoryDirectory: target.repositoryDirectory,
       questionId: target.questionId, goalId: target.goalId,
     });
+  }
+
+  async runProgress(target: RunWatchTarget, read: (path: string) => Promise<RunProgress | undefined>,
+    reread: () => Promise<RunWatchTarget | undefined>): Promise<void> {
+    if (!target.running || target.metaPath === null || target.task.runSlug === undefined) return;
+    const progress = await read(target.metaPath);
+    if (progress === undefined || !progress.running) return;
+    if (progress.runSlug !== target.task.runSlug) throw new Error('Run metadata slug differs from its task');
+    const current = await reread();
+    if (current === undefined || current.generation !== target.generation || !current.running || current.metaPath !== target.metaPath) return;
+    const run = { ...target, generation: progress.runSlug };
+    if (this.now() - Date.parse(progress.startedAt) > WATCH_THRESHOLDS.runDuration) {
+      await this.observations.abnormal(run, { ...this.observations.evidence(run), kind: 'run_too_long',
+        task: target.task, startedAt: progress.startedAt });
+    }
+    for (const step of progress.steps) {
+      if (step.count <= WATCH_THRESHOLDS.stepRepetitions) continue;
+      const repeated = { ...run, targetId: createHash('sha256').update(JSON.stringify([target.targetId, step.identity])).digest('hex') };
+      await this.observations.abnormal(repeated, { ...this.observations.evidence(repeated), kind: 'run_step_repeated',
+        task: target.task, workflow: step.workflow, step: step.step, stepIdentity: step.identity, count: step.count });
+    }
   }
 
   async goal(target: GoalWatchTarget): Promise<void> {

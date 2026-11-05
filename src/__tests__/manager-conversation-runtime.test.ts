@@ -66,17 +66,17 @@ it('waits for MCP disposal during close and reports its failure', async () => {
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it('exposes only the active non-aborted director turn to MCP authorization', async () => {
+it.each([false, true])('exposes only active non-aborted turn metadata to MCP (patrol: %s)', async (patrol) => {
   const prepared = await runtime.resolve(assignment, signal);
-  const options = doubles.connect.mock.calls[0]![3] as { conversationTurn(): { operationId: string; directorMessage: boolean } | undefined };
+  const options = doubles.connect.mock.calls[0]![3] as { conversationTurn(): { operationId: string; directorMessage: boolean; patrol?: boolean } | undefined };
   expect(options.conversationTurn()).toBeUndefined();
   const controller = new AbortController(); const gate = deferred<void>(); const started = deferred<void>();
   doubles.execute.mockImplementation(async () => { started.resolve(); await gate.promise; return { message: 'done', summary: null }; });
   const execution = prepared.executor.execute({ prompt: 'message', instruction: 'message', configDirectory: '/config',
     sessionId: 'session', assignment: { kind: 'repository', repositoryDirectory: '/repository' }, abortSignal: controller.signal,
-    conversationOperationId: 'operation', directorMessage: true });
+    conversationOperationId: 'operation', directorMessage: !patrol, patrol });
   await started.promise;
-  expect(options.conversationTurn()).toEqual({ operationId: 'operation', directorMessage: true });
+  expect(options.conversationTurn()).toEqual({ operationId: 'operation', directorMessage: !patrol, patrol });
   controller.abort();
   expect(options.conversationTurn()).toBeUndefined();
   gate.resolve(); await execution;

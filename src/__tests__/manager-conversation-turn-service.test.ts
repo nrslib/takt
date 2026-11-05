@@ -161,3 +161,30 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
     expect(f.resolve).toHaveBeenCalledOnce(); expect(f.execute).toHaveBeenCalledOnce();
   }
 });
+
+it('inspects active patrol goals together using the saved conversation and no registration proposal', async () => {
+  const f = fixture();
+  const active = goalRecord(); const paused = { ...goalRecord(), id: randomUUID(), executionStatus: 'paused' };
+  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : paused);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, paused.id] };
+  const message = 'Patrol: 1 goal, no anomalies';
+  f.execute.mockResolvedValue({ message, summary: null, sessionId: 'next', assignment: undefined });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message },
+    change: { session: { sessionId: 'next' } } });
+  const turn = f.execute.mock.calls[0]![0];
+  expect(JSON.parse(turn.instruction)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
+    instruction: expect.any(String) });
+  expect(turn).toMatchObject({ patrol: true, sessionId: 'shared-session' });
+  expect(doubles.updateGoal).not.toHaveBeenCalled();
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each(['paused', 'aborted', 'completed'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
+  const f = fixture();
+  const goal = goalRecord();
+  doubles.getGoal.mockResolvedValue(status === 'completed' ? { ...goal, status } : { ...goal, executionStatus: status });
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+});

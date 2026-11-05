@@ -563,6 +563,7 @@ export function bindWorkflowExecutionEvents(
   });
 
   deps.engine.on('workflow_call:start', (lifecycle) => {
+    deps.runMetaManager.recordWorkflowCall(lifecycle.stack);
     deps.sessionLogger.onWorkflowCallStart(lifecycle);
   });
 
@@ -586,6 +587,7 @@ export function bindWorkflowExecutionEvents(
     state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(resumeStepName, iteration, state.lastResumePoint);
+    deps.runMetaManager.recordStep(step.name, workflowStack);
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {

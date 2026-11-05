@@ -6,9 +6,9 @@ This is the event-driven conversation contract. The event and process contracts 
 
 The daemon owns admission, two durable queues, conversation state, snapshots, delivery routes, and lightweight watchers. It never runs business preparation, AI, MCP tools, task execution, or synchronous business-store scans. Each conversation has one persistent child process for those operations. Human input and event turns share that conversation and provider session.
 
-There are exactly two model queues: human input (including inquiry answers) and other events (including director messages). At the next turn boundary, human input has priority. Acceptance order is preserved within each queue and conversation. A running turn is never preempted by a new message. Interrupt targets its operation ID and generation and never removes queued input.
+There are exactly two model queues: human input (including inquiry answers) and other events (including director messages and patrols). At the next turn boundary, human input has priority, followed by ordinary events, then patrols. Within the other queue, waiting ordinary events take precedence over patrols, including while persistence or a conversation slot is pending. Acceptance order is preserved within each conversation's human input, ordinary events and patrols. After human input is durably accepted, a running patrol in the same conversation is interrupted; other running turns are not preempted. Interrupt targets its operation ID and generation and never removes queued input. An interrupted patrol is settled without requeueing; the next scheduled interval can enqueue a new patrol. Patrols deliver only their completed result to the TUI, without intermediate output.
 
-Watchers use asynchronous, bounded observations. They emit events for changes and anomalies, without calling a model on a clock. There is no scheduled model patrol or observer child process. Failed or interrupted work is rerun only on an explicit human request. Retrying a failed persistence operation reuses the stored result and never reruns AI.
+Watchers use asynchronous, bounded observations. They emit events for changes and anomalies, without calling a model themselves. Separately, manager patrols enqueue one turn per repository at the configured interval (30 minutes by default), only while active goals exist. Patrols use the other lane, never accumulate within a conversation, and do not replay missed intervals. Director patrols remain disabled. Failed or interrupted work is rerun only on an explicit human request. Retrying a failed persistence operation reuses the stored result and never reruns AI.
 
 ## Admission and control
 
@@ -60,7 +60,7 @@ Event persistence follows accept → started → result → settled. On restart,
 
 ## 現在の結線と制約
 
-`runDaemon.ts` は `createDaemonConversationInput` を dispatcher と非同期の会話状態所有者へ接続する。watcher の問い合わせ変更は会話配送を通して TUI と Slack へ届く。Slack ポートには解決済みの設定を渡す。子の director 要求は dispatcher と状態所有者が認可し、イベント受付・通知保存・接続ポートの照会を処理する。旧 daemon のモデル巡回と自己 IPC の呼び出し経路は廃止され、daemon から到達する同期 API は lint で常時禁止されている。
+`runDaemon.ts` は `createDaemonConversationInput` を dispatcher と非同期の会話状態所有者へ接続する。watcher の問い合わせ変更は会話配送を通して TUI と Slack へ届く。Slack ポートには解決済みの設定を渡す。子の director 要求は dispatcher と状態所有者が認可し、イベント受付・通知保存・接続ポートの照会を処理する。旧 daemon のゴール単位の巡回と自己 IPC の呼び出し経路は廃止され、manager の定期的な見回りはリポジトリ単位で other キューへ入る。daemon から到達する同期 API は lint で常時禁止されている。
 
 run 消失の観測は子で状態を再確認し、現在の実行ならタスクを修復して completion を受け箱へ保存する。古い観測は処理済みとして終える。AI が扱うのは後続の task_completed / task_failed のみで、消失の観測では呼ばない。開始時刻が不明でも PID は保持し、不存在が確かめられた場合だけ消失と扱う。存在する PID の本人確認ができなければ unknown を維持する。director はゴール状態・未回答質問・blocked 通知 ID の変化を観測し、同じ保存済み通知では再起動後もイベントを増やさない。
 

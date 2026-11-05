@@ -2,10 +2,10 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalQuestionSchema, GoalSchema, type Goal, type GoalQuestion } from '../../../infra/goals/schema.js';
+import { GoalQuestionSchema, type GoalQuestion } from '../../../infra/goals/schema.js';
+import type { WatchGoalReader, WatchGoal } from './goalReader.js';
 import { isMissing, listWatchEntries, readSmallJson } from './files.js';
 
-export const GOAL_FILE_NAME = 'goal.json';
 export const TASKS_FILE_NAME = 'tasks.yaml';
 
 // 業務側の巨大な schema 依存は持ち込まず、観測に使う列だけを検証する。
@@ -32,17 +32,15 @@ export async function readWatchTasks(cwd: string): Promise<readonly WatchTask[]>
   return TasksSchema.parse(document.toJS({ maxAliasCount: 0 })).tasks;
 }
 
-export async function readWatchGoal(cwd: string, id: string): Promise<Goal> {
-  const goal = GoalSchema.parse(JSON.parse(await readFile(join(cwd, '.takt', 'goals', z.uuid().parse(id), GOAL_FILE_NAME), 'utf8')) as unknown);
-  if (goal.id !== id) throw new Error('Goal ID differs from its directory');
-  return goal;
+export async function readWatchGoal(cwd: string, id: string, reader: WatchGoalReader): Promise<WatchGoal> {
+  return reader.read(cwd, id);
 }
 
-export async function* readWatchGoals(cwd: string, onError: (error: unknown) => void): AsyncGenerator<Goal> {
+export async function* readWatchGoals(cwd: string, onError: (error: unknown) => void, reader: WatchGoalReader): AsyncGenerator<WatchGoal> {
   for (const entry of await listWatchEntries(join(cwd, '.takt', 'goals'))) {
     if (!entry.isDirectory() || !z.uuid().safeParse(entry.name).success) continue;
     let goal;
-    try { goal = await readWatchGoal(cwd, entry.name); }
+    try { goal = await readWatchGoal(cwd, entry.name, reader); }
     catch (error) { onError(error); continue; }
     yield goal;
   }

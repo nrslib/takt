@@ -6,6 +6,7 @@ import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange 
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './loop.js';
 import { WatchObservations, type WatchRecordStore, type WatchTarget } from './observations.js';
 import { observePullRequest, type PullRequestWatchTarget } from './pullRequests.js';
+import { readRunProgress } from './runProgress.js';
 
 /** 観測対象を取得する。1回の観測件数はループ側で区切る。 */
 export interface DaemonWatchSource {
@@ -36,7 +37,7 @@ export function startDaemonWatchers(dependencies: {
 }): DaemonWatchers {
   const observations = new WatchObservations(dependencies.records, dependencies.ingress, dependencies.now);
   const loops: WatchLoop[] = [];
-  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'pr' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
+  const register = <T extends WatchTarget>(scope: 'process' | 'log' | 'run' | 'pr' | 'inquiry' | 'goal' | 'launch', interval: number, read: () => Promise<readonly T[]>,
     observe: (checks: WatchChecks, target: T, signal: AbortSignal) => Promise<void>): void => {
     const checks = new WatchChecks(observations, dependencies.now, dependencies.onError, scope);
     let offset = 0;
@@ -56,6 +57,8 @@ export function startDaemonWatchers(dependencies: {
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
   register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) =>
     checks.log(target, readLogStamp, () => dependencies.source.run(target.targetId)));
+  register('run', WATCH_INTERVALS.long, () => dependencies.source.runs(), (checks, target) =>
+    checks.runProgress(target, readRunProgress, () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   register('inquiry', WATCH_INTERVALS.files, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));

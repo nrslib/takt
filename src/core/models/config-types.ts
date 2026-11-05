@@ -357,7 +357,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[];
+  manager?: { patrolInterval?: number; autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[];
     slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
@@ -451,7 +451,7 @@ export interface ProjectConfig {
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
+  manager?: { patrolInterval?: number; autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

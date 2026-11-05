@@ -12,10 +12,11 @@ export const ManagerEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
   z.object({ ...common, kind: z.literal('resumed') }).strict(),
+  // 旧受け箱の読取専用。新しい見回りは daemon の TurnEvent として受け付ける。
   z.object({ ...common, kind: z.literal('patrol') }).strict(),
 ]);
 export type ManagerEvent = z.infer<typeof ManagerEventSchema>;
-export type ManagerEventInput = ManagerEvent extends infer Event
+export type ManagerEventInput = Exclude<ManagerEvent, { kind: 'patrol' }> extends infer Event
   ? Event extends ManagerEvent ? Omit<Event, 'createdAt'> : never : never;
 export interface SavedManagerEvent { filePath: string; event: ManagerEvent }
 

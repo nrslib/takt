@@ -23,6 +23,8 @@ export type WatchObservation = {
 } & (
   | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
   | { kind: 'run_log_stalled'; task: TaskRef; lastUpdatedAt: string }
+  | { kind: 'run_too_long'; task: TaskRef; startedAt: string }
+  | { kind: 'run_step_repeated'; task: TaskRef; workflow: string; step: string; stepIdentity: string; count: number }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
   | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
@@ -41,16 +43,18 @@ export type TurnEvent =
   | { kind: 'director_message'; directorConversationId: string; text: string }
   | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
-  | { kind: 'watch_observation'; observation: WatchObservation };
+  | { kind: 'watch_observation'; observation: WatchObservation }
+  | { kind: 'patrol'; repositoryDirectory: string; goalIds: string[] };
 
 export function eventGoalReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
     case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
+    case 'patrol': return { repositoryDirectory: event.repositoryDirectory };
     case 'watch_observation': {
       const observation = event.observation;
       switch (observation.kind) {
-        case 'run_process_lost': case 'run_log_stalled': return observation.task;
+        case 'run_process_lost': case 'run_log_stalled': case 'run_too_long': case 'run_step_repeated': return observation.task;
         case 'watch_failed': case 'director_state_changed': return undefined;
         default: return observation;
       }

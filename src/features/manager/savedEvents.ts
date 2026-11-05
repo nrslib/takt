@@ -3,7 +3,6 @@ import type { Language } from '../../core/models/types.js';
 import type { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { formatGoalNotification } from '../../infra/goals/notifications.js';
 import type { Goal } from '../../infra/goals/schema.js';
-import { formatPatrolSummary } from './goalDisplay.js';
 
 type ManagerNotificationPolicy = Readonly<ReturnType<typeof resolveManagerConfig>['notifications']>;
 
@@ -17,9 +16,10 @@ export function* projectManagerDisplayEvents(goal: Goal, directory: string, lang
   startupBoundary: number | undefined, notificationStartedAt: number, policy: ManagerNotificationPolicy): Generator<ManagerDisplayEvent> {
   const project = basename(directory);
   for (const record of goal.workLog) {
+    if (record.kind === 'patrol') continue;
     if (startupBoundary !== undefined && Date.parse(record.recordedAt) < startupBoundary) continue;
     yield { id: JSON.stringify([directory, goal.id, 'work-log', record.id]),
-      message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}` };
+      message: `${goal.id}: ${record.summary}` };
   }
   for (const notification of goal.notifications ?? []) {
     if (notification.kind === 'question' || !policy[notification.kind]) continue;

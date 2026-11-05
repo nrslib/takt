@@ -236,7 +236,7 @@ export class GlobalConfigManager {
         },
       },
       manager: parsed.manager === undefined ? undefined : {
-        autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications, sensitivePaths: parsed.manager.sensitive_paths,
+        patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications, sensitivePaths: parsed.manager.sensitive_paths,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),

@@ -55,7 +55,7 @@ function harness() {
 const base: WatchTarget = { targetId: 'run-1', generation: 'execution-1', conversationId: 'manager-1' };
 const run: RunWatchTarget = { ...base,
   task: { repositoryDirectory: '/repo', goalId: 'goal-1', taskName: 'task-1', runSlug: 'run-1', executionId: 'execution-1' },
-  owner: { pid: 123, startTime: 'start-1' }, running: true, paused: false, awaitingAnswer: false, logPath: '/log',
+  owner: { pid: 123, startTime: 'start-1' }, running: true, paused: false, awaitingAnswer: false, logPath: '/log', metaPath: null,
   startedAt: '2026-11-01T00:00:00.000Z',
 };
 const inquiry: InquiryWatchTarget = { ...base, repositoryDirectory: '/repo', questionId: 'question-1', goalId: 'goal-1',
@@ -571,9 +571,9 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
     ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
   await watchers.drain();
-  expect(source.runs).toHaveBeenCalledTimes(2);
+  expect(source.runs).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(15_000);
-  expect(source.runs).toHaveBeenCalledTimes(6);
+  expect(source.runs).toHaveBeenCalledTimes(7);
   expect(source.pullRequests).toHaveBeenCalledTimes(1);
   expect(source.inquiries).toHaveBeenCalledTimes(4);
   expect(source.launches).toHaveBeenCalledTimes(1);
@@ -627,4 +627,52 @@ it('processes directory files in pages and retains unchanged entries between pag
     expect(changed.mock.calls.every(([change]) => !(change as WatchFileChange).removed)).toBe(true);
     expect(onError).not.toHaveBeenCalled();
   } finally { await loop.close(); }
+});
+
+it('notifies only after two hours and more than five step executions, once per run and step across restart', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  const started = Date.now();
+  const progress = { runSlug: run.task.runSlug!, running: true, startedAt: new Date(started).toISOString(),
+    steps: [{ identity: 'root-review', workflow: 'root', step: 'review', count: 5 }] };
+  const read = vi.fn(async () => progress);
+  const reread = async () => target;
+  vi.setSystemTime(started + WATCH_THRESHOLDS.runDuration - 1);
+  await h.checks.runProgress(target, read, reread);
+  vi.setSystemTime(started + WATCH_THRESHOLDS.runDuration);
+  await h.checks.runProgress(target, read, reread);
+  expect(h.accept).not.toHaveBeenCalled();
+  vi.setSystemTime(Date.now() + 1);
+  progress.steps[0]!.count = 6;
+  await h.checks.runProgress(target, read, reread);
+  const restarted = new WatchChecks(new WatchObservations(h.records, { accept: h.accept }, Date.now), Date.now, h.onError, 'run');
+  // PID の世代や観測できる段階が変わっても同じ run の同じ異常は再通知しない。
+  await restarted.runProgress({ ...target, generation: 'new-owner' }, read, async () => ({ ...target, generation: 'new-owner' }));
+  progress.steps = [];
+  await restarted.runProgress(target, read, reread);
+  progress.steps = [{ identity: 'root-review', workflow: 'root', step: 'review', count: 9 }];
+  await restarted.runProgress(target, read, reread);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated']);
+  progress.steps.push({ identity: 'child-review', workflow: 'child', step: 'review', count: 6 });
+  await restarted.runProgress(target, read, reread);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated', 'run_step_repeated']);
+  const next = { ...target, task: { ...target.task, runSlug: 'next' }, generation: 'next' };
+  progress.runSlug = 'next';
+  await restarted.runProgress(next, read, async () => next);
+  expect(observedKinds(h.accepted)).toEqual(['run_too_long', 'run_step_repeated', 'run_step_repeated',
+    'run_too_long', 'run_step_repeated', 'run_step_repeated']);
+});
+
+it('discards run progress after completion or replacement and rejects mismatched metadata', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  const progress = { runSlug: run.task.runSlug!, running: true, startedAt: '2020-01-01T00:00:00.000Z',
+    steps: [{ identity: 'child', workflow: 'child', step: 'review', count: 6 }] };
+  await h.checks.runProgress(target, async () => undefined, async () => target);
+  await h.checks.runProgress(target, async () => ({ ...progress, running: false }), async () => target);
+  await h.checks.runProgress(target, async () => progress, async () => undefined);
+  await h.checks.runProgress(target, async () => progress, async () => ({ ...target, running: false }));
+  await h.checks.runProgress(target, async () => progress, async () => ({ ...target, generation: 'new' }));
+  await expect(h.checks.runProgress(target, async () => ({ ...progress, runSlug: 'different' }), async () => target)).rejects.toThrow();
+  expect(h.accept).not.toHaveBeenCalled();
 });

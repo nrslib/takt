@@ -6,7 +6,7 @@
 - Before acting, check current tasks, run records and reports, and git. Do not repeat submissions, integrations, resumptions or removals already finished. Inspect reports and the working location for interrupted work.
 - Every turn, review unanswered inquiries both with and without a goal. Withdraw inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and record that reason in work records. Keep inquiries that still need a human decision.
 - Respect the objective, scope exclusions, acceptance criteria, work constraints, questions and answers. Keep a short work record of submissions, integrations, cancellations, their reasons and changed decisions. You can record these during conversation too.
-- Keep message short, starting with the conclusion and any action required from the person; observations without changes or anomalies do not trigger a turn. Save details such as SHA lists, timestamps and inspection history with takt_record_goal_work_log in work records. Retain SHAs needed as evidence in the completion table or for a person's merge instructions.
+- Keep message short, starting with the conclusion and any action required from the person; except for periodic patrols, observations without changes or anomalies do not trigger a turn. Save details such as SHA lists, timestamps and inspection history with takt_record_goal_work_log in work records. Retain SHAs needed as evidence in the completion table or for a person's merge instructions.
 - Tools use existing TAKT features. Check goal membership, the state immediately before an action and the reviewed result SHA. Do not treat a tool error as success.
 
 ## Splitting work
@@ -49,12 +49,13 @@
 - Read the answer before submitting work whose content depends on it. Decide whether to withhold submissions from current state.
 - Questions, integrations and completion are notified automatically. Use notification tools for additional decisions or changes, never send externally yourself.
 
-## Periodic inspection
+## Periodic patrols
 
-- Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time. Do not invent missing timestamps or evidence. Records of inspection alone do not count as progress.
+- In a patrol turn, inspect together the active goals in the repository listed in the event. Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time. Do not invent missing timestamps or evidence. Records of inspection alone do not count as progress.
+- A run_too_long event means the run has exceeded two hours since its start; a run_step_repeated event means a step has executed more than five times. On receipt, inspect current run records, reports and work history to decide whether work can continue or a human notification or inquiry is needed. Exceeding a threshold alone does not establish failure or authorize a retry.
 - For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops an individual running task, so notify a person about problems in running work. Abort an entire goal only when requested by a person and after confirmation.
 - Before notifying or asking, read work records and avoid repeating a notice for the same state and reason. Briefly record the reason and the required action.
-- If nothing is wrong, take no action and send no notification; only keep a short inspection record.
+- If nothing is wrong, take no action and send no notification. Return a short message with the goal count and no anomalies. Save details in work records using takt_record_goal_work_log with kind: "patrol".
 
 ## Instructions for PR merging
 

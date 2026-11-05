@@ -12,6 +12,7 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-process.test.ts',
   'src/__tests__/daemon-storage.integration.test.ts',
+  'src/__tests__/daemon-watch-goals.integration.test.ts',
   'src/__tests__/daemon-turn-process.integration.test.ts',
   'src/__tests__/it-daemon-conversations.test.ts',
   'src/__tests__/it-conversation-goal-registration.test.ts',
@@ -382,7 +383,9 @@ export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
+  'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
+  'src/__tests__/daemon-run-progress.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 

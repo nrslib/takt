@@ -14,7 +14,7 @@ import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
 import { managerInboxTurnEvent } from './inboxEvent.js';
 
-/** 以前の登録がなくても、残った巡回は起動時にモデルを使わず退役させる。 */
+/** 旧形式のゴール単位の patrol は、新しい見回りとして再生しない。 */
 export async function retireLegacyPatrols(directory: string): Promise<void> {
   const root = join(directory, 'manager-inbox');
   for (const entry of await listWatchEntries(root)) {

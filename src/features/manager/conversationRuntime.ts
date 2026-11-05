@@ -53,7 +53,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         turnScope,
         enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
         conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined
-          : { operationId: activeTurn.operationId, directorMessage: activeTurn.directorMessage },
+          : { operationId: activeTurn.operationId, directorMessage: activeTurn.directorMessage, patrol: activeTurn.patrol },
       });
       try {
         await plan.ctx.provider.preflight?.({
@@ -66,6 +66,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
             turnScope.begin(turn.abortSignal);
             activeTurn = turn.conversationOperationId === undefined ? undefined : {
               operationId: turn.conversationOperationId, directorMessage: turn.directorMessage === true, signal: turn.abortSignal,
+              patrol: turn.patrol === true,
             };
             try { return await executor.execute(turn); }
             finally { await turnScope.end(); activeTurn = undefined; }
