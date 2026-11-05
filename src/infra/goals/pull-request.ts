@@ -16,6 +16,7 @@ export class GoalPullRequestUnavailableError extends Error {}
 export async function prepareGoalPullRequest(
   cwd: string, goal: Goal, completion: NonNullable<Goal['completion']>,
   humanChecks: string | undefined, language: Language, signal: AbortSignal | undefined,
+  assertCurrent: () => Promise<void>,
 ): Promise<NonNullable<Goal['pullRequest']>> {
   signal?.throwIfAborted();
   const providerType = resolveConfigValue(cwd, 'vcsProvider') ?? detectVcsProvider(cwd);
@@ -31,12 +32,14 @@ export async function prepareGoalPullRequest(
   if (humanChecks === undefined || humanChecks.trim().length === 0) {
     throw new Error('humanChecks is required for a goal PR');
   }
+  await assertCurrent();
   try {
     await runGoalGit(cwd, ['push', '--', 'origin', `${completion.goalSha}:${toLocalBranchRef(goal.branch)}`], 4096, signal);
   } catch (error) {
     signal?.throwIfAborted();
     throw new GoalPullRequestUnavailableError(`Goal PR push failed: ${safeExternalErrorMessage(error)}`);
   }
+  await assertCurrent();
   const provider = new GitHubProvider();
   const existing = provider.findExistingPr(goal.branch, cwd);
   if (existing !== undefined) {
@@ -57,6 +60,7 @@ export async function prepareGoalPullRequest(
     `## ${getLabel('manager.goalPr.humanChecks', language)}`, humanChecks,
   ].join('\n\n');
   signal?.throwIfAborted();
+  await assertCurrent();
   const result = createPullRequestSafely(provider, {
     branch: goal.branch, base: goal.integrationBranch, title: truncateUtf8(goal.objective, 200).value, body,
   }, cwd);

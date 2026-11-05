@@ -128,6 +128,19 @@ describe('UTF-8 text ranges', () => {
 });
 
 describe('goal response projections', () => {
+  it('exposes bounded PR failure evidence in completion replies and goal reads', () => {
+    const error = 'commit_refs '.repeat(1000);
+    const pullRequestFailure = { id: goalRecord().id, goalSha: 'a'.repeat(40), recordedAt: '2026-11-06T00:00:00.000Z', error };
+    const goal = { ...goalRecord(), pullRequestFailure };
+    const reply = integrationSummary({ goal }).goal!;
+    for (const result of [goalSummary(goal), reply]) {
+      expect(result.pullRequestFailure).toMatchObject({ id: pullRequestFailure.id, goalSha: pullRequestFailure.goalSha, errorTotalBytes: Buffer.byteLength(error) });
+      expect(Buffer.byteLength(result.pullRequestFailure!.error)).toBeLessThanOrEqual(256);
+    }
+    expect(getGoalInputSchema.safeParse({ cwd: '/project', goalId: goal.id, path: 'pullRequestFailure.error' }).success).toBe(true);
+    expect(selectGoalValue(goal, 'pullRequestFailure.error')).toBe(error);
+  });
+
   it('bounds human verification previews and keeps the complete saved field retrievable', () => {
     const humanChecks = '画面を開いて結果を確認する。'.repeat(1000);
     const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };

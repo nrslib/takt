@@ -4,7 +4,9 @@ import { z } from 'zod/v4';
 import type { WatchRecord, WatchRecordStore } from '../../features/daemon/watchers/observations.js';
 import { readPrivateFile, writePrivateFile } from './privateFile.js';
 
-const record = z.object({ episode: z.number().int().positive(), active: z.boolean(), accepted: z.boolean(), input: EventInputSchema.nullable() }).strict();
+const record = z.object({ retry: z.object({
+  attempts: z.number().int().nonnegative(), lastAttemptAt: z.iso.datetime(), limitNotified: z.boolean().optional(),
+}).strict().optional(), episode: z.number().int().positive(), active: z.boolean(), accepted: z.boolean(), input: EventInputSchema.nullable() }).strict();
 
 export class FileWatchRecords implements WatchRecordStore {
   constructor(private readonly directory: string) {}

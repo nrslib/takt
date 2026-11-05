@@ -1,3 +1,5 @@
+import { goalPullRequestFailure } from '../../infra/goals/pull-request-failure.js';
+import type { GoalPullRequestRetryTarget } from './watchers/goalPullRequestRetries.js';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -16,7 +18,8 @@ import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } fro
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import type { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
+import type { IoOptions } from '../../core/daemon/io.js';
+import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const safeName = (name: string): string => {
@@ -104,6 +107,36 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       } catch (error) { this.onError(error); }
     }
     return targets;
+  }
+
+  async pullRequestRetries(): Promise<readonly GoalPullRequestRetryTarget[]> {
+    const targets: GoalPullRequestRetryTarget[] = [];
+    for await (const project of this.projects()) {
+      try {
+        for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError)) {
+          const failure = goalPullRequestFailure(goal);
+          if (failure === undefined) continue;
+          targets.push({ targetId: digest([project.repositoryDirectory, goal.id]),
+            generation: digest([failure.id, failure.goalSha, goal.branch, goal.integrationBranch, goal.completion]),
+            conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory, goalId: goal.id,
+            expectedSha: failure.goalSha, failureId: failure.id, failedAt: failure.recordedAt, error: failure.error, headBranch: goal.branch });
+        }
+      } catch (error) { this.onError(error); }
+    }
+    return targets;
+  }
+
+  async pullRequestRetry(targetId: string): Promise<GoalPullRequestRetryTarget | undefined> {
+    return (await this.pullRequestRetries()).find((target) => target.targetId === targetId);
+  }
+
+  async notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean> {
+    const directory = this.conversations.routing.directory;
+    const global = await globalDaemonConfiguration(directory);
+    const config = await readDaemonConfiguration(join(target.repositoryDirectory, '.takt', 'config.yaml'));
+    if ((config.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked) === false) return true;
+    return new DaemonPersistedFiles(directory).savePullRequestRetryLimit(target.repositoryDirectory, target.goalId,
+      target.failureId, target.expectedSha, config.language ?? global.language ?? 'en', options);
   }
 
   async inquiries(): Promise<readonly InquiryWatchTarget[]> {

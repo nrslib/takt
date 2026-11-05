@@ -17,6 +17,8 @@ import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from './pull-request.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { goalPullRequestFailure } from './pull-request-failure.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { readGoalPullRequestStatus } from './pull-request-status.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
@@ -136,7 +138,16 @@ async function prepareCompletionPullRequest(
   humanChecks: string | undefined, language: Language, signal: AbortSignal | undefined,
 ): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string }> {
   try {
-    return { pullRequest: await prepareGoalPullRequest(cwd, goal, completion, humanChecks, language, signal) };
+    return { pullRequest: await prepareGoalPullRequest(cwd, goal, completion, humanChecks, language, signal, async () => {
+      signal?.throwIfAborted();
+      const current = await new GoalStore(cwd).get(goal.id);
+      assertCompletionAllowed(current, goal);
+      if (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
+        || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url) {
+        throw new Error('Goal PR target changed during publication');
+      }
+      await assertReviewedGoalSha(cwd, goal.branch, completion.goalSha, signal);
+    }) };
   } catch (error) {
     signal?.throwIfAborted();
     if (!(error instanceof GoalPullRequestUnavailableError)) throw error;
@@ -144,8 +155,26 @@ async function prepareCompletionPullRequest(
   }
 }
 
-function recordPullRequestFailure(goal: Goal, failure: string | undefined): Goal {
-  return failure === undefined ? goal : appendGoalWorkLog(goal, { summary: failure });
+function recordPullRequestFailure(
+  goal: Goal, failure: string | undefined, previousGoal: Goal, notifications: GoalNotificationPolicy, language: Language,
+): Goal {
+  if (failure === undefined || goal.pullRequest !== undefined) {
+    return { ...goal, pullRequestFailure: undefined };
+  }
+  const failureRecord = goalPullRequestFailure(previousGoal);
+  const previous = failureRecord?.goalSha === goal.completion!.goalSha ? failureRecord : undefined;
+  const saved = appendGoalWorkLog(goal, { summary: failure });
+  const entry = saved.workLog.at(-1)!;
+  const updated = { ...saved, pullRequestFailure: {
+    id: previous?.id ?? entry.id, recordedAt: previous?.recordedAt ?? entry.recordedAt,
+    goalSha: goal.completion!.goalSha, error: failure,
+  } };
+  const notificationId = updated.pullRequestFailure.id;
+  if (updated.notifications?.some((notification) => notification.id === notificationId)) return updated;
+  return appendGoalNotification(updated, {
+    kind: 'blocked', severity: 'error',
+    body: getLabel('manager.goalPr.preparationFailed', language, { reason: failure.replace(/\s+/gu, ' ').trim() }),
+  }, notifications, notificationId);
 }
 
 export async function completeGoal(
@@ -158,6 +187,7 @@ export async function completeGoal(
   const goal = await store.get(goalId);
   await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
   if (goal.status === 'completed') return { goal };
+  assertCompletionAllowed(goal, goal);
   const targetBranch = goal.integrationBranch;
   const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   const included = await isGoalContentIncluded(cwd, expectedSha, targetSha, signal);
@@ -169,7 +199,7 @@ export async function completeGoal(
       await store.update(goalId, (current) => {
         signal?.throwIfAborted();
         assertCompletionAllowed(current, goal);
-        return recordPullRequestFailure({ ...current, ...(pullRequest === undefined ? {} : { pullRequest }) }, failure);
+        return recordPullRequestFailure({ ...current, ...(pullRequest === undefined ? {} : { pullRequest: current.pullRequest ?? pullRequest }) }, failure, current, notifications, language);
       });
     }
     const current = store.getSync(goalId);
@@ -201,7 +231,7 @@ export async function completeGoal(
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
-    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure);
+    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure, current, notifications, language);
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
       kind: 'awaiting_merge', body: summary,
     }, notifications);

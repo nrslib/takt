@@ -165,6 +165,9 @@ export const GoalRecordObjectSchema = z.object({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
+  pullRequestFailure: z.object({
+    id: z.uuid(), goalSha, recordedAt: z.iso.datetime(), error: goalText,
+  }).strict().optional(),
   pullRequest: z.object({ number: z.number().int().safe().positive(), url: z.url() }).strict().optional(),
 }).strict();
 export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {

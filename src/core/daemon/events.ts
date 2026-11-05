@@ -24,6 +24,8 @@ export type WatchObservation = {
   | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
   | { kind: 'run_log_stalled'; task: TaskRef; lastUpdatedAt: string }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
+  | { kind: 'goal_pr_retry'; repositoryDirectory: string; goalId: string; failureId: string; expectedSha: string; reason: string;
+      attempt: number; maxAttempts: number }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
   | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
   | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }

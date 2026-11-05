@@ -23,9 +23,11 @@ const completion = {
 const pr = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
 const prDetails = { number: pr.number, headBranch: goal.branch, headSha: sha, baseBranch: 'main', sameRepository: true,
   headRepositoryUrl: 'https://github.com/example/project.git', headRepositoryPushUrls: ['https://github.com/example/project.git'] };
+const assertCurrent = vi.fn<() => Promise<void>>();
 const signal = new AbortController().signal;
 beforeEach(() => {
   vi.resetAllMocks();
+  assertCurrent.mockResolvedValue(undefined);
   doubles.providerType.mockReturnValue('github');
   doubles.git.mockResolvedValue({ output: Buffer.alloc(0), code: 0, truncated: false });
   doubles.create.mockReturnValue({ success: true, url: pr.url });
@@ -42,12 +44,12 @@ it.each(['ja', 'en'] as const)('publishes the reviewed SHA before creating the P
     }
     return { success: true, url: pr.url };
   });
-  expect(await prepareGoalPullRequest('/project', goal, completion, 'Open the result', language, signal)).toEqual(pr);
+  expect(await prepareGoalPullRequest('/project', goal, completion, 'Open the result', language, signal, assertCurrent)).toEqual(pr);
 });
 
 it('reuses the existing matching PR without creating another', async () => {
   doubles.find.mockReturnValue(pr);
-  expect(await prepareGoalPullRequest('/project', goal, completion, 'Check the result', 'ja', signal)).toEqual(pr);
+  expect(await prepareGoalPullRequest('/project', goal, completion, 'Check the result', 'ja', signal, assertCurrent)).toEqual(pr);
   expect(doubles.details).toHaveBeenCalledExactlyOnceWith(1950, '/project', signal);
   expect(doubles.create).not.toHaveBeenCalled();
 });
@@ -58,26 +60,26 @@ it.each([
   { headBranch: goal.branch, baseBranch: 'main', sameRepository: false },
 ])('rejects an existing PR for another target: %j', async (details) => {
   doubles.find.mockReturnValue(pr); doubles.details.mockResolvedValue({ ...prDetails, ...details });
-  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal)).rejects.toThrow();
+  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal, assertCurrent)).rejects.toThrow();
   expect(doubles.create).not.toHaveBeenCalled();
 });
 
 it.each([undefined, '', ' \n '])('rejects missing verification steps before publishing: %s', async (checks) => {
-  await expect(prepareGoalPullRequest('/project', goal, completion, checks, 'en', signal)).rejects.toThrow();
+  await expect(prepareGoalPullRequest('/project', goal, completion, checks, 'en', signal, assertCurrent)).rejects.toThrow();
   expect(doubles.git).toHaveBeenCalledExactlyOnceWith('/project', ['remote', 'get-url', 'origin'], 4096, signal);
   expect(doubles.create).not.toHaveBeenCalled();
 });
 
 it('classifies push failure as unavailable without creating a PR', async () => {
   doubles.git.mockResolvedValueOnce({ output: Buffer.from('origin'), code: 0, truncated: false }).mockRejectedValueOnce(new Error('push failed'));
-  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal)).rejects.toBeInstanceOf(GoalPullRequestUnavailableError);
+  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal, assertCurrent)).rejects.toBeInstanceOf(GoalPullRequestUnavailableError);
   expect(doubles.find).not.toHaveBeenCalled(); expect(doubles.create).not.toHaveBeenCalled();
 });
 
 it.each([{ success: false, error: 'failure' }, { success: true }, { success: true, url: 'invalid' }])(
   'rejects failed or incomplete creation results: %j', async (result) => {
     doubles.create.mockReturnValue(result);
-    await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal)).rejects.toThrow();
+    await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal, assertCurrent)).rejects.toThrow();
   },
 );
 
@@ -88,7 +90,7 @@ it.each([
 ])('skips unsupported PR environments: %j', async ({ configured, detected }) => {
   doubles.providerType.mockReturnValue(configured);
   doubles.detected.mockReturnValue(detected);
-  await expect(prepareGoalPullRequest('/project', goal, completion, undefined, 'en', signal))
+  await expect(prepareGoalPullRequest('/project', goal, completion, undefined, 'en', signal, assertCurrent))
     .rejects.toBeInstanceOf(GoalPullRequestUnavailableError);
   expect(doubles.git).not.toHaveBeenCalled();
   expect(doubles.find).not.toHaveBeenCalled();
@@ -99,15 +101,23 @@ it('does not treat cancellation during push as PR unavailability', async () => {
   const controller = new AbortController();
   doubles.git.mockResolvedValueOnce({ output: Buffer.from('origin'), code: 0, truncated: false })
     .mockImplementationOnce(async () => { controller.abort(); throw new Error('push cancelled'); });
-  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', controller.signal))
+  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', controller.signal, assertCurrent))
     .rejects.toMatchObject({ name: 'AbortError' });
   expect(doubles.create).not.toHaveBeenCalled();
 });
 
 it('classifies a missing origin before requiring PR review steps', async () => {
   doubles.git.mockRejectedValueOnce(new Error('No such remote: origin'));
-  await expect(prepareGoalPullRequest('/project', goal, completion, undefined, 'en', signal))
+  await expect(prepareGoalPullRequest('/project', goal, completion, undefined, 'en', signal, assertCurrent))
     .rejects.toBeInstanceOf(GoalPullRequestUnavailableError);
   expect(doubles.git).toHaveBeenCalledExactlyOnceWith('/project', ['remote', 'get-url', 'origin'], 4096, signal);
+  expect(doubles.create).not.toHaveBeenCalled();
+});
+
+it('does not create a PR if the goal pauses or its tip changes while push is running', async () => {
+  assertCurrent.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Goal changed'));
+  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal, assertCurrent)).rejects.toThrow();
+  expect(doubles.git).toHaveBeenCalledTimes(2);
+  expect(doubles.find).not.toHaveBeenCalled();
   expect(doubles.create).not.toHaveBeenCalled();
 });
