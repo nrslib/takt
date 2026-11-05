@@ -1122,7 +1122,7 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
 });
 
 it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)(
-  'applies the current %s switch to saved TUI notifications without hiding questions or work records', async (kind) => {
+  'applies the current %s switch to saved TUI notifications without hiding questions or exposing work records', async (kind) => {
     const question = addGoalQuestion(goalRecord(), { body: '形式を選んでください' });
     const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
     let goal = question.goal;
@@ -1136,10 +1136,10 @@ it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'cust
     const display = await readManagerTestDisplay(cwd);
     expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
     expect(display.events.map(({ id }) => id)).toEqual([
-      JSON.stringify([cwd, goal.id, 'work-log', goal.workLog[0]!.id]),
       ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind)
         .map(({ id }) => JSON.stringify([cwd, goal.id, 'notification', id])),
     ]);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual(goal.workLog);
     expect((await new GoalStore(cwd).get(goal.id)).notifications).toEqual(goal.notifications);
   },
 );

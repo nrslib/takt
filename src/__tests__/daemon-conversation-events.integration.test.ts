@@ -553,7 +553,7 @@ it('retires an unread legacy patrol without starting a turn and only deletes oth
   expect(await readFile(path, 'utf8')).toContain('registered');
 });
 
-it('reads legacy proposal, session, patrol history and accepted human/director queues through the new stores', async () => {
+it('reads legacy proposal, session and accepted human/director queues while preserving hidden patrol history', async () => {
   let record!: ReturnType<typeof conversationRecord>;
   const f = await fixture(async (directory, repository) => {
     record = conversationRecord(repository);
@@ -570,7 +570,10 @@ it('reads legacy proposal, session, patrol history and accepted human/director q
   const read = await f.dispatcher.snapshot(f.id); const items = [];
   for await (const item of read.items) items.push(item);
   read.complete();
-  expect(items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([f.repository, goal.id, 'work-log', goal.workLog[0]!.id]), message: `${goal.id}: old history` }, recordedAt: goal.workLog[0]!.recordedAt });
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
+  expect(items).toContainEqual({ kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
+    executionStatus: goal.executionStatus, repositoryDirectory: f.repository } });
+  expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8'))).toEqual(goal);
   expect((await new ConversationStateStore(f.directory).read(f.id))!.record.directorMessages).toEqual([]);
 });
 
