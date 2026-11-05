@@ -27,7 +27,8 @@ function isSensitiveName(name: string, entry: string): boolean {
 function isSensitivePath(path: string, scope: ManagerReadScope): boolean {
   return scope.sensitivePaths.some((entry) => {
     if (!entry.includes('/') && !entry.includes('\\')) {
-      return path.split(sep).some((name) => isSensitiveName(name, entry));
+      return scope.repositoryDirectories.some((root) => isPathInside(root, path)
+        && relative(root, path).split(sep).some((name) => name.length > 0 && isSensitiveName(name, entry)));
     }
     if (entry.includes('*')) throw new Error('Unsupported sensitive path pattern');
     const expanded = expandHomePath(entry);

@@ -110,9 +110,9 @@ describe('manager read scope through the conversation provider and SDK permissio
     const temporaryDirectory = join(process.cwd(), '.tmp');
     mkdirSync(temporaryDirectory, { recursive: true });
     root = mkdtempSync(join(temporaryDirectory, 'manager-read-scope-'));
-    repository = join(root, 'repo');
-    secondRepository = join(root, 'second');
-    otherRepository = join(root, 'repo-other');
+    repository = join(root, 'private', 'repo');
+    secondRepository = join(root, 'private', 'second');
+    otherRepository = join(root, 'private', 'repo-other');
     configDirectory = process.env.TAKT_CONFIG_DIR!;
     doubles.home.mockReturnValue(join(root, 'home'));
     for (const directory of [repository, secondRepository, otherRepository]) {
@@ -215,10 +215,11 @@ describe('manager read scope through the conversation provider and SDK permissio
   });
 
   it.each([
-    '.env', '.env.production', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
-    'server.key', 'server.pem', 'server.crt', 'server.cer', 'server.p12', 'server.pfx',
+    '.env', '.env.local', 'sub/id_rsa', 'certs/server.pem',
+    'config/.env', 'config/.env.production', 'config/id_rsa', 'config/id_dsa', 'config/id_ecdsa', 'config/id_ed25519',
+    'config/server.key', 'config/server.pem', 'config/server.crt', 'config/server.cer', 'config/server.p12', 'config/server.pfx',
   ])('judges a default sensitive file inside assignment: %s', async (name) => {
-    expectJudged(await invoke('Read', { file_path: file(join(repository, 'config', name)) }));
+    expectJudged(await invoke('Read', { file_path: file(join(repository, name)) }));
   });
 
   it('judges a public-looking symlink to a sensitive file', async () => {
@@ -393,6 +394,64 @@ describe('manager read scope through the conversation provider and SDK permissio
   it('does not mistake a sibling of a configured sensitive directory for that directory', async () => {
     writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
     expectPassthrough(await invoke('Read', { file_path: file(join(repository, 'private-public', 'readme.txt')) }));
+  });
+
+  it('allows Glob over a sibling of a configured sensitive directory with a sensitive ancestor name', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    file(join(repository, 'private-public', 'readme.txt'));
+
+    expectPassthrough(await invoke('Glob', { path: join(repository, 'private-public'), pattern: '**/*.txt' }));
+  });
+
+  it('judges Glob over a configured sensitive directory with a sensitive ancestor name', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    file(join(repository, 'private', 'readme.txt'));
+
+    expectJudged(await invoke('Glob', { path: join(repository, 'private'), pattern: '**/*.txt' }));
+  });
+
+  it('allows Grep in a sibling of a configured sensitive directory with a sensitive ancestor name', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    const path = file(join(repository, 'private-public', 'readme.txt'));
+
+    expectPassthrough(await invoke('Grep', { path, pattern: 'fixture' }));
+  });
+
+  it('judges Grep in a configured sensitive directory with a sensitive ancestor name', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    const path = file(join(repository, 'private', 'readme.txt'));
+
+    expectJudged(await invoke('Grep', { path, pattern: 'fixture' }));
+  });
+
+  it('judges a configured sensitive directory inside a repository with a sensitive ancestor name', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    expectJudged(await invoke('Read', { file_path: file(join(repository, 'private', 'x')) }));
+  });
+
+  it('judges a symlink to a configured sensitive directory inside the repository', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    const sensitive = file(join(repository, 'private', 'x'));
+    const link = join(repository, 'link');
+    symlinkSync(sensitive, link);
+
+    expectJudged(await invoke('Read', { file_path: link }));
+  });
+
+  it('judges a file outside the repository under the same sensitive ancestor', async () => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['private'] } }));
+    expectJudged(await invoke('Read', { file_path: file(join(root, 'private', 'other.txt')) }));
+  });
+
+  it.each([
+    ['config/secret.json', true],
+    ['config/secret.json-public', false],
+  ] as const)('preserves relative sensitive path matching for %s', async (name, judged) => {
+    writeFileSync(join(repository, '.takt', 'config.yaml'), stringify({ provider: 'claude-sdk', manager: { sensitive_paths: ['config/secret.json'] } }));
+    const output = await invoke('Read', { file_path: file(join(repository, name)) });
+
+    if (judged) expectJudged(output);
+    else expectPassthrough(output);
   });
 
   it('preserves provider capabilities, prototype methods, call options and responses', async () => {

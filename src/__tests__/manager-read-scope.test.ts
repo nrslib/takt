@@ -57,6 +57,33 @@ describe('manager read target classification', () => {
     expect(isManagerReadAllowed(request('Read', { file_path: '/work/repo/private-public/main.ts' }))).toBe(true);
   });
 
+  it.each([
+    ['both paths', '/work/private/repo/private-public/readme.txt', '/work/private/repo/private-public/readme.txt', ['/work/private/repo']],
+    ['requested path', '/work/private/repo/private-public/readme.txt', '/work/repo/public.txt', ['/work/private/repo', '/work/repo']],
+    ['resolved path', '/work/repo/public.txt', '/work/private/repo/private-public/readme.txt', ['/work/repo', '/work/private/repo']],
+  ] as const)('ignores sensitive ancestor names outside the containing repository for %s', (_kind, file_path, realPath, repositoryDirectories) => {
+    vi.mocked(realpathSync.native).mockReturnValue(realPath);
+    const scoped: ScopedReadRequest = {
+      ...request('Read', { file_path }),
+      [managerReadScope]: { repositoryDirectories, sensitivePaths: ['private'] },
+    };
+
+    expect(isManagerReadAllowed(scoped)).toBe(true);
+  });
+
+  it.each([
+    ['requested', '/work/private/repo/private/x', '/work/private/repo/public.txt'],
+    ['resolved', '/work/private/repo/link', '/work/private/repo/private/x'],
+  ])('keeps a sensitive directory in the %s path protected', (_kind, file_path, realPath) => {
+    vi.mocked(realpathSync.native).mockReturnValue(realPath);
+    const scoped: ScopedReadRequest = {
+      ...request('Read', { file_path }),
+      [managerReadScope]: { repositoryDirectories: ['/work/private/repo'], sensitivePaths: ['private'] },
+    };
+
+    expect(isManagerReadAllowed(scoped)).toBe(false);
+  });
+
   it('checks symlink targets as well as their public-looking names', () => {
     vi.mocked(realpathSync.native).mockReturnValue('/work/repo/.env');
     expect(isManagerReadAllowed(request('Read', { file_path: 'public.txt' }))).toBe(false);
