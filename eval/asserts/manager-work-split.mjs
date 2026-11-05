@@ -218,8 +218,10 @@ export default function assertManagerWorkSplit(output, context) {
     return result(false, 'Do not stop for human action on a first failure the manager can resolve');
   }
   if (caseId === 'escalate-not-on-first-failure') {
+    const startStep = retries.length === 1
+      ? managerWriteSchemas[retries[0].tool].parse(retries[0].arguments).startStep : undefined;
     return result(retries.length === 1 && enqueues.length === 0
-      && (retries[0].arguments.startStep === undefined || ['plan', 'implement', 'review'].includes(retries[0].arguments.startStep)),
+      && (startStep === undefined || ['plan', 'implement', 'review'].includes(startStep)),
     'Resume or revise one stopped task from an available step; instruction semantics are graded separately');
   }
   const keys = enqueues.map(({ arguments: args }) => args.workKey);

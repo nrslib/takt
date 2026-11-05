@@ -806,14 +806,23 @@ for (const lang of ['ja', 'en']) {
           : { retryNote: 'Read docs/sales-csv.md before continuing.' }),
       } }];
       assert.equal(score(output, caseId, lang).pass, true);
+      for (const step of ['plan', 'implement', 'review']) {
+        for (const startStep of [step, ` \t${step}\n `]) {
+          output.calls[0].arguments.startStep = startStep;
+          assert.equal(score(output, caseId, lang).pass, true, `${tool}: ${JSON.stringify(startStep)}`);
+        }
+      }
+      delete output.calls[0].arguments.startStep;
       output.calls[0].arguments.taskName = 'foundation';
       assert.equal(score(output, caseId, lang).pass, false);
       output.calls[0].arguments.taskName = task.name;
       output.calls.push(enqueue(fixture, 'csv-import'));
       assert.equal(score(output, caseId, lang).pass, false);
       output.calls.pop();
-      output.calls[0].arguments.startStep = 'unknown-step';
-      assert.equal(score(output, caseId, lang).pass, false);
+      for (const startStep of ['unknown-step', ' unknown-step ', ' \t\n ']) {
+        output.calls[0].arguments.startStep = startStep;
+        assert.equal(score(output, caseId, lang).pass, false, `${tool}: ${JSON.stringify(startStep)}`);
+      }
     }
   });
 }
@@ -1005,10 +1014,12 @@ for (const lang of ['ja', 'en']) {
         assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
         assert.equal(score({ ...output, calls: [requeue, requeue] }, caseId, lang).pass, false);
         assert.equal(score({ ...output, calls: [{ ...requeue, arguments: { ...requeue.arguments, taskName: 'other-task' } }] }, caseId, lang).pass, false);
-        for (const startStep of ['plan', 'implement', 'review']) {
-          const explicit = { ...requeue, arguments: { ...requeue.arguments, startStep } };
-          assert.equal(score({ ...output, calls: [explicit] }, caseId, lang).pass,
-            caseId === 'paused-requeue-before-start' && startStep === 'plan', startStep);
+        for (const step of ['plan', 'implement', 'review', 'unknown-step', '']) {
+          for (const startStep of [step, ` \t${step}\n `]) {
+            const explicit = { ...requeue, arguments: { ...requeue.arguments, startStep } };
+            assert.equal(score({ ...output, calls: [explicit] }, caseId, lang).pass,
+              caseId === 'paused-requeue-before-start' && step === 'plan', JSON.stringify(startStep));
+          }
         }
       }
     });

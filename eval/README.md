@@ -385,8 +385,11 @@ retry という語や推奨だけでは不合格にしない。「retry を許�
 一時停止の RED / GREEN は **knowledge・policies・instructions の日英6ファイルすべて**を切り替える。
 後述の `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` は別の比較用であり、今回の6ファイルの切り替えには使わない。
 コーディネーターが次の手順で実行する。モデルを呼ぶコマンドを含む。
+ブロック全体を貼り付けて実行する。バックアップなどが失敗したらサブシェル内で中断し、利用者のシェル設定は変更しない。
 
 ```bash
+(
+set -euo pipefail
 pause_eval_backup=$(mktemp -d /private/tmp/takt-manager-pause.XXXXXX)
 mkdir -p eval/.results
 for pause_eval_lang in ja en; do
@@ -427,6 +430,7 @@ node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
   -o eval/.results/manager-pause-green-all.json
 trap - EXIT
+)
 ```
 
 `--filter-pattern` は description の正規表現で絞り込み、8入力を選ぶ。
