@@ -26,7 +26,30 @@ function harness() {
 }
 const options = () => ({ signal: new AbortController().signal, timeoutMs: 60_000 });
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(target.failedAt); });
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it('checks the goal repository tip without inherited Git repository or command configuration overrides', async () => {
+  const overrides = {
+    GIT_DIR: '/other/.git', GIT_WORK_TREE: '/other', GIT_COMMON_DIR: '/other/.git', GIT_INDEX_FILE: '/other/index',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.worktree', GIT_CONFIG_VALUE_0: '/other',
+    GIT_CONFIG_KEY_1: 'core.bare', GIT_CONFIG_VALUE_1: 'true',
+    GIT_CONFIG: '/other/config', GIT_CONFIG_PARAMETERS: "'core.worktree=/other'",
+  };
+  for (const [key, value] of Object.entries(overrides)) vi.stubEnv(key, value);
+  const h = harness();
+  const io = options();
+  vi.setSystemTime(Date.now() + 60_000);
+  await h.create().observe(target, io);
+  expect(h.run).toHaveBeenCalledOnce();
+  const request = h.run.mock.calls[0]![0];
+  expect(request.cwd).toBe(target.repositoryDirectory);
+  expect(request.args).toEqual(['rev-parse', '--verify', 'refs/heads/takt/goal^{commit}']);
+  for (const [key, value] of Object.entries(overrides)) {
+    expect(request.env[key]).not.toBe(value);
+    expect(process.env[key]).toBe(value);
+  }
+  expect(h.events).toHaveLength(1);
+});
 
 it('counts admission immediately and emits six events at the prescribed intervals without waiting for manager results', async () => {
   const h = harness();

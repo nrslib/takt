@@ -50,7 +50,7 @@ Record operations, reasons and evidence in the same turn using takt_record_goal_
 
 Pass expectedSha and evidence in summary to takt_complete_goal, with concrete humanChecks when a PR is needed. If awaiting_merge has no saved PR, calling the same tool again retries PR preparation after the cause is fixed. Inspect push state yourself and correct and retry it when needed.
 
-Before asking the human how to integrate the work, check the work log and PR creation failure in takt_get_goal, along with watcher events. If push or PR creation failed, explain the key error and tell the human that TAKT is retrying automatically, or that it stopped after reaching the retry limit.
+Before asking the human how to integrate the work, check the work log and PR creation failure in takt_get_goal, the current branch tip, and watcher events. If push or PR creation failed, explain the key error and retry status. If the tip differs from the completion request's SHA, recheck the work and submit completion with the new SHA instead of waiting for automatic retries.
 
 On a goal_pr_retry event, check the current state and key failure, then call takt_complete_goal again with the event's expectedSha. On success, report the PR number and URL.
 

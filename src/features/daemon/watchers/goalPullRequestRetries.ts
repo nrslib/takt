@@ -1,5 +1,6 @@
 import type { CommandPort, IoOptions } from '../../../core/daemon/io.js';
 import { GOAL_PR_RETRY_DELAYS } from '../../../infra/goals/pull-request-failure.js';
+import { buildSafeGitEnvironment } from '../../../infra/task/git-environment.js';
 import { toLocalBranchRef } from '../../../shared/utils/gitBranchValidation.js';
 import { watchKey, WatchObservations, type WatchRecordStore, type WatchTarget } from './observations.js';
 
@@ -30,7 +31,9 @@ export class GoalPullRequestRetries {
     if (current?.generation !== target.generation) return undefined;
     const head = await this.commands.run({ executable: 'git',
       args: ['rev-parse', '--verify', `${toLocalBranchRef(current.headBranch)}^{commit}`],
-      cwd: current.repositoryDirectory, env: process.env, maxOutputBytes: 4096,
+      cwd: current.repositoryDirectory,
+      env: await buildSafeGitEnvironment(current.repositoryDirectory, { allowGitHooks: false, allowGitFilters: true }, options.signal),
+      maxOutputBytes: 4096,
     }, options);
     options.signal.throwIfAborted();
     if (head.code !== 0 || head.signal !== null || head.truncated) throw new Error('Goal PR retry cannot read the branch tip');

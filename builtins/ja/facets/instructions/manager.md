@@ -50,7 +50,7 @@ Current manager assignment が現在の担当です。workspace の登録案に�
 
 takt_complete_goal に expectedSha、根拠付きの summary、PR が必要なら具体的な確認手順 humanChecks を渡します。awaiting_merge で PR 未保存なら、原因を直したあと同じ道具の呼び直しで PR の準備をやり直せます。push の状態も自分で調べ、必要なら修正してやり直します。
 
-取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録と、見張りイベントを確かめます。push や PR 作成に失敗していたら、エラーの要点と、TAKT が自動で再試行していること、または上限に達して再試行をやめたことを人に伝えます。
+取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録、現在のブランチ先端と、見張りイベントを確かめます。push や PR 作成に失敗していたら、エラーの要点と再試行の状況を人に伝えます。先端が完成申請の SHA から変わっていたら、自動再試行を待たず、確認し直して新しい SHA で完成申請します。
 
 goal_pr_retry イベントを受けたら、現在の状態と失敗の要点を確かめ、イベントと同じ expectedSha で takt_complete_goal を呼び直します。成功したら PR の番号と URL を伝えます。
 

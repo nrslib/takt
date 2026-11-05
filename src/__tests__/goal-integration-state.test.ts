@@ -10,7 +10,14 @@ const clones = vi.hoisted(() => ({ cleanup: vi.fn(), load: vi.fn() }));
 vi.mock('../infra/task/clone.js', () => ({ cleanupOrphanedClone: clones.cleanup }));
 vi.mock('../infra/task/clone-meta.js', () => ({ loadCloneMeta: clones.load }));
 const github = vi.hoisted(() => ({ command: vi.fn() }));
+const publication = vi.hoisted(() => ({ git: vi.fn(), find: vi.fn(), details: vi.fn(), create: vi.fn() }));
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: github.command }));
+vi.mock('../infra/config/resolveConfigValue.js', () => ({ resolveConfigValue: () => 'github' }));
+vi.mock('../infra/github/GitHubProvider.js', () => ({ GitHubProvider: class {
+  findExistingPr = publication.find;
+  fetchPrDetails = publication.details;
+  createPullRequest = publication.create;
+} }));
 vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
   constructor() { standalone.construct(); }
   create = standalone.create; answer = standalone.answer; withdraw = standalone.withdraw;
@@ -24,9 +31,13 @@ vi.mock('../infra/goals/git-command.js', async (original) => ({
   ...await original<typeof import('../infra/goals/git-command.js')>(),
   resolveGoalBranchSha: doubles.sha, isGoalCommitIncluded: doubles.included, isGoalContentIncluded: doubles.contentIncluded,
   fetchGoalIntegrationBranchSha: doubles.remoteSha,
+  runGoalGit: publication.git,
 }));
 vi.mock('../infra/goals/diff-summary.js', () => ({ readGoalDiffSummary: doubles.diff, GOAL_DIFF_MAX_FILES: 50 }));
-vi.mock('../infra/goals/pull-request.js', () => ({ GoalPullRequestUnavailableError: class extends Error {}, prepareGoalPullRequest: vi.fn(async () => ({ number: 1950, url: 'https://github.com/example/project/pull/1950' })) }));
+vi.mock('../infra/goals/pull-request.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/pull-request.js')>(),
+  prepareGoalPullRequest: vi.fn(),
+}));
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
@@ -1203,4 +1214,42 @@ it('keeps an existing PR usable when the manager explicitly submits a newly revi
   await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(goal.pullRequest).toEqual(pullRequest);
   expect(goal.completion?.goalSha).toBe(nextSha);
+});
+
+it('records a failed push of a newly reviewed SHA and restores the existing PR on retry', async () => {
+  const actual = await vi.importActual<typeof import('../infra/goals/pull-request.js')>('../infra/goals/pull-request.js');
+  vi.mocked(prepareGoalPullRequest).mockImplementation(actual.prepareGoalPullRequest);
+  const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
+  publication.git.mockResolvedValue({ output: Buffer.alloc(0), code: 0, truncated: false });
+  publication.find.mockReturnValue(pullRequest);
+  publication.details.mockResolvedValue({ sameRepository: true, headBranch: goal.branch, baseBranch: goal.integrationBranch });
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  expect(goal.pullRequest).toEqual(pullRequest);
+  const nextSha = 'c'.repeat(40);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? nextSha : targetSha);
+  publication.git.mockResolvedValueOnce({ output: Buffer.alloc(0), code: 0, truncated: false })
+    .mockRejectedValueOnce(new Error('commit_refs'));
+  publication.find.mockClear();
+  const result = await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, 'Check', 'ja');
+  expect(result).toMatchObject({ status: 'awaiting_merge', goal: { pullRequest: undefined, completion: { goalSha: nextSha } } });
+  expect(goal.pullRequest).toBeUndefined();
+  expect(goal.status).toBe('awaiting_merge');
+  expect(goal.pullRequestFailure).toMatchObject({ goalSha: nextSha, error: expect.stringContaining('commit_refs') });
+  expect(goal.workLog.at(-1)?.summary).toContain('commit_refs');
+  expect(goal.notifications?.filter((notice) => notice.kind === 'blocked')).toEqual([
+    expect.objectContaining({ id: goal.pullRequestFailure!.id, severity: 'error' }),
+  ]);
+  expect(publication.find).not.toHaveBeenCalled();
+  const completion = structuredClone(goal.completion);
+
+  const retried = await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja');
+
+  expect(publication.git).toHaveBeenLastCalledWith('/project', ['push', '--', 'origin', `${nextSha}:refs/heads/${goal.branch}`], 4096, undefined);
+  expect(publication.find).toHaveBeenCalledExactlyOnceWith(goal.branch, '/project');
+  expect(publication.details).toHaveBeenLastCalledWith(pullRequest.number, '/project', undefined);
+  expect(publication.create).not.toHaveBeenCalled();
+  expect(retried).toMatchObject({ status: 'awaiting_merge', goal: { pullRequest, completion } });
+  expect(goal.pullRequest).toEqual(pullRequest);
+  expect(goal.completion).toEqual(completion);
+  expect(goal.pullRequestFailure).toBeUndefined();
 });

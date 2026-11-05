@@ -1,5 +1,6 @@
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 import { truncateUtf8, sliceUtf8 } from '../../shared/utils/utf8.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 
 function preview(value: string) {
@@ -39,7 +40,7 @@ export function questionSummary(question: GoalQuestion) {
 }
 
 function pullRequestFailureSummary(failure: NonNullable<Goal['pullRequestFailure']>) {
-  return { ...failure, error: preview(failure.error), errorTotalBytes: Buffer.byteLength(failure.error) };
+  return { ...failure, error: preview(safeExternalErrorMessage(failure.error)), errorTotalBytes: Buffer.byteLength(failure.error) };
 }
 
 export function goalSummary(goal: Goal) {
