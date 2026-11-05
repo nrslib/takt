@@ -448,13 +448,15 @@ describe('manager polling and answer cancellation', () => {
     expect(transcript().filter((entry) => entry.content.includes(failure === 'goal' ? goalFile : 'repository read failed'))).toHaveLength(1);
   });
 
-  it.each([true, false])('displays new records once and suppresses pre-startup records after an initial read fails (saved before startup=%s)', async (beforeStartup) => {
+  it.each([true, false])('hides work logs and displays only new notifications after an initial read fails (saved before startup=%s)', async (beforeStartup) => {
     const goals = await createGoalsWithHistory();
     const goalId = goals[0]!.id;
     const summary = '作業報告\n詳細';
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-21T09:59:59Z'));
-    const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary }));
+    const notification = { id: randomUUID(), kind: 'progress' as const, body: '人向けの進捗通知' };
+    const save = () => store.update(goalId, (goal) => ({ ...appendGoalWorkLog(goal, { summary }),
+      notifications: [{ ...notification, recordedAt: new Date().toISOString() }] }));
     if (beforeStartup) await save();
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
     const iterator = vi.spyOn(DaemonDisplayFiles.prototype, 'goal').mockRejectedValue(new Error('initial display read rejected'));
@@ -470,34 +472,40 @@ describe('manager polling and answer cancellation', () => {
     await waitFor(() => {
       expect(client.getSnapshot().readStatus).toBe('complete');
       expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(beforeStartup ? 0 : 1);
-      expect(transcript().filter((entry) => entry.content === `${goalId}: ${summary}`)).toHaveLength(beforeStartup ? 0 : 1);
+      expect(transcript().some((entry) => entry.content.includes(summary))).toBe(false);
+      expect(transcript().filter((entry) => entry.content.includes(notification.body))).toHaveLength(beforeStartup ? 0 : 1);
     });
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls + 1));
     for (const [props] of vi.mocked(TranscriptView).mock.calls) {
       expect(props.entries.some((entry) => entry.content.includes('起動前の記録'))).toBe(false);
-      expect(props.entries.filter((entry) => entry.content === `${goalId}: ${summary}`).length).toBeLessThanOrEqual(beforeStartup ? 0 : 1);
+      expect(props.entries.some((entry) => entry.content.includes(summary))).toBe(false);
+      expect(props.entries.filter((entry) => entry.content.includes(notification.body)).length).toBeLessThanOrEqual(beforeStartup ? 0 : 1);
     }
   });
 
-  it('reads all work records without a startup boundary and excludes old work only for startup repositories', async () => {
+  it('omits work logs in every repository while applying the notification startup time to added repositories', async () => {
     const goals = await createGoalsWithHistory();
     const added = join(cwd, 'added');
     mkdirSync(added);
-    const addedGoal = await new GoalStore(added).create({ ...goalRecord(), id: randomUUID(), workLog: goals[0]!.workLog });
+    const addedStore = new GoalStore(added);
+    const addedGoal = await addedStore.create({ ...goalRecord(), id: randomUUID(), workLog: goals[0]!.workLog });
+    const notification = { id: randomUUID(), kind: 'progress' as const, body: '起動前の進捗', recordedAt: '2026-10-14T00:00:00Z' };
+    await store.update(goals[0]!.id, (goal) => ({ ...goal, notifications: [notification] }));
+    await addedStore.update(addedGoal.id, (goal) => ({ ...goal, notifications: [notification] }));
     const assignment = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'Startup workspace',
       repositoryDirectories: [cwd, added] };
     const all = await readManagerTestDisplay(cwd, 'en', assignment);
-    expect(all.events).toHaveLength(90);
-    const bounded = await readManagerTestDisplay(cwd, 'en', assignment,
-      new Map([[cwd, Date.now()]]));
-    expect(bounded.events).toHaveLength(30);
-    const addedEvents = bounded.events.filter((event) => event.message.startsWith(`${addedGoal.id}: `));
-    expect(addedEvents).toHaveLength(30);
-    expect(bounded.events).toEqual(addedEvents);
+    expect(all.events.map((event) => event.id)).toEqual([
+      JSON.stringify([cwd, goals[0]!.id, 'notification', notification.id]),
+      JSON.stringify([added, addedGoal.id, 'notification', notification.id]),
+    ]);
+    const bounded = await readManagerTestDisplay(cwd, 'en', assignment, Date.now());
+    expect(bounded.events).toEqual([]);
+    expect((await addedStore.get(addedGoal.id)).workLog).toEqual(goals[0]!.workLog);
   });
 
-  it.each(['ja', 'en'] as const)('suppresses historical work records and notices but keeps diagnostics and new records in the same screen in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('hides work logs and historical notices but keeps diagnostics and new notifications in the same screen in %s', async (lang) => {
     const goals = await createGoalsWithHistory();
     const notice = '起動前に保存した通知';
     await store.update(goals[0]!.id, (goal) => ({ ...goal, notifications: [{
@@ -514,20 +522,26 @@ describe('manager polling and answer cancellation', () => {
     });
 
     const newSummary = '起動後に届いた作業の全文\n' + '新着の詳細。'.repeat(30) + '新着末尾';
-    await store.update(goals[1]!.id, (goal) => appendGoalWorkLog(goal, { summary: newSummary }));
+    const newNotice = '起動後に届いた人向け通知';
+    await store.update(goals[1]!.id, (goal) => ({ ...appendGoalWorkLog(goal, { summary: newSummary }),
+      notifications: [{ id: randomUUID(), kind: 'progress', body: newNotice, recordedAt: new Date().toISOString() }] }));
     writeFileSync(brokenFile, JSON.stringify(broken));
-    await waitFor(() => expect(transcript().filter((entry) => entry.content === `${goals[1]!.id}: ${newSummary}`)).toHaveLength(1));
+    await waitFor(() => expect(transcript().filter((entry) => entry.content.includes(newNotice))).toHaveLength(1));
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
 
     for (const [props] of vi.mocked(TranscriptView).mock.calls) {
-      for (const entry of props.entries) expect(entry.content).not.toContain('起動前の記録');
+      for (const entry of props.entries) {
+        expect(entry.content).not.toContain('起動前の記録');
+        expect(entry.content).not.toContain(newSummary);
+      }
     }
     expect(transcript().filter((entry) => entry.content.includes(notice))).toEqual([]);
     expect((await store.get(goals[0]!.id)).notifications).toEqual([{
       id: expect.any(String), recordedAt: '2026-10-14T00:00:00Z', kind: 'custom', body: notice,
     }]);
-    expect(transcript().filter((entry) => entry.content === `${goals[1]!.id}: ${newSummary}`)).toHaveLength(1);
+    expect(transcript().filter((entry) => entry.content.includes(newNotice))).toHaveLength(1);
+    expect((await store.get(goals[1]!.id)).workLog.at(-1)!.summary).toBe(newSummary);
     for (const goal of goals) expect((await store.get(goal.id)).workLog.slice(0, 30)).toEqual(goal.workLog);
   });
 
@@ -703,7 +717,7 @@ describe('manager polling and answer cancellation', () => {
       : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*2/iu));
   });
 
-  it.each(['ja', 'en'] as const)('keeps patrol details in work records and displays only ordinary records in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('hides patrol and ordinary records while preserving their full saved contents in %s', async (lang) => {
     const saved = await store.create(goalRecord());
     const { read } = await mount(lang);
     await waitFor(() => expect(read).toHaveBeenCalled());
@@ -714,12 +728,13 @@ describe('manager polling and answer cancellation', () => {
     await store.update(saved.id, (goal) => appendGoalWorkLog(appendGoalWorkLog(goal, {
       summary: patrol, kind: 'patrol',
     }), { summary: ordinary }));
-    await waitFor(() => {
-      expect(transcript().filter((entry) => entry.content.startsWith(`${saved.id}: `))).toHaveLength(1);
-      expect(transcript().some((entry) => entry.content === `${saved.id}: ${ordinary}`)).toBe(true);
-    });
+    const polls = read.mock.calls.length;
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
+    await read.mock.results.at(-1)!.value;
+    for (const [props] of vi.mocked(TranscriptView).mock.calls) {
+      expect(props.entries.some((entry) => entry.content.includes('変化なし'))).toBe(false);
+    }
     expect((await store.get(saved.id)).workLog.map((record) => record.summary)).toEqual([patrol, ordinary]);
-
   });
 
   describe.each(['ja', 'en'] as const)('selection lists in %s', (lang) => {

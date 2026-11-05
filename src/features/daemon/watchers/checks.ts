@@ -164,6 +164,7 @@ export class WatchChecks {
         task: target.task, startedAt: progress.startedAt });
     }
     for (const step of progress.steps) {
+      if (step.step.startsWith('_loop_judge_')) continue;
       if (step.count <= WATCH_THRESHOLDS.stepRepetitions) continue;
       const repeated = { ...run, targetId: createHash('sha256').update(JSON.stringify([target.targetId, step.identity])).digest('hex') };
       await this.observations.abnormal(repeated, { ...this.observations.evidence(repeated), kind: 'run_step_repeated',

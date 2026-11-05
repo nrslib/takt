@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -120,4 +121,39 @@ it('bounds pending worker requests and rejects reads after closing', async () =>
   await reader.close();
   expect((await settled).every((result) => result.status === 'rejected')).toBe(true);
   await expect(reader.read(directory, randomUUID())).rejects.toThrow();
+});
+
+it.skipIf(process.platform === 'win32')('rejects a FIFO without blocking later goal reads or shutdown', async () => {
+  const goal = goalRecord(); const fifoId = randomUUID();
+  for (const id of [goal.id, fifoId]) await mkdir(join(directory, '.takt', 'goals', id), { recursive: true });
+  execFileSync('mkfifo', [join(directory, '.takt', 'goals', fifoId, 'goal.json')]);
+  await writeFile(join(directory, '.takt', 'goals', goal.id, 'goal.json'), JSON.stringify(goal));
+  await expect(reader.read(directory, fifoId)).rejects.toThrow();
+  expect(await reader.read(directory, goal.id)).toMatchObject({ id: goal.id });
+  await reader.close();
+}, 10_000);
+
+it.each(['.takt', 'goals', 'goal', 'goal.json'] as const)('rejects a symlink at %s for both goal listing and direct reading', async (part) => {
+  const goal = goalRecord();
+  const foreign = join(directory, 'foreign');
+  const repository = join(directory, 'registered');
+  await mkdir(join(foreign, '.takt', 'goals', goal.id), { recursive: true });
+  await writeFile(join(foreign, '.takt', 'goals', goal.id, 'goal.json'), JSON.stringify(goal));
+  const segments = ['.takt', 'goals', goal.id, 'goal.json'];
+  const index = part === '.takt' ? 0 : part === 'goals' ? 1 : part === 'goal' ? 2 : 3;
+  await mkdir(join(repository, ...segments.slice(0, index)), { recursive: true });
+  await symlink(join(foreign, ...segments.slice(0, index + 1)), join(repository, ...segments.slice(0, index + 1)),
+    part === 'goal.json' ? 'file' : 'junction');
+  await expect(reader.read(repository, goal.id)).rejects.toThrow();
+  const errors = vi.fn();
+  const listed = async () => {
+    const goals = [];
+    for await (const observed of readWatchGoals(repository, errors, reader)) goals.push(observed);
+    return goals;
+  };
+  if (index < 2) await expect(listed()).rejects.toThrow();
+  else {
+    expect(await listed()).toEqual([]);
+    if (index === 3) expect(errors).toHaveBeenCalledOnce();
+  }
 });

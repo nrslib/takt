@@ -75,8 +75,8 @@ export async function startDaemon(options: {
   const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
   const resources = { async close() {
     await startupFinished;
-    const results = await Promise.allSettled([idleCheck?.close(), patrols?.close(), watchers?.close(), slack?.close(), ipc?.close()]);
-    const delivery = await Promise.allSettled([conversations.close(), source?.close()]);
+    const results = await Promise.allSettled([idleCheck?.close(), patrols?.close(), watchers?.close(), source?.close(), slack?.close(), ipc?.close()]);
+    const delivery = await Promise.allSettled([conversations.close()]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
     if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');

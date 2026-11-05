@@ -295,6 +295,7 @@ describe('RunMetaManager', () => {
 it('counts executed steps across child workflow invocations without treating phases or inherited counts as new executions', async () => {
   const { parseRunMeta } = await import('../core/workflow/run/run-meta.js');
   const manager = new RunMetaManager(createRunPaths(), 'task', 'root');
+  expect(JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls.at(-1)![1])).stepExecutions).toEqual([]);
   for (const call of [1, 2]) {
     const parent = { workflow: 'root', workflow_ref: 'root.yaml', step: 'delegate', kind: 'workflow_call' as const,
       occurrence: call, call_instance: call, step_iterations: { delegate: call } };

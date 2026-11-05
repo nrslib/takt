@@ -2,8 +2,9 @@ import { parentPort } from 'node:worker_threads';
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { GoalIdSchema, GoalSchema } from '../../../infra/goals/schema.js';
+import { GoalSchema } from '../../../infra/goals/schema.js';
 import type { GoalReadReply, WatchGoal } from './goalReader.js';
+import { watchGoalDirectory } from './goalPaths.js';
 
 const port = parentPort;
 if (port === null) throw new Error('Goal reader requires a worker port');
@@ -12,8 +13,9 @@ port.on('message', (request: { id: number; cwd: string; goalId: string }) => {
   reading = reading.then(async () => {
     let reply: GoalReadReply;
     try {
-      const file = await open(join(request.cwd, '.takt', 'goals', GoalIdSchema.parse(request.goalId), 'goal.json'),
-        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const directory = await watchGoalDirectory(request.cwd, request.goalId);
+      const file = await open(join(directory, 'goal.json'),
+        constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
       let text;
       try {
         if (!(await file.stat()).isFile()) throw new Error('Goal file is not regular');

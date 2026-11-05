@@ -64,11 +64,16 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         reference = candidate;
         if (event.kind === 'patrol') {
           const store = new GoalStore(event.repositoryDirectory);
-          const goals = await Promise.all(event.goalIds.map((id) => store.get(id)));
-          const patrolEvent = { ...event, goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id) };
-          if (patrolEvent.goalIds.length === 0) return { kind: 'completed', result: { kind: 'reply', message: '' } };
+          const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          io.signal.throwIfAborted();
+          const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
+          const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
+          const patrolEvent = { ...event,
+            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id),
+            ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
+          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'reply', message: '' } };
           command = { kind: 'message', text: JSON.stringify({ event: patrolEvent,
-            instruction: 'Inspect all listed active goals together in this patrol turn. Check run duration, repeated steps, progress toward each objective, and unanswered inquiries using current evidence and work records. Do not propose a new registration. If nothing is wrong, take no action and send no notification; return a short message with the goal count and no anomalies. Record inspection details for each goal using takt_record_goal_work_log with kind: "patrol". If a problem needs attention, use the existing notification or inquiry tools without repeating an earlier notice for the same state and reason.' }) };
+            instruction: 'Inspect all listed active goals together in this patrol turn. Check run duration, repeated steps, progress toward each objective, and unanswered inquiries using current evidence and work records. If unreadableGoalIds are listed, report those goals as unreadable and do not claim that they have no anomalies; continue inspecting the readable goals. Do not propose a new registration. If nothing is wrong, take no action and send no notification; return a short message with the goal count and no anomalies. Record inspection details for each goal using takt_record_goal_work_log with kind: "patrol". If a problem needs attention, use the existing notification or inquiry tools without repeating an earlier notice for the same state and reason.' }) };
         }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
           reconcileLostRun(event.observation, io.signal);

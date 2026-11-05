@@ -188,3 +188,19 @@ it.each(['paused', 'aborted', 'completed'] as const)('does not run a queued patr
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: '' } });
   expect(f.resolve).not.toHaveBeenCalled();
 });
+
+it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
+  const f = fixture();
+  const active = goalRecord(); const unreadable = randomUUID();
+  doubles.getGoal.mockImplementation(async (id: string) => {
+    if (id === unreadable) throw new Error('unreadable goal');
+    return active;
+  });
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: readable ? [unreadable, active.id] : [unreadable] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.execute.mock.calls[0]![0].instruction).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
+    goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
+  expect(doubles.notify).not.toHaveBeenCalled();
+});

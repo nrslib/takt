@@ -676,3 +676,15 @@ it('discards run progress after completion or replacement and rejects mismatched
   await expect(h.checks.runProgress(target, async () => ({ ...progress, runSlug: 'different' }), async () => target)).rejects.toThrow();
   expect(h.accept).not.toHaveBeenCalled();
 });
+
+it('ignores synthetic loop judge steps while observing repeated ordinary steps', async () => {
+  const h = harness();
+  const target = { ...run, metaPath: '/meta.json' };
+  await h.checks.runProgress(target, async () => ({ runSlug: run.task.runSlug!, running: true,
+    startedAt: new Date().toISOString(), steps: [
+      { identity: 'judge', workflow: 'root', step: '_loop_judge_plan_review', count: 20 },
+      { identity: 'review', workflow: 'root', step: 'review', count: 6 },
+    ] }), async () => target);
+  expect(observedKinds(h.accepted)).toEqual(['run_step_repeated']);
+  expect([...h.accepted.values()]).toMatchObject([{ event: { observation: { step: 'review' } } }]);
+});

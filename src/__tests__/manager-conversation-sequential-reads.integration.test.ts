@@ -56,7 +56,7 @@ it('retains inquiry ordering and full values without either goal or standalone a
   expect(list).not.toHaveBeenCalled(); expect(standalone).not.toHaveBeenCalled();
 });
 
-it('projects work logs and notifications sequentially with the existing IDs, formatting and startup exclusion', async () => {
+it('projects notifications sequentially with the existing IDs, formatting and startup exclusion while hiding work logs', async () => {
   const boundary = Date.parse('2026-10-24T00:00:01.000Z');
   const goal = { ...goalRecord(), workLog: [{ id: '650e8400-e29b-41d4-a716-446655440001',
     summary: 'old work', recordedAt: '2026-10-24T00:00:00.000Z' }], notifications: [{
@@ -64,16 +64,16 @@ it('projects work logs and notifications sequentially with the existing IDs, for
     body: 'current notice', recordedAt: '2026-10-24T00:00:02.000Z',
   }] };
   save(goal);
-  const boundaries = new Map([[repository, boundary]]);
   const expected = [
     { id: JSON.stringify([repository, goal.id, 'notification', goal.notifications[0]!.id]),
       message: formatGoalNotification(goal, goal.notifications[0]!, 'en', basename(repository), 'tui') },
   ];
   const list = vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(new Error('forbidden array read'));
-  expect(await collect(iterateTestDisplayEvents(assignment(), 'en', boundaries, boundary))).toEqual(expected);
+  expect(await collect(iterateTestDisplayEvents(assignment(), 'en', boundary))).toEqual(expected);
   expect(list).not.toHaveBeenCalled();
-  const addedRepository = await collect(iterateTestDisplayEvents(assignment(), 'en', new Map(), boundary));
-  expect(addedRepository[0]).toEqual({ id: JSON.stringify([repository, goal.id, 'work-log', goal.workLog[0]!.id]), message: goal.id + ': old work' });
+  const unbounded = await collect(iterateTestDisplayEvents(assignment(), 'en', -Infinity));
+  expect(unbounded).toEqual(expected);
+  expect(await new GoalStore(repository).get(goal.id)).toEqual(goal);
 });
 
 it('reads each goal once when independently ordering multiple inquiries or display events', async () => {
@@ -84,7 +84,7 @@ it('reads each goal once when independently ordering multiple inquiries or displ
   }));
   for (const goal of goals) save(goal);
   const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
-  for (const source of [iteratePendingInquiries(directory, assignment()), iterateTestDisplayEvents(assignment(), 'en', new Map(), -Infinity)]) {
+  for (const source of [iteratePendingInquiries(directory, assignment()), iterateTestDisplayEvents(assignment(), 'en', -Infinity)]) {
     reads.mockClear();
     const items = await collect<unknown>(source);
     expect(items).toHaveLength(8);

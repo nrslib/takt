@@ -57,8 +57,8 @@ export function startDaemonWatchers(dependencies: {
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
   register('log', WATCH_INTERVALS.log, async () => (await dependencies.source.runs()).filter((target) => target.task.runSlug !== undefined), (checks, target) =>
     checks.log(target, readLogStamp, () => dependencies.source.run(target.targetId)));
-  register('run', WATCH_INTERVALS.long, () => dependencies.source.runs(), (checks, target) =>
-    checks.runProgress(target, readRunProgress, () => dependencies.source.run(target.targetId)));
+  register('run', WATCH_INTERVALS.long, () => dependencies.source.runs(), (checks, target, signal) =>
+    checks.runProgress(target, (path) => readRunProgress(path, signal), () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   register('inquiry', WATCH_INTERVALS.files, () => dependencies.source.inquiries(), (checks, target) => checks.inquiry(target));

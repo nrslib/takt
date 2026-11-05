@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { readRunProgress } from '../features/daemon/watchers/runProgress.js';
+import { runStepIdentity } from '../core/workflow/run/step-executions.js';
 
 let directory: string;
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'takt-run-progress-')); });
@@ -47,7 +48,7 @@ it('uses the frame occurrence when old metadata has no step_iterations and ignor
   expect((await readRunProgress(path))!.steps).toEqual([]);
 });
 
-it('allows metadata not yet created and rejects malformed, invalid and oversized metadata', async () => {
+it('allows metadata not yet created and rejects malformed, invalid and nonregular metadata', async () => {
   const path = join(directory, 'meta.json');
   expect(await readRunProgress(path)).toBeUndefined();
   for (const value of ['{', JSON.stringify(metadata([frame('root', 'review', 0)])),
@@ -55,12 +56,55 @@ it('allows metadata not yet created and rejects malformed, invalid and oversized
     await writeFile(path, value);
     await expect(readRunProgress(path)).rejects.toThrow();
   }
+  await rm(path);
+  await mkdir(path);
+  await expect(readRunProgress(path)).rejects.toThrow();
 });
 
 it('uses run-wide step executions after a child returns rather than its disappearing resume frame', async () => {
   const path = join(directory, 'meta.json');
-  const { runStepIdentity } = await import('../core/workflow/run/step-executions.js');
   const child = { ...runStepIdentity([frame('root', 'delegate', 2), frame('child', 'review', 3)], 'child', 'review'), count: 6 };
   await writeFile(path, JSON.stringify({ ...metadata([frame('root', 'finish', 1)]), stepExecutions: [child] }));
   expect((await readRunProgress(path))!.steps).toEqual([child]);
+});
+
+it('accepts the legacy camelCase resumePoint with the same validation and identity', async () => {
+  const path = join(directory, 'meta.json');
+  const meta = metadata([frame('child', 'review', 6)]);
+  await writeFile(path, JSON.stringify(meta));
+  const expected = await readRunProgress(path);
+  const { resume_point: resumePoint, ...rest } = meta;
+  await writeFile(path, JSON.stringify({ ...rest, resumePoint }));
+  expect(await readRunProgress(path)).toEqual(expected);
+  await writeFile(path, JSON.stringify({ ...rest, resumePoint: { stack: [frame('child', 'review', 0)] } }));
+  await expect(readRunProgress(path)).rejects.toThrow();
+});
+
+it.each(['requeue', 'retry', 'instruct'])('does not report inherited legacy frame counts in a %s run', async (mode) => {
+  const path = join(directory, 'meta.json');
+  const meta = metadata([frame('child', 'review', 106, { review: 106 })]);
+  for (const lineage of [{ resume_mode: mode }, { source_run_slug: 'prior-run' }, { resumeMode: mode }, { sourceRunSlug: 'prior-run' }]) {
+    await writeFile(path, JSON.stringify({ ...meta, ...lineage }));
+    expect(await readRunProgress(path)).toMatchObject({ running: true, startedAt: meta.startTime, steps: [] });
+  }
+  const step = { ...runStepIdentity([], 'root', 'review'), count: 6 };
+  await writeFile(path, JSON.stringify({ ...meta, resume_mode: mode, stepExecutions: [step] }));
+  expect((await readRunProgress(path))!.steps).toEqual([step]);
+});
+
+it('keeps all distinct step counts observable when metadata exceeds 256 KiB', async () => {
+  const path = join(directory, 'meta.json');
+  const steps = Array.from({ length: 3000 }, (_, index) => ({ ...runStepIdentity([], 'root', `step-${index}`), count: 6 }));
+  const text = JSON.stringify({ ...metadata([frame('root', 'review', 6)]), stepExecutions: steps });
+  expect(Buffer.byteLength(text)).toBeGreaterThan(256 * 1024);
+  await writeFile(path, text);
+  expect(await readRunProgress(path)).toMatchObject({ running: true, steps });
+});
+
+it('cancels an outstanding metadata read when the watcher stops', async () => {
+  const controller = new AbortController();
+  const reading = readRunProgress(join(directory, 'meta.json'), controller.signal);
+  controller.abort(new Error('watcher stopped'));
+  await expect(reading).rejects.toBe(controller.signal.reason);
+  await expect(readRunProgress(join(directory, 'meta.json'), controller.signal)).rejects.toBe(controller.signal.reason);
 });

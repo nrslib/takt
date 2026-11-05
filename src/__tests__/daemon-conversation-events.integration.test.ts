@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import * as slackPorts from '../features/daemon/slackPorts.js';
 import * as watcherModule from '../features/daemon/watchers/index.js';
+import { WatchGoalReader, type WatchGoal } from '../features/daemon/watchers/goalReader.js';
 import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
 import { createDaemonStateRequests } from '../features/daemon/stateRequests.js';
@@ -553,7 +554,7 @@ it('retires an unread legacy patrol without starting a turn and only deletes oth
   expect(await readFile(path, 'utf8')).toContain('registered');
 });
 
-it('reads legacy proposal, session, patrol history and accepted human/director queues through the new stores', async () => {
+it('reads legacy proposal, session and accepted human/director queues while preserving hidden patrol history', async () => {
   let record!: ReturnType<typeof conversationRecord>;
   const f = await fixture(async (directory, repository) => {
     record = conversationRecord(repository);
@@ -571,7 +572,9 @@ it('reads legacy proposal, session, patrol history and accepted human/director q
   for await (const item of read.items) items.push(item);
   read.complete();
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
-  expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8')).workLog[0].summary).toBe('old history');
+  expect(items).toContainEqual({ kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
+    executionStatus: goal.executionStatus, repositoryDirectory: f.repository } });
+  expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8'))).toEqual(goal);
   expect((await new ConversationStateStore(f.directory).read(f.id))!.record.directorMessages).toEqual([]);
 });
 
@@ -635,6 +638,37 @@ it('starts observation while Slack connection setup remains pending', async () =
   } finally {
     released.resolve();
     await (await starting).close();
+  }
+});
+
+it('releases pending goal reads before awaiting watcher shutdown', async () => {
+  const directory = getGlobalConfigDir();
+  const repository = join(directory, 'repository');
+  const goal = goalRecord();
+  await mkdir(join(repository, '.takt', 'goals', goal.id), { recursive: true });
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  const entered = deferred<void>();
+  let rejectRead!: (error: Error) => void;
+  const pending = new Promise<WatchGoal>((_resolve, reject) => { rejectRead = reject; });
+  vi.spyOn(WatchGoalReader.prototype, 'read').mockImplementation(() => { entered.resolve(); return pending; });
+  const closeReader = WatchGoalReader.prototype.close;
+  const close = vi.spyOn(WatchGoalReader.prototype, 'close').mockImplementation(async function (this: WatchGoalReader) {
+    rejectRead(new Error('reader closed'));
+    await closeReader.call(this);
+  });
+  const restoreErrorLog = installDaemonErrorLog(async () => {});
+  const daemon = await startDaemon({ configDirectory: directory,
+    owner: { pid: process.pid, identity: { startTime: 'pending-goal' }, version: 'test', cliPath: '/daemon.js' },
+    tokens: undefined, signal: new AbortController().signal, runnerFactory: () => new ControlledTurnRunner() });
+  await entered.promise;
+  const closing = daemon.close();
+  try {
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce(), { timeout: 2000 });
+    await closing;
+  } finally {
+    rejectRead(new Error('test cleanup'));
+    await closing;
+    restoreErrorLog();
   }
 });
 

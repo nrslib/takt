@@ -5,6 +5,7 @@ import { z } from 'zod/v4';
 import { GoalQuestionSchema, type GoalQuestion } from '../../../infra/goals/schema.js';
 import type { WatchGoalReader, WatchGoal } from './goalReader.js';
 import { isMissing, listWatchEntries, readSmallJson } from './files.js';
+import { watchGoalDirectory } from './goalPaths.js';
 
 export const TASKS_FILE_NAME = 'tasks.yaml';
 
@@ -37,7 +38,10 @@ export async function readWatchGoal(cwd: string, id: string, reader: WatchGoalRe
 }
 
 export async function* readWatchGoals(cwd: string, onError: (error: unknown) => void, reader: WatchGoalReader): AsyncGenerator<WatchGoal> {
-  for (const entry of await listWatchEntries(join(cwd, '.takt', 'goals'))) {
+  let entries;
+  try { entries = await listWatchEntries(await watchGoalDirectory(cwd)); }
+  catch (error) { if (isMissing(error)) return; throw error; }
+  for (const entry of entries) {
     if (!entry.isDirectory() || !z.uuid().safeParse(entry.name).success) continue;
     let goal;
     try { goal = await readWatchGoal(cwd, entry.name, reader); }

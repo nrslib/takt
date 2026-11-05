@@ -957,15 +957,13 @@ describe('manager questions, answers and notifications through production bounda
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
     const display = await readManagerTestDisplay(cwd);
-    expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
+    expect(display.events).toHaveLength(1);
     expect(display.events).toContainEqual({
       id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
     });
     if (kind === 'progress') {
       expect(saved.workLog).toHaveLength(1);
-      expect(display.events[0]).toEqual({
-        id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
-      });
+      expect(saved.workLog[0]!.summary).toContain('Integrated');
       expect(requests[0]!.text).toContain('出力の検証');
     }
   });
@@ -976,12 +974,11 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests).toEqual([]);
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toBeUndefined();
-    expect((await readManagerTestDisplay(cwd)).events).toEqual(kind === 'progress' ? [{
-      id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
-    }] : []);
+    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
     const goal = (await invoke('takt_get_goal')).goal;
     if (kind === 'question') expect(goal).toMatchObject({ questions: [expect.objectContaining({ status: 'pending' })] });
     else if (kind === 'progress') {
+      expect(saved.workLog).toHaveLength(1);
       const taskSha = git(['rev-parse', 'takt/question-fixture-work']);
       expect(git(['merge-base', '--is-ancestor', taskSha, goalRecord().branch])).toBe('');
     }

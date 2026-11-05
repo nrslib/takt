@@ -36,7 +36,7 @@ it('filters notifications for each assigned repository without changing event id
   storage.iterate.mockImplementation(async function* () { yield* goals; });
   storage.config.mockImplementation((directory: string) => ({ notifications: { ...policy, custom: directory === '/first' } }));
   const assignment = { kind: 'workspace' as const, workspaceId: 'fixture', name: 'Both', repositoryDirectories: repositories };
-  const source = iterateTestDisplayEvents(assignment, 'en', new Map(), startedAt);
+  const source = iterateTestDisplayEvents(assignment, 'en', startedAt);
   const ids = [];
   for await (const item of source) ids.push(item.id);
   const expected = repositories.flatMap((directory) => goals.flatMap((goal) => goal.notifications
@@ -45,17 +45,15 @@ it('filters notifications for each assigned repository without changing event id
   expect(ids.sort()).toEqual(expected.sort());
 });
 
-it('projects sequential work logs and enabled notices with exact stable IDs and independent startup boundaries', async () => {
+it('omits work logs and filters disabled, question and old notifications', async () => {
   const record = { id: '850e8400-e29b-41d4-a716-446655440001', summary: 'Old work', recordedAt: new Date(startedAt - 1).toISOString() };
   const goal: Goal = { ...goalRecord(), workLog: [record], notifications: [notice(1), notice(2, { kind: 'question' }), notice(3, { kind: 'custom' })] };
   storage.iterate.mockImplementation(async function* (directory) { if (directory === '/second') yield goal; });
   storage.config.mockReturnValue({ notifications: { ...policy, custom: false } });
   const assignment = { kind: 'workspace' as const, workspaceId: 'fixture', name: 'Both', repositoryDirectories: ['/first', '/second'] };
   const values = [];
-  for await (const event of iterateTestDisplayEvents(assignment, 'en', new Map([['/first', startedAt]]), startedAt + 2)) values.push(event);
-  expect(values).toEqual([
-    { id: JSON.stringify(['/second', goal.id, 'work-log', record.id]), message: goal.id + ': Old work' },
-  ]);
+  for await (const event of iterateTestDisplayEvents(assignment, 'en', startedAt + 2)) values.push(event);
+  expect(values).toEqual([]);
 });
 
 describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
@@ -122,29 +120,24 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
 });
 
 describe('saved manager display events', () => {
-  it('applies the notification startup time to added repositories without changing work-log boundaries', () => {
+  it('omits old notifications and work logs in added repositories without changing saved histories', () => {
     const notification = notice(1, { recordedAt: new Date(startedAt - 1).toISOString() });
     const record = { id: '850e8400-e29b-41d4-a716-446655440001', recordedAt: notification.recordedAt, summary: 'Old work record' };
     const goal: Goal = { ...goalRecord(), workLog: [record], notifications: [notification] };
     const original = structuredClone(goal);
-    const added = [...projectManagerDisplayEvents(goal, '/second', 'en', undefined, startedAt, policy)];
-    expect(added).toEqual([
-      { id: JSON.stringify(['/second', goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` },
-    ]);
-    const initial = [...projectManagerDisplayEvents(goal, '/second', 'en', startedAt, startedAt, policy)];
-    expect(initial).toEqual([]);
+    const added = [...projectManagerDisplayEvents(goal, '/second', 'en', startedAt, policy)];
+    expect(added).toEqual([]);
     expect(goal).toEqual(original);
   });
 
-  it('omits events before startup but retains work and notifications exactly at or after the boundary', () => {
+  it('retains notifications exactly at or after startup and omits all work logs', () => {
     const notifications = [-1, 0, 1].map((index) => notice(index + 2, { recordedAt: new Date(startedAt + index).toISOString() }));
     const workLog = notifications.map((notification, index) => ({ id: notification.id,
       recordedAt: notification.recordedAt, summary: `Work ${index}` }));
     const goal: Goal = { ...goalRecord(), workLog, notifications };
     const before = structuredClone(goal);
-    const result = [...projectManagerDisplayEvents(goal, '/fixture', 'en', startedAt, startedAt, policy)];
+    const result = [...projectManagerDisplayEvents(goal, '/fixture', 'en', startedAt, policy)];
     expect(result).toEqual([
-      ...workLog.slice(1).map((record) => ({ id: JSON.stringify(['/fixture', goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` })),
       ...notifications.slice(1).map((notification) => ({ id: JSON.stringify(['/fixture', goal.id, 'notification', notification.id]),
         message: formatGoalNotification(goal, notification, 'en', 'fixture', 'tui') })),
     ]);
@@ -165,7 +158,7 @@ describe('saved manager display events', () => {
     const result = [];
     for await (const event of iterateTestDisplayEvents({
       kind: 'workspace', workspaceId: 'fixture', name: 'Workspace', repositoryDirectories: ['/first', '/second'],
-    }, 'en', new Map(), startedAt)) result.push(event);
+    }, 'en', startedAt)) result.push(event);
     const expected = [[first, first.notifications![0]!], [first, first.notifications![1]!],
       [second, second.notifications![0]!], [second, second.notifications![1]!]] as const;
     expect(result).toEqual(expected.map(([goal, notification]) => ({

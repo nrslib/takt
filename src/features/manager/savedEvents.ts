@@ -13,14 +13,8 @@ export interface ManagerDisplayEvent {
 }
 
 export function* projectManagerDisplayEvents(goal: Goal, directory: string, language: Language,
-  startupBoundary: number | undefined, notificationStartedAt: number, policy: ManagerNotificationPolicy): Generator<ManagerDisplayEvent> {
+  notificationStartedAt: number, policy: ManagerNotificationPolicy): Generator<ManagerDisplayEvent> {
   const project = basename(directory);
-  for (const record of goal.workLog) {
-    if (record.kind === 'patrol') continue;
-    if (startupBoundary !== undefined && Date.parse(record.recordedAt) < startupBoundary) continue;
-    yield { id: JSON.stringify([directory, goal.id, 'work-log', record.id]),
-      message: `${goal.id}: ${record.summary}` };
-  }
   for (const notification of goal.notifications ?? []) {
     if (notification.kind === 'question' || !policy[notification.kind]) continue;
     if (Date.parse(notification.recordedAt) < notificationStartedAt) continue;

@@ -137,6 +137,7 @@ export class RunMetaManager {
       contextDirectory: runPaths.contextRel,
       logsDirectory: runPaths.logsRel,
       status: 'running',
+      stepExecutions: [],
       startTime: options?.startTime ?? new Date().toISOString(),
       ...(resumeSource ? {
         resumeMode: resumeSource.resumeMode,
