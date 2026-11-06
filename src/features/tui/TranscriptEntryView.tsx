@@ -1,4 +1,5 @@
 import { Box, Static, Text, useStdout } from 'ink';
+import chalk from 'chalk';
 import { memo, type ReactElement } from 'react';
 import type { UserMessageColors } from './terminalColors.js';
 import { ASSISTANT_MARKER, USER_MARKER, MARKER_WIDTH, formatTranscriptEntryOutput } from './transcriptOutput.js';
@@ -18,6 +19,7 @@ export interface TranscriptEntryViewProps {
 export interface TranscriptViewProps {
   readonly entries: readonly TranscriptEntry[];
   readonly userMessageColors: UserMessageColors;
+  readonly startupNotice?: string;
 }
 
 /**
@@ -58,15 +60,19 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
 }
 
 /** Commits each entry once, using native TTY wrapping and children-based fallback output. */
-function TranscriptViewComponent({ entries, userMessageColors }: TranscriptViewProps): ReactElement {
+function TranscriptViewComponent({ entries, userMessageColors, startupNotice }: TranscriptViewProps): ReactElement {
   const { stdout } = useStdout();
+  const items = startupNotice === undefined ? entries : [{ role: 'notice' as const, content: startupNotice }, ...entries];
   return (
     <Static
-      items={[...entries]}
+      items={[...items]}
       style={{ width: '100%' }}
-      renderOutput={stdout.isTTY ? (entry) => formatTranscriptEntryOutput(entry, userMessageColors) : undefined}
+      renderOutput={stdout.isTTY ? (entry) => entry.role === 'notice'
+        ? `${chalk.yellow(entry.content)}\n\n` : formatTranscriptEntryOutput(entry, userMessageColors) : undefined}
     >
-      {(entry, index) => (
+      {(entry, index) => entry.role === 'notice' ? (
+        <Box key={index} marginBottom={1}><Text color="yellow" wrap="wrap">{entry.content}</Text></Box>
+      ) : (
         <TranscriptEntryView
           key={index}
           entry={entry}

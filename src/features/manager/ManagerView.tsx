@@ -277,9 +277,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     : 'manager.inputHint', lang);
   const hintSeparator = selectingSummary ? ' / ' : '  ';
   const hintItems = inputHint.split(hintSeparator);
-  const statusDetails = `${getLabel('manager.counts', lang, {
+  const statusDetails = getLabel('manager.counts', lang, {
     goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length),
-  })} | ${getLabel('manager.statusExperimental', lang)}`;
+  });
   const statusWidth = Math.max(1, columns ?? 80);
   const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);
   const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
@@ -294,7 +294,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   return <Box flexDirection="column">
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+      startupNotice={getLabel('manager.experimentalNotice', lang)} />
     {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
     {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
     {snapshot.readStatus === 'incomplete' && <Text>{getLabel('manager.conversation.incomplete', lang)}</Text>}

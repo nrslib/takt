@@ -762,7 +762,7 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect(inquiries).toHaveLength(30);
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) }), getLabel('manager.statusExperimental', 'en')];
+    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   const bytes = observation.bytes;
 
@@ -972,7 +972,7 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   await client.connect(); await complete();
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: '2', questions: '2' }), getLabel('manager.statusExperimental', 'en')];
+    getLabel('manager.counts', 'en', { goals: '2', questions: '2' })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
   await openSnapshotMenu(app, 'answer', connections[0]!);

@@ -483,7 +483,6 @@ manager:
   assignmentHeadingMultiple: "Assignment: {name} + {count} more"
   counts: "Ongoing {goals} / Pending {questions}"
   inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit"
-  statusExperimental: "experimental"
   makeGoalDescription: "Create or regenerate a goal proposal"
   slackGoalApprove: "Register goal"
   slackGoalDismiss: "Return to conversation without registering"
