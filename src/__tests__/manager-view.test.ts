@@ -69,7 +69,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     expect(app.lastFrame()).not.toContain('manager-repository');
   });
 
-  it.each([40, 42])('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
+  it.each([52, 54])('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
     const { app } = mount(lang);
     Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
     app.stdout.emit('resize');
@@ -85,7 +85,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     });
   });
 
-  it.each([40, 80])('truncates only the assignment heading and preserves counts and experimental status within %i columns', async (columns) => {
+  it.each([52, 80])('truncates only the assignment heading and preserves counts and experimental status within %i columns', async (columns) => {
     const name = '開発repository'.repeat(30);
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
       kind: 'repository', repositoryDirectory: `/test/${name}`, repositoryDirectories: [`/test/${name}`],
@@ -103,6 +103,60 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       expect(rows.filter((row) => row.includes(counts!))).toEqual([status]);
       for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
     });
+  });
+
+  it.each(lang === 'ja' ? [34, 40, 42] : [36, 40, 42])('shows the assignment above counts and experimental status within %i columns', async (columns) => {
+    const name = `開発-${'repository'.repeat(10)}-末尾`;
+    const repositoryDirectory = `/test/${name}`;
+    const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
+      kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory],
+    } }, { kind: 'goal', goal: { ...goalRecord(), repositoryDirectory } }, { kind: 'inquiry', inquiry: {
+      question: createInquiry({ body: 'Pending question' }),
+      target: { goalId: null, owner: { kind: 'repository', repositoryDirectory } },
+    } }] });
+    const { app } = mount(lang, client);
+    Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
+    app.stdout.emit('resize');
+    const fullHeading = getLabel('manager.assignmentHeading', lang, { name });
+    const counts = getLabel('manager.counts', lang, { goals: '1', questions: '1' });
+    const details = `${counts} | ${getLabel('manager.statusExperimental', lang)}`;
+    await waitFor(() => {
+      const rows = app.lastFrame()!.split('\n');
+      const heading = rows.at(-2)!.trimEnd();
+      const [start, end] = heading.split('…');
+      expect(start!.length).toBeGreaterThan(0);
+      expect(end!.length).toBeGreaterThan(0);
+      expect(fullHeading.startsWith(start!)).toBe(true);
+      expect(fullHeading.endsWith(end!)).toBe(true);
+      expect(rows.at(-1)).toBe(details);
+      expect(rows.filter((row) => row.includes(counts))).toEqual([details]);
+      for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+    });
+  });
+
+  it('truncates the second status row at the end on very narrow terminals', async () => {
+    const name = '開発repository'.repeat(10);
+    const repositoryDirectory = `/test/${name}`;
+    const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
+      kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory],
+    } }] });
+    const { app } = mount(lang, client);
+    const counts = getLabel('manager.counts', lang, { goals: '0', questions: '0' });
+    const details = `${counts} | ${getLabel('manager.statusExperimental', lang)}`;
+    for (const columns of [1, 2, 8, 12, 20, 30]) {
+      Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
+      app.stdout.emit('resize');
+      await waitFor(() => {
+        const rows = app.lastFrame()!.split('\n').slice(-2);
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toContain('…');
+        const truncatedDetails = rows[1]!.trimEnd();
+        expect(truncatedDetails).toMatch(/…$/u);
+        expect(details.startsWith(truncatedDetails.slice(0, -1))).toBe(true);
+        if (columns === 30) expect(truncatedDetails).toContain(counts);
+        for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+      });
+    }
   });
 
   it('preserves both ends of a long workspace assignment heading and nonzero counts when resized', async () => {

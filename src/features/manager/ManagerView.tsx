@@ -30,6 +30,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' }];
+const MIN_STATUS_HEADING_WIDTH = 12;
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -276,10 +277,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     : 'manager.inputHint', lang);
   const hintSeparator = selectingSummary ? ' / ' : '  ';
   const hintItems = inputHint.split(hintSeparator);
-  const statusSuffix = ` | ${getLabel('manager.counts', lang, {
+  const statusDetails = `${getLabel('manager.counts', lang, {
     goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length),
   })} | ${getLabel('manager.statusExperimental', lang)}`;
-  const headingWidth = Math.min(measureWidth(assignmentHeading), Math.max(0, (columns ?? 80) - measureWidth(statusSuffix)));
+  const statusWidth = Math.max(1, columns ?? 80);
+  const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);
+  const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
+  const headingWidth = Math.min(measureWidth(assignmentHeading), splitStatus ? statusWidth : availableHeadingWidth);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
@@ -310,9 +314,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
       return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
     })}</Box>
-    <Box>
+    <Box flexDirection={splitStatus ? 'column' : 'row'} width={statusWidth}>
       <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
-      <Text dimColor wrap="truncate-end">{statusSuffix}</Text>
+      <Text dimColor wrap="truncate-end">{splitStatus ? statusDetails : ` | ${statusDetails}`}</Text>
     </Box>
   </Box>;
 }

@@ -22,11 +22,10 @@ it.each([40, 80])('keeps Japanese guidance and the status line within %i columns
     const frame = context.app.lastFrame()!;
     for (const line of frame.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(width);
     expect(frame.replace(/\s+/gu, '')).toContain(getLabel('manager.inputHint', 'ja').replace(/\s+/gu, ''));
-    const [heading, counts, experimental] = frame.split('\n').at(-1)!.split(' | ');
-    expect(counts).toBe(getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }));
-    expect(experimental).toBe(getLabel('manager.statusExperimental', 'ja'));
-    if (width === 40) expect(heading).toMatch(/^.+….+$/u);
-    else expect(heading).toBe(getLabel('manager.assignmentHeading', 'ja', { name: 'manager-repository' }));
+    const heading = getLabel('manager.assignmentHeading', 'ja', { name: 'manager-repository' });
+    const details = [getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }),
+      getLabel('manager.statusExperimental', 'ja')].join(' | ');
+    expect(frame.split('\n').slice(width === 40 ? -2 : -1)).toEqual(width === 40 ? [heading, details] : [`${heading} | ${details}`]);
   });
 });
 

@@ -658,15 +658,16 @@ describe('manager polling and answer cancellation', () => {
         const rows = frame.split('\n');
         const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
         expect(promptEnd).toBeGreaterThan(0);
-        const hintRows = rows.slice(promptEnd + 1, -1).filter((row) => row.trim() !== '');
+        const statusRows = columns === 40 ? 2 : 1;
+        const hintRows = rows.slice(promptEnd + 1, -statusRows).filter((row) => row.trim() !== '');
         expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
-        expect(hintRows.length).toBeGreaterThan(1);
+        if (columns === 40) expect(hintRows.length).toBeGreaterThan(1);
+        else expect(hintRows).toHaveLength(1);
         for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
-        const [heading, counts, experimental] = rows.at(-1)!.split(' | ');
-        expect(counts).toBe(getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }));
-        expect(experimental).toBe(getLabel('manager.statusExperimental', 'ja'));
-        if (columns === 40) expect(heading).toMatch(/^.+….+$/u);
-        else expect(heading).toBe(getLabel('manager.assignmentHeading', 'ja', { name: basename(cwd) }));
+        const heading = getLabel('manager.assignmentHeading', 'ja', { name: basename(cwd) });
+        const details = [getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }),
+          getLabel('manager.statusExperimental', 'ja')].join(' | ');
+        expect(rows.slice(-statusRows)).toEqual(columns === 40 ? [heading, details] : [`${heading} | ${details}`]);
         const beforeInput = rows.slice(0, rows.map((row) => row.startsWith('╭')).lastIndexOf(true)).join('');
         expect(beforeInput.replace(/\s+/gu, '')).not.toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
         expect(beforeInput).not.toMatch(/担当:|進行中/u);
