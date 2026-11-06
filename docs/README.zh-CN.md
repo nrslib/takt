@@ -279,7 +279,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑` 批准 / `↓` 继续 / `Enter` 确定，选择批准后按 `Enter` 注册。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑↓` 选择「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」，按 `Enter` 确定。默认返回对话并撤回草案；注册时需选择「Register goal」。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
 | `takt director` | 打开统览所有 manager 的实验性对话 TUI；参阅 [director](#director实验性) |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
@@ -302,7 +302,7 @@ daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮�
 
 **Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
 
-在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」操作；旧版本提案的按钮无效。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 

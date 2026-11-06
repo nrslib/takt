@@ -7,7 +7,7 @@
 Use the one-question procedure when only a person can decide, including during event handling.
 
 1. Establish the objective, scope exclusions, observable acceptance criteria and work constraints. Ask about important unresolved matters requiring human judgment.
-2. Once settled, put the entire proposal in summary and direct the person to approve it in the TUI or Slack to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include registration approval or choice guidance when summary is null.
+2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include registration or choice guidance when summary is null.
 3. Return summaries as JSON with message and summary. summary is {"objective":"objective","outOfScope":["exclusions"],"acceptanceCriteria":["criteria"],"constraints":["work constraints"]} or null. Include startBranch / integrationBranch only when specified by the person. Replies without a summary may be plain text.
 
 ## Conversation and assignment

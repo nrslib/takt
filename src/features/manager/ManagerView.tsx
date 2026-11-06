@@ -10,7 +10,6 @@ import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
 import { formatPendingSummary } from './summaryDisplay.js';
-import { ManagerHelp } from './ManagerHelp.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
 import { formatGoalName } from './goalDisplay.js';
@@ -246,7 +245,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       questionId: target.question.id, answer },
     (id) => {
       saving.operationId = id;
-      pendingAnswers.current.set(id, { text: answer.text ?? '', questionId: target.question.id });
+      let text = answer.text ?? '';
+      if (answer.report !== undefined) {
+        const choice = getLabel(`manager.answerChoices.${answer.report}`, lang);
+        text = text.trim() === '' ? choice : `${choice}\n${text}`;
+      }
+      pendingAnswers.current.set(id, { text, questionId: target.question.id });
     });
     if (operationId === null && savingAnswer.current === saving) savingAnswer.current = null;
   };
@@ -267,9 +271,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     : getLabel(repositoryDirectories.length > 1 ? 'manager.assignmentHeadingMultiple' : 'manager.assignmentHeading', lang, {
       name: toSingleLineText(basename(headingRepository)), count: String(repositoryDirectories.length - 1),
     });
-  const inputHint = getLabel(selectingSummary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
+  const inputHint = getLabel(selectingSummary
+    ? (busy ? 'manager.summaryInputHintWorking' : 'manager.summaryInputHint')
+    : 'manager.inputHint', lang);
   const hintSeparator = selectingSummary ? ' / ' : '  ';
   const hintItems = inputHint.split(hintSeparator);
+  const statusSuffix = ` | ${getLabel('manager.counts', lang, {
+    goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length),
+  })} | ${getLabel('manager.statusExperimental', lang)}`;
+  const headingWidth = Math.min(measureWidth(assignmentHeading), Math.max(0, (columns ?? 80) - measureWidth(statusSuffix)));
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
@@ -280,8 +290,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   return <Box flexDirection="column">
-    <Text bold wrap="truncate-middle">{assignmentHeading}</Text>
-    <Text>{getLabel('manager.counts', lang, { goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length) })}</Text>
     <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
     {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
     {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
@@ -291,7 +299,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
-    <ManagerHelp lang={lang} />
     <StatusLine busy={busy} label={state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
@@ -303,6 +310,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
       return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
     })}</Box>
-    {conversationInput && !selectingSummary && <Text dimColor>{getLabel('manager.makeGoalHint', lang)}</Text>}
+    <Box>
+      <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
+      <Text dimColor wrap="truncate-end">{statusSuffix}</Text>
+    </Box>
   </Box>;
 }

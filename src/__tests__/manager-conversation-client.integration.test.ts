@@ -284,7 +284,7 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
-    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    expect(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
   });
   const submissions = vi.spyOn(client, 'submit');
   const refreshing = client.refresh();
@@ -292,7 +292,7 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     await entered.promise;
     await waitFor(() => expect(service.snapshot).toHaveBeenCalled());
     expect.soft(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
-    expect.soft(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    expect.soft(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
@@ -333,7 +333,7 @@ it('does not send approval before the initial transfer ends and enables it on th
     expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
-    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    expect(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
   });
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
@@ -351,7 +351,7 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
     expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
-    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    expect(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
   });
   const submissions = vi.spyOn(client, 'submit');
   const entered = gate(); const released = gate();
@@ -390,7 +390,7 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
     expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
     expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
-    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    expect(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
   });
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
@@ -762,8 +762,8 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect(inquiries).toHaveLength(30);
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) })];
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
+    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) }), getLabel('manager.statusExperimental', 'en')];
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   const bytes = observation.bytes;
 
   const received = await refreshSnapshot(client, observation);
@@ -774,7 +774,7 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect.soft(received.items).toHaveLength(0);
   expect.soft(displayedGoals(client)).toEqual(goals);
   expect.soft(displayedInquiries(client)).toEqual(inquiries);
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
 });
 
 it('[SCN-SNAP-SIZE-P2] initially receives all thirty goals and pending inquiries without historical events or notice items', async () => {
@@ -972,8 +972,8 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   await client.connect(); await complete();
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: '2', questions: '2' })];
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
+    getLabel('manager.counts', 'en', { goals: '2', questions: '2' }), getLabel('manager.statusExperimental', 'en')];
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
   await openSnapshotMenu(app, 'answer', connections[0]!);
   await vi.waitFor(() => {
@@ -997,7 +997,7 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   await vi.waitFor(() => expect(app.lastFrame()!.split(notification.body)).toHaveLength(2));
   await refreshSnapshot(client, connections[0]!);
   await vi.waitFor(() => expect(app.lastFrame()!.split(notification.body)).toHaveLength(2));
-  expect(app.lastFrame()).toContain(headings.join('\n'));
+  expect(app.lastFrame()).toContain(headings.join(' | '));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
 });
 

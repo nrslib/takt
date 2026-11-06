@@ -425,7 +425,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', client, initialDiagnostics: [], onExit: vi.fn() }));
     try {
       await vi.waitFor(() => {
-        expect(app.lastFrame()!.split('\n')[0]).toBe('担当: a ほか 1 件');
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 1 件 | 進行中 1 ／ 未回答 0 | 実験的機能');
         expect(app.lastFrame()).toMatch(/進行中\s*1/u);
       });
       app.stdin.write('\x07');
@@ -441,7 +441,9 @@ describe('manager workspace storage and repository boundaries', () => {
       app.stdin.write('担当を確認');
       await vi.waitFor(() => expect(app.lastFrame()).toContain('担当を確認'));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(app.lastFrame()!.split('\n')).toContain('担当: a ほか 2 件'), { timeout: 30_000 });
+      await vi.waitFor(() => {
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 2 件 | 進行中 1 ／ 未回答 0 | 実験的機能');
+      }, { timeout: 30_000 });
     } finally { app.unmount(); await client.dispose(); }
   });
 
@@ -462,7 +464,7 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain('処理中');
-        expect(app.lastFrame()!.split('\n').slice(0, 2)).toEqual(['担当: b ほか 2 件', '進行中 0 ／ 未回答 0']);
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: b ほか 2 件 | 進行中 0 ／ 未回答 0 | 実験的機能');
       });
       expect(client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment).toMatchObject({ repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
     } finally { app.unmount(); await client.dispose(); }
@@ -485,9 +487,10 @@ describe('manager workspace storage and repository boundaries', () => {
     const app = render(createElement(ManagerView, { cwd, assignment, lang, client, initialDiagnostics: [], onExit: vi.fn() }));
     const checkHeading = () => {
       const rows = app.lastFrame()!.split('\n');
-      expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
-      for (const value of [basename(cwd), workspace.id]) expect(rows[0]).not.toContain(value);
-      expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+      expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
+        getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+        getLabel('manager.statusExperimental', lang)].join(' | '));
+      for (const value of [basename(cwd), workspace.id]) expect(rows.at(-1)).not.toContain(value);
     };
     try {
       checkHeading();
@@ -510,7 +513,9 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
-        expect(app.lastFrame()!.split('\n')[0]).toBe(getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }));
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }),
+          getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+          getLabel('manager.statusExperimental', lang)].join(' | '));
       });
       const currentAssignment = (client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment)!;
       if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
@@ -518,11 +523,12 @@ describe('manager workspace storage and repository boundaries', () => {
       expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
       await vi.waitFor(() => {
         const rows = app.lastFrame()!.split('\n');
-        expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
+        expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
+          getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+          getLabel('manager.statusExperimental', lang)].join(' | '));
         for (const value of [basename(cwd), workspace.id]) {
-          expect(rows[0]).not.toBe(getLabel('manager.assignmentHeading', lang, { name: value }));
+          expect(rows.at(-1)).not.toContain(getLabel('manager.assignmentHeading', lang, { name: value }));
         }
-        expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
       });
       expect(client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [] });
     } finally { app.unmount(); await client.dispose(); }

@@ -6,20 +6,24 @@ function toDisplayBullet(item: string): string {
   return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
 }
 
+export function formatSummaryList(items: readonly string[], lang: 'ja' | 'en'): string {
+  return (items.length === 0 ? [getLabel('manager.summary.none', lang)] : items).map(toDisplayBullet).join('\n');
+}
+
 export function formatPendingSummary(pending: PendingSummary, lang: 'ja' | 'en'): string {
   const { summary } = pending;
   const lines = [
     getLabel('manager.summary.title', lang),
-    toDisplayText(pending.repositoryDirectory),
-    toDisplayText(summary.objective),
+    `${getLabel('manager.summary.repository', lang)}: ${toDisplayText(pending.repositoryDirectory)}`,
+    `${getLabel('manager.summary.objective', lang)}: ${toDisplayText(summary.objective).replace(/\n/g, '\n  ')}`,
     `${getLabel('manager.summary.outOfScope', lang)}:`,
-    ...summary.outOfScope.map(toDisplayBullet),
+    formatSummaryList(summary.outOfScope, lang),
     `${getLabel('manager.summary.acceptanceCriteria', lang)}:`,
-    ...summary.acceptanceCriteria.map(toDisplayBullet),
+    formatSummaryList(summary.acceptanceCriteria, lang),
     `${getLabel('manager.summary.constraints', lang)}:`,
-    ...summary.constraints.map(toDisplayBullet),
+    formatSummaryList(summary.constraints, lang),
   ];
-  if (summary.startBranch !== undefined) lines.push(`startBranch: ${toDisplayText(summary.startBranch)}`);
-  if (summary.integrationBranch !== undefined) lines.push(`integrationBranch: ${toDisplayText(summary.integrationBranch)}`);
+  if (summary.startBranch !== undefined) lines.push(`${getLabel('manager.summary.startBranch', lang)}: ${toDisplayText(summary.startBranch)}`);
+  if (summary.integrationBranch !== undefined) lines.push(`${getLabel('manager.summary.integrationBranch', lang)}: ${toDisplayText(summary.integrationBranch)}`);
   return lines.join('\n');
 }

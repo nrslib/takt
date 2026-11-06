@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PendingSummary } from '../infra/conversations/schema.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { formatPendingSummary } from '../features/manager/summaryDisplay.js';
 
 function proposal(): PendingSummary {
@@ -18,11 +19,28 @@ describe.each(['ja', 'en'] as const)('formatPendingSummary in %s', (lang) => {
       ...pending.summary.outOfScope, ...pending.summary.acceptanceCriteria, ...pending.summary.constraints]) {
       expect(text.split(value)).toHaveLength(2);
     }
-    expect(text).toContain('startBranch: release');
-    expect(text).toContain('integrationBranch: main');
-    const sections = lang === 'ja' ? ['登録する要約', '範囲外', '受け入れ条件', '作業の制約']
-      : ['Summary to register', 'Out of scope', 'Acceptance criteria', 'Work constraints'];
+    expect(text).toContain(`${getLabel('manager.summary.startBranch', lang)}: release`);
+    expect(text).toContain(`${getLabel('manager.summary.integrationBranch', lang)}: main`);
+    const sections = lang === 'ja' ? ['ゴールの登録案', 'リポジトリ: /test/repository', '目的: Export the data', '範囲外:', '受け入れ条件:', '作業の制約:', '作業ブランチの作成元: release', '取り込み先のブランチ: main']
+      : ['Proposed goal', 'Repository: /test/repository', 'Objective: Export the data', 'Out of scope:', 'Acceptance criteria:', 'Work constraints:', 'Branch to start from: release', 'Merge target branch: main'];
     for (const section of sections) expect(text).toContain(section);
+  });
+
+  it('indents the continuation lines of a multiline objective', () => {
+    const pending = proposal();
+    const summary = { ...pending.summary, objective: 'Export the data\nKeep the columns\nPreserve ordering' };
+    expect(formatPendingSummary({ ...pending, summary }, lang)).toContain(
+      `${getLabel('manager.summary.objective', lang)}: Export the data\n  Keep the columns\n  Preserve ordering\n${getLabel('manager.summary.outOfScope', lang)}:`,
+    );
+  });
+
+  it.each(['outOfScope', 'acceptanceCriteria', 'constraints'] as const)('shows an explicit empty item for %s without changing other lists', (field) => {
+    const pending = proposal();
+    const text = formatPendingSummary({ ...pending, summary: { ...pending.summary, [field]: [] } }, lang);
+    expect(text).toContain(`${getLabel(`manager.summary.${field}`, lang)}:\n- ${lang === 'ja' ? 'なし' : 'None'}\n`);
+    for (const other of ['outOfScope', 'acceptanceCriteria', 'constraints'] as const) {
+      if (other !== field) for (const item of pending.summary[other]) expect(text).toContain(`- ${item}`);
+    }
   });
 
   it.each(['outOfScope', 'acceptanceCriteria', 'constraints'] as const)('preserves order, duplicate items and multiline indentation in %s', (field) => {
@@ -44,7 +62,7 @@ describe.each(['ja', 'en'] as const)('formatPendingSummary in %s', (lang) => {
     const before = structuredClone(pending);
     const text = formatPendingSummary(pending, lang);
     for (const value of ['/test/repository', 'Objective', '- Excluded\n- Next exclusion',
-      '- Criterion\n- Next criterion', '- Constraint\n- Next constraint', 'startBranch: release', 'integrationBranch: main']) {
+      '- Criterion\n- Next criterion', '- Constraint\n- Next constraint', `${getLabel('manager.summary.startBranch', lang)}: release`, `${getLabel('manager.summary.integrationBranch', lang)}: main`]) {
       expect(text).toContain(value);
     }
     expect(text).not.toContain('\x1b');
@@ -55,7 +73,8 @@ describe.each(['ja', 'en'] as const)('formatPendingSummary in %s', (lang) => {
     const pending = proposal();
     const { startBranch: _startBranch, integrationBranch: _integrationBranch, ...summary } = pending.summary;
     const text = formatPendingSummary({ ...pending, summary }, lang);
-    expect(text.split('\n').filter((line) => /^(?:startBranch|integrationBranch):/u.test(line))).toEqual([]);
+    expect(text).not.toContain(getLabel('manager.summary.startBranch', lang));
+    expect(text).not.toContain(getLabel('manager.summary.integrationBranch', lang));
     expect(text).toContain(summary.objective);
   });
 });

@@ -376,8 +376,15 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
   const expectProposalFrame = (frame: string, updated: boolean): void => {
     const rows = stripVTControlCharacters(frame).split('\n');
     const heading = getLabel('manager.assignmentHeading', language, { name: basename(fixture.repository) });
-    expect(rows.filter((row) => row.trim() === heading)).toHaveLength(1);
-    const start = rows.findIndex((row) => row.trim() === heading);
+    const status = [heading, getLabel('manager.counts', language, { goals: '0', questions: '0' }),
+      getLabel('manager.statusExperimental', language)].join(' | ');
+    expect(rows.filter((row) => row.trim() === status)).toHaveLength(1);
+    expect(rows.filter((row) => row.trim() !== '').at(-1)?.trim()).toBe(status);
+    const confirmation = getLabel('manager.summary.confirmation', language);
+    const confirmationRow = rows.map((row) => row.includes(confirmation)).lastIndexOf(true);
+    expect(confirmationRow).toBeGreaterThan(0);
+    const start = rows.slice(0, confirmationRow).map((row) => row.startsWith('╭')).lastIndexOf(true);
+    expect(start).toBeGreaterThanOrEqual(0);
     const history = normalize(rows.slice(0, start).join('\n'));
     const liveRows = rows.slice(start);
     const live = liveRows.join('\n');
@@ -392,14 +399,14 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
       expect(normalizedLive).not.toContain(normalize(value));
     }
     expect(liveRows.length).toBeLessThanOrEqual(24);
-    const confirmation = getLabel('manager.summary.confirmation', language);
     expect(normalizedLive.split(normalize(confirmation))).toHaveLength(2);
     const dialogs = live.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu);
     expect(dialogs).not.toBeNull();
     const summaryDialogs = dialogs!.filter((dialog) => dialog.includes(confirmation));
     expect(summaryDialogs).toHaveLength(1);
-    expect(summaryDialogs[0]!.split('\n').slice(1, -1).map((row) => row.replace(/^│\s*|\s*│$/gu, '')))
-      .toEqual([confirmation, getLabel('manager.summary.approve', language), getLabel('manager.summary.continue', language)]);
+    const contents = summaryDialogs[0]!.split('\n').slice(1, -1).map((row) => row.replace(/^│\s*|\s*│$/gu, ''));
+    expect(contents.slice(0, 3)).toEqual([confirmation, getLabel('manager.summary.approve', language), getLabel('manager.summary.continue', language)]);
+    expect(normalize(contents.slice(3).join(''))).toBe(normalize(getLabel('manager.summary.dismissHint', language)));
   };
   writeLegacyConversation(fixture.directory, saved);
   fixture.release();

@@ -339,7 +339,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
   await send('Prepare export');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'), { timeout: 10_000 });
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Proposed goal'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {

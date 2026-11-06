@@ -1083,8 +1083,10 @@ describe('manager questions, answers and notifications through production bounda
   it('shows new notifications in the same mounted TUI without replaying saved notifications on reopening', async () => {
     const first = ['保存済みの進捗', '保存済みの確認事項', '保存済みの次の作業', '保存済みの詳細末尾'];
     const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
-    const counts = getLabel('manager.counts', 'en', { goals: '1', questions: '0' }).replace(/\s+/gu, ' ');
     const project = basename(cwd);
+    const status = [getLabel('manager.assignmentHeading', 'en', { name: project }),
+      getLabel('manager.counts', 'en', { goals: '1', questions: '0' }),
+      getLabel('manager.statusExperimental', 'en')].join(' | ');
     const customHeading = getLabel('manager.notificationHeadings.custom', 'en', { project });
     const blockedHeading = getLabel('manager.notificationHeadings.blocked', 'en', { project });
     const goalLine = getLabel('manager.notificationGoal', 'en', { objective: goalRecord().objective, id: goalId.slice(0, 8) });
@@ -1094,7 +1096,7 @@ describe('manager questions, answers and notifications through production bounda
     await mountManager();
     await vi.waitFor(() => {
       const frame = app!.lastFrame()!;
-      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame.split('\n').at(-1)).toBe(status);
       expect(frame).not.toContain('Working');
       for (const line of first) expect(frame).not.toContain(line);
       expect(frame).not.toContain(customHeading);
@@ -1127,7 +1129,7 @@ describe('manager questions, answers and notifications through production bounda
     app = render(createElement(ManagerView, { cwd, lang: 'en', client: session!, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => {
       const frame = app!.lastFrame()!;
-      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame.split('\n').at(-1)).toBe(status);
       expect(frame).not.toContain('Working');
       for (const line of [...first, ...second]) expect(frame).not.toContain(line);
       expect(frame).not.toContain(customHeading);

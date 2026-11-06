@@ -2,7 +2,7 @@
 
 ## Conversation and state
 
-The TUI handles discussion, proposal approval, answers, state operations and display. /make-goal regenerates a proposal from the conversation; it does not register it. Use ↑ Approve / ↓ Continue / Enter Confirm to operate the proposal and approve registration. Replies without summary do not display a proposal. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals, including while processing. Tab accepts / completion; slash input other than /make-goal is ordinary speech.
+The TUI handles discussion, proposal approval, answers, state operations and display. /make-goal regenerates a proposal from the conversation; it does not register it. Use ↑ Register goal / ↓ Return to conversation without registering / Enter Confirm to operate the proposal. Returning to the conversation or typing changes dismisses the proposal. Replies without summary do not display a proposal. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals, including while processing. Tab accepts / completion; slash input other than /make-goal is ordinary speech.
 
 A persistent child per conversation owns turn preparation, AI, MCP and business operations; the daemon owns admission, persistence, routing and observation. Two queues contain human input and other events. Human input has priority for the next turn; each queue preserves admission order. Turns in one conversation are serial and one session retains event knowledge. accepted means durable admission, not success. Saving input, reading and interruption remain available during processing; interruption preserves waiting input. A child crash records failure without blindly replaying the turn. Manager may inspect current state and decide recovery.
 
