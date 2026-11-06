@@ -187,6 +187,10 @@ export class SdkOptionsBuilder {
       sdkOptions.sandbox = this.options.sandbox;
     }
 
+    if (this.options.denyRules !== undefined) {
+      sdkOptions.settings = { permissions: { deny: this.options.denyRules } };
+    }
+
     if (this.options.pathToClaudeCodeExecutable) {
       sdkOptions.pathToClaudeCodeExecutable = this.options.pathToClaudeCodeExecutable;
     }

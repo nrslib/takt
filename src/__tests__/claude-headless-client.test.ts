@@ -1905,6 +1905,96 @@ describe('callClaudeHeadless', () => {
     });
   });
 
+  describe('deny rules via --settings JSON', () => {
+    const denyRules = ['Read(./.env)', 'Read(~/.ssh/**)'];
+
+    function readSettingsArg(): Record<string, unknown> {
+      const argv = lastSpawnArgv();
+      const settingsIndex = argv.indexOf('--settings');
+      expect(settingsIndex).toBeGreaterThanOrEqual(0);
+      return JSON.parse(argv[settingsIndex + 1]!) as Record<string, unknown>;
+    }
+
+    it('passes deny rules as permissions.deny', async () => {
+      stubSpawn({
+        stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+        closeCode: 0,
+      });
+
+      await callClaudeHeadless('agent', 'p', { cwd: '/tmp', denyRules });
+
+      expect(readSettingsArg()).toEqual({ permissions: { deny: denyRules } });
+    });
+
+    it('keeps the sandbox settings next to the deny rules', async () => {
+      stubSpawn({
+        stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+        closeCode: 0,
+      });
+
+      await callClaudeHeadless('agent', 'p', {
+        cwd: '/tmp',
+        denyRules,
+        sandbox: { allowUnsandboxedCommands: true, excludedCommands: ['./gradlew'] },
+      });
+
+      expect(readSettingsArg()).toEqual({
+        sandbox: { allowUnsandboxedCommands: true, excludedCommands: ['./gradlew'] },
+        permissions: { deny: denyRules },
+      });
+    });
+
+    it('keeps the deny rules while ambient settings stay disabled in strict-readonly isolation', async () => {
+      stubSpawn({
+        stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+        closeCode: 0,
+      });
+
+      await callClaudeHeadless('judge', 'p', {
+        cwd: '/tmp',
+        internalAgentIsolation: 'strict-readonly',
+        allowedTools: [],
+        denyRules,
+      });
+
+      const argv = lastSpawnArgv();
+      expect(argv).toEqual(expect.arrayContaining(['--tools', '', '--setting-sources', '']));
+      expect(readSettingsArg()).toEqual({ permissions: { deny: denyRules } });
+    });
+
+    it('keeps the readonly artifact Read hook next to the deny rules', async () => {
+      stubSpawn({
+        stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+        closeCode: 0,
+      });
+
+      await callClaudeHeadless('selector', 'read verification files', {
+        cwd: '/tmp',
+        internalAgentIsolation: 'strict-readonly',
+        allowReadonlyFileRead: true,
+        readonlyFileReadPaths: [fileURLToPath(import.meta.url)],
+        allowedTools: ['Read'],
+        permissionMode: 'readonly',
+        denyRules,
+      });
+
+      const settings = readSettingsArg();
+      expect(settings.permissions).toEqual({ deny: denyRules });
+      expect((settings.hooks as { PreToolUse: Array<{ matcher: string }> }).PreToolUse[0]).toMatchObject({ matcher: 'Read' });
+    });
+
+    it('does not pass --settings when no deny rules, sandbox, or readonly hook are requested', async () => {
+      stubSpawn({
+        stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+        closeCode: 0,
+      });
+
+      await callClaudeHeadless('agent', 'p', { cwd: '/tmp' });
+
+      expect(lastSpawnArgv()).not.toContain('--settings');
+    });
+  });
+
   it('accepts opaque sessionId when resuming', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'resumed' })}\n`],

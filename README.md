@@ -426,6 +426,16 @@ events continue to arrive. Raise the limit with
 profiles and per-model overrides are described in
 [Provider inactivity deadline and OpenCode execution guards](./docs/configuration.md#provider-inactivity-deadline-and-opencode-execution-guards).
 
+`provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`.
+`Read(` rules stop Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and the file commands Claude Code recognizes in Bash, such as `cat` and `head`.
+They do not stop a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself.
+To block the shell commands Claude runs, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the Claude Code sandbox.
+Processes in the sandbox can still read paths that have no deny rule.
+Hooks, MCP servers, and other processes outside the sandbox are not blocked.
+Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`.
+Neither key is set by default, and `claude-terminal` is not affected.
+See [Claude Code read-deny rules](./docs/configuration.md#claude-read-deny-rules).
+
 ### Dedicated provider configuration (`runtime.yaml`)
 
 You can keep provider, model, and routing settings in `~/.takt/runtime.yaml`

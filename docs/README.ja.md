@@ -412,6 +412,16 @@ export DEEPSEEK_API_KEY=...                 # 公式 DeepSeek Harness SDK
 
 OpenCode の呼び出しには既定で 60 分の provider イベント無活動上限があります。タイマーは provider イベントごとにリセットされるため、イベントが届き続ける限り呼び出しは 60 分を超えて実行できます。上限は `provider_options.opencode.guards.call_timeout_ms`（最大 86,400,000 ms）で変更できます。guard プロファイルとモデル別上書きは [Configuration Guide](./configuration.ja.md) を参照してください。
 
+`provider_options.claude.permissions.deny` を使うと、Claude Code の `permissions.deny` ルール（例: `Read(./.env)`）を `claude-sdk` と `claude-headless` に渡せます。
+`Read(` ルールが止めるのは、Claude の組み込みのファイルツール（Grep や Glob などには `Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head` など）です。
+ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、スクリプトが自分でファイルを開く読み取りは止められません。
+Claude が実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、Claude Code の sandbox を有効にしてください。
+拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
+hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
+`provider_options.claude.permissions.import_user_read_deny: true` を指定すると、`~/.claude/settings.json` の `Read(` ルールも取り込みます。
+どちらのキーも既定では未指定で、`claude-terminal` は対象外です。
+詳しくは[Claude Code の Read 拒否ルール](./configuration.ja.md#claude-read-deny-rules)を参照してください。
+
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 
 プロバイダ、モデル、ルーティングは `~/.takt/runtime.yaml` または `<project>/.takt/runtime.yaml` にまとめて設定できます。プロジェクト側の設定が優先されます。ワークフローの定義と実行環境の設定を分けたい場合に使ってください。`runtime.yaml` を使う場合は旧来のプロバイダ設定と混在させず、移行方法を[設定ガイド](./configuration.ja.md)で確認してください。

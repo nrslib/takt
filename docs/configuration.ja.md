@@ -1733,6 +1733,39 @@ provider_options:
 
 ファイル編集の権限は引き続き `permission_mode` で制御されます。
 
+<a id="claude-read-deny-rules"></a>
+
+#### Claude Code の Read 拒否ルール (`permissions`)
+
+TAKT から起動した Claude に `permissions.deny` のルール（例: `Read(./.env)`）を適用させるには、`provider_options.claude.permissions` でルールを Claude に渡します。
+
+```yaml
+provider_options:
+  claude:
+    permissions:
+      deny:
+        - "Read(./.env)"
+        - "Read(~/.ssh/**)"
+      import_user_read_deny: true
+```
+
+| キー | 型 | 既定値 | 意味 |
+|------|----|--------|------|
+| `deny` | 空でない文字列のリスト | なし | TAKT の設定に書くルールです。書いたとおりに Claude へ渡すので、`Read(` で始まるルールには限定しません。 |
+| `import_user_read_deny` | boolean | `false` | `true` のとき、`~/.claude/settings.json` の `permissions.deny` から、`Read(` で始まる（大文字と小文字を区別する）ルールも取り込みます。Bash 系、MCP 系、その他のルールは取り込みません。 |
+
+- `Read(` ルールが止める範囲は、TAKT ではなく Claude Code が決めます。
+  [Claude Code の権限に関するドキュメント](https://code.claude.com/docs/en/permissions)によると、止まるのは Claude の組み込みのファイルツール（Grep や Glob などには、`Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head`、`tail`、`sed`、`tee` など）です。
+  ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、Python や Node のスクリプトのように自分でファイルを開くものは、止まりません。
+  Claude が実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、[Claude Code の sandbox](https://code.claude.com/docs/en/sandboxing.md) を有効にしてください。
+  拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
+  hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
+- Claude に渡すルールは、`deny` と取り込んだルールの和集合で、重複は 1 つにまとめます。TAKT は Claude の flag settings の `permissions.deny` として渡します（`claude-sdk` は SDK の `settings` オプション、`claude-headless` は `--settings`）。そのため、ステータス判定のような隔離された内部の呼び出しにも効きます。
+- 対象は `claude-sdk`（別名 `claude` を含む）と `claude-headless` で、workflow の step、内部の呼び出し、対話モードのアシスタントのすべてに効きます。`claude-terminal` には渡さず、後述の警告も出しません。
+- ユーザー設定のファイルは、現在のユーザーのホームディレクトリにある `~/.claude/settings.json` に固定です。`CLAUDE_CONFIG_DIR` は参照しません。ファイルを読むのは `import_user_read_deny` が `true` のときだけで、Claude を起動するたびに読みます。2 つのキーを指定しない場合は、ファイルを読まず、Claude の起動引数も従来どおりです。
+- ファイルが存在しない、読めない、JSON として不正、または `permissions` や `permissions.deny` の型が違う場合は、TAKT が警告を出し、`deny` のルールだけで Claude を起動します。ファイルを読めて `Read(` のルールが 1 件もないときは、何も取り込まず、警告も出しません。`permissions.deny` の要素のうち文字列でないものは無視します。
+- 2 つのキーは、ほかの `provider_options` の leaf と同じ層と上書きの規則に従います。上位の層は `deny` のリスト全体を置き換え、リストどうしは連結しません。環境変数は `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY`（JSON 配列）と `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY` です。
+
 <a id="pi-resource-loading"></a>
 
 #### Pi のリソース読み込み (`extensions`, `no_*`)

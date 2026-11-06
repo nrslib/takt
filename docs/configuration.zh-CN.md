@@ -1340,6 +1340,39 @@ provider_options:
       allow_unsandboxed_commands: true
 ```
 
+<a id="claude-read-deny-rules"></a>
+
+#### Claude Code 读取拒绝规则（`permissions`）
+
+要让由 TAKT 启动的 Claude 应用 `permissions.deny` 规则（例如 `Read(./.env)`），请通过 `provider_options.claude.permissions` 向 Claude 传递这些规则：
+
+```yaml
+provider_options:
+  claude:
+    permissions:
+      deny:
+        - "Read(./.env)"
+        - "Read(~/.ssh/**)"
+      import_user_read_deny: true
+```
+
+| 键 | 类型 | 默认值 | 含义 |
+|----|------|--------|------|
+| `deny` | 非空字符串列表 | 无 | 写在 TAKT 配置中的规则，按原样传给 Claude，因此不限于 `Read(` 规则。 |
+| `import_user_read_deny` | boolean | `false` | 为 `true` 时，还会从 `~/.claude/settings.json` 的 `permissions.deny` 导入以 `Read(` 开头（区分大小写）的规则。Bash 规则、MCP 规则和其他规则不会导入。 |
+
+- `Read(` 规则拦截的范围由 Claude Code 决定，而不是由 TAKT 决定。
+  根据 [Claude Code 权限文档](https://code.claude.com/docs/en/permissions)，这些规则适用于 Claude 的内置文件工具（Claude 会尽力将 `Read` 规则应用于 Grep、Glob 等工具），以及 Claude Code 在 Bash 中识别的文件命令，如 `cat`、`head`、`tail`、`sed` 和 `tee`。
+  它们不适用于不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不适用于自行打开文件的脚本（如 Python 或 Node 脚本）。
+  要在操作系统层面阻止 Claude 运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。
+  没有拒绝规则的路径，sandbox 中的进程仍然可以读取。
+  hooks、MCP server 等在 sandbox 之外运行的进程不会被阻止。
+- Claude 收到的规则是 `deny` 与导入规则的并集，重复项只保留一条。TAKT 将其作为 Claude flag settings 的 `permissions.deny` 传递（`claude-sdk` 使用 SDK 的 `settings` 选项，`claude-headless` 使用 `--settings`），因此对状态判定等隔离的内部调用同样有效。
+- 适用于 `claude-sdk`（包括别名 `claude`）和 `claude-headless`，覆盖 workflow step、内部调用和交互式 assistant。`claude-terminal` 不会收到这些规则，也不会触发下述警告。
+- 用户设置文件固定为当前用户主目录下的 `~/.claude/settings.json`，不会参考 `CLAUDE_CONFIG_DIR`。仅当 `import_user_read_deny` 为 `true` 时才读取，每次启动 Claude 都会读取。两个键都未设置时不读取文件，Claude 的启动参数也与以前相同。
+- 文件不存在、无法读取、不是有效 JSON，或 `permissions`、`permissions.deny` 的类型不对时，TAKT 会输出警告，并只用 `deny` 中的规则启动 Claude。文件可读但没有 `Read(` 规则时，不导入任何内容，也不输出警告。`permissions.deny` 中不是字符串的元素会被忽略。
+- 两个键与其他 `provider_options` leaf 使用相同的层级和覆盖规则。上层会整体替换 `deny` 列表，不会拼接。环境变量为 `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY`（JSON 数组）和 `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY`。
+
 #### Pi 资源加载（`extensions`、`no_*`）
 
 ```yaml

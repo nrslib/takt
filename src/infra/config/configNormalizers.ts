@@ -869,6 +869,16 @@ export function denormalizeProviderOptions(
     if (Object.keys(sandbox).length > 0) {
       claude.sandbox = sandbox;
     }
+    const permissions: Record<string, unknown> = {};
+    if (providerOptions.claude.permissions?.deny !== undefined) {
+      permissions.deny = providerOptions.claude.permissions.deny;
+    }
+    if (providerOptions.claude.permissions?.importUserReadDeny !== undefined) {
+      permissions.import_user_read_deny = providerOptions.claude.permissions.importUserReadDeny;
+    }
+    if (Object.keys(permissions).length > 0) {
+      claude.permissions = permissions;
+    }
     if (Object.keys(claude).length > 0) {
       raw.claude = claude;
     }
