@@ -3,13 +3,13 @@ import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { stringify } from 'yaml';
 import { createManagerConversationPlan } from '../../dist/features/manager/conversationPlan.js';
 import { createManagerTurnExecutor } from '../../dist/features/manager/turnExecutor.js';
-import { buildManagerEventInput } from '../manager-work-split-prompt.mjs';
+import { buildManagerEventInput, resolveManagerEvalFacet } from '../manager-work-split-prompt.mjs';
 import { startLocalMcpConnection } from '../../dist/features/mcp/localConnection.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../../dist/features/manager/managerMcp.js';
 import { GoalStore } from '../../dist/infra/goals/store.js';
@@ -24,7 +24,6 @@ import * as schemas from '../../dist/features/mcp/schemas.js';
 import { managerWriteSchemas, loadManagerCase } from '../manager-work-split-prompt.mjs';
 import { executionConfig } from './manager-work-split-execution.mjs';
 
-const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
 function git(cwd, ...args) {
@@ -180,15 +179,19 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     Object.assign(trial, repository);
     const projectConfig = join(cwd, '.takt');
     mkdirSync(projectConfig, { recursive: true });
-    const instructionPath = config.instruction_root === undefined
-      ? join(repoRoot, 'builtins', config.lang, 'facets/instructions/manager.md')
-      : join(config.instruction_root, config.lang, 'manager.md');
-    const instruction = readFileSync(instructionPath, 'utf8');
-    const facetDir = join(projectConfig, 'facets/instructions');
-    mkdirSync(facetDir, { recursive: true });
-    writeFileSync(join(facetDir, 'manager.md'), instruction);
-    writeFileSync(join(artifactDir, 'instruction.md'), instruction);
-    trial.instructionSha256 = sha256(instruction);
+    const context = { projectDir: cwd, lang: config.lang };
+    for (const [facetType, name, envKey] of [
+      ['instructions', 'instruction', 'TAKT_EVAL_MANAGER_INSTRUCTION_ROOT'],
+      ['policies', 'policy', 'TAKT_EVAL_MANAGER_POLICY_ROOT'],
+    ]) {
+      const body = resolveManagerEvalFacet(facetType, envKey, context, config[`${name}_root`]);
+      if (body === undefined) throw new Error(`Manager ${facetType} facet is missing`);
+      const facetDir = join(projectConfig, 'facets', facetType);
+      mkdirSync(facetDir, { recursive: true });
+      writeFileSync(join(facetDir, 'manager.md'), body);
+      writeFileSync(join(artifactDir, `${name}.md`), body);
+      trial[`${name}Sha256`] = sha256(body);
+    }
     const seed = loadManagerCase('integrated-task-verification', config.lang);
     const store = new GoalStore(cwd);
     const goal = { ...seed.goal, branch: 'goal/inventory', startBranch: 'main', integrationBranch: 'main',

@@ -1,5 +1,6 @@
 ja:
   lang: ja
+  expectedQuestionType: choice-or-operation
   turn: event
   cwd: /workspace/project
   concurrency: 3
@@ -430,6 +431,7 @@ ja:
           content: 指示書を変え、決済処理の結合テストだけを実行した。設定の読み込み順とテスト用 API の接続先を確認したが、TEST_PAYMENT_KEY は環境にも保存済みの設定にもなかった。前回と同じ missing test payment key エラーで失敗した。管理画面へのアクセス権はなく、鍵の発行や設定は行えなかった。
 en:
   lang: en
+  expectedQuestionType: choice-or-operation
   turn: event
   cwd: /workspace/project
   concurrency: 3

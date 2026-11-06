@@ -14,9 +14,11 @@ import { resolveTaskOrderContent } from '../dist/features/tasks/orderRevision.js
 import { issueTellableRunningTask } from '../dist/features/tasks/liveIntervention.js';
 import { GoalStore } from '../dist/infra/goals/store.js';
 import { TaskStore } from '../dist/infra/task/store.js';
+import { StandaloneInquiryStore } from '../dist/infra/goals/standalone-inquiries.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../dist/infra/config/index.js';
 import { managerStateReads } from './manager-work-split-reads.mjs';
+import { listTaktStandaloneInquiries } from '../dist/features/mcp/standaloneInquiryOperations.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const fixtures = suite.tests.map(({ vars }) => ({ ...vars,
@@ -150,6 +152,72 @@ test('workflow replay lists honor the production default limit and explicit cont
     assert.deepEqual(selected.map(({ name }) => name), expectedNames);
     assert.deepEqual(actualPage, { collection: 'workflows', totalCount: 51, ...page });
   }
+});
+
+test('operation fixtures expose the production empty pending standalone inquiry page', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-inquiry-contract-'));
+  try {
+    const native = await listTaktStandaloneInquiries({ cwd: root }, root,
+      { kind: 'repository', repositoryDirectory: root });
+    assert.notEqual(native.isError, true);
+    for (const { case: caseId, fixture } of fixtures) {
+      if (!['settled-operation-merge', 'migration-no-downtime'].includes(caseId)) continue;
+      const reads = managerStateReads(fixture);
+      const inquiries = reads.find(({ tool }) => tool === 'takt_list_standalone_inquiries');
+      assert.deepEqual(inquiries.result, JSON.parse(native.content[0].text));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('standalone inquiry replay supplies production defaults and preserves explicit metadata', () => {
+  const fixture = fixtures.find(({ case: caseId, lang }) => caseId === 'settled-operation-merge' && lang === 'en').fixture;
+  const inquiries = [
+    { body: 'Which goal?' },
+    { body: 'Which repository?', createdAt: '2026-11-01T00:00:00.000Z' },
+    { kind: 'operation_request', body: 'Configure access.' },
+    { kind: 'question', body: 'Which method?', createdAt: '2026-11-02T00:00:00.000Z' },
+  ].map((inquiry, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+    recipient: 'human', status: 'pending', ...inquiry }));
+  const original = structuredClone(inquiries);
+  const replay = managerStateReads({ ...fixture, readResults: [{ tool: 'takt_list_standalone_inquiries',
+    arguments: { cwd: fixture.cwd }, result: { inquiries } }] }).find(({ tool }) => tool === 'takt_list_standalone_inquiries').result;
+  assert.deepEqual(replay.inquiries, [
+    { ...inquiries[0], kind: 'question', createdAt: null },
+    { ...inquiries[1], kind: 'question' },
+    { ...inquiries[2], createdAt: null },
+    inquiries[3],
+  ]);
+  assert.deepEqual(inquiries, original);
+});
+
+test('standalone inquiry replay matches nonempty production pages with default and explicit pagination', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-inquiry-pages-'));
+  try {
+    const owner = { kind: 'repository', repositoryDirectory: root };
+    const store = new StandaloneInquiryStore(root, owner);
+    const inquiries = [];
+    for (let index = 0; index < 51; index++) inquiries.push(await store.create({ body: `Question ${index}` }));
+    inquiries.sort((left, right) => left.id.localeCompare(right.id));
+    const fixture = fixtures.find(({ case: caseId, lang }) => caseId === 'settled-operation-merge' && lang === 'en').fixture;
+    for (const { parameters, start, end, page } of [
+      { parameters: {}, start: 0, end: 50,
+        page: { returnedCount: 50, omittedCount: 1, offset: 0, nextOffset: 50, truncated: true } },
+      { parameters: { offset: 1, limit: 2 }, start: 1, end: 3,
+        page: { returnedCount: 2, omittedCount: 49, offset: 1, nextOffset: 3, truncated: true } },
+      { parameters: { offset: 50, limit: 2 }, start: 50, end: 51,
+        page: { returnedCount: 1, omittedCount: 50, offset: 50, nextOffset: null, truncated: true } },
+      { parameters: { offset: 51, limit: 2 }, start: 51, end: 51,
+        page: { returnedCount: 0, omittedCount: 51, offset: 51, nextOffset: null, truncated: true } },
+    ]) {
+      const native = await listTaktStandaloneInquiries({ cwd: root, ...parameters }, root, owner);
+      assert.notEqual(native.isError, true);
+      const replay = managerStateReads({ ...fixture, readResults: [{ tool: 'takt_list_standalone_inquiries',
+        arguments: { cwd: fixture.cwd, ...parameters }, result: { inquiries } }] })
+        .find(({ tool }) => tool === 'takt_list_standalone_inquiries').result;
+      assert.deepEqual(replay, JSON.parse(native.content[0].text));
+      assert.deepEqual(replay, { inquiries: inquiries.slice(start, end), collection: 'inquiries', totalCount: 51, ...page });
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('every event fixture lists the saved specification and run metadata in the production response shape', async () => {

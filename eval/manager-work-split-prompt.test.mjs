@@ -13,20 +13,22 @@ import { TaskRecordSchema } from '../dist/infra/task/schema.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
-import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
+import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, goalWriteInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
+import { prepareQuestionFacetVariants } from './fixtures/manager-question-options/facets.mjs';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const runLogContent = (fixture, runSlug, index) => fixture.readResults.find(({ tool, arguments: args }) =>
   tool === 'takt_get_run' && args.runSlug === runSlug && args.view === 'log' && args.stepIndex === index).result.log.content;
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
-const inheritedInstructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
-delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
-after(() => preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', inheritedInstructionRoot));
+const facetEnvKeys = ['TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', 'TAKT_EVAL_MANAGER_POLICY_ROOT'];
+const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
+for (const key of facetEnvKeys) delete process.env[key];
+after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 94 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 108 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 94);
+  assert.equal(suite.tests.length, 108);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -54,6 +56,7 @@ test('assembles all 94 turn prompts without a provider call, excluding scoring c
       taskName: 'running-task', content: 'Review the active repair target.',
     }).success);
     assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/tool-calls|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
+    assert.ok(!prompt.includes('expectedQuestionType'));
     if (fixture.turn === 'conversation') assert.ok(prompt.includes(`USER:\n${fixture.user}`));
     else {
       const user = prompt.split('USER:\n')[1].split('\n\n')[0];
@@ -63,6 +66,22 @@ test('assembles all 94 turn prompts without a provider call, excluding scoring c
       const readGoal = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.path === undefined).result.goal;
       assert.deepEqual(readGoal, goalSummary(GoalSchema.parse(fixture.goal)));
 
+    }
+  }
+});
+
+test('question expectations match choice, information and operation scenarios in both languages', () => {
+  const expectations = {
+    'task-stopped-not-resumed': 'choice',
+    'migration-method-event': 'choice',
+    'migration-method-conversation': 'choice',
+    'conflicting-calendar-visibility': 'choice',
+    'escalate-repeated-failure': 'choice-or-operation',
+    'external-contract-limit': 'information',
+  };
+  for (const lang of ['ja', 'en']) {
+    for (const { vars } of suite.tests.filter(({ vars }) => vars.lang === lang)) {
+      assert.equal(loadManagerCase(vars.case, lang).expectedQuestionType, expectations[vars.case]);
     }
   }
 });
@@ -370,7 +389,9 @@ test('work contents, integrated verification and constraint cases receive semant
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
-    'stopped-background-execution', 'integrated-task-execution']);
+    'stopped-background-execution', 'integrated-task-execution',
+    'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
+    'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
     if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
@@ -434,6 +455,168 @@ test('instruction file switching preserves input, schemas and other facets in bo
   } finally {
     preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', prior);
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recorded main question rules and green workspace facets are exclusive in assembled prompts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-question-redgreen-'));
+  const prior = facetEnvKeys.map((key) => [key, process.env[key]]);
+  const newRuleMarkers = {
+    ja: [
+      '人に判断を求めるときは人宛ての質問を使い、',
+      '人に届く質問・操作依頼・通知の本文には、理由と試したことの要約を書く。',
+      '失敗の記録を確かめ、失敗した操作と、',
+      '人の答えが必要な未決定事項があり、それを尋ねる未回答の質問がなければ、',
+      '「停止したままにする」「あとで相談する」は、まだ決まっていない案の代わりにしない。',
+      '選択肢と理由付きの推奨案も付ける。',
+      '事実を答えてもらっただけで、その案を採ることの承認とみなさない。',
+      '人にしか分からない、すでに決まっている事実や値',
+      '何を決めるために必要か、何を調べても分からなかったかを本文に短く書く。',
+      '人への新しい質問を takt_ask_goal_question で作る。',
+      '選択肢を options に、推奨案と理由を recommendation に書く。',
+      '推奨回答を示すのは、案から選んでもらう質問のときだけです。',
+      '質問の直前に「推奨:」を文章で書く手順は、人の発言に応じるターンに適用します。',
+      '会話や手元の情報から対象のリポジトリやゴールを特定できないときは、',
+    ],
+    en: [
+      'Use a human-directed question when a decision is needed,',
+      'Put a brief explanation of the reason and what you tried in the body of the question,',
+      'check its records and include the operation that failed',
+      "If an unresolved matter requires the person's answer and no unanswered question addresses that matter,",
+      'Do not use "remain stopped" or "discuss later" as substitutes for the unresolved alternatives themselves.',
+      'State which alternative each answer selects, and include the options and a recommendation with its reason.',
+      'Do not treat an answer that only supplies a fact as approval to adopt an alternative.',
+      'When an already established fact or value that only a person knows',
+      'briefly state in its body what decision needs the information and what you checked without finding it.',
+      'create new questions for the person with takt_ask_goal_question.',
+      'put the options in options and the recommendation with its reason in recommendation.',
+      'Present a recommended answer only for a question asking the person to choose among alternatives.',
+      'Apply the step of writing "Recommended:" immediately before the question in turns responding to a person\'s message.',
+      'If the target repository or goal cannot be identified from the conversation and available context,',
+    ],
+  };
+  try {
+    for (const lang of ['ja', 'en']) {
+      const variants = prepareQuestionFacetVariants(root, lang);
+      for (const key of facetEnvKeys) delete process.env[key];
+      const prompts = {};
+      for (const phase of ['red', 'green']) {
+        process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, phase, 'policies');
+        process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, phase, 'instructions');
+        prompts[phase] = buildPrompt({ vars: { case: 'migration-method-event', lang } });
+        for (const marker of newRuleMarkers[lang]) {
+          assert.equal(prompts[phase].includes(marker), phase === 'green', `${lang}/${phase}: ${marker}`);
+        }
+        const other = phase === 'red' ? 'green' : 'red';
+        const promptLines = new Set(prompts[phase].split('\n'));
+        for (const bodies of Object.values(variants)) {
+          const exclusive = bodies[phase].split('\n').filter((line) => line.trim() && !bodies[other].split('\n').includes(line));
+          assert.ok(exclusive.length > 0);
+          for (const line of exclusive) {
+            assert.ok(promptLines.has(line), `${lang}/${phase}: includes chosen facet line`);
+          }
+          for (const line of bodies[other].split('\n').filter((line) => line.trim() && !bodies[phase].split('\n').includes(line))) {
+            assert.ok(!promptLines.has(line), `${lang}/${phase}: excludes other facet line`);
+          }
+        }
+        assert.doesNotMatch(prompts[phase], /\{\{include:/);
+      }
+      assert.equal(prompts.red.split('\n\nTOOLS:\n')[1], prompts.green.split('\n\nTOOLS:\n')[1]);
+    }
+    delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = 'relative/path';
+    assert.throws(() => buildPrompt({ vars: { case: 'migration-method-event', lang: 'ja' } }), /POLICY_ROOT must be an absolute path/);
+    process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, 'missing');
+    assert.throws(() => buildPrompt({ vars: { case: 'migration-method-event', lang: 'ja' } }), /ENOENT/);
+  } finally {
+    prior.forEach(([key, value]) => preserveEnv(key, value));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('policy switching preserves all other prompt content in both languages', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-policy-test-'));
+  const prior = process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+  try {
+    delete process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+    for (const lang of ['ja', 'en']) {
+      mkdirSync(join(root, lang));
+      const policy = readFileSync(new URL(`../builtins/${lang}/facets/policies/manager.md`, import.meta.url), 'utf8');
+      const vars = { case: 'migration-method-event', lang };
+      const original = buildPrompt({ vars });
+      writeFileSync(join(root, lang, 'manager.md'), policy);
+      process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = root;
+      assert.equal(buildPrompt({ vars }), original);
+      const marker = `POLICY_VARIANT_${lang}`;
+      writeFileSync(join(root, lang, 'manager.md'), `${marker}\n${policy}`);
+      assert.equal(buildPrompt({ vars }).replace(`${marker}\n`, ''), original);
+      delete process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+    }
+  } finally {
+    preserveEnv('TAKT_EVAL_MANAGER_POLICY_ROOT', prior);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('question fixtures preserve the human input boundary and constraints', () => {
+  for (const lang of ['ja', 'en']) {
+    const event = loadManagerCase('migration-method-event', lang);
+    const conversation = loadManagerCase('migration-method-conversation', lang);
+    assert.equal(event.turn, 'event');
+    assert.equal(conversation.turn, 'conversation');
+    assert.ok(conversation.user.length > 0);
+    assert.deepEqual(conversation.goal, event.goal);
+    assert.deepEqual(conversation.readResults, event.readResults);
+    const constrained = loadManagerCase('migration-no-downtime', lang);
+    assert.deepEqual({ ...constrained.goal, constraints: [] }, event.goal);
+    assert.equal(constrained.goal.constraints.length, 1);
+    const unidentified = loadManagerCase('unidentified-goal', lang);
+    assert.equal(unidentified.goal, undefined);
+    assert.equal(unidentified.turn, 'conversation');
+    assert.equal(new Set(unidentified.goals.map((candidate) => GoalSchema.parse(candidate).id)).size, 2);
+    assert.deepEqual(unidentified.readResults[0].result.goals,
+      unidentified.goals.map((candidate) => goalSummary(GoalSchema.parse(candidate))));
+  }
+});
+
+test('settled-operation fixtures expose an answered method choice and a reviewed unintegrated completion', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('settled-operation-merge', lang);
+    const goal = GoalSchema.parse(fixture.goal);
+    const event = ManagerEventSchema.parse(fixture.event);
+    assert.equal(event.kind, 'completion');
+    assert.equal(event.goalId, goal.id);
+    assert.equal(fixture.tasks.length, 1);
+    const task = fixture.tasks[0];
+    assert.equal(event.taskName, task.name);
+    assert.equal(event.runSlug, task.runSlug);
+    assert.deepEqual(event.result, task.completion);
+    assert.equal(task.status, 'completed');
+    assert.equal(task.goalIntegration, 'not_integrated');
+    assert.equal(event.result.success, true);
+    assert.equal(goal.questions.length, 1);
+    const question = goal.questions[0];
+    assert.equal(question.kind, 'question');
+    assert.equal(question.recipient, 'human');
+    assert.equal(question.status, 'answered');
+    assert.ok(question.answer.text.trim().length > 0);
+    assert.equal(question.operation, undefined);
+    assert.equal(question.answer.decision, undefined);
+    assert.ok(Date.parse(question.answer.answeredAt) < Date.parse(task.createdAt));
+    const review = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read'
+      && args.file_path === `${fixture.cwd}/docs/ledger-review.md`);
+    assert.ok(review.result.includes(task.completion.sha));
+    const log = goal.workLog.find(({ summary }) => summary.includes(task.completion.sha));
+    assert.ok(log);
+    assert.ok(Date.parse(log.recordedAt) >= Date.parse(task.completedAt));
+    assert.ok(Date.parse(log.recordedAt) <= Date.parse(event.createdAt));
+    assert.deepEqual(fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal'
+      && args.path === 'questions').result.items, goal.questions);
+    const relation = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation');
+    assert.ok(goalWriteInputSchema.safeParse(relation.arguments).success);
+    assert.deepEqual(Object.keys(relation.result).sort(), ['ahead', 'goalBranch', 'goalSha', 'included', 'targetBranch', 'targetSha']);
+    assert.notEqual(task.completion.sha, relation.result.goalSha);
+    assert.notEqual(task.completion.sha, relation.result.targetSha);
   }
 });
 
@@ -603,6 +786,40 @@ test('pause cases use production read-tool arguments and paginated run summaries
           assert.ok(read.result.reports.every((report) => !Object.hasOwn(report, 'content')));
         }
       }
+    }
+  }
+});
+
+test('operation fixtures provide current git state and run evidence before required writes', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['settled-operation-merge', 'migration-no-downtime']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const reads = fixture.readResults;
+      const bash = (command) => reads.find((read) => read.tool === 'Bash' && read.arguments.command === command)?.result;
+      assert.equal(bash(`git -C ${fixture.cwd} status --short --branch`), '## main\n');
+      assert.match(bash(`git -C ${fixture.cwd} rev-parse ${fixture.goal.branch}`), /^[a-f0-9]{40}\n$/);
+      const listed = reads.find(({ tool }) => tool === 'takt_list_tasks').result;
+      assert.ok(listed.tasks.every((task) => task.error === undefined));
+      const inquiries = reads.find(({ tool }) => tool === 'takt_list_standalone_inquiries').result;
+      assert.equal(inquiries.totalCount, 0);
+      assert.equal(inquiries.nextOffset, null);
+      if (caseId === 'migration-no-downtime') {
+        assert.deepEqual(listed.tasks, []);
+        continue;
+      }
+      const task = fixture.tasks[0];
+      assert.equal(bash(`git -C ${task.worktreePath} rev-parse ${task.branch}`).trim(), fixture.event.result.sha);
+      assert.equal(bash(`git -C ${task.worktreePath} status --short --branch`), `## ${task.branch}\n`);
+      const run = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === undefined);
+      assert.ok(getRunInputSchema.safeParse(run.arguments).success);
+      assert.equal(run.result.runSlug, task.runSlug);
+      assert.equal(run.result.status, 'completed');
+      assert.equal(run.result.currentStep, listed.tasks[0].currentStep);
+      const report = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === 'report');
+      assert.ok(getRunInputSchema.safeParse(report.arguments).success);
+      assert.equal(report.result.runSlug, task.runSlug);
+      assert.equal(report.result.report.truncated, false);
+      assert.ok(report.result.report.content.length > 0);
     }
   }
 });

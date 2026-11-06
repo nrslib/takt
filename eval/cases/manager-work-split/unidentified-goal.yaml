@@ -1,0 +1,250 @@
+ja:
+  lang: ja
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals:
+          - id: 650e8400-e29b-41d4-a716-446655440000
+            status: created
+            executionStatus: active
+            branch: takt/goal/ledger-migration
+            integrationBranch: main
+            objective: 顧客台帳を新しい保存先へ移行する
+            acceptanceCriteriaVersion: 1
+            questions: []
+            pendingQuestionCount: 0
+            questionCount: 0
+            workLog: []
+            workLogCount: 0
+            notificationCount: 0
+            truncated: true
+            omissions:
+              objective:
+                totalBytes: 48
+              questions:
+                totalCount: 0
+              workLog:
+                totalCount: 0
+              notifications:
+                totalCount: 0
+                returnedCount: 0
+              acceptanceCriteria:
+                totalCount: 1
+                returnedCount: 0
+              constraints:
+                totalCount: 0
+                returnedCount: 0
+              outOfScope:
+                totalCount: 1
+                returnedCount: 0
+            retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+          - id: 650e8400-e29b-41d4-a716-446655440009
+            status: created
+            executionStatus: active
+            branch: takt/goal/order-migration
+            integrationBranch: main
+            objective: 注文履歴を新しい保存先へ移行する
+            acceptanceCriteriaVersion: 1
+            questions: []
+            pendingQuestionCount: 0
+            questionCount: 0
+            workLog: []
+            workLogCount: 0
+            notificationCount: 0
+            truncated: true
+            omissions:
+              objective:
+                totalBytes: 48
+              questions:
+                totalCount: 0
+              workLog:
+                totalCount: 0
+              notifications:
+                totalCount: 0
+                returnedCount: 0
+              acceptanceCriteria:
+                totalCount: 1
+                returnedCount: 0
+              constraints:
+                totalCount: 0
+                returnedCount: 0
+              outOfScope:
+                totalCount: 1
+                returnedCount: 0
+            retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+        collection: goals
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+  user: 移行の件を進めたいです。今どこまで進められますか。
+  goals:
+    - id: 650e8400-e29b-41d4-a716-446655440000
+      createdAt: 2026-11-01T00:00:00.000Z
+      objective: 顧客台帳を新しい保存先へ移行する
+      outOfScope:
+        - 本番環境の切り替え
+      acceptanceCriteria:
+        - 顧客と住所の全件を移行し、件数と参照関係を維持する。
+      constraints: []
+      mode: local
+      status: created
+      executionStatus: active
+      acceptanceCriteriaVersion: 1
+      branch: takt/goal/ledger-migration
+      startBranch: main
+      integrationBranch: main
+      workLog: []
+      questions: []
+    - id: 650e8400-e29b-41d4-a716-446655440009
+      createdAt: 2026-11-01T00:00:00.000Z
+      objective: 注文履歴を新しい保存先へ移行する
+      outOfScope:
+        - 本番環境の切り替え
+      acceptanceCriteria:
+        - 注文履歴の全件を移行し、件数と商品への参照関係を維持する。
+      constraints: []
+      mode: local
+      status: created
+      executionStatus: active
+      acceptanceCriteriaVersion: 1
+      branch: takt/goal/order-migration
+      startBranch: main
+      integrationBranch: main
+      workLog: []
+      questions: []
+en:
+  lang: en
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals:
+          - id: 650e8400-e29b-41d4-a716-446655440000
+            status: created
+            executionStatus: active
+            branch: takt/goal/ledger-migration
+            integrationBranch: main
+            objective: Migrate the customer ledger to the new store
+            acceptanceCriteriaVersion: 1
+            questions: []
+            pendingQuestionCount: 0
+            questionCount: 0
+            workLog: []
+            workLogCount: 0
+            notificationCount: 0
+            truncated: true
+            omissions:
+              objective:
+                totalBytes: 44
+              questions:
+                totalCount: 0
+              workLog:
+                totalCount: 0
+              notifications:
+                totalCount: 0
+                returnedCount: 0
+              acceptanceCriteria:
+                totalCount: 1
+                returnedCount: 0
+              constraints:
+                totalCount: 0
+                returnedCount: 0
+              outOfScope:
+                totalCount: 1
+                returnedCount: 0
+            retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+          - id: 650e8400-e29b-41d4-a716-446655440009
+            status: created
+            executionStatus: active
+            branch: takt/goal/order-migration
+            integrationBranch: main
+            objective: Migrate order history to the new store
+            acceptanceCriteriaVersion: 1
+            questions: []
+            pendingQuestionCount: 0
+            questionCount: 0
+            workLog: []
+            workLogCount: 0
+            notificationCount: 0
+            truncated: true
+            omissions:
+              objective:
+                totalBytes: 38
+              questions:
+                totalCount: 0
+              workLog:
+                totalCount: 0
+              notifications:
+                totalCount: 0
+                returnedCount: 0
+              acceptanceCriteria:
+                totalCount: 1
+                returnedCount: 0
+              constraints:
+                totalCount: 0
+                returnedCount: 0
+              outOfScope:
+                totalCount: 1
+                returnedCount: 0
+            retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+        collection: goals
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+  user: I would like to proceed with the migration. How far can we go now?
+  goals:
+    - id: 650e8400-e29b-41d4-a716-446655440000
+      createdAt: 2026-11-01T00:00:00.000Z
+      objective: Migrate the customer ledger to the new store
+      outOfScope:
+        - Production cutover
+      acceptanceCriteria:
+        - Migrate all customers and addresses, preserving counts and references.
+      constraints: []
+      mode: local
+      status: created
+      executionStatus: active
+      acceptanceCriteriaVersion: 1
+      branch: takt/goal/ledger-migration
+      startBranch: main
+      integrationBranch: main
+      workLog: []
+      questions: []
+    - id: 650e8400-e29b-41d4-a716-446655440009
+      createdAt: 2026-11-01T00:00:00.000Z
+      objective: Migrate order history to the new store
+      outOfScope:
+        - Production cutover
+      acceptanceCriteria:
+        - Migrate all order history, preserving counts and product references.
+      constraints: []
+      mode: local
+      status: created
+      executionStatus: active
+      acceptanceCriteriaVersion: 1
+      branch: takt/goal/order-migration
+      startBranch: main
+      integrationBranch: main
+      workLog: []
+      questions: []

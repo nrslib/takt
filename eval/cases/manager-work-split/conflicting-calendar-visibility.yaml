@@ -1,5 +1,6 @@
 ja:
   lang: ja
+  expectedQuestionType: choice
   turn: event
   cwd: /workspace/project
   concurrency: 2
@@ -382,6 +383,7 @@ ja:
           sizeBytes: 520
 en:
   lang: en
+  expectedQuestionType: choice
   turn: event
   cwd: /workspace/project
   concurrency: 2

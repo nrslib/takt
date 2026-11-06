@@ -42,6 +42,13 @@ const verificationPlanCases = new Set(['stopped-background-check', 'integrated-t
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const caseWriteTools = {
+  'migration-method-event': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
+  'migration-method-conversation': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
+  'settled-operation-merge': new Set(['takt_merge_goal_task']),
+  'single-operation-request': new Set(['takt_ask_goal_question']),
+  'migration-no-downtime': new Set(['takt_enqueue_goal_task']),
+  'unidentified-goal': new Set(),
+  'external-contract-limit': new Set(['takt_ask_goal_question']),
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
   'paused-requeue': new Set(['takt_requeue_goal_task']),
   'paused-requeue-before-start': new Set(['takt_requeue_goal_task']),
@@ -67,6 +74,7 @@ const pauseRequeueCases = new Set(['paused-requeue', 'paused-requeue-before-star
 const pauseRecordCases = new Set(['task-stopped-not-resumed', 'resumed-already-requeued']);
 const caseCommonTools = Object.fromEntries([...pauseRequeueCases, ...pauseRecordCases]
   .map((caseId) => [caseId, new Set(['takt_record_goal_work_log'])]));
+caseCommonTools['unidentified-goal'] = new Set();
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseEnvelope(output) {
@@ -107,7 +115,9 @@ export default function assertManagerWorkSplit(output, context) {
       return result(false, `Writing tool not allowed for this case: ${call.tool}`);
     }
     const schema = managerWriteSchemas[call.tool];
-    if (schema === undefined || !schema.safeParse(call.arguments).success) return result(false, `Invalid production arguments: ${call.tool}`);
+    const validated = schema.safeParse(call.arguments);
+    if (!validated.success) return result(false, `Invalid production arguments: ${call.tool}`);
+    call.arguments = validated.data;
     const args = call.arguments;
     if (args.cwd !== fixture.cwd || args.goalId !== fixture.goal?.id) return result(false, 'Wrong repository or goal');
     if (call.tool === 'takt_enqueue_goal_task') {
@@ -134,10 +144,29 @@ export default function assertManagerWorkSplit(output, context) {
     }
   }
   const enqueues = parsed.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');
+  const keys = enqueues.map(({ arguments: args }) => args.workKey);
+  const workKeys = keys.filter((key) => key !== undefined);
+  if (new Set(workKeys).size !== workKeys.length) return result(false, 'Repeated work key');
   const retries = parsed.calls.filter(({ tool }) => tool === 'takt_requeue_goal_task' || tool === 'takt_retry_goal_task');
   const completes = parsed.calls.filter(({ tool }) => ['takt_complete_goal', 'takt_check_goal_completion'].includes(tool));
   const tells = parsed.calls.filter(({ tool }) => tool === 'takt_tell_run');
   const questions = parsed.calls.filter(({ tool }) => tool === 'takt_ask_goal_question');
+  const questionType = fixture.expectedQuestionType;
+  if (questionType === 'choice' || questionType === 'choice-or-operation') {
+    const required = questionType === 'choice' && fixture.turn === 'event';
+    if ((required && questions.length !== 1) || questions.length > 1) {
+      return result(false, 'Save exactly one human choice question');
+    }
+    for (const { arguments: raw } of questions) {
+      const args = managerWriteSchemas.takt_ask_goal_question.parse(raw);
+      if (args.recipient !== 'human') return result(false, 'Choice questions must be addressed to a human');
+      if (args.kind === 'operation_request' && questionType === 'choice-or-operation') continue;
+      if (args.kind !== 'question' || args.options === undefined || args.options.length < 2
+        || new Set(args.options.map((option) => option.trim())).size < 2 || args.recommendation === undefined) {
+        return result(false, 'Choice questions require kind question, distinct options and a recommendation with its reason');
+      }
+    }
+  }
   if (new Set(tells.map(({ arguments: args }) => args.taskName)).size !== tells.length) {
     return result(false, 'Do not send repeated instructions to the same task');
   }
@@ -146,6 +175,31 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (questionType === 'information') {
+    if (questions.length !== 1) return result(false, 'Save exactly one human information question');
+    const args = questions[0].arguments;
+    return result(args.kind === 'question' && args.recipient === 'human'
+      && !Object.hasOwn(args, 'options') && !Object.hasOwn(args, 'recommendation'),
+    'Save one human information question without options or recommendation; body content is graded by llm-rubric');
+  }
+  if (['migration-method-event', 'migration-method-conversation', 'unidentified-goal'].includes(caseId)) {
+    return result(true, 'Question content and withholding answer-dependent work are graded by llm-rubric');
+  }
+  if (caseId === 'single-operation-request') {
+    const blocked = parsed.calls.filter(({ tool, arguments: args }) => tool === 'takt_notify_goal' && args.kind === 'blocked');
+    return result(questions.length === 0 && blocked.length > 0
+      || questions.length === 1 && questions[0].arguments.kind === 'operation_request',
+    'Notify the required action or save one operation request; action and absence of policy choices are graded semantically');
+  }
+  if (caseId === 'settled-operation-merge') {
+    const merges = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
+    return result(merges.length === 1 && merges[0].arguments.taskName === fixture.event.taskName
+      && merges[0].arguments.expectedSha === fixture.event.result.sha,
+    'Integrate the reviewed task result once with its result SHA without another question');
+  }
+  if (caseId === 'migration-no-downtime') {
+    return result(enqueues.length === 1, 'Proceed with the constrained migration; method and instructions are graded semantically');
+  }
   if (pauseRequeueCases.has(caseId)) {
     if (retries.length !== 1 || retries[0].arguments.taskName !== fixture.event.taskName) {
       return result(false, 'Requeue the interrupted task exactly once');
@@ -224,12 +278,11 @@ export default function assertManagerWorkSplit(output, context) {
       && (startStep === undefined || ['plan', 'implement', 'review'].includes(startStep)),
     'Resume or revise one stopped task from an available step; instruction semantics are graded separately');
   }
-  const keys = enqueues.map(({ arguments: args }) => args.workKey);
   if (caseId === 'shared-resource') {
     return result(keys.length === 1 && typeof keys[0] === 'string' && keys[0].trim().length > 0,
       'Submit one permissions task, either ordered or combined; instruction semantics are graded separately');
   }
-  if (new Set(keys).size !== keys.length || keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected or repeated work key');
+  if (keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected work key');
   const minimum = ['parallel-cli', 'parallel-docs-migration'].includes(caseId) ? readyKeys[caseId].length
     : caseId === 'constraint-once' ? 2 : 1;
   const maximum = ['shared-resource', 'shared-definition', 'human-order', 'constraint-carryover', 'constraint-carryover-data', 'escalate-not-on-first-failure'].includes(caseId) ? 1 : fixture.concurrency;

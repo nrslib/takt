@@ -72,6 +72,7 @@ export default class ManagerExecutionProvider {
       mkdirSync(root, { recursive: true });
       artifactDir = mkdtempSync(join(root, `${config.case}-${config.lang}-`));
       config.instruction_root = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+      config.policy_root = process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
       config.sdk_root = resolve(process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt'), 'claude-sdk');
       const result = await runExecutionWorker(config, artifactDir, options.abortSignal);
       if (!result.complete) throw new Error(result.error);
