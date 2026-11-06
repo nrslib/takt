@@ -32,7 +32,7 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
   if (entry.role === 'system') {
     return (
       <Box marginBottom={1} paddingLeft={MARKER_WIDTH}>
-        <Text color="gray">{entry.content}</Text>
+        <Text dimColor>{entry.content}</Text>
       </Box>
     );
   }

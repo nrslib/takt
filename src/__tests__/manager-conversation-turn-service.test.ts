@@ -9,13 +9,17 @@ import { randomUUID } from 'node:crypto';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
+import { getLabel } from '../shared/i18n/index.js';
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn() }));
+const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.getGoal; update = doubles.updateGoal; } }));
 vi.mock('../features/daemonTurn/reconcileLostRun.js', () => ({ reconcileLostRun: doubles.reconcile }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
-  resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path }));
+  resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path,
+  findAssignedGoalRepository: async () => '/repository' }));
 vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(), registerReservedGoal: doubles.register }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.autoRun }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
@@ -42,6 +46,44 @@ beforeEach(() => {
   vi.resetAllMocks();
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
+});
+it('returns a system notice after dismissing a registration proposal without invoking AI', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'dismiss_summary', revision: 1 } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'notice', message: getLabel('manager.conversation.dismissed', 'en'),
+  } });
+  expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ proposal: { revision: 2, pending: null } }) }));
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each([
+  { kind: 'pause_goal', status: 'paused', label: 'manager.goalPaused' },
+  { kind: 'resume_goal', status: 'active', label: 'manager.goalResumed' },
+  { kind: 'abort_goal', status: 'aborted', label: 'manager.goalAborted' },
+] as const)('returns a system notice after $kind without invoking AI', async ({ kind, status, label }) => {
+  const f = fixture();
+  const goalId = goalRecord().id;
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind, goalId } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'notice', message: getLabel(label, 'en', { goalId }),
+  } });
+  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal);
+  expect(doubles.invalidate).toHaveBeenCalledTimes(status === 'aborted' ? 1 : 0);
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each(['paused', 'aborted'] as const)('returns a system notice for an event on a %s goal without invoking AI', async (executionStatus) => {
+  const f = fixture();
+  const goal = { ...goalRecord(), executionStatus };
+  doubles.getGoal.mockResolvedValue(goal);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'goal_registered', repositoryDirectory: '/repository', goalId: goal.id };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
+  expect(f.execute).not.toHaveBeenCalled();
 });
 it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { provider: 'codex', model: 'custom' }])('keeps selection %j and session across human, director and completion turns', async (overrides) => {
   const f = fixture();
@@ -152,7 +194,7 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
     observedAt: '2026-11-03T00:00:00Z', pid: 12345, startTime: null };
   f.input.event.event = { kind: 'watch_observation', observation }; f.input.event.lane = 'other';
   doubles.reconcile.mockReturnValue(recovered);
-  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
   expect(doubles.reconcile).toHaveBeenCalledExactlyOnceWith(observation, f.io.signal);
   expect(f.resolve).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
   expect(f.request).not.toHaveBeenCalled();
@@ -187,7 +229,7 @@ it.each(['paused', 'aborted', 'completed'] as const)('does not run a queued patr
   const goal = goalRecord();
   doubles.getGoal.mockResolvedValue(status === 'completed' ? { ...goal, status } : { ...goal, executionStatus: status });
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
-  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: '' } });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
   expect(f.resolve).not.toHaveBeenCalled();
 });
 
