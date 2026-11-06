@@ -117,7 +117,9 @@ describe('event driven daemon dispatcher', () => {
     await h.runner.finish(t1, kind === 'completed'
       ? { kind, change, result: { kind: 'reply', message: 'late' } }
       : { kind, change, message: 'late failure' });
-    expect(h.applied.get(t1.turn.operationId)?.outcome).toEqual({ kind: 'interrupted' });
+    expect(h.applied.get(t1.turn.operationId)?.outcome).toEqual({ kind: 'interrupted', change: {
+      operationId: t1.turn.operationId, expectedVersion: 0, interruptedMessage: 'T1',
+    } });
     expect(h.store.records.get('T1')).toMatchObject({ state: 'settled', result: { outcome: { kind: 'interrupted' } } });
   });
 
@@ -139,8 +141,9 @@ describe('event driven daemon dispatcher', () => {
     h.store.beforeResult = async () => {};
     await h.dispatcher.retryStorage();
     const t2 = await h.runner.started(2);
-    expect(h.applied.get(t1.turn.operationId)?.outcome).toEqual({ kind: 'interrupted', change });
-    expect(h.store.records.get('T1')).toMatchObject({ state: 'settled', result: { outcome: { kind: 'interrupted', change } } });
+    const interruptedChange = { ...change, interruptedMessage: 'T1' };
+    expect(h.applied.get(t1.turn.operationId)?.outcome).toEqual({ kind: 'interrupted', change: interruptedChange });
+    expect(h.store.records.get('T1')).toMatchObject({ state: 'settled', result: { outcome: { kind: 'interrupted', change: interruptedChange } } });
     await h.runner.finish(t1, { kind: 'interrupted', change: { ...change, operationId: 'stale-cleanup' } });
     expect(h.owner.apply).toHaveBeenCalledTimes(1);
     expect(t2.signal.aborted).toBe(false);

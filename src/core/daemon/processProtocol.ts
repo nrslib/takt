@@ -19,11 +19,14 @@ const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, gener
 const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
   revision: version, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
+  interruptedMessage: text.nullable().optional(),
 }).strict() satisfies z.ZodType<ConversationTurnState>;
 const change = z.object({ operationId: id, expectedVersion: version, session: session.optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
-}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined) satisfies z.ZodType<ConversationChange>;
+  interruptedMessage: text.nullable().optional(),
+}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
+  || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const task = z.object({ repositoryDirectory: text, goalId: id, taskName: text, runSlug: id.optional(), executionId: id.optional() }).strict();
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: text, goalId: id };

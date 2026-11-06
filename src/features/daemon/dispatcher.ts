@@ -447,6 +447,15 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   }
 
   private finish(active: ActiveTurn, outcome: TurnOutcome, effects: DispatcherEffect[]): void {
+    const event = active.event.event;
+    if (outcome.kind === 'interrupted' && outcome.change?.interruptedMessage === undefined
+      && event.kind === 'human_command' && event.command.kind === 'message') {
+      outcome = { ...outcome, change: {
+        // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
+        operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,
+        interruptedMessage: event.command.text,
+      } };
+    }
     active.phase = 'settling';
     active.result = { ...active.turn, event: active.event, outcome };
     const { requestAbort } = active;
