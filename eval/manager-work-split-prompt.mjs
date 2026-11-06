@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
-import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { managerStateReads } from './manager-work-split-reads.mjs';
 import * as schemas from '../dist/features/mcp/schemas.js';
@@ -91,7 +91,7 @@ export function resolveManagerEvalFacet(facetType, envKey, context, root) {
 
 export function buildManagerEventInput(cwd, saved) {
   const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
-  return JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
+  return buildManagerEventPrompt(event);
 }
 
 export default function buildManagerWorkSplitPrompt({ vars }) {

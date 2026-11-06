@@ -20,7 +20,6 @@ const retiredWatchEvent = z.object({
 export function isRetiredWatchEvent(input: unknown): boolean {
   return retiredWatchEvent.safeParse(input).success;
 }
-export const RetiredEventRecordSchema = z.object({ event: retiredWatchEvent.extend({ acceptedSequence: sequence }) });
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
@@ -49,6 +48,12 @@ export const EventInputSchema = z.object({
 }).strict() satisfies z.ZodType<EventInput>;
 export const AcceptedEventSchema = EventInputSchema.extend({ operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']) })
   .strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) as z.ZodType<AcceptedEvent>;
+const retiredAcceptedEvent = EventInputSchema.omit({ event: true }).extend({
+  operationId: id, acceptedSequence: sequence, lane: z.literal('other'),
+  event: retiredWatchEvent.shape.event.extend({ observation: retiredWatchEvent.shape.event.shape.observation.extend(observed).passthrough() }).strict(),
+}).strict();
+// 旧イベントは不透明な保存値として扱い、索引と結果の確定にだけ渡す。新規受付・ターン実行には使わない。
+const storedAcceptedEvent = z.union([AcceptedEventSchema, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;
 // 保存済みの許可回答だけを正規化し、新しいコマンドの受付スキーマには許可文を戻さない。
 const storedAnswer = z.object({
   kind: z.literal('inquiry_answer'),
@@ -58,7 +63,7 @@ const storedEvent = z.preprocess((input) => {
   if (typeof input !== 'object' || input === null || !('event' in input)) return input;
   const answer = storedAnswer.safeParse(input.event);
   return answer.success ? { ...input, event: answer.data } : input;
-}, AcceptedEventSchema);
+}, storedAcceptedEvent);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);

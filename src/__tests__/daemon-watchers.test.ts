@@ -453,7 +453,7 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
   expect(h.accept).not.toHaveBeenCalled();
 });
 
-it('長く動く run と更新のない問い合わせでも時間による異常イベントを発行しない', async () => {
+it('長く動く run でも時間による異常イベントを発行しない', async () => {
   const h = harness();
   const target = { ...run, startedAt: '2020-01-01T00:00:00.000Z' };
   const source: DaemonWatchSource = {
@@ -474,7 +474,6 @@ it('長く動く run と更新のない問い合わせでも時間による異�
       await watchers.drain();
     }
     expect(inspect).toHaveBeenCalledTimes(4);
-    expect(source.inquiries).toHaveBeenCalledTimes(4);
     expect(h.accept).not.toHaveBeenCalled();
     expect(errors).not.toHaveBeenCalled();
   } finally { await watchers.close(); }

@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 import { parse } from 'yaml';
 import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase } from './manager-work-split-prompt.mjs';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
-import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { goalSummary } from '../dist/features/mcp/goalResponse.js';
 import { parseDaemonProcessMessage } from '../dist/core/daemon/processProtocol.js';
 import { TaskRecordSchema } from '../dist/infra/task/schema.js';
@@ -292,7 +292,7 @@ test('event fixtures use the production event envelope and goal/task reading con
     const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
     const event = ['watch_observation', 'patrol'].includes(fixture.event.kind) ? fixture.event
       : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
-    assert.deepEqual(input, { event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
+    assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(event)));
     parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
       event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
         lane: 'other', source: event.kind === 'patrol' ? 'daemon' : event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
@@ -861,5 +861,19 @@ test('operation fixtures provide current git state and run evidence before requi
       assert.equal(report.result.report.truncated, false);
       assert.ok(report.result.report.content.length > 0);
     }
+  }
+});
+
+
+test('patrol replay uses the production event prompt including unreadable goals', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('mail-dispatch-state', lang);
+    const event = { ...fixture.event, unreadableGoalIds: ['650e8400-e29b-41d4-a716-446655440099'] };
+    const replay = buildManagerEventInput(fixture.cwd, event);
+    assert.equal(replay, buildManagerEventPrompt(event));
+    assert.deepEqual(JSON.parse(replay).event, event);
+    assert.notEqual(JSON.parse(replay).instruction, JSON.parse(buildManagerEventInput(fixture.cwd, {
+      kind: 'registered', goalId: fixture.goal.id, createdAt: fixture.snapshotAt,
+    })).instruction);
   }
 });
