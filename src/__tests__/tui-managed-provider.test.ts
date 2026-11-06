@@ -7,9 +7,14 @@ import type { ConversationViewProps } from '../features/tui/ConversationView.js'
 import { makeProvider, makeSessionContext } from './test-helpers.js';
 import { ManagedProviderInstallRequiredError } from '../infra/managed-providers/loader.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
+import { checkManagedProviders } from '../infra/managed-providers/preflight.js';
 
 const mocks = vi.hoisted(() => ({
-  mount: vi.fn(), inspect: vi.fn(), install: vi.fn(), warn: vi.fn(), confirm: vi.fn(), selectSession: vi.fn(),
+  mount: vi.fn(), inspect: vi.fn(), install: vi.fn(), warn: vi.fn(), confirm: vi.fn(), selectSession: vi.fn(), error: vi.fn(),
+}));
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/ui/index.js')>()),
+  error: mocks.error,
 }));
 vi.mock('../features/interactive/sessionSelector.js', () => ({ selectRecentSession: mocks.selectSession }));
 vi.mock('../features/tui/inkMount.js', () => ({ mountInk: mocks.mount }));
@@ -111,11 +116,12 @@ describe('managed provider preparation around TUI mounts', () => {
     mocks.inspect.mockResolvedValue({ state });
     mocks.confirm.mockResolvedValue(false);
     const run = runTuiConversation(runOptions());
+    await expect(run).resolves.toEqual(cancelled.exit.result);
+    expect(mocks.mount).toHaveBeenCalledOnce();
     if (state === 'missing') {
-      await expect(run).rejects.toBeInstanceOf(ManagedProviderInstallRequiredError);
-      expect(mocks.mount).not.toHaveBeenCalled();
+      expect(mocks.error).toHaveBeenCalledWith(new ManagedProviderInstallRequiredError('claude-sdk').message);
+      expect(mocks.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.mount.mock.invocationCallOrder[0]!);
     } else {
-      await expect(run).resolves.toEqual(cancelled.exit.result);
       expect(mocks.warn).toHaveBeenCalledWith('claude-sdk');
       expect(mocks.warn.mock.invocationCallOrder[0]).toBeLessThan(mocks.mount.mock.invocationCallOrder[0]!);
     }
@@ -210,13 +216,97 @@ describe('managed provider preparation around TUI mounts', () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it('does not mount Ink after installation fails', async () => {
+  it('reports an installation failure on the bare terminal and mounts Ink', async () => {
     mocks.inspect.mockResolvedValue({ state: 'missing' });
     mocks.confirm.mockResolvedValue(true);
     const failure = new Error('installation failed');
     mocks.install.mockRejectedValue(failure);
+    await expect(runTuiConversation(runOptions())).resolves.toEqual(cancelled.exit.result);
+    expect(mocks.error).toHaveBeenCalledWith(failure.message);
+    expect(mocks.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.mount.mock.invocationCallOrder[0]!);
+    expect(mocks.mount).toHaveBeenCalledOnce();
+  });
+
+  it.each(['declined', 'failed'])('retains the conversation and carried input after a provider installation is %s and retries before remounting', async (outcome) => {
+    const options = runOptions();
+    const sealImages = vi.spyOn(options.conversation, 'sealImages');
+    const carried = {
+      history: ['earlier question'], queue: ['queued question'],
+      draft: { text: 'unfinished draft', cursor: 4 },
+    };
+    let provider = 'claude-sdk';
+    const mounted: ConversationViewProps[] = [];
+    mocks.inspect.mockImplementation(async (value: string) => ({ state: value === 'pi' ? 'missing' : 'ready' }));
+    mocks.confirm.mockResolvedValue(outcome === 'failed');
+    mocks.install.mockRejectedValue(new Error('installation failed'));
+    mocks.mount.mockImplementation(async (
+      buildTree: (handlers: { settle: () => void; fail: () => void }) => ReactElement<ConversationViewProps>,
+    ) => {
+      mounted.push(buildTree({ settle: vi.fn(), fail: vi.fn() }).props);
+      if (mounted.length === 1) return { exit: { kind: 'handoff', id: 'provider' }, carried };
+      expect(provider).toBe('pi');
+      expect(mocks.error).toHaveBeenCalledTimes(mounted.length - 1);
+      if (mounted.length === 2) return { exit: { kind: 'handoff', id: 'tell' }, carried };
+      return cancelled;
+    });
+
+    await expect(runTuiConversation({
+      ...options, getProvider: () => provider,
+      onHandoff: async (id) => {
+        if (id === 'provider') provider = 'pi';
+        return { kind: 'continue' };
+      },
+    })).resolves.toEqual(cancelled.exit.result);
+
+    expect(mocks.inspect.mock.calls).toEqual([['claude-sdk'], ['pi'], ['pi']]);
+    expect(mocks.confirm).toHaveBeenCalledTimes(2);
+    expect(mocks.install).toHaveBeenCalledTimes(outcome === 'failed' ? 2 : 0);
+    expect(mounted).toHaveLength(3);
+    for (const props of mounted.slice(1)) {
+      expect(props.conversation).toBe(options.conversation);
+      expect(props.initialHistory).toEqual(carried.history);
+      expect(props.initialQueue).toEqual(carried.queue);
+      expect(props.initialDraft).toEqual(carried.draft);
+    }
+    expect(sealImages).not.toHaveBeenCalled();
+    expect(mocks.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.mount.mock.invocationCallOrder[1]!);
+    expect(mocks.error.mock.invocationCallOrder[1]).toBeLessThan(mocks.mount.mock.invocationCallOrder[2]!);
+  });
+
+  it.each(['inspection', 'confirmation'])('propagates unrelated %s failures', async (phase) => {
+    const failure = new Error('unrelated failure');
+    mocks.inspect.mockResolvedValue({ state: 'missing' });
+    if (phase === 'inspection') mocks.inspect.mockRejectedValue(failure);
+    else mocks.confirm.mockRejectedValue(failure);
+
     await expect(runTuiConversation(runOptions())).rejects.toBe(failure);
+
     expect(mocks.mount).not.toHaveBeenCalled();
+    expect(mocks.error).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it.each(['inspection', 'confirmation', 'installation'])('propagates AbortError during %s', async (phase) => {
+    const interrupted = new DOMException('interrupted', 'AbortError');
+    mocks.inspect.mockResolvedValue({ state: 'missing' });
+    mocks.confirm.mockResolvedValue(true);
+    if (phase === 'inspection') mocks.inspect.mockRejectedValue(interrupted);
+    else if (phase === 'confirmation') mocks.confirm.mockRejectedValue(interrupted);
+    else mocks.install.mockRejectedValue(interrupted);
+
+    await expect(runTuiConversation(runOptions())).rejects.toBe(interrupted);
+
+    expect(mocks.mount).not.toHaveBeenCalled();
+    expect(mocks.error).not.toHaveBeenCalled();
+  });
+
+  it('preserves a custom cancellation reason from the installer', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled');
+    mocks.inspect.mockResolvedValue({ state: 'missing' });
+    mocks.install.mockImplementation(async () => { controller.abort(reason); throw reason; });
+
+    await expect(checkManagedProviders(['claude-sdk'], async () => true, controller.signal)).rejects.toBe(reason);
   });
 
   it.each(['submit', 'createInstruction', 'exec'] as const)(

@@ -13,8 +13,10 @@ import type { InteractiveSessionRecords } from '../interactive/interactiveSessio
 import { useEffect, useRef } from 'react';
 import { Text, useInput } from 'ink';
 import { getLabel } from '../../shared/i18n/index.js';
-import { info } from '../../shared/ui/index.js';
-import { checkManagedProviders } from '../../infra/managed-providers/preflight.js';
+import { error, info } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { checkManagedProviders, ManagedProviderInstallError } from '../../infra/managed-providers/preflight.js';
+import { ManagedProviderInstallRequiredError } from '../../infra/managed-providers/loader.js';
 import { managedProviderFor, type ManagedProvider } from '../../infra/managed-providers/definitions.js';
 import { terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
 import type { PostSummaryAction } from '../interactive/interactive-summary.js';
@@ -179,8 +181,15 @@ export async function runTuiConversation(
   while (true) {
     const provider = managedProviderFor(options.getProvider());
     if (provider !== undefined && !checkedProviders.has(provider)) {
-      await checkManagedProviders([provider], terminalProviderConfirmation());
-      checkedProviders.add(provider);
+      try {
+        await checkManagedProviders([provider], terminalProviderConfirmation());
+        checkedProviders.add(provider);
+      } catch (caught) {
+        if (!(caught instanceof ManagedProviderInstallRequiredError || caught instanceof ManagedProviderInstallError)) {
+          throw caught;
+        }
+        error(sanitizeTerminalText(caught.message));
+      }
     }
     const settled = await mountInk<{
       readonly exit: Exclude<ConversationExit, { kind: 'failed' }>;
