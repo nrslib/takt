@@ -258,6 +258,28 @@ describe('durable daemon event storage', () => {
     expect(pending).toEqual([]);
   });
 
+  it('persists and retries a large interrupted message without duplicating it in the receipt', async () => {
+    const directory = await root();
+    const store = new ConversationStateStore(directory);
+    await store.create(record());
+    const text = 'x'.repeat(7 * 1024 * 1024);
+    const input = { ...event('large-interruption', 1), conversationId: id, operationId: turn.operationId };
+    const change = { operationId: 'large-interruption-save', expectedVersion: 0, interruptedMessage: text };
+    const interrupted: TurnResult = { ...turn, event: input, outcome: { kind: 'interrupted', change } };
+
+    await store.apply(interrupted);
+
+    const path = join(directory, 'conversations', `${id}.json`);
+    const saved = JSON.parse(await readFile(path, 'utf8')) as { daemonState: { receipts: unknown[] } };
+    expect(Buffer.byteLength(JSON.stringify(saved.daemonState.receipts))).toBeLessThan(1024 * 1024);
+    expect(Buffer.byteLength(await readFile(path))).toBeLessThan(12 * 1024 * 1024);
+    expect((await new ConversationStateStore(directory).read(id))?.state.interruptedMessage).toBe(text);
+    await expect(new ConversationStateStore(directory).apply(interrupted)).resolves.toBeUndefined();
+
+    const changed: TurnResult = { ...interrupted, outcome: { kind: 'interrupted', change: { ...change, interruptedMessage: `${text}different` } } };
+    await expect(new ConversationStateStore(directory).apply(changed)).rejects.toThrow('Conversation result could not be applied');
+  });
+
   it('normalizes an existing goal question consistently across result retries and settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

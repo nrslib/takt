@@ -1,19 +1,37 @@
 import { join } from 'node:path';
 import { opendir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
-import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
+import { MAX_PROCESS_MESSAGE_BYTES, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { ConversationChangeSchema, StoredTurnSchema } from './eventRecord.js';
-import { ConversationIdSchema, ConversationRecordSchema, type ConversationRecord } from '../conversations/schema.js';
+import { ApprovalSchema, ConversationAgentOverridesSchema, ConversationIdSchema, ConversationRecordSchema,
+  PendingSummarySchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
 import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
 const MAX_CONVERSATION_BYTES = 12 * 1024 * 1024;
+const id = z.string().min(1).max(128);
+const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const messageDigest = z.string().regex(/^[a-f0-9]{64}$/);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const receipt = z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict();
+const receiptChange = z.object({
+  operationId: id, expectedVersion: version,
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(),
+    agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+  proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
+  approval: ApprovalSchema.nullable().optional(),
+  interruptedMessageDigest: messageDigest.nullable().optional(),
+}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
+  || value.interruptedMessageDigest !== undefined);
+const receipt = z.union([
+  // 既存 receipt は中断本文をそのまま保持する形式で読み込む。
+  z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict(),
+  z.object({ turn: StoredTurnSchema, change: receiptChange, version }).strict(),
+]);
 const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {
   const operations = new Set<string>();
   if (value.version < value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
@@ -27,6 +45,21 @@ const metadata = z.object({ version, receipts: z.array(receipt) }).strict().supe
 interface StoredConversation {
   record: ConversationRecord;
   metadata: z.infer<typeof metadata>;
+}
+
+function receiptChangeFor(change: ConversationChange): z.infer<typeof receiptChange> | ConversationChange {
+  const { interruptedMessage, ...fields } = change;
+  if (interruptedMessage === undefined) return change;
+  return { ...fields, interruptedMessageDigest: interruptedMessage === null ? null
+    : createHash('sha256').update(interruptedMessage).digest('hex') };
+}
+
+function receiptMatches(entry: z.infer<typeof receipt>, turn: TurnIdentity, change: ConversationChange): boolean {
+  if (!isDeepStrictEqual(entry.turn, turn)) return false;
+  if ('interruptedMessageDigest' in entry.change) {
+    return isDeepStrictEqual(entry.change, receiptChangeFor(change));
+  }
+  return isDeepStrictEqual(entry.change, change);
 }
 
 export class ConversationStateStore {
@@ -117,7 +150,7 @@ export class ConversationStateStore {
         const previous = stored.metadata.receipts.find((entry) => entry.change.operationId === change.operationId);
         if (previous !== undefined) {
           if (rebaseInterrupted && change.expectedVersion < previous.change.expectedVersion) change.expectedVersion = previous.change.expectedVersion;
-          if (!isDeepStrictEqual(previous.change, change) || !isDeepStrictEqual(previous.turn, identity)) {
+          if (!receiptMatches(previous, identity, change)) {
             return { kind: 'error', code: 'forbidden', message: 'Operation ID was reused with different content or turn' };
           }
           return committed = { kind: 'state_saved', version: previous.version, duplicate: true };
@@ -135,7 +168,9 @@ export class ConversationStateStore {
         if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
         const nextVersion = stored.metadata.version + 1;
         if (!Number.isSafeInteger(nextVersion)) throw new Error('Conversation version exhausted');
-        const receipts = [...stored.metadata.receipts, { turn: identity, change, version: nextVersion }].slice(-MAX_RECEIPTS);
+        // 中断本文は会話レコードに保存済みのため、receipt ではダイジェストだけを保持する。
+        const savedChange = receiptChangeFor(change);
+        const receipts = [...stored.metadata.receipts, { turn: identity, change: savedChange, version: nextVersion }].slice(-MAX_RECEIPTS);
         while (receipts.length > 1 && Buffer.byteLength(JSON.stringify(receipts)) > MAX_RECEIPT_BYTES) receipts.shift();
         await this.write({ record: checked.data, metadata: { version: nextVersion,
           receipts } }, signal);
