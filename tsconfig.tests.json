@@ -76,6 +76,7 @@
     "src/__tests__/claude-headless-provider.test.ts",
     "src/__tests__/claude-headless-stream-json.test.ts",
     "src/__tests__/claude-mcp-runtime.test.ts",
+    "src/__tests__/claude-permission-warnings.test.ts",
     "src/__tests__/claude-provider-split-block-options.test.ts",
     "src/__tests__/claude-sdk-runtime.test.ts",
     "src/__tests__/claude-terminal-command.test.ts",

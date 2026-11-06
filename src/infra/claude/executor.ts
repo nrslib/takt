@@ -42,6 +42,7 @@ import { buildClaudePromptInput } from './image-input.js';
 import { extractClaudeProviderUsage } from './usage.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { isClaudeSessionMissing } from './session-resume.js';
+import { withDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
 
 const log = createLogger('claude-sdk');
 const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
@@ -222,6 +223,19 @@ export class QueryExecutor {
       },
     };
     const sdkOptions = new SdkOptionsBuilder(optionsWithStderr).build();
+    let completePermissionMode: (() => void) | undefined;
+    if (sdkOptions.permissionMode === 'bypassPermissions') {
+      const permissionModeReady = new Promise<void>((resolve) => { completePermissionMode = resolve; });
+      // The SDK reads control requests independently of the message iterator.
+      // Hold CLI tool execution until init negotiation has settled.
+      sdkOptions.hooks = {
+        ...sdkOptions.hooks,
+        PreToolUse: [
+          { hooks: [async () => { await permissionModeReady; return { continue: true }; }] },
+          ...(sdkOptions.hooks?.PreToolUse ?? []),
+        ],
+      };
+    }
 
     let sessionId: string | undefined;
     let success = false;
@@ -332,6 +346,7 @@ export class QueryExecutor {
           return;
         }
         abortRequested = true;
+        completePermissionMode?.();
         interruptPromise = Promise.resolve()
           .then(() => q.interrupt())
           .then(() => undefined)
@@ -362,6 +377,32 @@ export class QueryExecutor {
         const message = messageResult.value;
         if ('session_id' in message) {
           sessionId = message.session_id;
+        }
+
+        if (message.type === 'system' && message.subtype === 'init' && sdkOptions.permissionMode === 'bypassPermissions') {
+          try {
+            if (message.permissionMode !== 'bypassPermissions') {
+              const modes = {
+                requestedMode: sdkOptions.permissionMode,
+                actualMode: message.permissionMode,
+                targetMode: 'auto',
+              };
+              withDiagnosticLogging(() => log.warn(
+                `Claude SDK permission mode requested=${modes.requestedMode}, actual=${modes.actualMode}, target=${modes.targetMode}; switching`, modes,
+              ));
+              try {
+                await q.setPermissionMode('auto');
+              } catch (error) {
+                withDiagnosticLogging(() => log.warn(
+                  `Claude SDK permission mode switch to auto failed; continuing with ${modes.actualMode}`, {
+                    ...modes, error: getErrorMessage(error),
+                  },
+                ));
+              }
+            }
+          } finally {
+            completePermissionMode?.();
+          }
         }
 
         if (message.type === 'assistant'
@@ -467,6 +508,7 @@ export class QueryExecutor {
         && (rejectedResume || isClaudeSessionMissing(options.sessionId, stderrChunks.join('')))
         ? { ...response, failureCategory: 'session_continuation_unsupported' } : response;
     } finally {
+      completePermissionMode?.();
       if (onExternalAbort && options.abortSignal) {
         options.abortSignal.removeEventListener('abort', onExternalAbort);
       }
