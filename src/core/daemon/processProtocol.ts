@@ -68,6 +68,7 @@ const acceptedEvent = z.object({ eventId: id, requestId: id, conversationId: id,
 }).strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) satisfies z.ZodType<AcceptedEvent>;
 const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
+  z.object({ kind: z.literal('notice'), message: text }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: text }).strict(),
   z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional() }).strict(),

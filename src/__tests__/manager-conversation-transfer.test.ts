@@ -33,6 +33,15 @@ it('validates and delivers a user message with the matching operation identity',
   expect(observer.output).toHaveBeenCalledExactlyOnceWith(message, expect.objectContaining({ operationId }));
 });
 
+it.each(['reply', 'notice'] as const)('preserves the %s result kind when receiving daemon output', async (kind) => {
+  const { receiver, observer, metadata, frames } = fixture();
+  const operationId = randomUUID();
+  const output = { kind: 'result', operationId, result: { kind, message: 'Same text' } };
+  const read = metadata(5, 2, operationId);
+  for (const frame of await frames(read, [output], 'output')) receiver.receive(frame);
+  expect(observer.output).toHaveBeenCalledExactlyOnceWith(output, expect.objectContaining({ operationId }));
+});
+
 it('rejects a user message belonging to a different operation', async () => {
   const { receiver, observer, metadata, frames } = fixture();
   const read = metadata(5, 2, randomUUID());

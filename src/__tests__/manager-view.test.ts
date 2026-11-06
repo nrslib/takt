@@ -3,7 +3,8 @@ import { createElement } from 'react';
 import { renderToString } from 'ink';
 import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
-import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
+import { TranscriptEntryView, TranscriptView } from '../features/tui/TranscriptEntryView.js';
+import type { OperationResult, PortOutput } from '../features/manager/conversationPort.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
@@ -21,6 +22,56 @@ vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
 const entries = () => vi.mocked(TranscriptView).mock.calls.at(-1)![0].entries;
 
 describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
+  it('shows queued acceptance as a system notice without an assistant marker', async () => {
+    const { app, client } = mount(lang);
+    client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });
+    app.stdin.write('Hello\r');
+    const content = getLabel('manager.conversation.queued', lang, { count: '1' });
+    await waitFor(() => expect(entries()).toContainEqual({ role: 'system', content }));
+    expect(app.lastFrame()).not.toContain('●');
+  });
+
+  it.each(['reply', 'progress', 'notice'] as const)('distinguishes daemon %s output by kind even with identical text', async (kind) => {
+    const { app, client } = mount(lang);
+    await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.inputHint', lang)));
+    const message = 'Shared output';
+    const operationId = randomUUID();
+    const output: PortOutput = kind === 'notice' ? { kind, id: randomUUID(), message } : { kind, operationId, message };
+    client.output(output);
+    const role = kind === 'reply' ? 'assistant' : 'system';
+    await waitFor(() => expect(entries()).toEqual([{ role, content: message }]));
+    expect(app.lastFrame()).toContain(`${kind === 'reply' ? '●' : ' '} ${message}`);
+    if (kind !== 'reply') expect(app.lastFrame()).not.toContain('●');
+  });
+
+  it.each<OperationResult>([
+    { kind: 'reply', message: 'Shared result' },
+    { kind: 'notice', message: 'Shared result' },
+    { kind: 'answer_saved', answerSaved: true, message: 'Shared result' },
+    { kind: 'error', code: 'operation_failed', message: 'Shared result' },
+    { kind: 'goal_registered', goal: goalRecord() },
+  ])('distinguishes $kind operation results from manager replies', async (result) => {
+    const { app, client } = mount(lang);
+    await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.inputHint', lang)));
+    client.output({ kind: 'result', operationId: randomUUID(), result });
+    await waitFor(() => {
+      expect(entries()).toHaveLength(1);
+      expect(entries()[0]!.role).toBe(result.kind === 'reply' ? 'assistant' : 'system');
+    });
+    if (result.kind === 'reply') expect(app.lastFrame()).toContain('● Shared result');
+    else expect(app.lastFrame()).not.toContain('●');
+  });
+
+  it('shows saved display events and snapshot errors as system notices', async () => {
+    const { app, client } = mount(lang);
+    client.change({ error: 'Read failed', items: [...client.getSnapshot().items,
+      { kind: 'display_event', event: { id: 'saved-notice', message: 'Saved notification' } }] });
+    await waitFor(() => expect(entries()).toEqual([
+      { role: 'system', content: 'Read failed' }, { role: 'system', content: 'Saved notification' },
+    ]));
+    expect(app.lastFrame()).not.toContain('●');
+  });
+
   it('shows the full startup notice once before conversation output without adding it to messages or commands', async () => {
     const { app, client } = mount(lang);
     const notice = getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, '');
@@ -283,4 +334,24 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       });
     });
   });
+});
+
+it.each(['system', 'assistant'] as const)('renders %s entries at width 80 with the corresponding marker and dim style', (role) => {
+  const level = chalk.level;
+  try {
+    chalk.level = 3;
+    const content = 'First line\nSecond line';
+    const output = renderToString(createElement(TranscriptEntryView, {
+      entry: { role, content }, userMessageColors: FALLBACK_USER_MESSAGE_COLORS,
+    }), { columns: 80 });
+    const text = stripAnsi(output);
+    expect(text).toBe(`${role === 'assistant' ? '●' : ' '} First line\n  Second line\n`);
+    if (role === 'system') {
+      expect(output).toContain('\x1b[2m');
+      expect(text).not.toContain('●');
+    } else {
+      expect(output).not.toContain('\x1b[2m');
+      expect(output).toContain('\x1b[37m● ');
+    }
+  } finally { chalk.level = level; }
 });
