@@ -16,6 +16,17 @@ import type { Admission, EventInput } from '../core/daemon/events.js';
 import type { ConversationSnapshot } from '../core/daemon/messages.js';
 import type { SnapshotItem } from '../features/manager/conversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { z } from 'zod/v4';
+import { createTaktMcpServer } from '../features/mcp/server.js';
+import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
+import type { ManagerAssignment } from '../features/manager/startupResolution.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import { answerConversationInquiry } from '../features/manager/conversationAnswers.js';
+import { buildSlackInquiry } from '../features/manager/slackInquiryBlocks.js';
+import * as autoRun from '../features/manager/autoRun.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 
 const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
@@ -81,6 +92,81 @@ function resultFor(requestId: string) {
   if (admission?.kind !== 'accepted') throw new Error('Event was not admitted');
   return admission.operationId;
 }
+
+it.each(['unchanged', 'removed', 'empty'] as const)('posts an MCP-created standalone question and preserves its Slack binding owner when %s', async (condition) => {
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  const configDirectory = process.env.TAKT_CONFIG_DIR!;
+  const paths = [join(configDirectory, 'question-a'), join(configDirectory, 'question-b')];
+  for (const path of paths) {
+    await mkdir(path, { recursive: true });
+    await promisify(execFile)('git', ['init', '--quiet', path]);
+  }
+  const repositories = await Promise.all(paths.map((path) => realpath(path)));
+  const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '担当', repositoryDirectories: repositories });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  let selected = { ...owner, name: workspace.name, repositoryDirectories: repositories };
+  let channelAssignment: ManagerAssignment = selected;
+  const workspaceId = conversationId(owner);
+  const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
+  const portA = createSlackConversationPort({ repositoryDirectory: repositories[0]!, configDirectory,
+    resolveAssignment: async () => selected, channelId: 'CA', input, client, language: 'en' });
+  const portB = createSlackConversationPort({ repositoryDirectory: repositories[1]!, configDirectory,
+    resolveAssignment: async () => channelAssignment, channelId: 'CB', input, client, language: 'en' });
+  const server = createTaktMcpServer({}, { toolSet: 'manager', managerAssignment: owner, allowedProjectRoot: repositories[0]! });
+  const mcp = new Client({ name: 'standalone-slack-test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(b);
+    await mcp.connect(a);
+    const result = await mcp.callTool({ name: 'takt_ask_standalone_question', arguments: {
+      cwd: repositories[1]!, body: 'Which goal?', options: ['Export', 'Import'], recommendation: 'Export',
+    } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const question = await store.get(questionId);
+    const target = { goalId: null, owner };
+    const output = { kind: 'inquiry' as const, target, question };
+    await portA.delivery.deliver(workspaceId, output, version);
+    await portB.delivery.deliver(workspaceId, output, version);
+    const expected = buildSlackInquiry({ ...target, question }, 'en', 'expected');
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB', text: expected.text }));
+    const posted = sdk.post.mock.calls[0]![0] as { blocks: unknown[] };
+    expect(posted.blocks.slice(0, -1)).toEqual(expected.blocks.slice(0, -1));
+    const base = await ingress.snapshot(id);
+    if (condition !== 'unchanged') {
+      let current = await removeWorkspaceRepository(configDirectory, workspace.id, repositories[1]!);
+      if (condition === 'empty') current = await removeWorkspaceRepository(configDirectory, workspace.id, repositories[0]!);
+      selected = { ...owner, name: current.name, repositoryDirectories: [...current.repositoryDirectories] };
+      channelAssignment = { kind: 'repository', repositoryDirectory: repositories[1]!, repositoryDirectories: [repositories[1]!] };
+    }
+    vi.mocked(ingress.snapshot).mockImplementation(async (conversation) => ({ ...base, conversationId: conversation,
+      turnState: { ...base.turnState, assignment: selected }, transferId: randomUUID(),
+      items: (async function* () { if (conversation === workspaceId) yield { kind: 'inquiry' as const, inquiry: { target, question } }; })() }));
+    beforeSave = async (event) => {
+      if (event.event.kind !== 'inquiry_answer') throw new Error('Expected a question answer');
+      expect(await answerConversationInquiry(event.event.command, selected, configDirectory, { signal: new AbortController().signal,
+        request: async (request) => {
+          expect(request).toEqual({ kind: 'publish_workspace_inquiry_answer', questionId });
+          return { kind: 'event_accepted', admission: { kind: 'accepted', eventId: 'answer', operationId: 'answer', acceptedSequence: 1 } };
+        } }, 'en'))
+        .toMatchObject({ kind: 'answer_saved', answerSaved: true });
+    };
+    await portB.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'posted-1' }, 'Export');
+    expect(events).toHaveLength(0);
+    await portB.receive({ teamId: 'T1', userId: 'U1', channelId: 'CB', parentTs: 'posted-1' }, 'Export');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.conversationId).toBe(workspaceId);
+    expect(events[0]!.event).toMatchObject({ kind: 'inquiry_answer', command: {
+      target, questionId, answer: { text: 'Export' }, source: 'slack',
+    } });
+    expect(await store.get(questionId)).toMatchObject({ status: 'answered', answer: { text: 'Export', source: 'slack' } });
+  } finally {
+    try { await mcp.close(); } finally { await server.close(); }
+    await portA.close(); await portB.close(); await client.close();
+    vi.restoreAllMocks();
+  }
+});
 it('ACKs transport before persistence and reports acceptance only after durable save', async () => {
   const saving = deferred<void>(); const entered = deferred<void>();
   beforeSave = async () => { entered.resolve(); await saving.promise; };

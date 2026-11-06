@@ -1,6 +1,7 @@
 import type { DaemonIngress, DaemonStateOwner } from '../../core/daemon/ports.js';
 import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
 
 export function createDaemonStateRequests(options: {
@@ -14,6 +15,19 @@ export function createDaemonStateRequests(options: {
     signal.throwIfAborted();
     if (request.kind === 'save_conversation') return conversations.store.save(turn, request.change, signal);
     const source = await conversations.store.read(turn.conversationId);
+    if (request.kind === 'publish_workspace_inquiry_answer') {
+      const owner = source?.state.assignment;
+      if (owner?.kind !== 'workspace' || turn.conversationId !== conversationId(owner)
+        || !await conversations.routing.permits(owner, turn.conversationId)) return forbidden();
+      const question = await new DaemonPersistedFiles(conversations.routing.directory).readWorkspaceInquiry(owner.workspaceId, request.questionId);
+      if (question.status !== 'answered' || question.answer === undefined) return forbidden();
+      signal.throwIfAborted();
+      const id = `workspace-answer-${owner.workspaceId}-${question.id}`;
+      const admission = await options.ingress.accept({ eventId: id, requestId: id, conversationId: turn.conversationId,
+        occurredAt: question.answer.answeredAt, source: 'daemon',
+        event: { kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer } });
+      return { kind: 'event_accepted', admission };
+    }
     if (source?.state.assignment.kind !== 'daemon' || turn.conversationId !== conversationId({ kind: 'daemon' })) return forbidden();
     if (request.kind === 'notify_director') {
       const saved = await conversations.notifications.save({ id: request.notificationId, message: request.message, subject: request.subject, turnOperationId: turn.operationId }, signal);

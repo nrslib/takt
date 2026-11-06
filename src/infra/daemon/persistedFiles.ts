@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema, type Goal } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal } from '../goals/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
 import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
@@ -17,13 +17,20 @@ const tasksFile = z.object({ tasks: z.array(z.record(z.string(), z.unknown())) }
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 const inboxEvent = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
-  z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.enum(['registered', 'resumed', 'patrol']) }).strict(),
 ]);
 
 /** 既存形式を小さい読取に限定。大きい goals/tasks の全件解析には使わない。 */
 export class DaemonPersistedFiles {
   constructor(private readonly configDirectory: string) {}
+
+  async readWorkspaceInquiry(workspaceId: string, questionId: string) {
+    const path = join(this.configDirectory, 'workspaces', z.uuid().parse(workspaceId), 'inquiries', `${z.uuid().parse(questionId)}.json`);
+    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    if (question.id !== questionId) throw new Error('Saved question ID differs from its filename');
+    return question;
+  }
 
   async readGoal(repositoryDirectory: string, goalId: string) {
     const content = await readPrivateFile(join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json'), MAX_PROJECTION_BYTES);

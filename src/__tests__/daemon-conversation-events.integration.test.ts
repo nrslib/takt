@@ -44,6 +44,8 @@ import type { PreparedConversationRuntime } from '../features/manager/conversati
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { WatchChecks } from '../features/daemon/watchers/checks.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
 
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
@@ -77,6 +79,239 @@ async function fixture(seed?: (directory: string, repository: string) => Promise
   const post = (name: string, lane: 'human' | 'other' = 'human') => daemon.dispatcher.accept(input(name, id, lane));
   return { ...daemon, directory, repository, runner, id, opened, post, outputs };
 }
+
+it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer through the inbox, event store and IPC to the manager executor', async (source) => {
+  const f = await fixture();
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const owner = { kind: 'repository' as const, repositoryDirectory: f.repository };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const question = await store.create({ body: 'Which goal should handle this event?',
+    operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } });
+  const before = await f.conversations.snapshot(f.id);
+  const pending = [];
+  for await (const item of before.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
+  before.complete();
+  expect(pending).toContain(question.id);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'answer-session', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'standalone-answer', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>, turnInput = call.input) => {
+    const outcome = await service.execute(turnInput, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+
+  accepted(await f.dispatcher.accept({ ...input('standalone-answer', f.id), source,
+    event: { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text: 'Use the export goal' }, source } } }));
+  expect(await perform(await f.runner.started(1))).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+  expect(execute).not.toHaveBeenCalled();
+  const saved = await store.get(question.id);
+  expect(saved).toMatchObject({ status: 'answered', answer: { text: 'Use the export goal', source } });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(1);
+  expect(await files.readInboxEvent(f.repository, names[0]!)).toMatchObject({
+    kind: 'answer', goalId: null, questionId: question.id, answer: saved.answer,
+  });
+  await receiveInboxChange({ target: { targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' },
+    path: join(inbox, names[0]!), removed: false, generation: 'answer', value: {} }, files, f.conversations, f.dispatcher);
+  const turn = await f.runner.started(2);
+  const expected = { kind: 'inquiry_answered', repositoryDirectory: f.repository, goalId: null,
+    questionId: question.id, answer: saved.answer };
+  expect(turn.input.event.event).toEqual(expected);
+  const restored = await new FileEventStore(f.directory).restore();
+  const storedEvents = [];
+  for await (const record of restored.pending) storedEvents.push(record.event.event);
+  expect(storedEvents).toContainEqual(expected);
+  const message = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'standalone-answer',
+    kind: 'start_turn', input: turn.input })), 'standalone-answer');
+  if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
+  expect(await perform(turn, message.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Answer received' } });
+  expect(execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(execute.mock.calls[0]![0].prompt)).toMatchObject({ event: expected });
+  expect(await readdir(inbox)).toEqual([]);
+  const after = await f.conversations.snapshot(f.id);
+  const remaining = [];
+  for await (const item of after.items) if (item.kind === 'inquiry') remaining.push(item.inquiry.question.id);
+  after.complete();
+  expect(remaining).not.toContain(question.id);
+});
+
+it.each([
+  { source: 'tui' as const, empty: false, operation: true },
+  { source: 'slack' as const, empty: false, operation: true },
+  { source: 'tui' as const, empty: true, operation: true },
+  { source: 'slack' as const, empty: true, operation: false },
+  { source: 'tui' as const, empty: true, operation: true, large: true },
+])('delivers a workspace $source answer after assignment removal (empty=$empty, operation=$operation, large=$large)', async ({ source, empty, operation, large }) => {
+  const workspaceId = '750e8400-e29b-41d4-a716-446655440001';
+  const owner = { kind: 'workspace' as const, workspaceId };
+  const f = await fixture(async (directory) => {
+    await mkdir(join(directory, 'workspaces', workspaceId), { recursive: true });
+    await mkdir(join(directory, 'other'), { recursive: true });
+    await writeFile(join(directory, 'workspaces', workspaceId, 'workspace.json'), JSON.stringify({
+      id: workspaceId, name: 'Workspace', repositoryDirectories: [],
+    }));
+  });
+  await writeFile(join(f.directory, 'workspaces', workspaceId, 'workspace.json'), JSON.stringify({
+    id: workspaceId, name: 'Workspace', repositoryDirectories: [f.repository, join(f.directory, 'other')],
+  }));
+  await f.conversations.ensure(owner);
+  const id = conversationId(owner);
+  const opened = await f.input.open({ conversationId: id, assignment: owner, speaker: { namespace: 'local', id: 'operator' },
+    binding: { port: source, key: 'workspace-answer', counterpart: { namespace: 'local', id: 'operator' } } },
+  { async deliver() { return { kind: 'delivered' }; } });
+  opened.read.cancel();
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const body = large ? 'Q'.repeat(128 * 1024) : 'Which goal?';
+  const question = await store.create({ body, ...(operation ? {
+    operation: { cwd: f.repository, toolName: 'takt_ask_standalone_question', args: JSON.stringify({ cwd: f.repository, body }) },
+  } : {}) });
+  if (large) expect((await readFile(join(f.directory, 'workspaces', workspaceId, 'inquiries', `${question.id}.json`))).byteLength)
+    .toBeGreaterThan(256 * 1024);
+  await workspaceRegistry.removeWorkspaceRepository(f.directory, workspaceId, f.repository);
+  if (empty) await workspaceRegistry.removeWorkspaceRepository(f.directory, workspaceId, join(f.directory, 'other'));
+  const snapshot = await f.input.snapshot(opened.attachmentId);
+  const pending = [];
+  for await (const item of snapshot.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
+  snapshot.complete();
+  expect(pending).toContain(question.id);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'workspace-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'workspace-answer', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>, start = call.input) => {
+    const outcome = await service.execute(start, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+  expect(await f.input.submit({ attachmentId: opened.attachmentId, requestId: 'workspace-answer',
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text: 'Export' }, source } })).toMatchObject({ kind: 'accepted' });
+  expect(await perform(await f.runner.started(1))).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+  const saved = await store.get(question.id);
+  expect(saved.operation).toEqual(question.operation);
+  const next = await f.runner.started(2);
+  const expected = { kind: 'workspace_inquiry_answered', questionId: question.id, answer: saved.answer };
+  expect(next.input.event).toMatchObject({ conversationId: id, event: expected });
+  const restored = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event.event);
+  expect(restored).toContainEqual(expected);
+  const ipc = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'workspace', kind: 'start_turn', input: next.input })), 'workspace');
+  if (ipc.kind !== 'start_turn') throw new Error('Expected next turn');
+  expect(await perform(next, ipc.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(JSON.parse(execute.mock.calls[0]![0].prompt)).toMatchObject({ event: expected });
+  expect(f.runner.calls).toHaveLength(2);
+});
+
+it('publishes distinct saved workspace answers once and preserves their events on repeated publication', async () => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const id = conversationId(owner);
+  await f.conversations.ensure(owner);
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const questions = [];
+  for (const text of ['Export', 'Import']) {
+    const question = await store.create({ body: 'Which goal?' });
+    questions.push(await store.answer(question.id, { text }, 'tui'));
+  }
+  accepted(await f.dispatcher.accept(input('publish-answers', id)));
+  const call = await f.runner.started(1);
+  const publish = (questionId: string) => f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer', questionId }, call.signal);
+  const receipts = [];
+  for (const question of questions) receipts.push(await publish(question.id));
+  expect(receipts.every((reply) => reply.kind === 'event_accepted' && reply.admission.kind === 'accepted')).toBe(true);
+  expect(receipts[0]).not.toEqual(receipts[1]);
+  expect(await publish(questions[0]!.id)).toEqual(receipts[0]);
+  const restored = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event);
+  const answers = restored.filter(({ event }) => event.kind === 'workspace_inquiry_answered');
+  expect(answers).toHaveLength(2);
+  for (const question of questions) expect(answers).toContainEqual(expect.objectContaining({ conversationId: id,
+    event: { kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer } }));
+  expect(new Set(answers.map(({ eventId }) => eventId)).size).toBe(2);
+  for (const event of answers) {
+    expect(event.eventId).toContain(workspace.id);
+    expect(event.eventId).toBe(event.requestId);
+  }
+  await f.runner.finish(call);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Received', summary: null, sessionId: 'saved-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'answer', executor: { execute } };
+  }, async close() {} });
+  for (let index = 2; index <= 3; index++) {
+    const next = await f.runner.started(index);
+    const outcome = await service.execute(next.input, { signal: next.signal, progress() {},
+      request: (request) => f.dispatcher.request(next.turn, request, next.signal) });
+    await f.runner.finish(next, outcome);
+  }
+  expect(execute.mock.calls.map(([value]) => JSON.parse(value.prompt).event)).toEqual(questions.map((question) => ({
+    kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer,
+  })));
+  accepted(await f.dispatcher.accept(input('publish-settled-answer', id)));
+  const repeat = await f.runner.started(4);
+  expect(await f.dispatcher.request(repeat.turn, { kind: 'publish_workspace_inquiry_answer', questionId: questions[0]!.id }, repeat.signal)).toEqual(receipts[0]);
+  await f.runner.finish(repeat);
+  expect(f.runner.calls).toHaveLength(4);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+});
+
+it.each(['pending', 'other-owner', 'repository', 'director'] as const)('rejects workspace answer publication from %s without an event', async (condition) => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const other = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Other', repositoryDirectories: [] });
+  const store = new StandaloneInquiryStore(f.directory, condition === 'other-owner' ? { ...owner, workspaceId: other.id } : owner);
+  const question = await store.create({ body: 'Which goal?' });
+  if (condition !== 'pending') await store.answer(question.id, { text: 'Export' });
+  await f.conversations.ensure(owner);
+  const id = condition === 'repository' ? f.id : condition === 'director' ? conversationId({ kind: 'daemon' }) : conversationId(owner);
+  accepted(await f.dispatcher.accept(input('invalid-publication', id)));
+  const call = await f.runner.started(1);
+  const publication = f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer', questionId: question.id }, call.signal);
+  if (condition === 'other-owner') await expect(publication).rejects.toThrow();
+  else expect(await publication).toMatchObject({ kind: 'error', code: 'forbidden' });
+  await f.runner.finish(call);
+  expect(f.runner.calls).toHaveLength(1);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+});
+
+it.each(['missing', 'invalid-json', 'invalid-schema', 'wrong-id'] as const)('rejects a workspace inquiry read with %s without publishing an event', async (condition) => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const question = await store.create({ body: 'Which goal?' });
+  const saved = await store.answer(question.id, { text: 'Export' });
+  const path = join(f.directory, 'workspaces', workspace.id, 'inquiries', `${question.id}.json`);
+  if (condition === 'invalid-json') await writeFile(path, '{');
+  if (condition === 'invalid-schema') await writeFile(path, JSON.stringify({ ...saved, body: null }));
+  if (condition === 'wrong-id') await writeFile(path, JSON.stringify({ ...saved, id: randomUUID() }));
+  await f.conversations.ensure(owner);
+  accepted(await f.dispatcher.accept(input('read-inquiry', conversationId(owner))));
+  const call = await f.runner.started(1);
+  await expect(f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer',
+    questionId: condition === 'missing' ? randomUUID() : question.id }, call.signal)).rejects.toThrow();
+  await f.runner.finish(call);
+  expect(f.runner.calls).toHaveLength(1);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+  const remaining = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) remaining.push(record);
+  expect(remaining).toEqual([]);
+});
 
 it('persists H1 and H2 during a stopped turn and schedules both human messages before queued events', async () => {
   const f = await fixture();

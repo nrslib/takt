@@ -44,7 +44,8 @@ export type TurnEvent =
   | { kind: 'task_completed' | 'task_failed'; task: TaskRef; result: GoalTaskResult }
   | { kind: 'director_message'; directorConversationId: string; text: string }
   | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
-  | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
+  | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string | null; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
+  | { kind: 'workspace_inquiry_answered'; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation }
   | { kind: 'patrol'; repositoryDirectory: string; goalIds: string[] };
 

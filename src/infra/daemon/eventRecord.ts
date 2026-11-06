@@ -28,7 +28,8 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
 ]);
 const event = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('workspace_inquiry_answered'), questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id.nullable(), questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
