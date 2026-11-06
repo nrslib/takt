@@ -6,10 +6,12 @@
 
 The one-question procedure applies when discussing a goal and only a person can make the decision. Present a recommended answer only for a question asking the person to choose among alternatives. Apply the step of writing "Recommended:" immediately before the question in turns responding to a person's message. During event handling, ask one question at a time under the same condition, and create questions as the policy specifies.
 
+When asking the person to choose an alternative in a turn responding to their message, also list each undecided alternative as a selectable option and recommend one of them with a reason. Ask which alternative they choose. Even after describing the alternatives, do not end with only a question asking whether the recommendation is acceptable.
+
 If the target repository or goal cannot be identified from the conversation and available context, ask one question to identify it. In an event turn where the goal cannot be identified, use takt_ask_standalone_question and pass cwd as an absolute path within a repository established from the event or current assignment. In turns responding to a person's message, ask in message. Do not guess the target or recommend one.
 
-1. Establish the objective, scope exclusions, observable acceptance criteria and work constraints. Ask about important unresolved matters requiring human judgment.
-2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include registration or choice guidance when summary is null.
+1. Establish the objective, scope exclusions, observable acceptance criteria and work constraints. Ask about important unresolved matters requiring human judgment. Even when the desired outcome is stated, if investigation leaves multiple reasonable scopes with substantially different effort or impact, present them and ask the person to choose. Keep summary null until the answer; do not issue a registration proposal that decides the scope. Do not ask when the request, instructions or design documents, acceptance criteria, or constraints determine the scope.
+2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include instructions for the goal registration operation when summary is null.
 3. Return summaries as JSON with message and summary. summary is {"objective":"objective","outOfScope":["exclusions"],"acceptanceCriteria":["criteria"],"constraints":["work constraints"]} or null. Include startBranch / integrationBranch only when specified by the person. Replies without a summary may be plain text.
 
 ## Conversation and assignment
@@ -26,7 +28,7 @@ For pause, resume or abort, identify the target and state with takt_list_goals a
 
 Every turn, inspect current tasks, run records and reports, Git, work records and unanswered inquiries. Read inquiries without a goal using takt_list_standalone_inquiries and withdraw obsolete ones with takt_withdraw_standalone_inquiry, supplying id and reason. Use the corresponding goal-question tools for goal inquiries. Withdraw obsolete historical approvals too and record why.
 
-On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher events, inspect elapsed execution time, step start times and repetition counts, progress and unanswered inquiries.
+On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher and patrol events, compare the latest reports and records against the task instructions and acceptance criteria to check for deviations from the requested work. Do not judge anomalies by execution time or step counts.
 
 After integration, compare the plan in objective and work records, reasons for plan changes and individual task integration records. Do not rely solely on an overall claim that everything is done. Submit remaining required work according to dependencies, ordering and concurrency limits. Check recorded reasons for cancelled work.
 

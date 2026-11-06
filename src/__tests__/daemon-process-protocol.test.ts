@@ -6,7 +6,7 @@ import {
   type DaemonProcessMessage, type TurnProcessMessage,
 } from '../core/daemon/processProtocol.js';
 import { input, turnState } from './helpers/controlledDaemon.js';
-import { AcceptedEventSchema } from '../infra/daemon/eventRecord.js';
+import { AcceptedEventSchema, StoredResultSchema } from '../infra/daemon/eventRecord.js';
 
 const common = { protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'launch-1' } as const;
 const turn = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -50,6 +50,15 @@ describe('daemon turn process protocol', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'run', event: { kind, repositoryDirectory: '/repo', goalId: null } };
     expect(() => parseDaemonProcessMessage({ ...common, kind: 'start_turn', input: { event, turn, state: turnState() } }, common.launchId)).toThrow();
   });
+
+  it.each(['reply', 'notice'] as const)('preserves %s results through process messages and stored results', (kind) => {
+    const outcome = { kind: 'completed' as const, result: { kind, message: 'Same text' } };
+    const message = { ...common, kind: 'turn_finished', turn, outcome };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    const stored = { ...turn, event: acceptedEvent, outcome };
+    expect(StoredResultSchema.parse(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+  });
+
   it.each<DaemonProcessMessage>([
     { ...common, kind: 'initialize', conversationId: turn.conversationId, assignment: turnState().assignment, configDirectory: '/config' },
     { ...common, kind: 'start_turn', input: { event: acceptedEvent, turn, state: turnState() } },

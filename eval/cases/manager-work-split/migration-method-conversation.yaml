@@ -198,7 +198,7 @@ ja:
         file_path: /workspace/project/.takt/tasks.yaml
       result:
         tasks: []
-  user: 顧客台帳の移行について、調査結果を踏まえて次を進めたいです。
+  user: 顧客台帳の移行について相談したいです。段階的に移せば業務を止めずに済みそうですね。調査結果を踏まえて、移行の進め方を決めたいです。
 en:
   lang: en
   expectedQuestionType: choice
@@ -399,4 +399,4 @@ en:
         file_path: /workspace/project/.takt/tasks.yaml
       result:
         tasks: []
-  user: I would like to move the customer ledger migration forward based on the investigation.
+  user: I would like to discuss the customer ledger migration. A staged transfer seems to avoid interrupting operations. Based on the investigation, I would like to decide how to proceed.

@@ -4,19 +4,17 @@ import type { IoOptions } from '../../../core/daemon/io.js';
 import type { Language } from '../../../core/models/types.js';
 import { FileAsyncLock } from '../../../infra/daemon/lock.js';
 import type { Goal } from '../../../infra/goals/schema.js';
-import type { RunProgress } from './runProgress.js';
 import { WATCH_INTERVALS } from './loop.js';
 import { watchGoalDirectory } from './goalPaths.js';
 
 export type WatchGoal = Pick<Goal, 'id' | 'status' | 'executionStatus' | 'questions' | 'pullRequest' | 'branch' | 'integrationBranch'> & {
-  lastUpdatedAt: string | undefined;
   blockedNotifications: string[];
   pullRequestRetry: { failure: NonNullable<Goal['pullRequestFailure']>; generation: string } | undefined;
 };
-type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string } | { kind: 'run'; path: string }
+type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string }
   | { kind: 'pr-retry-limit'; cwd: string; goalId: string; failureId: string; expectedSha: string; language: Language };
 export type WatchReadRequest = { id: number } & WatchReadOperation;
-type WatchReadResult = { kind: 'goal'; goal: WatchGoal } | { kind: 'run'; progress: RunProgress | undefined }
+type WatchReadResult = { kind: 'goal'; goal: WatchGoal }
   | { kind: 'pr-retry-limit'; saved: boolean };
 export type WatchReadReply = { id: number } & (({ ok: true } & WatchReadResult) | { ok: false; message: string });
 
@@ -32,14 +30,6 @@ export class WatchGoalReader {
     const result = await this.request({ kind: 'goal', cwd, goalId }, AbortSignal.timeout(WATCH_INTERVALS.long));
     if (result.kind !== 'goal') throw new Error('Unexpected goal reader reply');
     return result.goal;
-  }
-
-  async readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined> {
-    const deadline = AbortSignal.timeout(WATCH_INTERVALS.long);
-    const cancellation = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-    const result = await this.request({ kind: 'run', path }, cancellation);
-    if (result.kind !== 'run') throw new Error('Unexpected run reader reply');
-    return result.progress;
   }
 
   async savePullRequestRetryLimit(cwd: string, goalId: string, failureId: string, expectedSha: string,

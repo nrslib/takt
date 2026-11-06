@@ -17,6 +17,20 @@ function withColors(test: () => void): void {
 }
 
 describe('formatTranscriptEntryOutput', () => {
+  it('should emit dim system notices without a marker and preserve normal assistant output', () => {
+    withColors(() => {
+      const content = 'first\nsecond';
+      const notice = formatTranscriptEntryOutput({ role: 'system', content }, FALLBACK_USER_MESSAGE_COLORS);
+      const reply = formatTranscriptEntryOutput({ role: 'assistant', content }, FALLBACK_USER_MESSAGE_COLORS);
+      expect(notice).toContain('\x1b[2m');
+      expect(notice).not.toContain('●');
+      expect(toDisplayText(notice)).toBe('  first\n  second\n\n');
+      expect(reply).not.toContain('\x1b[2m');
+      expect(reply).toContain('\x1b[37m● ');
+      expect(toDisplayText(reply)).toBe('● first\n  second\n\n');
+    });
+  });
+
   it.each(['user', 'assistant', 'system'] as const)('should not hard-wrap a long %s paragraph', (role) => {
     const content = 'a long paragraph with spaces 日本語 '.repeat(100);
     const output = formatTranscriptEntryOutput({ role, content }, FALLBACK_USER_MESSAGE_COLORS);

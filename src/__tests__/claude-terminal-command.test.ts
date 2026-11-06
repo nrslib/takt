@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { buildClaudeTerminalCommand } from '../infra/claude-terminal/command.js';
+import type { BuildClaudeTerminalCommandOptions } from '../infra/claude-terminal/types.js';
 
 const SCHEMA = {
   type: 'object',
@@ -51,14 +52,37 @@ describe('Claude terminal command builder', () => {
     expect(command.args).not.toContain('stream-json');
   });
 
-  it('Given bypassPermissions true, When building command, Then bypassPermissions overrides permissionMode', () => {
+  it.each<BuildClaudeTerminalCommandOptions>([
+    { permissionMode: 'full' },
+    { bypassPermissions: true },
+    { permissionMode: 'readonly', bypassPermissions: true },
+    { permissionMode: 'full', bypassPermissions: false },
+  ])('enables CLI permission bypass for %j', (options) => {
     const command = buildClaudeTerminalCommand({
       pathToClaudeCodeExecutable: 'claude',
-      permissionMode: 'readonly',
-      bypassPermissions: true,
+      ...options,
     });
 
-    expect(command.args).toEqual(['--permission-mode', 'bypassPermissions']);
+    expect(command.args).toEqual([
+      '--permission-mode', 'bypassPermissions', '--allow-dangerously-skip-permissions',
+      '--settings', JSON.stringify({ skipDangerousModePermissionPrompt: true }),
+    ]);
+  });
+
+  it.each<BuildClaudeTerminalCommandOptions>([
+    {},
+    { bypassPermissions: false },
+    { permissionMode: 'readonly' },
+    { permissionMode: 'edit' },
+    { permissionMode: 'readonly', bypassPermissions: false },
+    { permissionMode: 'edit', bypassPermissions: false },
+  ])('does not enable CLI permission bypass for %j', (options) => {
+    const command = buildClaudeTerminalCommand(options);
+
+    expect(command.args).not.toContain('bypassPermissions');
+    expect(command.args).not.toContain('--allow-dangerously-skip-permissions');
+    expect(command.args).not.toContain('--dangerously-skip-permissions');
+    expect(command.args).not.toContain('--settings');
   });
 
   it('maps an explicit readonly permission without adding unrelated restrictions', () => {
@@ -160,9 +184,39 @@ describe('Claude terminal command builder', () => {
     expect(command.args).not.toContain('--mcp-config');
     const settingsIndex = command.args.indexOf('--settings');
     expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(command.args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(JSON.parse(command.args[settingsIndex + 1]!)).not.toHaveProperty('skipDangerousModePermissionPrompt');
     expect(JSON.parse(command.args[settingsIndex + 1]!).hooks.PreToolUse[0]).toMatchObject({
       matcher: 'Read',
       hooks: [{ type: 'command', command: process.execPath, args: expect.arrayContaining(['-e']) }],
+    });
+  });
+
+  it('merges bypass consent and artifact read hooks in a single settings argument', () => {
+    const command = buildClaudeTerminalCommand({
+      cwd: process.cwd(),
+      internalAgentIsolation: 'strict-readonly',
+      allowReadonlyFileRead: true,
+      readonlyFileReadPaths: [fileURLToPath(import.meta.url)],
+      allowedTools: ['Read'],
+      permissionMode: 'readonly',
+      bypassPermissions: true,
+    });
+
+    expect(command.args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    const settingsIndex = command.args.indexOf('--settings');
+    expect(JSON.parse(command.args[settingsIndex + 1]!)).toEqual({
+      skipDangerousModePermissionPrompt: true,
+      hooks: {
+        PreToolUse: [{
+          matcher: 'Read',
+          hooks: [{
+            type: 'command',
+            command: process.execPath,
+            args: expect.arrayContaining(['-e']),
+          }],
+        }],
+      },
     });
   });
 

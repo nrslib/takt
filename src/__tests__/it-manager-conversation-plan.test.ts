@@ -419,7 +419,10 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(options.permissionMode).toBe('bypassPermissions');
       expect(options.mcpServers).toEqual(servers);
       expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
-      expect(options.allowedTools).toBeUndefined();
+      expect(options.allowedTools).toEqual([
+        ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+      ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
+      expect(options.tools).toBeUndefined();
     }
   });
 

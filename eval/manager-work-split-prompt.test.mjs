@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 import { parse } from 'yaml';
 import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase } from './manager-work-split-prompt.mjs';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
-import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { goalSummary } from '../dist/features/mcp/goalResponse.js';
 import { parseDaemonProcessMessage } from '../dist/core/daemon/processProtocol.js';
 import { TaskRecordSchema } from '../dist/infra/task/schema.js';
@@ -25,10 +25,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 108 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 112 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 108);
+  assert.equal(suite.tests.length, 112);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -75,6 +75,8 @@ test('question expectations match choice, information and operation scenarios in
     'task-stopped-not-resumed': 'choice',
     'migration-method-event': 'choice',
     'migration-method-conversation': 'choice',
+    'csv-export-scope-conversation': 'choice',
+    'search-index-scope-conversation': 'choice',
     'conflicting-calendar-visibility': 'choice',
     'escalate-repeated-failure': 'choice-or-operation',
     'external-contract-limit': 'information',
@@ -94,7 +96,7 @@ test('stopped-check inputs connect a previous launch to the current process and 
     const outputRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('.log'));
     const launch = fixture.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
     assert.ok(launch);
-    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
+    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
     assert.match(processRead.result, /^exit code: 1\nstdout:\s*\nstderr:\s*$/);
     assert.match(outputRead.result, /RUN /);
     assert.doesNotMatch(outputRead.result, /PASS|FAIL|Tests\s+\d+/);
@@ -127,23 +129,22 @@ test('verification inputs expose integration state, result SHA and a distinct go
   }
 });
 
-test('uses the current time for each watcher case even long after module loading', async (t) => {
+test('uses the current time for each patrol case even long after module loading', async (t) => {
   const now = Date.now();
   const clock = t.mock.method(Date, 'now', () => now - 24 * 60 * 60 * 1000);
-  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-watcher');
+  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-patrol');
   const earlier = loadLaterCase('mail-dispatch-state', 'ja');
   clock.mock.mockImplementation(() => now);
   const later = loadLaterCase('mail-dispatch-state', 'ja');
-  assert.equal(Date.parse(later.event.observation.observedAt) - Date.parse(earlier.event.observation.observedAt), 24 * 60 * 60 * 1000);
+  assert.equal(Date.parse(later.snapshotAt) - Date.parse(earlier.snapshotAt), 24 * 60 * 60 * 1000);
   const prompt = buildLaterPrompt({ vars: { case: 'mail-dispatch-state', lang: 'ja' } });
   const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-  assert.equal(context.event.kind, 'watch_observation');
-  assert.equal(Date.parse(context.event.observation.observedAt), now);
-  assert.ok(Date.parse(context.event.observation.observedAt) - Date.parse(context.event.observation.lastUpdatedAt) >= 30 * 60000);
+  assert.equal(context.event.kind, 'patrol');
+  assert.equal(Date.parse(later.snapshotAt), now);
   assert.deepEqual(context.event, later.event);
 });
 
-test('watcher fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
+test('patrol fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
   const cases = [
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
@@ -153,12 +154,12 @@ test('watcher fixtures preserve repeated repair history, source documents and th
     for (const caseId of cases) {
       const fixture = loadManagerCase(caseId, lang);
       assert.equal(fixture.turn, 'event');
-      assert.equal(fixture.event.kind, 'watch_observation');
-      assert.equal(fixture.event.observation.kind, 'run_log_stalled');
+      assert.equal(fixture.event.kind, 'patrol');
+      assert.deepEqual(fixture.event.goalIds, [fixture.goal.id]);
       const run = fixture.readResults.find(({ tool }) => tool === 'takt_get_run');
-      assert.equal(fixture.event.observation.task.runSlug, run.result.runSlug);
-      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
-      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt)));
+      assert.ok(fixture.tasks.some(({ runSlug }) => runSlug === run.result.runSlug));
+      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
+      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt)));
       for (const entry of run.result.stepLogs.filter(({ step }) => ['fix', 'remediation'].includes(step))) {
         assert.doesNotMatch(runLogContent(fixture, run.result.runSlug, entry.index), /次の review|next review/i);
       }
@@ -289,12 +290,12 @@ test('event fixtures use the production event envelope and goal/task reading con
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
     const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
-    const event = fixture.event.kind === 'watch_observation' ? fixture.event
+    const event = ['watch_observation', 'patrol'].includes(fixture.event.kind) ? fixture.event
       : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
-    assert.deepEqual(input, { event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
+    assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(event)));
     parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
       event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
-        lane: 'other', source: event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
+        lane: 'other', source: event.kind === 'patrol' ? 'daemon' : event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
       turn: { conversationId: 'manager', operationId: 'turn', generation: 1 },
       state: { version: 0, assignment: { kind: 'repository', repositoryDirectory: fixture.cwd },
         session: { provider: 'mock', model: null, sessionId: null }, revision: 0, pending: null, approval: null },
@@ -391,6 +392,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
     'stopped-background-execution', 'integrated-task-execution',
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
+    'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
@@ -579,6 +581,43 @@ test('question fixtures preserve the human input boundary and constraints', () =
   }
 });
 
+test('scope consultations replay substantial investigation after the human request without inventing a registered goal', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['csv-export-scope-conversation', 'search-index-scope-conversation']) {
+      const fixture = loadManagerCase(caseId, lang);
+      assert.equal(fixture.turn, 'conversation');
+      assert.equal(fixture.expectedQuestionType, 'choice');
+      assert.equal(fixture.goal, undefined);
+      assert.deepEqual(fixture.tasks, []);
+      const reads = fixture.readResults;
+      assert.deepEqual(reads.map(({ tool }) => tool), [
+        'takt_list_goals', 'takt_list_standalone_inquiries', 'Bash', 'Bash', 'Bash', 'Agent',
+      ]);
+      for (const [index, collection] of ['goals', 'inquiries'].entries()) {
+        assert.deepEqual(reads[index].result, {
+          [collection]: [], collection, totalCount: 0, returnedCount: 0,
+          omittedCount: 0, offset: 0, nextOffset: null, truncated: false,
+        });
+      }
+      const research = reads.slice(2);
+      assert.ok(research.every(({ result }) => typeof result === 'string' && result.length > 0));
+      assert.ok(research.reduce((total, read) => total + read.result.length, 0) > 6000,
+        'Preserve the extended investigation rather than reducing it to a short comparison of alternatives');
+      assert.equal(reads.at(-1).arguments.subagent_type, 'Explore');
+      assert.match(reads.at(-1).result, /src\/.*:\d+/);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      const input = prompt.split('\n\nUSER:\n')[1];
+      assert.ok(input.startsWith(fixture.user));
+      assert.ok(input.includes(JSON.stringify(reads)));
+      assert.doesNotMatch(input, /llm-rubric|expectedQuestionType|\/Users\/|Slack|Webhook|合格|不合格/);
+      const rows = suite.tests.filter(({ vars }) => vars.case === caseId && vars.lang === lang);
+      assert.equal(rows.length, 1);
+      assert.deepEqual(rows[0].providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      assert.equal(rows[0].assert[0].type, 'llm-rubric');
+    }
+  }
+});
+
 test('settled-operation fixtures expose an answered method choice and a reviewed unintegrated completion', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('settled-operation-merge', lang);
@@ -620,7 +659,7 @@ test('settled-operation fixtures expose an answered method choice and a reviewed
   }
 });
 
-test('verification fixtures distinguish separate finished checks, a single check, mixed causes and prior instruction', () => {
+test('verification fixtures distinguish required checks, out-of-scope demands, real defects and prior instruction', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['verification-repeated', 'verification-once', 'verification-mixed', 'verification-told']) {
       const fixture = loadManagerCase(caseId, lang);
@@ -645,6 +684,7 @@ test('verification fixtures distinguish separate finished checks, a single check
         assert.deepEqual(summary, check);
         assert.ok(content.includes('IDX-17'));
         assert.equal(content.includes('IDX-22'), caseId === 'verification-mixed');
+        assert.equal(content.includes('audioBlob'), caseId !== 'verification-repeated');
         assert.deepEqual({ totalBytes, offset, returnedBytes, direction, truncated, nextOffset }, {
           totalBytes: Buffer.byteLength(content), offset: 0, returnedBytes: Buffer.byteLength(content),
           direction: 'backward', truncated: false, nextOffset: null,
@@ -821,5 +861,19 @@ test('operation fixtures provide current git state and run evidence before requi
       assert.equal(report.result.report.truncated, false);
       assert.ok(report.result.report.content.length > 0);
     }
+  }
+});
+
+
+test('patrol replay uses the production event prompt including unreadable goals', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('mail-dispatch-state', lang);
+    const event = { ...fixture.event, unreadableGoalIds: ['650e8400-e29b-41d4-a716-446655440099'] };
+    const replay = buildManagerEventInput(fixture.cwd, event);
+    assert.equal(replay, buildManagerEventPrompt(event));
+    assert.deepEqual(JSON.parse(replay).event, event);
+    assert.notEqual(JSON.parse(replay).instruction, JSON.parse(buildManagerEventInput(fixture.cwd, {
+      kind: 'registered', goalId: fixture.goal.id, createdAt: fixture.snapshotAt,
+    })).instruction);
   }
 });

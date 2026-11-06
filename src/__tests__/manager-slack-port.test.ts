@@ -167,13 +167,13 @@ it('routes messages and standalone inquiry delivery and answers to the workspace
     questionId: question.id, answer: { text: 'chosen option' }, source: 'slack' } }));
   await port.close();
 });
-it('delivers a result emitted before admission returns exactly once and detaches even on delivery failure', async () => {
+it.each(['reply', 'notice'] as const)('delivers a %s result emitted before admission returns exactly once and detaches even on delivery failure', async (kind) => {
   const { port, input, client } = fixture();
   let delivery!: ConversationDelivery;
   vi.mocked(input.open).mockImplementation(async (_open, value) => { delivery = value; return { attachmentId: 'attachment', read: read() }; });
   const delivered: Promise<unknown>[] = [];
   vi.mocked(input.submit).mockImplementation(async () => {
-    delivered.push(delivery.deliver(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), { kind: 'result', operationId: 'operation', result: { kind: 'reply', message: 'reply' } },
+    delivered.push(delivery.deliver(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), { kind: 'result', operationId: 'operation', result: { kind, message: 'reply' } },
       { revision: 1, stateSequence: 1, operationId: 'operation' }));
     return { kind: 'accepted', operationId: 'operation' };
   });

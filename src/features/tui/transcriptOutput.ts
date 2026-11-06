@@ -19,7 +19,7 @@ const CLEAR_TO_LINE_END = '\x1b[K';
 export function formatTranscriptEntryOutput(entry: TranscriptEntry, colors: UserMessageColors): string {
   const lines = toDisplayText(entry.content).split('\n');
   if (entry.role === 'system') {
-    return `${chalk.gray(lines.map((line) => `${INDENT}${line}`).join('\n'))}\n\n`;
+    return `${chalk.dim(lines.map((line) => `${INDENT}${line}`).join('\n'))}\n\n`;
   }
   if (entry.role === 'assistant') {
     const first = `${chalk.white(ASSISTANT_MARKER)}${lines[0] ?? ''}`;

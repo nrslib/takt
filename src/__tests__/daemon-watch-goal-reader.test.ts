@@ -19,12 +19,12 @@ vi.mock('../features/daemon/watchers/goalPaths.js', () => ({
 
 afterEach(() => { vi.restoreAllMocks(); doubles.worker.mockClear(); });
 
-it.each(['goal', 'run'] as const)('terminates a stalled %s read at its deadline, rejects queued reads and recovers with a new worker', async (kind) => {
+it('terminates a stalled goal read at its deadline, rejects queued reads and recovers with a new worker', async () => {
   const deadline = new AbortController();
   const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(deadline.signal);
   const reader = new WatchGoalReader();
   try {
-    const first = kind === 'goal' ? reader.read('/repository', 'stalled') : reader.readRunProgress('/meta.json');
+    const first = reader.read('/repository', 'stalled');
     const queued = reader.read('/repository', 'queued');
     const settled = Promise.allSettled([first, queued]);
     expect(timeout).toHaveBeenNthCalledWith(1, WATCH_INTERVALS.long);

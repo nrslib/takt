@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { buildManagerEventPrompt } from '../daemon/inboxEvent.js';
 import { eventGoalReference } from '../../core/daemon/events.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
 import type { ConversationDisplayAssignment, OperationResult } from './conversationPort.js';
@@ -53,7 +54,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const directorMessage = event.kind === 'director_message';
       const human = event.kind === 'human_command';
       let command = human || event.kind === 'inquiry_answer' ? event.command
-        : { kind: 'message' as const, text: directorMessage ? event.text : JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' }) };
+        : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       try {
@@ -70,13 +71,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const patrolEvent = { ...event,
             goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
-          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'reply', message: '' } };
-          command = { kind: 'message', text: JSON.stringify({ event: patrolEvent,
-            instruction: 'Inspect all listed active goals together in this patrol turn. Check run duration, repeated steps, progress toward each objective, and unanswered inquiries using current evidence and work records. If unreadableGoalIds are listed, report those goals as unreadable and do not claim that they have no anomalies; continue inspecting the readable goals. Do not propose a new registration. If nothing is wrong, take no action and send no notification; return a short message with the goal count and no anomalies. Record inspection details for each goal using takt_record_goal_work_log with kind: "patrol". If a problem needs attention, use the existing notification or inquiry tools without repeating an earlier notice for the same state and reason.' }) };
+          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };
         }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
           reconcileLostRun(event.observation, io.signal);
-          return { kind: 'completed', result: { kind: 'reply', message: '' } };
+          return { kind: 'completed', result: { kind: 'notice', message: '' } };
         }
         const eventGoal = reference?.goalId !== undefined && reference.goalId !== null
           ? { repositoryDirectory: reference.repositoryDirectory, goal: await new GoalStore(reference.repositoryDirectory).get(reference.goalId) } : undefined;
@@ -84,7 +84,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           return { kind: 'deferred' };
         }
         if (eventGoal?.goal.executionStatus === 'paused' || eventGoal?.goal.executionStatus === 'aborted') {
-          return { kind: 'completed', result: { kind: 'reply', message: getLabel(eventGoal.goal.executionStatus === 'paused'
+          return { kind: 'completed', result: { kind: 'notice', message: getLabel(eventGoal.goal.executionStatus === 'paused'
             ? 'manager.goalPaused' : 'manager.goalAborted', language, { goalId: eventGoal.goal.id }) } };
         }
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
@@ -161,7 +161,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }) };
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
-          case 'dismiss_summary': result = { kind: 'reply', message: getLabel('manager.conversation.dismissed', language) }; break;
+          case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;
           case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io, language); break;
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
@@ -169,7 +169,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             await setGoalExecutionStatus(repository, command.goalId, status, io.signal);
             if (status === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(command.goalId);
             if (status === 'active') await ensureManagerRun(repository);
-            result = { kind: 'reply', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };
+            result = { kind: 'notice', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };
             break;
           }
           default: throw new ConversationError('invalid_input');

@@ -81,7 +81,7 @@ it.each(['pause', 'resume'] as const)('sends %s for the selected goal through IP
   await waitFor(() => expect(context.app.lastFrame()).toContain('Ongoing 1'));
   await chooseGoal(context, action);
   await waitFor(() => expect(context.client.commands()).toEqual([{ kind: action === 'pause' ? 'pause_goal' : 'resume_goal', goalId: item.goal.id }]));
-  context.client.output({ kind: 'result', operationId: await context.client.operation(), result: { kind: 'reply', message: 'Operation saved' } });
+  context.client.output({ kind: 'result', operationId: await context.client.operation(), result: { kind: 'notice', message: 'Operation saved' } });
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain('Operation saved');
     expect(context.app.lastFrame()).toContain(item.goal.objective);

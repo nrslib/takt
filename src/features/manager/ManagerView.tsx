@@ -45,7 +45,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [editor, setEditor] = useState(editorRef.current);
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
-  const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'assistant', content: toDisplayText(content) })));
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const submitting = useRef(0);
@@ -85,7 +85,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   active.current = busy;
   const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete';
-  const append = (content: string, role: TranscriptEntry['role'] = 'assistant'): void => {
+  const append = (content: string, role: TranscriptEntry['role'] = 'system'): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
@@ -143,7 +143,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (displayedSummaries.current.has(key)) return;
     const content = formatPendingSummary(state.pending, lang);
     displayedSummaries.current.add(key);
-    append(content);
+    append(content, 'assistant');
   }, [state?.conversationId, state?.pending, lang]);
   useEffect(() => {
     if (snapshot.error !== null && snapshot.error !== lastError.current) append(snapshot.error);
@@ -163,8 +163,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
-    else append(goalOperation !== undefined && result.kind === 'reply'
-      ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message);
+    else {
+      const message = goalOperation !== undefined && result.kind === 'notice'
+        ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message;
+      append(message, result.kind === 'reply' ? 'assistant' : 'system');
+    }
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
       ? { goal: goalOperation.goal, retry: true } : null);
     if (summaryOperation.current === operationId) {
@@ -192,7 +195,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
           append(output.message, 'user');
         }
       } else if (output.kind === 'result') showResult(output.result, output.operationId);
-      else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') append(output.message);
+      else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') {
+        append(output.message, output.kind === 'reply' ? 'assistant' : 'system');
+      }
     });
     const timer = setInterval(() => {
       if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
@@ -263,7 +268,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
-  const summaryVisible = pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
+  const summaryVisible = !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
   const startupRepositoryDirectory = assignment.startupRepositoryDirectory ?? cwd;

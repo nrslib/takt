@@ -173,7 +173,7 @@ export function createSlackConversationPort(options: {
             return await options.client.postThreadMessage(target.endpoint, getLabel('manager.goalRegistered', options.language,
               { name: formatGoalName(goal.objective), id: goal.id, branch: goal.branch }));
           }
-          if (output.result.kind !== 'reply' && output.result.kind !== 'error') return { kind: 'delivered' };
+          if (output.result.kind !== 'reply' && output.result.kind !== 'notice' && output.result.kind !== 'error') return { kind: 'delivered' };
           return await options.client.postThreadMessage(target.endpoint, output.result.message);
         } finally { detach(target.attachmentId); }
       },

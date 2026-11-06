@@ -982,7 +982,7 @@ for (const lang of ['ja', 'en']) {
       const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
       const record = { tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Decision and reason.' } };
       const output = { response: { message: 'Decision recorded.', summary: null }, calls: [record] };
-      if (['verification-repeated', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
+      if (['verification-once', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
       if (caseId === 'plan-missing') output.calls.unshift(enqueue(fixture, 'usage-docs'));
       assertSemanticGrader(caseId, lang);
       assert.equal(score(output, caseId, lang).pass, true, caseId);
@@ -997,11 +997,11 @@ for (const lang of ['ja', 'en']) {
       const extraWork = structuredClone(output);
       extraWork.calls.push(enqueue(fixture, 'check-only'));
       assert.equal(score(extraWork, caseId, lang).pass, false, caseId);
-      if (['verification-once', 'verification-told'].includes(caseId)) {
+      if (['verification-repeated', 'verification-told'].includes(caseId)) {
         output.calls.push(tellRun(fixture));
         assert.equal(score(output, caseId, lang).pass, false);
       }
-      if (['verification-repeated', 'verification-mixed', 'plan-missing'].includes(caseId)) {
+      if (['verification-once', 'verification-mixed', 'plan-missing'].includes(caseId)) {
         const missingAction = structuredClone(output);
         missingAction.calls.shift();
         assert.equal(score(missingAction, caseId, lang).pass, false);
@@ -1230,6 +1230,89 @@ for (const lang of ['ja', 'en']) {
       assert.equal(score(output, caseId, lang).pass, caseId === 'migration-method-conversation');
     });
   }
+
+  const migrationDescriptions = lang === 'ja'
+    ? '一括移行は書き込みを約40分停止して移します。段階移行は稼働したまま移し、検証期間が必要です。\n推奨: 段階移行です。利用者の業務を中断せずに済むためです。'
+    : 'Bulk migration pauses writes for roughly 40 minutes. Staged migration keeps writes active and requires a validation period.\nRecommended: staged migration because it avoids interrupting users.';
+
+  for (const [caseId, messages] of [
+    ['csv-export-scope-conversation', lang === 'ja' ? [
+      '画面CSVだけにするか、夜間CSVにも含めるかを選べます。推奨: 夜間CSVにも含めます。画面を使わない構成でも取得できるためです。どちらの範囲にしますか？',
+      '最初に決めたいのはCSVの範囲です。推奨: 夜間CSVにも含めます。画面を使わない構成でも取得できるためです。夜間CSVも足す形でよいですか？',
+      '作成API、画面CSVと夜間CSV、取り込み後の集計再開を登録案にまとめました。「登録する」を選んでください。',
+    ] : [
+      'Choose screen CSV only or also nightly CSV. Recommended: also nightly CSV, so headless installations can retrieve logs. Which scope do you choose?',
+      'First we need to decide CSV scope. Recommended: also nightly CSV, so headless installations can retrieve logs. Is adding nightly CSV okay?',
+      'The proposal covers the creation API, screen and nightly CSV, and aggregation resumption after import. Choose Register goal.',
+    ]],
+    ['search-index-scope-conversation', lang === 'ja' ? [
+      'タイトル検索に限るか、全文検索にも含めるかを選べます。推奨: 全文検索にも含めます。通常検索欄と端末クライアントから探せるためです。どちらの範囲にしますか？',
+      '最初に決めたいのは検索の範囲です。推奨: 全文検索にも含めます。通常検索欄と端末クライアントから探せるためです。全文検索にも含める形でよいですか？',
+      '共有メモの登録APIと、タイトル検索と本文の全文検索への接続を登録案にまとめました。「登録する」を選んでください。',
+    ] : [
+      'Choose title search only or also full-text search. Recommended: also full-text search, so the main search box and terminal client can find memos. Which scope do you choose?',
+      'First we need to decide search scope. Recommended: also full-text search, so the main search box and terminal client can find memos. Is including full-text search okay?',
+      'The proposal covers the registration API, title search and body full-text search. Choose Register goal.',
+    ]],
+  ]) {
+    test(`${lang}/${caseId}: JS validates the conversation envelope and delegates choice versus confirmation to semantic grading`, () => {
+      assertSemanticGrader(caseId, lang);
+      for (const message of messages.slice(0, 2)) {
+        const output = { response: { message, summary: null }, calls: [] };
+        assert.equal(score(output, caseId, lang).pass, true,
+          'JS success is not a semantic verdict; the rubric must reject the recommendation-only confirmation');
+      }
+    });
+
+    test(`${lang}/${caseId}: unregistered consultation rejects goal writes and a premature registration summary`, () => {
+      const output = { response: { message: messages[0], summary: null }, calls: [] };
+      const registered = loadManagerCase('migration-method-conversation', lang);
+      const log = { tool: 'takt_record_goal_work_log', arguments: {
+        cwd: registered.cwd, goalId: registered.goal.id, summary: 'Record investigation findings.',
+      } };
+      const notify = { tool: 'takt_notify_goal', arguments: {
+        cwd: registered.cwd, goalId: registered.goal.id, kind: 'blocked', body: 'Awaiting a scope choice.',
+      } };
+      for (const call of [migrationQuestion(registered), enqueue(registered, 'scope-work'), log, notify]) {
+        assert.equal(score({ ...output, calls: [call] }, caseId, lang).pass, false);
+      }
+      assert.equal(score({ ...output, response: { message: messages[2], summary: {
+        objective: 'Implement the broad scope', outOfScope: [], acceptanceCriteria: ['Support both paths'], constraints: [],
+      } } }, caseId, lang).pass, false);
+    });
+  }
+
+  test(`${lang}: conversation JS accepts paraphrased choice questions including confirmation-like endings`, () => {
+    const choices = lang === 'ja'
+      ? ['一括移行と段階移行では、どの方式がよいですか？', '一括移行と段階移行のどちらにしますか？',
+        '一括移行と段階移行ならどっちがいいですか？',
+        'はいなら段階移行、いいえなら一括移行を選びます。段階移行でよいですか？']
+      : ['Between bulk and staged migration, which method would be acceptable?', 'Which method would you choose: bulk or staged migration?',
+        'Should we proceed with bulk or staged migration?',
+        'Yes selects staged migration; no selects bulk migration. Is that okay?'];
+    const caseId = 'migration-method-conversation';
+    for (const choice of choices) {
+      assert.equal(score({ response: { message: `${migrationDescriptions}\n\n${choice}`, summary: null }, calls: [] }, caseId, lang).pass, true, choice);
+    }
+    assertSemanticGrader(caseId, lang);
+  });
+
+  test(`${lang}: conversation defers rejection of recommendation-only confirmation to llm-rubric`, () => {
+    const confirmations = lang === 'ja'
+      ? ['段階移行を使う形でよいですか？', 'この案で進めてもいいですか？', 'それでよろしいでしょうか？']
+      : ['Shall we proceed with staged migration?', 'Is that okay?', 'Can we go ahead with this approach?'];
+    const caseId = 'migration-method-conversation';
+    for (const confirmation of confirmations) {
+      for (const prefix of ['', `${migrationDescriptions}\n\n`]) {
+        const output = { response: { message: `${prefix}${confirmation}`, summary: null }, calls: [] };
+        assert.equal(score(output, caseId, lang).pass, true, 'JS checks structure; llm-rubric must reject the recommendation-only question');
+      }
+    }
+    const fixture = loadManagerCase(caseId, lang);
+    assert.equal(score({ response: { message: confirmations[0], summary: null }, calls: [migrationQuestion(fixture)] }, caseId, lang).pass, true,
+      'A correct saved choice remains an alternative to a message question');
+    assertSemanticGrader(caseId, lang);
+  });
 
   test(`${lang}: event choice requires a saved question while conversation permits message with summary null`, () => {
     const event = loadManagerCase('migration-method-event', lang);

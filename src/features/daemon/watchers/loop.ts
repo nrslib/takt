@@ -1,8 +1,7 @@
 import type { DaemonResources } from '../../../core/daemon/ports.js';
 
-export const WATCH_INTERVALS = { process: 5_000, files: 5_000, log: 15_000, long: 60_000, launch: 30_000 } as const;
-export const WATCH_THRESHOLDS = { log: 30 * 60_000, inquiry: 24 * 60 * 60_000, launch: 30_000,
-  runDuration: 2 * 60 * 60_000, stepRepetitions: 5 } as const;
+export const WATCH_INTERVALS = { process: 5_000, files: 5_000, long: 60_000, launch: 30_000 } as const;
+export const RUN_LAUNCH_STALL_MS = 30_000;
 
 export interface WatchLoop extends DaemonResources {
   wake(): void;

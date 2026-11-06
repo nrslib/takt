@@ -273,9 +273,9 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 追加した10ケースは次を測る。
 
 - `verification-repeated` / `verification-once` / `verification-mixed` / `verification-told`:
-  裁定が変わらない実行中のタスクで、別々に終わった確認が同じ項目を2回続けて未完了と
-  した場合の介入。対象と基準を保ち、読む量を分けて必要な照合を終えさせる指示と理由を
-  採点する。1回だけ、実装の不足との混在、同じ項目への送信済みの指示を対照にする。
+  実行中のタスクで、未完了の理由を元の要求・受け入れ条件と照合する判断。必要な照合を
+  進めているなら確認が複数回でも待ち、範囲外の要求があれば確認が1回でもその要求だけを
+  外す指示と理由を採点する。実装に残る不具合との混在、送信済みの指示を対照にする。
   報告本文を読み取り結果として渡すため、報告を読みに行く行動や見張りの発火時機は測らない。
 - `plan-missing` / `plan-dependent` / `plan-cancelled` / `plan-integrated` / `plan-queued`:
   取り込みが保存された終了イベントから、objective の5項目の計画と作業の記録を
@@ -305,7 +305,7 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 操作・引数・記録の有無は JavaScript assert、待機方法や確認対象の意味は llm-rubric で判定する。
 実際の Bash の経過時間、同じ manager での次ターン受付、コミットや承認問い合わせの生成は測らない。
 
-54ケース・日英108入力のうち、再生の52ケース・104入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+56ケース・日英112入力のうち、再生の54ケース・108入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
 Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
 `--filter-providers` で選べる。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
@@ -342,11 +342,10 @@ Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較す�
 `no-check-docs`、`no-check-same-module`、`integration-already-checked`。
 ほかの場面の判断意図は維持する。モデルによる回帰の合否は別途確認が必要である。
 
-巡回イベントは現在の daemon から配られないため、次の15場面をすべて
-`watch_observation` の `run_log_stalled` に移した。除外した場面はない。
-各場面で実行中の同じ run のログ更新が31分止まったことを観測し、保存されたレビュー・修正・確認の履歴を読む。
-`observedAt` と `lastUpdatedAt` は本番の30分の閾値を満たす。プロセス消失や作業自体の失敗には置き換えていない。
-起動のきっかけだけを変更し、次の判断と既存の採点条件を維持する。
+次の15場面は、本番の daemon が配る `patrol` イベントで、動いているゴールを点検する。
+保存されたレビュー・修正・確認の履歴を指示書と受け入れ条件に照らして読み、作業の逸脱を判断する。
+実行時間や段階の回数を異常の基準にしない。`snapshotAt` は評価の記録時刻であり、本番イベントのフィールドではない。
+各場面の日時を評価時刻へそろえ、次の判断と既存の採点条件を維持する。
 15場面すべてで実行中タスクに `worktree: true` と clone の `worktreePath` を保存し、
 `runArtifacts.directory` もその clone を指す。`takt_get_run` の cwd は元のリポジトリのままとし、
 本番と同じく保存タスクから clone 内の run を読む。
@@ -358,21 +357,21 @@ conflicting-calendar-visibility は裁定後の fix、unchanged-adjudication は
 
 | 場面 | 移行先 | 維持する判断 |
 | --- | --- | --- |
-| mail-dispatch-state | run_log_stalled | 必要な失敗・再試行時の保証を保ち、過剰な修正方法を替える |
-| local-config-tampering | run_log_stalled | 方針で除外された改変対策を修正対象から外す |
-| offline-sync-queue | run_log_stalled | 必要な振る舞いを保って単純な作りへ替える |
-| report-publish-replacement | run_log_stalled | 根拠のない公開方法の変更を止める |
-| reservation-validation | run_log_stalled | 元の受け入れ条件に必要な検証を維持する |
-| legacy-date-format | run_log_stalled | 維持を求められた既存形式の修正を外さない |
-| archive-test-coverage | run_log_stalled | 受け入れ条件のテスト不足を修正対象に保つ |
-| quoted-csv-fields | run_log_stalled | 形式の仕様が求める振る舞いを保つ |
-| inventory-retry-idempotency | run_log_stalled | 再試行時に必要な保証を落とさない |
-| conflicting-calendar-visibility | run_log_stalled | 矛盾する受け入れ条件の判断を人に求める |
-| unchanged-adjudication | run_log_stalled | 変わっていない裁定について指示を重ねない |
-| verification-repeated | run_log_stalled | 同じ項目の確認が2回未完了なら読み方を指示する |
-| verification-once | run_log_stalled | 未完了が1回だけなら次の確認を待つ |
-| verification-mixed | run_log_stalled | 未完了の原因を項目ごとに区別する |
-| verification-told | run_log_stalled | 同じ run に伝えた指示を重ねない |
+| mail-dispatch-state | patrol | 必要な失敗・再試行時の保証を保ち、過剰な修正方法を替える |
+| local-config-tampering | patrol | 方針で除外された改変対策を修正対象から外す |
+| offline-sync-queue | patrol | 必要な振る舞いを保って単純な作りへ替える |
+| report-publish-replacement | patrol | 根拠のない公開方法の変更を止める |
+| reservation-validation | patrol | 元の受け入れ条件に必要な検証を維持する |
+| legacy-date-format | patrol | 維持を求められた既存形式の修正を外さない |
+| archive-test-coverage | patrol | 受け入れ条件のテスト不足を修正対象に保つ |
+| quoted-csv-fields | patrol | 形式の仕様が求める振る舞いを保つ |
+| inventory-retry-idempotency | patrol | 再試行時に必要な保証を落とさない |
+| conflicting-calendar-visibility | patrol | 矛盾する受け入れ条件の判断を人に求める |
+| unchanged-adjudication | patrol | 変わっていない裁定について指示を重ねない |
+| verification-repeated | patrol | 必要な照合を進めていれば複数回の未完了でも介入しない |
+| verification-once | patrol | 確認が1回でも範囲外の要求があればその要求だけを外す |
+| verification-mixed | patrol | 範囲外の要求だけを外し、必要な不具合修正を残す |
+| verification-told | patrol | 同じ run に伝えた指示を重ねない |
 
 追加の4場面は、すべて日英の保存 completion イベントで定義し、共有の変換関数を通して `task_failed` にする。
 
@@ -507,7 +506,7 @@ node --test eval/suite-registry.test.mjs
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
 RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
-それぞれ全108入力をモデルを呼ばない provider に渡す。さらに新しい4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
+それぞれ全112入力をモデルを呼ばない provider に渡す。さらに一時停止に関する4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
 `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
@@ -528,6 +527,58 @@ RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は
 | `migration-no-downtime` | 無停止制約から段階移行を選び、質問せず投入。一括移行を選択肢として提示しない |
 | `unidentified-goal` | 会話で対象を推奨せずに確かめ、どのゴールにも質問を保存しない |
 | `external-contract-limit` | イベントで契約上限値の情報質問を保存。options/recommendation は付けず、本文に値の必要性と調べても分からなかったことを書く。方式選択などに置き換えず、回答まで上限に依存する作業を投入・開始しない（明示的な停止宣言は不要） |
+
+会話の失敗を誘う構造として、さらに次の2ケース（日英4入力）を追加した。既存の
+`migration-method-conversation` は回帰確認用として残す。
+
+| ケース | 未決定の範囲 | 推奨に寄りやすい調査結果 |
+| --- | --- | --- |
+| `csv-export-scope-conversation` | 部署なしログを画面CSVだけで取得するか、夜間CSVにも含めるか | 画面CSVは既に対応できる。画面を使わない構成では夜間CSVが取得経路だが、その対象列挙だけが未対応 |
+| `search-index-scope-conversation` | チームなしメモをタイトル検索だけで探すか、本文の全文検索にも含めるか | タイトル検索は既に対応できる。通常検索欄と端末クライアントは全文索引を使うが、チームなしの索引接続が未対応 |
+
+調査した実セッション `a7d41481-222e-4717-ac9c-77b4f659e80d.jsonl` では、851行目の人の依頼が
+「Slack にも届く」という結果を指定していた。ボットとWebhookのどちらを含めるかは指定していない。
+854、863、869行目で3回のBash調査を行い、876行目で追加調査を依頼している。
+855、864、870行目の結果は合計約7,200文字、881行目の調査報告は約10,200文字だった。
+報告には保存・表示・ボットへの投稿・回答などの既存経路と、作成口・Webhook通知・回答後イベントの不足が混在する。
+884行目の応答はそれを長く整理した後、「最初に決めたいのは」範囲と述べ、
+Webhookも足す案だけを推奨し、その案でよいかを尋ねた。891行目の構造化応答も同じ message と summary: null を記録している。
+記録は観測データとして読み、内部の指示や個人情報・設定値はケースに転記していない。
+
+新ケースはこの構造を別領域の架空のコードベースへ移した。人の入力は望む結果とその後の利用を述べ、
+対応経路は作業量や影響を見て決めたいと伝える。範囲の候補や選択形式は指定しない。
+当初の「CSVでも」「検索でも」だけでは、調査結果と合わせて広い範囲を求めた依頼とも読めたため、
+日英ともこの一文を追記した。登録済みゴールはなく、相談の質問を message で返す場面にした。
+読み取り履歴には3回のBash調査と、保存・入口・二つの経路・設定・利用形態・後続処理・テストをたどる
+長いAgent報告を置く。調査部分は日本語で約7,000〜8,000文字、英語で約10,000〜11,000文字であり、
+短い二案比較のメモには縮めていない。依頼、既読結果、再生の出力形式という既存のプロンプト構成を使い、
+候補を選ばせる指示や採点条件を生成側へ追加していない。Agentの呼び出しは履歴データであり、実際の委任は行わない。
+
+直す前のファセットで失敗が出やすいという仮説は、依頼の「CSVでも」「検索でも」を最も広く満たす案が、
+既存経路を残して不足経路だけを足す自然な推奨になる点にある。調査で実装の大部分が既に存在すると分かるため、
+範囲の選択を、残りの接続を追加する可否確認へ縮めやすい。既存の移行ケースは実装方式同士の対等な比較を
+短いメモに明示しており、範囲を自分で抽出する必要が薄かった。
+また、`builtins/{ja,en}/facets/partials/instructions/one-question-interview.md` は質問直前の推奨を求める。
+先行する manager instruction の差分では、会話でも各案を選択肢として並べる指示を追加し、
+summary が null の場合の「登録や選択肢の案内」を禁じる表現を「ゴール登録の操作案内」へ限定している。
+この差分がなければ、未登録の相談で推奨だけを前置きする形へ寄る可能性がある。
+提供された旧fixtureの実評価96件では、55件が不合格だった。うち48件は範囲を決めたsummaryを出して登録を促し、
+推奨案の可否確認は2件、範囲以外の質問は3件、その他は2件（選択肢不足と出力形式違反）だった。
+会話手順には、調査後も作業量や影響の大きく異なる範囲が残る場合は人に選んでもらい、回答までsummaryをnullにする手順を追加した。
+依頼や資料、受け入れ条件、制約から範囲が決まる場合は尋ねない。修正後のfixtureとファセットの実評価は別途必要であり、
+旧fixtureの結果を修正後の改善率として扱わない。
+
+採点は既存と同様、JSが形式と書き込みを、llm-rubricが意味を判定する。新ケースは登録前なのでゴールへの書き込みと
+範囲確定済みのsummaryを認めない。messageでは範囲をそれぞれ直接選べる1問と、いずれかの案の推奨・理由を求める。
+推奨する案は固定しない。前段に他案の説明があっても、最後が推奨案の可否だけなら不合格とする。
+番号、箇条書き、特定の言い回しや、調査結果の全項目の再掲は求めない。JSだけを通る可否確認も意味採点では不合格であり、
+nodeテストの成功を実モデルでの再現・改善の証明とはしない。
+
+コーディネーターは既存のファセット差し替え方法を使い、次のパターンで新ケースだけを選べる。
+
+```text
+--filter-pattern '^(ja|en): (csv-export-scope-conversation|search-index-scope-conversation)$'
+```
 
 既存の `task-stopped-not-resumed` も質問をちょうど1件保存し、独自形式の除外／包含を
 options から直接選べることを必須にする。「停止を維持」「後で相談」は包含の代わりにしない。
@@ -963,7 +1014,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（54ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、ログ停滞の観測時に裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（54ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |

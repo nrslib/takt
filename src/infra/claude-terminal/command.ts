@@ -52,6 +52,9 @@ export function buildClaudeTerminalCommand(
   if (permissionMode) {
     args.push('--permission-mode', permissionMode);
   }
+  if (permissionMode === 'bypassPermissions') {
+    args.push('--allow-dangerously-skip-permissions');
+  }
   if (options.sessionId) {
     args.push('--resume', options.sessionId);
   } else if (options.newSessionId) {
@@ -63,12 +66,17 @@ export function buildClaudeTerminalCommand(
   if (options.outputSchema) {
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
+  const settings: Record<string, unknown> = {};
+  if (permissionMode === 'bypassPermissions') {
+    settings.skipDangerousModePermissionPrompt = true;
+  }
   if (readonlyArtifactPaths.length > 0) {
-    args.push('--settings', JSON.stringify({
-      hooks: {
-        PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd ?? process.cwd())],
-      },
-    }));
+    settings.hooks = {
+      PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd ?? process.cwd())],
+    };
+  }
+  if (Object.keys(settings).length > 0) {
+    args.push('--settings', JSON.stringify(settings));
   }
 
   return {
