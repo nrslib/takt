@@ -20,6 +20,7 @@ export const managerWriteSchemas = {
   takt_remove_goal_task: removeGoalTaskInputSchema,
   takt_merge_goal_task: schemas.mergeGoalTaskInputSchema,
   takt_complete_goal: schemas.completeGoalInputSchema,
+  takt_merge_goal_pr: schemas.mergeGoalPrInputSchema,
   takt_check_goal_completion: schemas.goalWriteInputSchema,
   takt_ask_goal_question: schemas.askGoalQuestionInputSchema,
   takt_withdraw_goal_question: schemas.withdrawGoalQuestionInputSchema,

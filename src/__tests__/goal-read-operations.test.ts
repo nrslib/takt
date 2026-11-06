@@ -22,7 +22,7 @@ it.each(['', ' \n\t '])('rejects invalid human verification steps %#', (humanChe
   expect(completeGoalInputSchema.safeParse({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks }).success).toBe(false);
 });
 
-it.each(['createdAt', 'pullRequest', 'pullRequest.number', 'pullRequest.url', 'pullRequestFailure', 'pullRequestFailure.error', 'completion.humanChecks'])(
+it.each(['createdAt', 'pullRequest', 'pullRequest.number', 'pullRequest.url', 'completion.humanChecks'])(
   'accepts the saved goal selector %s', (path) => {
     expect(getGoalInputSchema.parse({ ...input, path })).toEqual({ ...input, path });
   },

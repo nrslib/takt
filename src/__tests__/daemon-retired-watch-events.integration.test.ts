@@ -34,6 +34,8 @@ afterEach(async () => {
 
 const task = { repositoryDirectory: '/repo', goalId: 'goal', taskName: 'task', runSlug: 'run' };
 const retiredObservations = [
+  { kind: 'goal_pr_retry', repositoryDirectory: '/repo', goalId: 'goal', reason: 'PR failed',
+    failureId: 'failure', expectedSha: 'a'.repeat(40), attempt: 1, maxAttempts: 6 },
   { kind: 'run_too_long', task, startedAt: '2020-01-01T00:00:00Z' },
   { kind: 'run_step_repeated', task, workflow: 'root', step: 'review', stepIdentity: 'review', count: 100 },
   { kind: 'run_log_stalled', task, lastUpdatedAt: '2020-01-01T00:00:00Z' },

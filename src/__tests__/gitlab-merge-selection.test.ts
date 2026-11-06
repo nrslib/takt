@@ -63,7 +63,7 @@ describe('GitLab merge selection data', () => {
     });
     mocks.provider.mockReturnValue(provider);
     mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: { selected: true, reason: '文書のみの変更' } });
-    executePrWorkflow.mockResolvedValue({ merged: true });
+    executePrWorkflow.mockResolvedValue({ success: true, merged: true, outcome: 'merged' });
   });
 
   it.each([
@@ -160,7 +160,7 @@ describe('GitLab merge selection data', () => {
     mocks.agent.mockResolvedValueOnce({ status: 'done', structuredOutput: { selected, reason: '文書の判定' } })
       .mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: false, reason: '実装を含む' } });
     const onSelectionResult = vi.fn();
-    expect(await run(onSelectionResult)).toEqual({ processedCount: selected ? 1 : 0, mergedCount: selected ? 1 : 0, exitCode: 0 });
+    expect(await run(onSelectionResult)).toEqual({ processedCount: selected ? 1 : 0, mergedCount: selected ? 1 : 0, preparedCount: 0, exitCode: 0 });
     expect(mocks.agent).toHaveBeenCalledTimes(2);
     expect(onSelectionResult).toHaveBeenCalledExactlyOnceWith([
       { number: 10, selected, reason: '文書の判定' }, { number: 11, selected: false, reason: '実装を含む' },

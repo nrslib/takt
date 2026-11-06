@@ -284,7 +284,7 @@ program
         workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
         ...(Object.keys(where).length === 0 ? {} : { where }),
       });
-      info(`Processed: ${result.processedCount}, merged: ${result.mergedCount}`);
+      info(`Processed: ${result.processedCount}, merged: ${result.mergedCount}, prepared: ${result.preparedCount}`);
       process.exitCode = result.exitCode;
     } catch (error) {
       logError(sanitizeTerminalText(getErrorMessage(error)));

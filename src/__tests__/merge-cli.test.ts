@@ -37,7 +37,7 @@ describe('takt merge CLI', () => {
     const config: Record<string, unknown> = { language: 'en', concurrency: 3 };
     resolveConfigValue.mockImplementation((_cwd: string, key: string) => config[key]);
     resolveMergeSettings.mockReturnValue({ workflow: 'merge-review-fix-simple', method: 'squash', concurrency: 4, autoStart: false, includeDraft: false });
-    runMerge.mockResolvedValue({ processedCount: 2, mergedCount: 2, exitCode: 0 });
+    runMerge.mockResolvedValue({ processedCount: 2, mergedCount: 2, preparedCount: 0, exitCode: 0 });
     const command = program.commands.find((candidate) => candidate.name() === 'merge');
     for (const option of command?.options ?? []) {
       command!.setOptionValueWithSource(option.attributeName(), option.defaultValue, 'default');
@@ -70,10 +70,10 @@ describe('takt merge CLI', () => {
   it.each([
     [3, 2], [4, 2], [3, 1],
   ])('処理%d件・マージ%d件を各ラベルへ対応付け未マージの終了コードを返す', async (processedCount, mergedCount) => {
-    runMerge.mockResolvedValue({ processedCount, mergedCount, exitCode: 1 });
+    runMerge.mockResolvedValue({ processedCount, mergedCount, preparedCount: 0, exitCode: 1 });
     await mergeCommand().parseAsync([], { from: 'user' });
     expect(process.exitCode).toBe(1);
-    expect(ui.info).toHaveBeenCalledWith(`Processed: ${processedCount}, merged: ${mergedCount}`);
+    expect(ui.info).toHaveBeenCalledWith(`Processed: ${processedCount}, merged: ${mergedCount}, prepared: 0`);
   });
 
   it('実行例外で終了コードを非ゼロにする', async () => {
@@ -108,13 +108,13 @@ describe('takt merge CLI', () => {
         { number: 10, selected: true, reason: 'ドキュメントだけの変更' },
         { number: 11, selected: false, reason: '実装を含む' },
       ]);
-      return { processedCount: 1, mergedCount: 1, exitCode: 0 };
+      return { processedCount: 1, mergedCount: 1, preparedCount: 0, exitCode: 0 };
     });
     await mergeCommand().parseAsync(['ドキュメントのみ'], { from: 'user' });
     const lines = ui.info.mock.calls.map(([line]) => String(line));
     expect(lines.some((line) => /#?10\b/u.test(line) && line.includes('ドキュメントだけの変更'))).toBe(true);
     expect(lines.some((line) => /#?11\b/u.test(line))).toBe(true);
-    expect(ui.info).toHaveBeenCalledWith('Processed: 1, merged: 1');
+    expect(ui.info).toHaveBeenCalledWith('Processed: 1, merged: 1, prepared: 0');
     expect(process.exitCode).toBe(0);
   });
 
@@ -135,7 +135,7 @@ describe('takt merge CLI', () => {
   it('選択理由の端末制御文字を通常出力へ渡さない', async () => {
     runMerge.mockImplementation(async (options) => {
       options.onSelectionResult([{ number: 10, selected: true, reason: '\u001b[31m文書の変更\u001b[0m' }]);
-      return { processedCount: 1, mergedCount: 1, exitCode: 0 };
+      return { processedCount: 1, mergedCount: 1, preparedCount: 0, exitCode: 0 };
     });
     await mergeCommand().parseAsync(['文書のみ'], { from: 'user' });
     const line = ui.info.mock.calls.map(([value]) => String(value)).find((value) => value.includes('#10'));
@@ -144,10 +144,10 @@ describe('takt merge CLI', () => {
   });
 
   it('テキスト選別ゼロ件の処理件数を表示し正常終了する', async () => {
-    runMerge.mockResolvedValue({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+    runMerge.mockResolvedValue({ processedCount: 0, mergedCount: 0, preparedCount: 0, exitCode: 0 });
     await mergeCommand().parseAsync(['ドキュメントのみ'], { from: 'user' });
     expect(runMerge).toHaveBeenCalledOnce();
-    expect(ui.info).toHaveBeenCalledWith('Processed: 0, merged: 0');
+    expect(ui.info).toHaveBeenCalledWith('Processed: 0, merged: 0, prepared: 0');
     expect(process.exitCode).toBe(0);
   });
 

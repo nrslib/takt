@@ -436,7 +436,7 @@ describe('fs.watchと限定照合', () => {
 
 it('組立済みの見張りは各周期で観測し、停止後には再開しない', async () => {
   const h = harness();
-  const source: DaemonWatchSource = { pullRequestRetries: vi.fn().mockResolvedValue([]), notifyPullRequestRetryLimit: vi.fn(), pullRequestRetry: vi.fn(), runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
+  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
     inquiries: vi.fn().mockResolvedValue(undefined), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
     ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
@@ -458,8 +458,7 @@ it('長く動く run でも時間による異常イベントを発行しない',
   const target = { ...run, startedAt: '2020-01-01T00:00:00.000Z' };
   const source: DaemonWatchSource = {
     runs: async () => [target], run: async () => target,
-    pullRequests: async () => [], pullRequestRetries: async () => [],
-    pullRequestRetry: vi.fn(), notifyPullRequestRetryLimit: vi.fn(),
+    pullRequests: async () => [],
     inquiries: vi.fn().mockResolvedValue(undefined), launches: async () => [], directories: async () => [],
   };
   const inspect = vi.fn(async () => ({ kind: 'alive' as const, owner: target.owner! }));
@@ -482,7 +481,7 @@ it('長く動く run でも時間による異常イベントを発行しない',
 it('組立済みのrun監視が保存状態を再確認し、Ingressへ観測だけを届ける', async () => {
   const h = harness();
   filesystem.stat.mockResolvedValue({ dev: 1, ino: 1, size: 2, mtimeMs: Date.now(), ctimeMs: Date.now(), isFile: () => true });
-  const source: DaemonWatchSource = { pullRequestRetries: vi.fn().mockResolvedValue([]), notifyPullRequestRetryLimit: vi.fn(), pullRequestRetry: vi.fn(), runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
+  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([run]), run: vi.fn().mockResolvedValue(run),
     pullRequests: vi.fn().mockResolvedValue([]), inquiries: vi.fn().mockResolvedValue(undefined),
     launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
   const errors = vi.fn();
@@ -510,35 +509,4 @@ it('processes directory files in pages and retains unchanged entries between pag
     expect(changed.mock.calls.every(([change]) => !(change as WatchFileChange).removed)).toBe(true);
     expect(onError).not.toHaveBeenCalled();
   } finally { await loop.close(); }
-});
-
-it('組立済みの見張りがPR作成失敗をmanagerに知らせ、子プロセスを起動しない', async () => {
-  const h = harness();
-  const sha = 'a'.repeat(40);
-  const target = { ...base, repositoryDirectory: '/repo', goalId: 'goal', expectedSha: sha, failureId: 'failure',
-    failedAt: new Date(Date.now() - 60_000).toISOString(), error: 'commit_refs', headBranch: 'takt/goal' };
-  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
-    pullRequestRetries: vi.fn().mockResolvedValue([target]), notifyPullRequestRetryLimit: vi.fn(), pullRequestRetry: vi.fn().mockResolvedValue(target),
-    inquiries: vi.fn().mockResolvedValue(undefined), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]) };
-  const run = vi.fn().mockResolvedValue({ code: 0, signal: null, truncated: false, stdout: Buffer.from(sha), stderr: Buffer.alloc(0) });
-  const launch = vi.fn();
-  const inspect = vi.fn();
-  const onError = vi.fn();
-  const processes = { launch, inspect };
-  const watchers = startDaemonWatchers({ source, processes, commands: { run }, records: h.records,
-    ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError });
-  try {
-    await watchers.drain();
-    expect(run.mock.calls.map(([request]) => request.executable)).toEqual(['git']);
-    expect(h.accept).toHaveBeenCalledOnce();
-    expect([...h.accepted.values()][0]?.event).toMatchObject({ kind: 'watch_observation', observation: {
-      kind: 'goal_pr_retry', expectedSha: sha, attempt: 1, maxAttempts: 6,
-    } });
-    watchers.changed(); await watchers.drain();
-    expect(run).toHaveBeenCalledOnce();
-    expect(h.accept).toHaveBeenCalledOnce();
-    expect(launch).not.toHaveBeenCalled();
-    expect(inspect).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-  } finally { await watchers.close(); }
 });

@@ -54,8 +54,8 @@ Current manager assignment が現在の担当です。workspace の登録案に�
 
 takt_complete_goal に expectedSha、根拠付きの summary、PR が必要なら具体的な確認手順 humanChecks を渡します。awaiting_merge で PR 未保存なら、原因を直したあと同じ道具の呼び直しで PR の準備をやり直せます。push の状態も自分で調べ、必要なら修正してやり直します。
 
-取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録、現在のブランチ先端と、見張りイベントを確かめます。push や PR 作成に失敗していたら、再試行の状況も人に伝えます。先端が完成申請の SHA から変わっていたら、自動再試行を待たず、確認し直して新しい SHA で完成申請します。
+取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録と現在のブランチ先端を確かめます。push や PR 作成の失敗は作業記録と通知で確認し、原因と副作用を調べて次の操作を判断します。先端が完成申請の SHA から変わっていたら、確認し直して新しい SHA で完成申請します。
 
-goal_pr_retry イベントを受けたら、現在の状態と失敗の要点を確かめ、イベントと同じ expectedSha で takt_complete_goal を呼び直します。成功したら PR の番号と URL を伝えます。
+ゴールの PR を取り込み先に入れる準備は、takt_merge_goal_pr でマージ用のタスクを積んで進める。取り込み先の取り込み、ぶつかりの解消、レビュー、CodeRabbit への対応、CI 待ちはこのタスクが行う。PR が取り込み先とぶつかったときも同じで、ぶつかりを直す普通のタスクは作らない。manager.main_merge が approve なら until: prepare で積み、仕上がったら人のマージを待つ。auto か、人がマージを指示したときは until: merge で積む。結果はタスクの完了のイベントで読み、取り込まれていれば takt_check_goal_completion で完成にする。
 
-PR の取り込みでは保存済みの pullRequest.number / url を確認し、cwd、goalId、prNumber を takt_merge_goal_pr に渡します。成功後は takt_check_goal_completion を使います。人が別途マージした場合も、取り込み先をゴールへ取り込むタスクを作らず同じ確認を使います。完成情報と PR を保持して created に戻した場合も確認できます。一時停止中・中止済みは完成させません。
+保存済みの pullRequest.number / url を確認し、cwd、goalId、prNumber、until を毎回明示します。マージ用タスクは PR のブランチに直接 push するため、takt_merge_goal_task で取り込みません。手元と origin のゴールブランチが分かれていたら、上書きせず、タスクの結果と報告から対応を判断します。人が別途マージした場合も同じ完成確認を使います。完成情報と PR を保持して created に戻した場合も確認できます。一時停止中・中止済みは完成させません。

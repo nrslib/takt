@@ -8,12 +8,12 @@ import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js'
 import type { WorkflowResumePoint } from '../core/models/workflow-types.js';
 import type { runSyncConflictResolver } from '../infra/service/runSyncConflictResolver.js';
 
-const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn(), resolver: vi.fn() }));
+const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn(), merge: vi.fn(), resolver: vi.fn() }));
 vi.mock('../infra/service/runSyncConflictResolver.js', () => ({ runSyncConflictResolver: mocks.resolver }));
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: () => ({ checkCliStatus: () => ({ available: true }),
-    fetchPrDetails: mocks.details, fetchPrStatus: mocks.status, commentOnPr: mocks.comment }),
+    fetchPrDetails: mocks.details, fetchPrStatus: mocks.status, commentOnPr: mocks.comment, mergePr: mocks.merge }),
 }));
 vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
@@ -27,12 +27,13 @@ vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({ runWorkflowExecution: mocks.workflow }));
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mocks.logError }),
+  createLogger: () => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mocks.logError }),
 }));
 
 import { runMerge, resolveMergeSettings, runLinkedMergeSafely, executePrWorkflow,
   executePersistedPrMergeTask } from '../features/merge/index.js';
 import { TaskRunner } from '../infra/task/index.js';
+import { TaskStore } from '../infra/task/store.js';
 import { prepareFailedTaskRetry } from '../features/tasks/taskRetryPreparation.js';
 import { persistFailedTaskRetry } from '../features/tasks/taskRetryPersistence.js';
 import { PrStatusTimeoutError } from '../core/workflow/system/pr-execution-context.js';
@@ -47,7 +48,16 @@ import { stageTaskSpecForExecution } from '../features/tasks/execute/taskSpecCon
 import { executeRunTaskAndCompleteWithDetails } from '../features/tasks/execute/runTaskExecution.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { mergeGoalPr } from '../features/manager/mergeGoalPr.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import { managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
+import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
+import { completeGoal, getGoalTaskSource, integrateGoalTask } from '../infra/goals/integration.js';
+import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { removeTaktGoalTask } from '../features/mcp/goalTaskRemovalOperations.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -64,6 +74,7 @@ describe('Merge PR persistent clone ownership', () => {
     vi.resetAllMocks();
     mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: { suspicious: false, reason: 'safe', files: [] } });
     mocks.comment.mockReturnValue({ success: true });
+    mocks.merge.mockReturnValue({ success: true });
     executedCwd = undefined;
     root = mkdtempSync(join(tmpdir(), 'takt-merge-clone-'));
     project = join(root, 'project');
@@ -103,7 +114,7 @@ describe('Merge PR persistent clone ownership', () => {
       executedCwd = request.cwd;
       expect(request.cwd).not.toBe(project);
       expect(request.projectCwd).toBe(project);
-      expect(request.workflowIdentifier).toBe('merge-review');
+      expect(request.workflowIdentifier).toBe('merge-review-fix-simple');
       expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(prHead);
       expect(git(request.cwd, 'branch', '--show-current')).toBe('feature/pr');
       expect(git(request.cwd, 'remote', 'get-url', 'origin')).toBe(fork);
@@ -116,7 +127,7 @@ describe('Merge PR persistent clone ownership', () => {
       expect(request.runPathsDirectory).toBe(join(project, '.takt', 'runs'));
       mkdirSync(join(project, '.takt', 'runs', 'merge-test', 'reports'), { recursive: true });
       writeFileSync(reportPath, 'Review completed\n');
-      return { success: true, reportDirectory: join(project, '.takt', 'runs', 'merge-test', 'reports') };
+      return { success: false, reportDirectory: join(project, '.takt', 'runs', 'merge-test', 'reports') };
     });
   });
   afterEach(() => {
@@ -127,13 +138,99 @@ describe('Merge PR persistent clone ownership', () => {
   });
   function run() {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
-      settings: resolveMergeSettings({ workflow: 'merge-review' }) });
+      settings: resolveMergeSettings({ workflow: 'merge-review-fix-simple' }) });
   }
+
+  it.each(['skipped_call', 'child_merge', 'failed_child_merge', 'root_merge', 'prepare'] as const)(
+    'uses workflow completion and current PR state across workflow calls: %s', async (scenario) => {
+      const workflowDirectory = join(project, '.takt', 'workflows');
+      mkdirSync(workflowDirectory, { recursive: true });
+      const workflow = join(workflowDirectory, 'effect-outcome.yaml');
+      const child = join(workflowDirectory, 'effect-child.yaml');
+      const mergeStep = [
+        '  - name: merge', '    mode: system', '    effects:',
+        '      - type: merge_pr', '        pr: 123',
+        '    rules:', '      - condition: when(effect.merge.merge_pr.success == true)', '        next: COMPLETE',
+        '      - condition: when(true)', '        next: ABORT',
+      ];
+      writeFileSync(child, ['name: effect-child', 'subworkflow:', '  callable: true', 'initial_step: merge', 'steps:', ...mergeStep].join('\n'));
+      const direct = scenario === 'root_merge';
+      writeFileSync(workflow, ['name: effect-outcome', `initial_step: ${direct ? 'merge' : 'check'}`, 'steps:',
+        ...(direct ? mergeStep : [
+          '  - name: check', '    mode: system', '    rules:', '      - condition: when(true)',
+          `        next: ${scenario === 'child_merge' || scenario === 'failed_child_merge' ? 'child' : 'COMPLETE'}`,
+          '  - name: child', '    kind: workflow_call', `    call: ${child}`,
+          '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+          '      - condition: ABORT', '        next: ABORT',
+        ]),
+      ].join('\n'));
+      const actual = await vi.importActual<typeof import('../features/tasks/execute/workflowExecutionApi.js')>(
+        '../features/tasks/execute/workflowExecutionApi.js');
+      mocks.workflow.mockImplementation((request: WorkflowExecutionRequest) => actual.runWorkflowExecution({
+        ...request, agentOverrides: { provider: 'mock' }, outputMode: 'silent',
+      }));
+      const merged = scenario === 'child_merge' || scenario === 'root_merge';
+      // A merge by another actor must not hide a failed workflow effect.
+      mocks.status.mockResolvedValue({ merged: merged || scenario === 'failed_child_merge' });
+      mocks.merge.mockReturnValue({ success: scenario !== 'failed_child_merge', error: 'merge failed' });
+      const result = await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow,
+        until: scenario === 'prepare' ? 'prepare' : 'merge', settings: resolveMergeSettings(undefined) });
+      const execution = await mocks.workflow.mock.results[0]!.value;
+      expect(execution.success, execution.reason).toBe(scenario !== 'failed_child_merge');
+      expect(result.success).toBe(scenario !== 'failed_child_merge');
+      expect(result.outcome).toBe(scenario === 'failed_child_merge' ? 'unresolved' : merged ? 'merged' : 'prepared');
+      expect(mocks.merge).toHaveBeenCalledTimes(direct || scenario.endsWith('child_merge') ? 1 : 0);
+    },
+  );
+
+  it('retries from the post-merge comment and reports merged without executing merge again', async () => {
+    const workflow = join(project, 'post-merge.yaml');
+    writeFileSync(workflow, [
+      'name: post-merge', 'initial_step: merge', 'steps:',
+      '  - name: merge', '    mode: system', '    effects:',
+      '      - type: merge_pr', '        pr: 123', '    rules:',
+      '      - condition: when(effect.merge.merge_pr.success == true)', '        next: comment',
+      '      - condition: when(true)', '        next: ABORT',
+      '  - name: comment', '    mode: system', '    effects:',
+      '      - type: comment_pr', '        pr: 123', '        body: PR merged', '    rules:',
+      '      - condition: when(effect.comment.comment_pr.success == true)', '        next: COMPLETE',
+      '      - condition: when(true)', '        next: ABORT',
+    ].join('\n'));
+    const actual = await vi.importActual<typeof import('../features/tasks/execute/workflowExecutionApi.js')>(
+      '../features/tasks/execute/workflowExecutionApi.js');
+    mocks.workflow.mockImplementation((request: WorkflowExecutionRequest) => actual.runWorkflowExecution({
+      ...request, agentOverrides: { provider: 'mock' }, outputMode: 'silent',
+    }));
+    mocks.merge.mockImplementation(() => {
+      mocks.status.mockResolvedValue({ merged: true });
+      return { success: true };
+    });
+    mocks.comment.mockReturnValueOnce({ success: false, error: 'comment unavailable' });
+
+    expect(await runMerge({ projectCwd: project, prNumber: 123, workflow, concurrency: 1,
+      settings: resolveMergeSettings(undefined) })).toMatchObject({ exitCode: 1, preparedCount: 0 });
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    expect(runner.listTaskStateItems()[0]?.completion).toMatchObject({ success: false, workflowResult: 'aborted', mergeOutcome: 'unresolved' });
+    runner.requeueTask(failed.name, ['failed'], { startStep: 'comment' });
+    const claimed = runner.claimNextTasks(1)[0]!;
+
+    const result = await executeRunTaskAndCompleteWithDetails(claimed, runner, project,
+      undefined, { outputMode: 'silent' });
+
+    expect(result).toMatchObject({ success: true,
+      completion: { success: true, workflowResult: 'completed', mergeOutcome: 'merged' } });
+    expect(mocks.workflow.mock.calls[1]![0]).toMatchObject({ startStep: 'comment' });
+    expect(mocks.merge).toHaveBeenCalledOnce();
+    expect(mocks.comment).toHaveBeenCalledTimes(2);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ status: 'completed',
+      completion: { success: true, mergeOutcome: 'merged' } });
+  });
 
   describe('requeued merge preparation', () => {
     const resumePoint: WorkflowResumePoint = {
       version: 2,
-      stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'review',
+      stack: [{ workflow: 'merge-review-fix-simple', workflow_ref: 'merge-review-fix-simple', step: 'review',
         kind: 'agent', occurrence: 2, step_iterations: { sync: 1, resolve_conflicts: 1, review: 2 } }],
       iteration: 7, elapsed_ms: 1234,
       workflow_call_invocations: {}, workflow_step_participations: {},
@@ -203,7 +300,10 @@ describe('Merge PR persistent clone ownership', () => {
     }
 
     async function expectContinued(context: Awaited<ReturnType<typeof prepareRetry>>) {
-      expect(await retry(context)).toEqual({ success: true });
+      expect(await retry(context)).toMatchObject({
+        success: true, completion: { success: true, mergeOutcome: 'merged', workflowResult: 'completed' },
+        runSlug: expect.any(String),
+      });
       expect(mocks.workflow).toHaveBeenCalledOnce();
       expect(context.runner.listAllTaskItems().find((task) => task.name === context.claimed.name)?.kind)
         .toBe('completed');
@@ -428,7 +528,9 @@ describe('Merge PR persistent clone ownership', () => {
         expect(git(options.cwd, 'merge-base', context.localHead, 'HEAD')).toBe(context.localHead);
         return { passed: false, comment: 'review required' };
       });
-      expect(await retry(context)).toEqual({ success: false });
+      expect(await retry(context)).toMatchObject({
+        success: false, completion: { success: false, mergeOutcome: 'unresolved', workflowResult: 'aborted' },
+      });
       expect(check).toHaveBeenCalledOnce();
       expect(mocks.workflow).not.toHaveBeenCalled();
       expect(mocks.comment).toHaveBeenCalledOnce();
@@ -474,7 +576,7 @@ describe('Merge PR persistent clone ownership', () => {
       return execute(request);
     });
     await runMerge({ projectCwd: project, prNumber: 123, concurrency: 5,
-      settings: resolveMergeSettings({ workflow: 'merge-review', concurrency: 2 }) });
+      settings: resolveMergeSettings({ workflow: 'merge-review-fix-simple', concurrency: 2 }) });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
     writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nmerge:\n  concurrency: 3\n');
@@ -493,7 +595,7 @@ describe('Merge PR persistent clone ownership', () => {
   });
   it('relays only child warning progress during a silent linked merge and preserves the merge result', async () => {
     mkdirSync(join(project, '.takt'), { recursive: true });
-    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review-fix-simple\n');
     const warning = { type: 'progress', level: 'warn', message: 'merge trace failed' } as const;
     mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
       await request.eventSink?.({ type: 'run_started', runDirectory: request.cwd, reportDirectory: request.cwd, ndjsonLogPath: 'log' });
@@ -550,7 +652,7 @@ describe('Merge PR persistent clone ownership', () => {
     const failed = runner.listFailedTasks()[0]!;
     const sourceResumePoint: WorkflowResumePoint = {
       version: 2,
-      stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'sync',
+      stack: [{ workflow: 'merge-review-fix-simple', workflow_ref: 'merge-review-fix-simple', step: 'sync',
         kind: 'agent', occurrence: 1 }],
       iteration: 3,
       elapsed_ms: 100,
@@ -559,7 +661,7 @@ describe('Merge PR persistent clone ownership', () => {
     };
     runner.requeueTask(failed.name, ['failed'], {
       restartPoint: {
-        stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'review', kind: 'agent' }],
+        stack: [{ workflow: 'merge-review-fix-simple', workflow_ref: 'merge-review-fix-simple', step: 'review', kind: 'agent' }],
       },
       sourceResumePoint,
     });
@@ -612,7 +714,7 @@ describe('Merge PR persistent clone ownership', () => {
       return { persona: persona ?? 'reviewer', status: 'error', content: 'failed',
         error: 'failure after delivery', timestamp: new Date() };
     });
-    await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow,
+    await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow, until: 'prepare',
       settings: resolveMergeSettings(undefined) });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
@@ -633,12 +735,14 @@ describe('Merge PR persistent clone ownership', () => {
     });
     await executePersistedPrMergeTask(claimed, runner, project);
     expect(reads.at(-1)).toContain(content);
-    const resumed = runner.listFailedTasks()[0]!;
+    const resumed = runner.listTaskStateItems().find((task) => task.name === failed.name)!;
+    expect(resumed.status).toBe('completed');
+    expect(resumed.completion).toMatchObject({ success: true, mergeOutcome: 'prepared' });
     expect(resumed.taskDir).toBe(originalSpecDir);
     expect(resumed.runSlug).not.toBe(failed.runSlug);
     expect(readFileSync(buildRunPaths(project, resumed.runSlug!).contextTaskOrderAbs, 'utf8')).toContain(content);
   });
-  it('forkのheadを専用cloneで実行し未マージ時はcloneを保持する', async () => {
+  it('forkのheadを専用cloneで実行しABORTならcloneを保持する', async () => {
     const result = await run();
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(executedCwd).toBeDefined();
@@ -664,6 +768,8 @@ describe('Merge PR persistent clone ownership', () => {
   });
 
   it('workflow成功だけではなくPRの実際のmerged状態を集計する', async () => {
+    const execute = mocks.workflow.getMockImplementation()!;
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => ({ ...await execute(request), success: true }));
     mocks.status.mockResolvedValue({ number: 123, headSha: prHead, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true });
     expect(await run()).toMatchObject({ processedCount: 1, mergedCount: 1, exitCode: 0 });
@@ -690,7 +796,7 @@ describe('Merge PR persistent clone ownership', () => {
 
     runner.requeueTask(failed.name, ['failed']);
     await expect(executePrWorkflow({ projectCwd: project, prNumber: 123,
-      workflow: 'merge-review', settings: resolveMergeSettings(undefined) }))
+      workflow: 'merge-review-fix-simple', settings: resolveMergeSettings(undefined) }))
       .rejects.toThrow('Active task target already exists');
     const claimed = runner.claimNextTasks(1)[0]!;
     expect(claimed.resumeMode).toBe('requeue');
@@ -698,7 +804,9 @@ describe('Merge PR persistent clone ownership', () => {
     expect(claimed.worktreePath).toBe(failed.worktreePath);
     mocks.status.mockResolvedValue({ number: 123, headSha: prHead, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true });
-    expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
+    const execute = mocks.workflow.getMockImplementation()!;
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => ({ ...await execute(request), success: true }));
+    expect(await executePersistedPrMergeTask(claimed, runner, project)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(existsSync(failed.worktreePath!)).toBe(false);
     expect(existsSync(fresh.worktreePath!)).toBe(true);
     const completed = runner.listAllTaskItems().find((task) => task.name === failed.name);
@@ -722,7 +830,9 @@ describe('Merge PR persistent clone ownership', () => {
     const claimed = runner.claimNextTasks(1)[0]!;
     mocks.status.mockResolvedValue({ number: 123, headSha: prHead, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true });
-    expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
+    const execute = mocks.workflow.getMockImplementation()!;
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => ({ ...await execute(request), success: true }));
+    expect(await executePersistedPrMergeTask(claimed, runner, project)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(existsSync(failed.worktreePath!)).toBe(false);
   });
 
@@ -730,8 +840,8 @@ describe('Merge PR persistent clone ownership', () => {
     const workflowDir = join(project, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
     writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\n');
-    writeFileSync(join(workflowDir, 'merge-review.yaml'),
-      'name: merge-review\ninitial_step: review\nmax_steps: 1\nsteps:\n  - name: review\n    instruction: "{task}"\n');
+    writeFileSync(join(workflowDir, 'merge-review-fix-simple.yaml'),
+      'name: merge-review-fix-simple\ninitial_step: review\nmax_steps: 1\nsteps:\n  - name: review\n    instruction: "{task}"\n');
     const interrupted = vi.spyOn(cloneExec, 'cloneAndIsolateAbortable')
       .mockRejectedValueOnce(new Error('clone unavailable'));
     expect(await run()).toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
@@ -749,7 +859,9 @@ describe('Merge PR persistent clone ownership', () => {
     const claimed = runner.claimNextTasks(1)[0]!;
     mocks.status.mockResolvedValue({ number: 123, headSha: prHead, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: true });
-    expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
+    const execute = mocks.workflow.getMockImplementation()!;
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => ({ ...await execute(request), success: true }));
+    expect(await executePersistedPrMergeTask(claimed, runner, project)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
   });
 
   it('別forkの同名head branchは許可し同番号PRと同repoの同名branchは拒否する', () => {
@@ -757,7 +869,7 @@ describe('Merge PR persistent clone ownership', () => {
     const start = (number: number, repository: string) => runner.startPrMergeTask({
       prNumber: number, headBranch: 'main', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: repository, headRepositoryPushUrls: [repository],
-      workflow: 'merge-review', method: 'squash', worktreePath: join(root, `clone-${number}-${repository.length}`),
+      workflow: 'merge-review-fix-simple', method: 'squash', worktreePath: join(root, `clone-${number}-${repository.length}`),
       threatCheckMaxDiffBytes: 1000,
     });
     start(123, '/fork-one');
@@ -773,7 +885,7 @@ describe('Merge PR persistent clone ownership', () => {
     const active = runner.startPrMergeTask({
       prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: fork, headRepositoryPushUrls: [fork],
-      workflow: 'merge-review', method: 'squash', worktreePath: join(root, 'active-clone'),
+      workflow: 'merge-review-fix-simple', method: 'squash', worktreePath: join(root, 'active-clone'),
       threatCheckMaxDiffBytes: 1000,
     });
     expect(() => runner.requeueTask(failed.name, ['failed']))
@@ -809,24 +921,26 @@ describe('Merge PR persistent clone ownership', () => {
     const parent = runner.addTask('Build feature', { branch: 'feature/pr', worktree: true });
     runner.claimNextTasks(1);
     await expect(executePrWorkflow({ projectCwd: project, prNumber: 123,
-      workflow: 'merge-review', settings: resolveMergeSettings(undefined) }))
+      workflow: 'merge-review-fix-simple', settings: resolveMergeSettings(undefined) }))
       .rejects.toThrow('Active task target already exists');
     expect(await executePrWorkflow({ projectCwd: project, prNumber: 123,
-      workflow: 'merge-review', settings: resolveMergeSettings(undefined), parentTaskName: parent.name }))
-      .toEqual({ merged: false });
+      workflow: 'merge-review-fix-simple', settings: resolveMergeSettings(undefined), parentTaskName: parent.name }))
+      .toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(runner.listFailedTasks().some((task) => task.data?.merge_task === true)).toBe(true);
   });
 
   it('相対workflow pathを元リポジトリから解決してclone実行へ渡す', async () => {
     mocks.workflow.mockResolvedValue({ success: true });
-    await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
-      settings: resolveMergeSettings({ workflow: './custom-merge.yaml' }) });
+    mocks.status.mockResolvedValue({ merged: true });
+    expect(await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
+      settings: resolveMergeSettings({ workflow: './custom-merge.yaml' }) }))
+      .toMatchObject({ processedCount: 1, preparedCount: 0, mergedCount: 1, exitCode: 0 });
     expect(mocks.workflow).toHaveBeenCalledWith(expect.objectContaining({
       workflowIdentifier: join(project, 'custom-merge.yaml'), projectCwd: project,
     }));
     const request = mocks.workflow.mock.calls[0]?.[0] as WorkflowExecutionRequest;
-    expect(existsSync(request.cwd)).toBe(true);
+    expect(existsSync(request.cwd)).toBe(false);
   });
 
   it('最終状態取得の期限切れでは失敗を集計してcloneとreportを保持する', async () => {
@@ -848,7 +962,7 @@ describe('Merge PR persistent clone ownership', () => {
       });
     });
     expect(await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
-      settings: resolveMergeSettings({ workflow: 'merge-review' }), abortSignal: controller.signal }))
+      settings: resolveMergeSettings({ workflow: 'merge-review-fix-simple' }), abortSignal: controller.signal }))
       .toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
     expect(existsSync(executedCwd!)).toBe(true);
     expect(existsSync(reportPath)).toBe(true);
@@ -874,6 +988,9 @@ describe('Merge PR persistent clone ownership', () => {
     writeFileSync(join(project, '.takt/config.yaml'), `allow_git_filters: ${allowGitFilters}\n`);
     mocks.details.mockResolvedValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+    mocks.status.mockResolvedValue({ number: 123, headSha: prHead, merged: false,
+      ci: { finished: true, passed: true }, mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' });
     mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
       executedCwd = request.cwd;
       expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(prHead);
@@ -884,7 +1001,7 @@ describe('Merge PR persistent clone ownership', () => {
     await run();
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(existsSync(probe.markerPath)).toBe(false);
-    expect(existsSync(executedCwd!)).toBe(true);
+    expect(existsSync(executedCwd!)).toBe(false);
   });
 
   it('自動起動設定を省略した場合はPRがあってもworkflowを起動しない', async () => {
@@ -895,7 +1012,7 @@ describe('Merge PR persistent clone ownership', () => {
 
   it('caccia無効でもmerge自動起動設定が有効なら同じPRのworkflowを起動する', async () => {
     mkdirSync(join(project, '.takt'), { recursive: true });
-    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\ncaccia:\n  enabled: false\n');
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review-fix-simple\ncaccia:\n  enabled: false\n');
     await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123');
     expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(mocks.details.mock.calls[0]?.[0]).toBe(123);
@@ -905,7 +1022,7 @@ describe('Merge PR persistent clone ownership', () => {
 
   it.each(['terminal', 'silent'] as const)('自動mergeの子workflowへ親の%s表示設定を引き継ぐ', async (outputMode) => {
     mkdirSync(join(project, '.takt'), { recursive: true });
-    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review-fix-simple\n');
     const display = { outputMode, taskPrefix: 'parent-task', taskColorIndex: 2, taskDisplayLabel: 'parent-label' };
 
     await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123', undefined, display);
@@ -937,7 +1054,7 @@ describe('Merge PR persistent clone ownership', () => {
       return { status: outcome === 'error' ? 'error' : 'done', structuredOutput: {
         suspicious: false, reason: 'safe', files: [] } };
     });
-    await expect(executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review',
+    await expect(executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review-fix-simple',
       settings: resolveMergeSettings(undefined), abortSignal: controller.signal })).rejects.toBe(reason);
     expect(mocks.agent).toHaveBeenCalledOnce();
     expect(mocks.comment).not.toHaveBeenCalled();
@@ -951,8 +1068,8 @@ describe('Merge PR persistent clone ownership', () => {
     const paths = observeClone();
     if (outcome === 'reject') mocks.agent.mockRejectedValue(new Error('provider failed'));
     else mocks.agent.mockResolvedValue({ status: 'error' });
-    expect(await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review',
-      settings: resolveMergeSettings(undefined), abortSignal: new AbortController().signal })).toEqual({ merged: false });
+    expect(await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review-fix-simple',
+      settings: resolveMergeSettings(undefined), abortSignal: new AbortController().signal })).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.comment).toHaveBeenCalledOnce();
     expect(mocks.comment.mock.calls[0]?.[1]).toContain('人間による確認');
     expect(mocks.workflow).not.toHaveBeenCalled();
@@ -970,10 +1087,10 @@ describe('Merge PR persistent clone ownership', () => {
         if (aborted) queueMicrotask(() => controller.abort(reason));
         return result;
       });
-      const running = executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review',
+      const running = executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'merge-review-fix-simple',
         settings: resolveMergeSettings(undefined), abortSignal: controller.signal });
       if (aborted) await expect(running).rejects.toBe(reason);
-      else expect(await running).toEqual({ merged: false });
+      else expect(await running).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
       expect(mocks.comment).toHaveBeenCalledTimes(!aborted && !passed ? 1 : 0);
       expect(mocks.workflow).toHaveBeenCalledTimes(!aborted && passed ? 1 : 0);
       expect(mocks.status).toHaveBeenCalledTimes(!aborted && passed ? 1 : 0);
@@ -985,7 +1102,7 @@ describe('Merge PR persistent clone ownership', () => {
     const paths = observeClone();
     const controller = new AbortController();
     mkdirSync(join(project, '.takt'), { recursive: true });
-    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review-fix-simple\n');
     mocks.agent.mockImplementation(async () => {
       controller.abort(new Error('cancelled linked merge'));
       return { status: 'error' };
@@ -1045,7 +1162,7 @@ describe('Merge PR persistent clone ownership', () => {
       suspicious: true, reason: '認証情報を送信する', files: ['code.txt'] } });
     if (kind === 'invalid') mocks.agent.mockResolvedValue({ status: 'done', content: '安全です' });
     expect(await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
-      settings: resolveMergeSettings({ workflow: 'merge-review', threatCheckMaxDiffBytes: kind === 'overflow' ? 1 : 200_000 }) }))
+      settings: resolveMergeSettings({ workflow: 'merge-review-fix-simple', threatCheckMaxDiffBytes: kind === 'overflow' ? 1 : 200_000 }) }))
       .toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
     expect(mocks.workflow).not.toHaveBeenCalled();
     expect(mocks.comment.mock.calls[0]?.[1]).toContain(kind === 'suspicious' ? '認証情報を送信する' : '人間による確認');
@@ -1067,7 +1184,7 @@ describe('Merge PR persistent clone ownership', () => {
       return { success: true };
     });
     const result = await runMerge({ projectCwd: project, concurrency: 1,
-      includeForks: true, settings: resolveMergeSettings({ workflow: 'merge-review' }) }, {
+      includeForks: true, settings: resolveMergeSettings({ workflow: 'merge-review-fix-simple' }) }, {
       listOpenPrNumbers: () => [123, 456],
       fetchPrListItem: (number) => ({ number, author: 'author', labels: [], base_branch: 'main',
         head_branch: 'feature/pr', managed_by_takt: false, same_repository: number === 456, draft: false, updated_at: '' }),
@@ -1077,6 +1194,210 @@ describe('Merge PR persistent clone ownership', () => {
     expect(mocks.agent).toHaveBeenCalledOnce(); expect(mocks.workflow).toHaveBeenCalledOnce();
     expect(mocks.logError).toHaveBeenCalledWith('PR merge workflow failed', expect.objectContaining({ prNumber: 123, error: 'comment denied' }));
     expect(paths).toHaveLength(2); expect(existsSync(paths[0]!)).toBe(true); expect(existsSync(paths[1]!)).toBe(false);
+  });
+
+  describe('goal PR merge tasks through the daemon worker pool', () => {
+    async function queuedGoal(until: 'prepare' | 'merge', trailingSlash = false) {
+      mkdirSync(join(project, '.takt'), { recursive: true });
+      writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  auto_run: false\n');
+      git(root, 'config', '--file', join(root, 'gitconfig'), '--unset-all', `url.file://${project}.insteadOf`);
+      git(root, 'config', '--file', join(root, 'gitconfig'), `url.file://${fork}.insteadOf`, 'git@github.com:org/repo.git');
+      git(project, 'remote', 'add', 'origin', 'git@github.com:org/repo.git');
+      git(project, 'fetch', fork, 'refs/heads/feature/pr:refs/heads/feature/pr');
+      const goal = { ...goalRecord(), constraints: ['Preserve the public API'], branch: 'feature/pr', status: 'awaiting_merge' as const,
+        completion: { goalBranch: 'feature/pr', goalSha: prHead, targetBranch: 'main', summary: 'verified', instructions: [],
+          humanChecks: 'Read the result', changeSummary: { filesChanged: 2, additions: 2, deletions: 0,
+            files: [], truncated: false, totalsTruncated: false } },
+        pullRequest: { number: 123, url: `https://github.com/org/repo/pull/123${trailingSlash ? '/' : ''}` } };
+      await new GoalStore(project).create(goal);
+      mocks.details.mockResolvedValue({ number: 123, headBranch: goal.branch, baseBranch: 'main', headSha: prHead,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: true });
+      const queued = await mergeGoalPr(project, goal, until, new AbortController().signal);
+      expect(queued).toMatchObject({ status: 'pending', mergeTask: true, goalId: goal.id });
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      const runner = new TaskRunner(project, { goalTasksOnly: true });
+      expect(runner.listTaskStateItems()[0]).toMatchObject({ mergeTask: true, goalId: goal.id, status: 'pending' });
+      return { goal, runner, queued };
+    }
+
+    it.each(['prepared', 'merged', 'deleted_head', 'unmerged', 'workflow_failed', 'both_failed', 'both_aborted', 'diverged', 'checked_out'] as const)(
+      'delivers %s with the published head and safe branch synchronization', async (scenario) => {
+        const until = scenario === 'merged' || scenario === 'deleted_head' || scenario === 'unmerged' ? 'merge' : 'prepare';
+        const { goal, runner, queued } = await queuedGoal(until);
+        const originalHead = git(project, 'rev-parse', 'HEAD');
+        const originalFile = readFileSync(join(project, 'code.txt'), 'utf8');
+        let localHead = prHead;
+        if (scenario === 'diverged' || scenario === 'both_failed' || scenario === 'both_aborted') {
+          localHead = git(project, 'commit-tree', `${prHead}^{tree}`, '-p', prHead, '-m', 'local goal work');
+          git(project, 'update-ref', 'refs/heads/feature/pr', localHead);
+        }
+        const humanWorktree = join(root, 'human-goal');
+        if (scenario === 'checked_out') git(project, 'worktree', 'add', humanWorktree, goal.branch);
+        let publishedHead = '';
+        mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+          expect(request.workflowIdentifier).toBe(until === 'prepare' ? 'merge-prepare' : 'merge-review-fix-simple');
+          expect(request.prExecutionContext?.preserveHeadBranch).toBe(true);
+          for (const requirement of [...goal.constraints, ...goal.acceptanceCriteria]) {
+            expect(request.taskSpec?.orderContent).toContain(requirement);
+          }
+          expect(git(request.cwd, 'remote', 'get-url', 'origin')).toBe(fork);
+          git(request.cwd, 'config', 'user.name', 'Merge Worker');
+          git(request.cwd, 'config', 'user.email', 'merge@example.com');
+          writeFileSync(join(request.cwd, 'prepared.txt'), 'PR preparation result\n');
+          git(request.cwd, 'add', 'prepared.txt'); git(request.cwd, 'commit', '-m', 'prepare goal PR');
+          publishedHead = git(request.cwd, 'rev-parse', 'HEAD');
+          await request.prGitOperations!.push('HEAD:refs/heads/feature/pr');
+          mocks.status.mockResolvedValue({ merged: scenario === 'merged' || scenario === 'deleted_head', headSha: publishedHead });
+          if (scenario === 'deleted_head') git(fork, 'update-ref', '-d', 'refs/heads/feature/pr');
+          if (scenario === 'both_failed') throw new Error('CI stopped: https://user:fixture-secret@github.com/org/repo.git');
+          if (scenario === 'workflow_failed') throw new Error('CI investigation stopped after push');
+          if (scenario === 'both_aborted') return { success: false, reason: 'CI stopped after workflow rejection' };
+          return { success: true };
+        });
+        const result = await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true);
+        const success = scenario === 'prepared' || scenario === 'merged' || scenario === 'deleted_head' || scenario === 'unmerged';
+        expect(result).toMatchObject({ success: success ? 1 : 0, fail: success ? 0 : 1 });
+        const saved = runner.listTaskStateItems()[0]!;
+        expect(saved.status).toBe(success ? 'completed' : 'failed');
+        if (scenario !== 'deleted_head') expect(git(fork, 'rev-parse', 'feature/pr')).toBe(publishedHead);
+        expect(git(project, 'rev-parse', 'feature/pr')).toBe(
+          scenario === 'diverged' || scenario === 'both_failed' || scenario === 'both_aborted' || scenario === 'checked_out' ? localHead : publishedHead);
+        expect(git(project, 'rev-parse', 'HEAD')).toBe(originalHead);
+        expect(readFileSync(join(project, 'code.txt'), 'utf8')).toBe(originalFile);
+        if (scenario === 'checked_out') {
+          expect(git(humanWorktree, 'rev-parse', 'HEAD')).toBe(prHead);
+          expect(existsSync(join(humanWorktree, 'prepared.txt'))).toBe(false);
+        }
+        const [record] = readManagerEvents(project);
+        expect(record!.event).toMatchObject({ kind: 'completion', goalId: goal.id, taskName: queued.taskName,
+          runSlug: saved.runSlug, result: { success, mergeOutcome: scenario === 'prepared' || scenario === 'unmerged' || scenario === 'diverged' || scenario === 'checked_out' ? 'prepared'
+              : scenario === 'merged' || scenario === 'deleted_head' ? 'merged' : 'unresolved',
+            branchSynchronization: { status: scenario === 'both_failed' || scenario === 'both_aborted' ? 'diverged' : scenario === 'diverged' || scenario === 'checked_out' ? scenario : 'fast_forward',
+              localSha: localHead, remoteSha: publishedHead } } });
+        expect(managerInboxTurnEvent(project, record!.event)).toMatchObject({
+          kind: success ? 'task_completed' : 'task_failed', result: saved.completion,
+        });
+        if (scenario === 'both_failed' || scenario === 'both_aborted') {
+          expect(saved.completion?.failureReason).toContain('CI stopped');
+          expect(saved.completion?.failureReason).toContain('diverged');
+          expect(JSON.stringify(saved)).not.toContain('fixture-secret');
+          expect(JSON.stringify(record)).not.toContain('fixture-secret');
+        }
+        await expect(getGoalTaskSource(project, goal, queued.taskName)).rejects.toThrow();
+        expect((await new GoalStore(project).get(goal.id)).status).toBe('awaiting_merge');
+      },
+    );
+
+    it('normalizes a saved PR URL with a trailing slash before enqueue validation', async () => {
+      const { runner } = await queuedGoal('prepare', true);
+      expect(runner.listPendingTaskItems()).toHaveLength(1);
+    });
+
+    it('does not run an agent after the queued goal has completed', async () => {
+      const { goal, runner } = await queuedGoal('prepare');
+      await new GoalStore(project).update(goal.id, (current) => ({ ...current, status: 'completed',
+        completion: { ...current.completion!, targetSha: baseHead } }));
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 0, fail: 1 });
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(runner.listTaskStateItems()[0]?.completion?.success).toBe(false);
+    });
+
+    it.each(['uncommitted', 'staged', 'unpushed', 'untracked-hidden-by-config'] as const)('keeps %s changes after completion until explicitly discarded', async (kind) => {
+      const { goal, runner, queued } = await queuedGoal('prepare');
+      let clone = '';
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        clone = request.cwd;
+        writeFileSync(join(clone, 'unpublished.txt'), 'retain this result\n');
+        if (kind === 'staged') git(clone, 'add', 'unpublished.txt');
+        if (kind === 'unpushed') {
+          git(clone, 'config', 'user.name', 'Merge Worker');
+          git(clone, 'config', 'user.email', 'merge@example.com');
+          git(clone, 'add', 'unpublished.txt'); git(clone, 'commit', '-m', 'unpublished work');
+        }
+        return { success: true };
+      });
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 1, fail: 0 });
+      expect(readFileSync(join(clone, 'unpublished.txt'), 'utf8')).toBe('retain this result\n');
+      expect(runner.listAllTaskItems()[0]?.worktreePath).toBe(clone);
+      if (kind === 'untracked-hidden-by-config') {
+        git(clone, 'config', 'status.showUntrackedFiles', 'no');
+        expect(git(clone, 'status', '--porcelain')).toBe('');
+      }
+      const input = { cwd: project, goalId: goal.id, taskName: queued.taskName, reason: '片付け' };
+      const signal = new AbortController().signal;
+      const before = await new GoalStore(project).get(goal.id);
+      expect((await removeTaktGoalTask(input, {}, signal)).isError).toBe(true);
+      expect(readFileSync(join(clone, 'unpublished.txt'), 'utf8')).toBe('retain this result\n');
+      expect(runner.listAllTaskItems()[0]?.worktreePath).toBe(clone);
+      expect(await new GoalStore(project).get(goal.id)).toEqual(before);
+      expect((await removeTaktGoalTask({ ...input, discardUnmerged: true }, {}, signal)).isError).toBeUndefined();
+      expect(existsSync(clone)).toBe(false);
+      expect(runner.listAllTaskItems()).toHaveLength(0);
+      expect((await new GoalStore(project).get(goal.id)).workLog.at(-1)?.summary).toContain('discardUnmerged: true');
+    });
+
+    it('removes a retained PR merge clone without discard after its work is published', async () => {
+      const { goal, runner, queued } = await queuedGoal('prepare');
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        git(request.cwd, 'config', 'user.name', 'Merge Worker');
+        git(request.cwd, 'config', 'user.email', 'merge@example.com');
+        writeFileSync(join(request.cwd, 'published.txt'), 'publish this result\n');
+        git(request.cwd, 'add', 'published.txt'); git(request.cwd, 'commit', '-m', 'prepared work');
+        return { success: true };
+      });
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 1, fail: 0 });
+      const clone = runner.listAllTaskItems()[0]!.worktreePath!;
+      expect(existsSync(clone)).toBe(true);
+      git(clone, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      expect((await removeTaktGoalTask({ cwd: project, goalId: goal.id, taskName: queued.taskName, reason: '片付け' },
+        {}, new AbortController().signal)).isError).toBeUndefined();
+      expect(existsSync(clone)).toBe(false);
+      expect(runner.listAllTaskItems()).toHaveLength(0);
+    });
+
+    it('refreshes a lagging goal before publication and requires verification of the new tip', async () => {
+      const { goal } = await queuedGoal('prepare');
+      const author = join(root, 'author');
+      writeFileSync(join(author, 'remote.txt'), 'new PR result\n');
+      git(author, 'add', 'remote.txt'); git(author, 'commit', '-m', 'remote goal work');
+      const remoteHead = git(author, 'rev-parse', 'HEAD');
+      git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      await expect(completeGoal(project, goal.id, prHead, 'old evidence', 'approve', undefined,
+        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'Check', 'en')).rejects.toThrow();
+      expect(git(project, 'rev-parse', 'feature/pr')).toBe(remoteHead);
+      expect((await new GoalStore(project).get(goal.id)).completion?.goalSha).toBe(prHead);
+    });
+
+    it('integrates subsequent work on top of the published PR head', async () => {
+      const { goal, runner } = await queuedGoal('prepare');
+      await new GoalStore(project).update(goal.id, (current) => ({ ...current, status: 'created' }));
+      const author = join(root, 'author');
+      writeFileSync(join(author, 'remote.txt'), 'remote review change\n');
+      git(author, 'add', 'remote.txt'); git(author, 'commit', '-m', 'remote review');
+      const remoteHead = git(author, 'rev-parse', 'HEAD'); git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      git(project, 'branch', 'task-result', prHead);
+      const taskSha = git(project, 'commit-tree', `${prHead}^{tree}`, '-p', prHead, '-m', 'subsequent task');
+      git(project, 'update-ref', 'refs/heads/task-result', taskSha);
+      const task = runner.addTask('subsequent goal work', { goal_id: goal.id, goal_purpose: 'subsequent work', branch: 'task-result' });
+      new TaskStore(project).update((current) => ({ tasks: current.tasks.map((item) => item.name === task.name
+        ? { ...item, status: 'completed', started_at: new Date().toISOString(), completed_at: new Date().toISOString(), completion: { success: true, interrupted: false, branch: 'task-result', sha: taskSha } } : item) }));
+      expect(await integrateGoalTask(project, goal.id, task.name, taskSha, undefined,
+        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'en')).toMatchObject({ status: 'merged' });
+      const integrated = git(project, 'rev-parse', 'feature/pr');
+      expect(git(project, 'merge-base', remoteHead, integrated)).toBe(remoteHead);
+      expect(git(project, 'merge-base', taskSha, integrated)).toBe(taskSha);
+    });
+
+    it('preserves a locally advanced goal and reports its relationship to origin', async () => {
+      const { goal } = await queuedGoal('prepare');
+      const localHead = git(project, 'commit-tree', `${prHead}^{tree}`, '-p', prHead, '-m', 'local work');
+      git(project, 'update-ref', 'refs/heads/feature/pr', localHead);
+      expect(await synchronizeGoalBranch(project, goal.branch, undefined)).toEqual({ status: 'local_ahead', localSha: localHead, remoteSha: prHead });
+      expect(git(project, 'rev-parse', 'feature/pr')).toBe(localHead);
+    });
   });
 
 });

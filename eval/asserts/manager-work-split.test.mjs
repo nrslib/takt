@@ -1465,3 +1465,27 @@ for (const lang of ['ja', 'en']) {
     }
   });
 }
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']) {
+    test(`${lang}: ${caseId} grades tool and required argument structure`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const args = { cwd: fixture.cwd, goalId: fixture.goal.id, prNumber: fixture.goal.pullRequest.number,
+        until: caseId === 'explicit-goal-pr-merge' ? 'merge' : 'prepare' };
+      const grade = (calls) => evaluate(JSON.stringify({ response: { message: '処理します', summary: null }, calls }), { vars: { case: caseId, lang } });
+      const call = { tool: 'takt_merge_goal_pr', arguments: args };
+      assert.equal(grade([call]).pass, true);
+      assert.equal(grade([]).pass, false);
+      assert.equal(grade([call, call]).pass, false);
+      for (const field of ['cwd', 'goalId', 'prNumber', 'until']) {
+        const missing = { ...args }; delete missing[field];
+        assert.equal(grade([{ ...call, arguments: missing }]).pass, false);
+      }
+      assert.equal(grade([{ ...call, arguments: { ...args, until: args.until === 'prepare' ? 'merge' : 'prepare' } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, prNumber: 1951 } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, workflow: 'default' } }]).pass, false);
+      assert.equal(grade([{ tool: 'takt_enqueue_goal_task', arguments: { cwd: args.cwd, goalId: args.goalId,
+        workflow: 'default', task: 'Resolve main conflicts', purpose: 'Resolve main conflicts' } }]).pass, false);
+    });
+  }
+}

@@ -10,6 +10,7 @@ const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
   z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
   z.object({ ...common, kind: z.literal('resumed') }).strict(),
   // 旧受け箱の読取専用。新しい見回りは daemon の TurnEvent として受け付ける。

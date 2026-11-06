@@ -1356,3 +1356,26 @@ it('marks work records from a patrol tool call even when the model omits kind', 
     expect(saved.workLog.map((entry) => entry.kind)).toEqual(['patrol', undefined]);
   } finally { await client.close(); await server.close(); }
 });
+
+it('delivers a saved PR publication failure through inbox admission to the manager', async () => {
+  const goal = goalRecord();
+  const f = await fixture();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, JSON.stringify({ ...goal, pullRequestFailure: { error: 'old failure' } }));
+  const failure = { kind: 'pr_failed' as const, goalId: goal.id, expectedSha: 'a'.repeat(40), reason: 'push failed' };
+  saveManagerEvent(f.repository, failure);
+  const files = new DaemonPersistedFiles(f.directory);
+  expect(await files.readGoal(f.repository, goal.id)).toEqual(goal);
+  const inbox = await files.inboxDirectory(f.repository);
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(1);
+  const target = { targetId: f.repository, generation: 'inbox', conversationId: f.id, kind: 'inbox' as const, directory: inbox };
+  await receiveInboxChange({ path: join(inbox, names[0]!), target, generation: 'failure', value: null, removed: false },
+    files, f.conversations, f.dispatcher);
+  const turn = await f.runner.started(1);
+  expect(turn.input.event.event).toEqual({ kind: 'goal_pr_failed', repositoryDirectory: f.repository,
+    goalId: goal.id, expectedSha: failure.expectedSha, reason: failure.reason });
+  expect(await readdir(inbox)).toEqual([]);
+  await f.runner.finish(turn);
+});

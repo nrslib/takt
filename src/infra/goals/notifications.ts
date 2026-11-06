@@ -121,12 +121,7 @@ export function formatGoalNotification(
   if (notification.kind === 'awaiting_merge' && goal.completion !== undefined) {
     const completion = goal.completion;
     lines.push(getLabel('manager.notificationMerge', language, { branch: completion.targetBranch }));
-    const directory = completion.worktrees?.[0];
-    lines.push(directory === undefined
-      ? getLabel('manager.notificationMergeRepository', language, { project })
-      : getLabel('manager.notificationMergeWorktree', language, { directory }));
-    // 実行コマンドはcompletion記録が所有する。作業ツリー未指定時の先頭要素は説明文。
-    lines.push(...(directory === undefined ? completion.instructions.slice(1) : completion.instructions));
+    lines.push(...completion.instructions);
   }
   return lines.join('\n');
 }

@@ -12,6 +12,10 @@ export async function getTaskGoalIntegrations(
   const branches = new Map<string, GoalBranchResolution>();
   const integrations: Record<string, unknown>[] = [];
   for (const task of tasks) {
+    if (task.mergeTask === true) {
+      integrations.push({ goalIntegration: 'direct_push' });
+      continue;
+    }
     if (task.goalId === undefined) {
       integrations.push({});
       continue;

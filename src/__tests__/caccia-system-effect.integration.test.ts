@@ -102,7 +102,7 @@ describe('Caccia effect through PR workflow execution', () => {
     const eventSink = vi.fn();
     expect(await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
       settings: resolveMergeSettings(undefined), display: { outputMode: 'silent', eventSink } }))
-      .toEqual({ merged: true });
+      .toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(eventSink).toHaveBeenCalledExactlyOnceWith({ type: 'progress', level: 'warn', message: 'Caccia child trace failed' });
     expect(await mocks.execution.mock.calls[0]?.[0]).toMatchObject({ success: true });
   });
@@ -156,7 +156,7 @@ describe('Caccia effect through PR workflow execution', () => {
           ] },
         { name: 'report', kind: 'system', effects: [{ type: 'comment_pr', pr: 123,
           body: 'outcome={effect:external_review.caccia.outcome}; head={effect:external_review.caccia.headSha}; unresolved={effect:external_review.caccia.unresolvedCount}' }],
-          rules: [{ condition: 'when(effect.report.comment_pr.success == true)', next: outcome === 'limit' ? 'COMPLETE' : 'ci' },
+          rules: [{ condition: 'when(effect.report.comment_pr.success == true)', next: outcome === 'limit' ? 'ABORT' : 'ci' },
             { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'ci', kind: 'system',
           system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
@@ -168,7 +168,7 @@ describe('Caccia effect through PR workflow execution', () => {
           rules: [{ condition: 'when(effect.merge.merge_pr.success == true)', next: 'COMPLETE' },
             { condition: 'when(true)', next: 'merge_failed' }] },
         { name: 'merge_failed', kind: 'system', effects: [{ type: 'comment_pr', pr: 123, body: 'Merge failed' }],
-          rules: [{ condition: 'when(effect.merge_failed.comment_pr.success == true)', next: 'COMPLETE' },
+          rules: [{ condition: 'when(effect.merge_failed.comment_pr.success == true)', next: 'ABORT' },
             { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'error', kind: 'system', effects: [{ type: 'comment_pr', pr: 123,
           body: '{effect:external_review.caccia.error}' }],
@@ -300,7 +300,8 @@ describe('Caccia effect through PR workflow execution', () => {
       return result;
     }, { provider: 'mock' }, { outputMode: 'silent' });
     expect(result.success, JSON.stringify(result)).toBe(expectedSuccess);
-    return { merged };
+    return { success: result.success, merged,
+      outcome: merged ? 'merged' : result.success ? 'prepared' : 'unresolved' };
   }
 
   async function useRealCaccia(pushUrls: string[]) {
@@ -362,7 +363,7 @@ describe('Caccia effect through PR workflow execution', () => {
       const pushUrls = firstFails ? [mirror, remote] : [remote, mirror];
       await useRealCaccia(pushUrls);
       const record = vi.spyOn(TaskRunner.prototype, entry === 'merge' ? 'recordPrMergePushedHead' : 'recordCacciaPushedHead');
-      expect(await run(entry, false)).toEqual({ merged: false });
+      expect(await run(entry, false)).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
       const runner = new TaskRunner(project);
       const failed = runner.listFailedTasks()[0]!;
       const clone = activeClone;
@@ -401,7 +402,7 @@ describe('Caccia effect through PR workflow execution', () => {
       vi.mocked(runAgent).mockClear();
       if (entry === 'merge') {
         const retry = executePersistedPrMergeTask(claimed, runner, project, undefined, { outputMode: 'silent' });
-        expect(await retry).toEqual({ merged: true });
+        expect(await retry).toMatchObject({ success: true, merged: true, outcome: 'merged' });
       } else {
         const retry = await executeTaskAndCompleteWithDetails(claimed, runner, project, async (request) => {
           expect(request.cwd).toBe(clone);
@@ -431,7 +432,7 @@ describe('Caccia effect through PR workflow execution', () => {
     const record = vi.spyOn(TaskRunner.prototype, 'recordPrMergePushedHead');
     const result = await run('merge');
     const executions = await Promise.all(mocks.execution.mock.calls.map(([execution]) => execution));
-    expect(result, JSON.stringify({ executions, comments: mocks.comment.mock.calls })).toEqual({ merged: true });
+    expect(result, JSON.stringify({ executions, comments: mocks.comment.mock.calls })).toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(record).toHaveBeenCalledExactlyOnceWith(expect.any(String), effectHead, pushedHead, 'caccia');
     expect(git(root, '--git-dir', mirror, 'rev-parse', 'refs/heads/feature/pr')).toBe(effectHead);
     expect(mocks.resolveThread).toHaveBeenCalledOnce();
@@ -448,7 +449,7 @@ describe('Caccia effect through PR workflow execution', () => {
       await worker(input);
       throw new Error('Review failed after push');
     });
-    expect(await run(entry, false)).toEqual({ merged: false });
+    expect(await run(entry, false)).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     const runner = new TaskRunner(project);
     const firstFailed = runner.listFailedTasks()[0]!;
     const clone = activeClone;
@@ -573,7 +574,7 @@ describe('Caccia effect through PR workflow execution', () => {
   it.each(['merge', 'from_pr', 'from_pr_local_origin', 'from_pr_custom_base'] as const)('%sは同じcloneをCaccia後のheadへ同期しCIとmergeへ渡す', async (entry) => {
     const result = await run(entry);
     const execution = await mocks.execution.mock.calls.at(-1)?.[0];
-    expect(result, JSON.stringify(execution)).toEqual({ merged: true });
+    expect(result, JSON.stringify(execution)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(mocks.caccia).toHaveBeenCalledOnce();
     expect(mocks.merge).toHaveBeenCalledExactlyOnceWith(123, project, entry === 'merge' ? 'squash' : undefined, effectHead);
     expect(mocks.comment).toHaveBeenCalledWith(123,
@@ -782,7 +783,7 @@ describe('Caccia effect through PR workflow execution', () => {
 
   it('修正push後のrate limitも最新headのskippedとして後続へ渡す', async () => {
     effectOutcome = 'skipped'; skipReason = 'review_rate_limited'; effectReason = 'Review rate limited';
-    expect(await run('merge')).toEqual({ merged: true });
+    expect(await run('merge')).toMatchObject({ success: true, merged: true, outcome: 'merged' });
     expect(mocks.caccia).toHaveBeenCalledOnce();
     expect(mocks.comment).toHaveBeenCalledWith(123,
       `outcome=skipped; head=${effectHead}; unresolved=0`, project);
@@ -791,7 +792,7 @@ describe('Caccia effect through PR workflow execution', () => {
 
   it('limitを実行エラーへ変換せず件数と同期後headを返す', async () => {
     effectOutcome = 'limit'; unresolvedCount = 3;
-    expect(await run('merge')).toEqual({ merged: false });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.caccia).toHaveBeenCalledOnce();
     expect(git(activeClone, 'rev-parse', 'HEAD')).toBe(effectHead);
     expect(mocks.comment).toHaveBeenCalledWith(123,
@@ -819,7 +820,7 @@ describe('Caccia effect through PR workflow execution', () => {
   it('本体例外をerror結果へ変換して後続コメントへ渡す', async () => {
     const error = 'Pull request #123 head changed before resolving review thread';
     mocks.caccia.mockRejectedValue(new Error(error));
-    expect(await run('merge')).toEqual({ merged: false });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringContaining(error), project);
     expect(mocks.merge).not.toHaveBeenCalled();
   });
@@ -831,7 +832,7 @@ describe('Caccia effect through PR workflow execution', () => {
         await worker(input);
         throw new Error('Timed out waiting for CodeRabbit after push');
       });
-      expect(await run('merge')).toEqual({ merged: false });
+      expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
       const runner = new TaskRunner(project);
       const failed = runner.listFailedTasks()[0]!;
       const clone = activeClone;
@@ -890,7 +891,7 @@ describe('Caccia effect through PR workflow execution', () => {
       });
       const retry = executePersistedPrMergeTask(claimed, runner, project, undefined, { outputMode: 'silent' });
       if (condition !== 'fetch_head' && condition !== 'initial_head' && condition !== 'clone_head') {
-        expect(await retry).toEqual({ merged: true });
+        expect(await retry).toMatchObject({ success: true, merged: true, outcome: 'merged' });
         expect(mocks.execution).toHaveBeenCalledOnce();
         expect(mocks.caccia).toHaveBeenCalledOnce();
         expect(mocks.merge).toHaveBeenCalledWith(123, project, 'squash', synchronizedHead);
@@ -998,7 +999,7 @@ describe('Caccia effect through PR workflow execution', () => {
         merged = true;
         return { success: true };
       });
-      expect(await run('merge')).toEqual({ merged: true });
+      expect(await run('merge')).toMatchObject({ success: true, merged: true, outcome: 'merged' });
       expect(mocks.caccia).toHaveBeenCalledOnce();
       expect(mocks.comment).toHaveBeenCalledWith(123,
         `outcome=skipped; head=${effectHead}; unresolved=0`, project);
@@ -1015,7 +1016,7 @@ describe('Caccia effect through PR workflow execution', () => {
         mocks.details.mockImplementation(async () => ({ ...await details(), [field]: changed }));
         return result;
       });
-      expect(await run('merge')).toEqual({ merged: false });
+      expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
       expect(git(activeClone, 'rev-parse', 'HEAD')).toBe(pushedHead);
       expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringMatching(/\S/u), project);
       expect(mocks.merge).not.toHaveBeenCalled();
@@ -1028,7 +1029,7 @@ describe('Caccia effect through PR workflow execution', () => {
       const result = await worker(input);
       return { ...result, headSha: pushedHead };
     });
-    expect(await run('merge')).toEqual({ merged: false });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(git(activeClone, 'rev-parse', 'HEAD')).toBe(pushedHead);
     expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringMatching(/\S/u), project);
     expect(mocks.merge).not.toHaveBeenCalled();
@@ -1049,7 +1050,7 @@ describe('Caccia effect through PR workflow execution', () => {
       });
       return result;
     });
-    expect(await run('merge')).toEqual({ merged: false });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(git(activeClone, 'rev-parse', 'HEAD')).toBe(pushedHead);
     expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringMatching(/\S/u), project);
     expect(mocks.merge).not.toHaveBeenCalled();
@@ -1058,7 +1059,7 @@ describe('Caccia effect through PR workflow execution', () => {
   it('forkの修正後の再検査に失敗した場合はerrorを返してmergeしない', async () => {
     sameRepository = false;
     mocks.threat.mockResolvedValueOnce({ passed: true }).mockResolvedValue({ passed: false, comment: 'unsafe change' });
-    expect(await run('merge')).toEqual({ merged: false });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.caccia).toHaveBeenCalledOnce();
     expect(mocks.threat).toHaveBeenCalledTimes(2);
     expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringMatching(/\S/u), project);

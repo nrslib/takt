@@ -106,7 +106,7 @@ async function retryGoalTask(
       if (target === undefined || target.goalId !== goal.id) throw new Error('Task does not belong to this goal');
       const result = { taskName: input.taskName, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), status: target.status };
       if (target.status === 'pending' || target.status === 'running' || target.status === 'completed') return result;
-      if (goal.status !== 'created') throw new Error('Goal cannot accept work');
+      if (goal.status !== 'created' && !(target.mergeTask === true && goal.status === 'awaiting_merge')) throw new Error('Goal cannot accept work');
       if (target.status !== 'failed' && !(kind === 'requeue' && target.status === 'exceeded')) {
         throw new Error(`Task cannot ${kind} from status: ${target.status}`);
       }

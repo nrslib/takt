@@ -3491,7 +3491,7 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({ success: true, failed: false });
   });
 
-  it('merge_prは初期headではなく現在のclone HEADをexpected SHAへ渡す', async () => {
+  it.each([false, true])('merge_prは現在のclone HEADを使い、preserveHeadBranch=%sを反映する', async (preserveHeadBranch) => {
     const headSha = 'b'.repeat(40);
     mockExecFileSync.mockReturnValue(headSha);
     mockMergePr.mockReturnValue({ success: true });
@@ -3500,6 +3500,7 @@ describe('DefaultSystemStepServices', () => {
       prExecutionContext: {
         prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/repo', headRepositoryPushUrls: ['/repo'],
+        preserveHeadBranch,
       },
       prGitOperations: { fetch: vi.fn(), push: vi.fn() },
     });
@@ -3507,7 +3508,8 @@ describe('DefaultSystemStepServices', () => {
     const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
 
     expect(result).toEqual({ success: true, failed: false });
-    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo', undefined, headSha);
+    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo', undefined, headSha,
+      ...(preserveHeadBranch ? [{ deleteBranch: false }] : []));
   });
 
   it('returns failed merge_pr effect results with provider errors', async () => {
