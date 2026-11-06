@@ -31,6 +31,35 @@ describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
   });
 });
 
+describe('SdkOptionsBuilder.build() — bypass permission opt-in', () => {
+  it.each<Partial<ClaudeSpawnOptions>>([
+    { permissionMode: 'full' },
+    { bypassPermissions: true },
+    { permissionMode: 'readonly', bypassPermissions: true },
+    { permissionMode: 'full', bypassPermissions: false },
+  ])('enables permission bypass for %j', (options) => {
+    const sdkOptions = buildSdkOptions({ cwd: '/tmp/test', ...options });
+
+    expect(sdkOptions.permissionMode).toBe('bypassPermissions');
+    expect(sdkOptions.allowDangerouslySkipPermissions).toBe(true);
+  });
+
+  it.each<Partial<ClaudeSpawnOptions>>([
+    {},
+    { bypassPermissions: false },
+    { permissionMode: 'readonly' },
+    { permissionMode: 'edit' },
+    { permissionMode: 'readonly', bypassPermissions: false },
+    { permissionMode: 'edit', bypassPermissions: false },
+    { onPermissionRequest: async () => ({ behavior: 'deny', message: 'Denied' }) },
+  ])('does not enable permission bypass for %j', (options) => {
+    const sdkOptions = buildSdkOptions({ cwd: '/tmp/test', ...options });
+
+    expect(sdkOptions.permissionMode).not.toBe('bypassPermissions');
+    expect(sdkOptions).not.toHaveProperty('allowDangerouslySkipPermissions');
+  });
+});
+
 describe('mapToCodexSandboxMode', () => {
   it('should map readonly to read-only', () => {
     expect(mapToCodexSandboxMode('readonly')).toBe('read-only');
