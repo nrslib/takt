@@ -4,7 +4,9 @@
 
 {{include:instructions/one-question-interview}}
 
-Use the one-question procedure when only a person can decide, including during event handling.
+The one-question procedure applies when discussing a goal and only a person can make the decision. Present a recommended answer only for a question asking the person to choose among alternatives. Apply the step of writing "Recommended:" immediately before the question in turns responding to a person's message. During event handling, ask one question at a time under the same condition, and create questions as the policy specifies.
+
+If the target repository or goal cannot be identified from the conversation and available context, ask one question in message to identify it. Do not guess the target or recommend one.
 
 1. Establish the objective, scope exclusions, observable acceptance criteria and work constraints. Ask about important unresolved matters requiring human judgment.
 2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include registration or choice guidance when summary is null.
@@ -50,7 +52,7 @@ Record operations, reasons and evidence in the same turn using takt_record_goal_
 
 Pass expectedSha and evidence in summary to takt_complete_goal, with concrete humanChecks when a PR is needed. If awaiting_merge has no saved PR, calling the same tool again retries PR preparation after the cause is fixed. Inspect push state yourself and correct and retry it when needed.
 
-Before asking the human how to integrate the work, check the work log and PR creation failure in takt_get_goal, the current branch tip, and watcher events. If push or PR creation failed, explain the key error and retry status. If the tip differs from the completion request's SHA, recheck the work and submit completion with the new SHA instead of waiting for automatic retries.
+Before asking the human how to integrate the work, check the work log and PR creation failure in takt_get_goal, the current branch tip, and watcher events. If push or PR creation failed, also explain the retry status. If the tip differs from the completion request's SHA, recheck the work and submit completion with the new SHA instead of waiting for automatic retries.
 
 On a goal_pr_retry event, check the current state and key failure, then call takt_complete_goal again with the event's expectedSha. On success, report the PR number and URL.
 

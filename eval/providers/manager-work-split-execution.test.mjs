@@ -14,6 +14,7 @@ import ManagerExecutionProvider, { executionConfig, runExecutionWorker } from '.
 import assertExecution, { gradeExecution } from '../asserts/manager-work-split-execution.mjs';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
 import { GoalStore } from '../../dist/infra/goals/store.js';
+import { prepareQuestionFacetVariants } from '../fixtures/manager-question-options/facets.mjs';
 
 const lines = (dir, path) => readFileSync(join(dir, path), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000 });
@@ -78,6 +79,73 @@ test('execution provider reports invalid input before starting a worker', async 
   assert.equal(response.output, undefined);
   assert.equal(response.metadata.artifact_dir, undefined);
   assert.equal(provider.id(), 'manager-execution:fake-only');
+});
+
+test('execution provider passes both facet roots to the worker configuration', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-facet-config-'));
+  const keys = ['TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', 'TAKT_EVAL_MANAGER_POLICY_ROOT'];
+  const prior = keys.map((key) => [key, process.env[key]]);
+  const received = [];
+  const originalSpawn = spawn;
+  const mock = t.mock.method(childProcess, 'spawn', (_command, args, options) => {
+    received.push(JSON.parse(readFileSync(args[1], 'utf8')));
+    return originalSpawn(process.execPath, ['-e', 'process.exit(1)'], options);
+  });
+  syncBuiltinESMExports();
+  try {
+    const provider = new ManagerExecutionProvider({ config: { ...config('integrated-task-execution'), artifact_root: root } });
+    for (const phase of ['red', 'green']) {
+      process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, phase, 'instructions');
+      process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, phase, 'policies');
+      const response = await provider.callApi('', { vars: { case: 'integrated-task-execution', lang: 'ja' } });
+      assert.equal(response.output, undefined);
+      assert.match(response.error, /Execution worker failed/);
+      assert.equal(received.at(-1).instruction_root, process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT);
+      assert.equal(received.at(-1).policy_root, process.env.TAKT_EVAL_MANAGER_POLICY_ROOT);
+    }
+    assert.equal(received.length, 2);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+    for (const [key, value] of prior) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('SDK execution prompts contain only their selected red or green question rules in both languages', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-sdk-facets-'));
+  try {
+    for (const lang of ['ja', 'en']) {
+      const variants = prepareQuestionFacetVariants(root, lang);
+      for (const caseId of ['stopped-background-execution', 'integrated-task-execution']) {
+        for (const phase of ['red', 'green']) {
+          const artifactDir = join(root, 'artifacts', lang, caseId, phase);
+          const trial = await runManagerExecution({ ...config(caseId), lang,
+            instruction_root: join(root, phase, 'instructions'), policy_root: join(root, phase, 'policies'),
+          }, artifactDir, new AbortController().signal, fakeProvider(async () => {}));
+          assert.equal(trial.error, undefined);
+          assert.equal(trial.complete, true);
+          const prompt = readFileSync(join(artifactDir, 'system-prompt.txt'), 'utf8');
+          const promptLines = new Set(prompt.split('\n'));
+          const other = phase === 'red' ? 'green' : 'red';
+          for (const bodies of Object.values(variants)) {
+            const chosen = bodies[phase].split('\n');
+            const excluded = bodies[other].split('\n');
+            const exclusive = chosen.filter((line) => line.trim() && !excluded.includes(line));
+            assert.ok(exclusive.length > 0);
+            for (const line of exclusive) assert.ok(promptLines.has(line), `${lang}/${caseId}/${phase}: includes chosen facet line`);
+            for (const line of excluded.filter((line) => line.trim() && !chosen.includes(line))) {
+              assert.ok(!promptLines.has(line), `${lang}/${caseId}/${phase}: excludes other facet line`);
+            }
+          }
+          assert.doesNotMatch(prompt, /\{\{include:/);
+        }
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('work-log MCP returns the production saved entry and count and retains matching evaluation evidence', async () => {

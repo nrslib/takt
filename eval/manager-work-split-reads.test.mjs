@@ -17,6 +17,7 @@ import { TaskStore } from '../dist/infra/task/store.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../dist/infra/config/index.js';
 import { managerStateReads } from './manager-work-split-reads.mjs';
+import { listTaktStandaloneInquiries } from '../dist/features/mcp/standaloneInquiryOperations.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const fixtures = suite.tests.map(({ vars }) => ({ ...vars,
@@ -150,6 +151,21 @@ test('workflow replay lists honor the production default limit and explicit cont
     assert.deepEqual(selected.map(({ name }) => name), expectedNames);
     assert.deepEqual(actualPage, { collection: 'workflows', totalCount: 51, ...page });
   }
+});
+
+test('operation fixtures expose the production empty pending standalone inquiry page', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-inquiry-contract-'));
+  try {
+    const native = await listTaktStandaloneInquiries({ cwd: root }, root,
+      { kind: 'repository', repositoryDirectory: root });
+    assert.notEqual(native.isError, true);
+    for (const { case: caseId, fixture } of fixtures) {
+      if (!['settled-operation-merge', 'migration-no-downtime'].includes(caseId)) continue;
+      const reads = managerStateReads(fixture);
+      const inquiries = reads.find(({ tool }) => tool === 'takt_list_standalone_inquiries');
+      assert.deepEqual(inquiries.result, JSON.parse(native.content[0].text));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('every event fixture lists the saved specification and run metadata in the production response shape', async () => {

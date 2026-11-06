@@ -1,5 +1,6 @@
 ja:
   lang: ja
+  expectedQuestionType: choice
   turn: event
   cwd: /workspace/project
   concurrency: 2
@@ -286,6 +287,7 @@ ja:
             記録時刻: plan の終了は 2026-11-01T00:03:00.000Z、implement の終了は 2026-11-01T00:04:00.000Z、review の開始は 2026-11-01T00:04:30.000Z、中断は 2026-11-01T00:05:00.000Z。
 en:
   lang: en
+  expectedQuestionType: choice
   turn: event
   cwd: /workspace/project
   concurrency: 2

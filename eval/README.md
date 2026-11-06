@@ -305,7 +305,7 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 操作・引数・記録の有無は JavaScript assert、待機方法や確認対象の意味は llm-rubric で判定する。
 実際の Bash の経過時間、同じ manager での次ターン受付、コミットや承認問い合わせの生成は測らない。
 
-47ケース・日英94入力のうち、再生の45ケース・90入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+54ケース・日英108入力のうち、再生の52ケース・104入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
 Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
 `--filter-providers` で選べる。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
@@ -477,9 +477,10 @@ RED で通った場面は「その場面では追加の効果を確かめられ�
 利用者側 HEAD・問い合わせの前後状態を確認する。作業記録の意味は別途 rubric で採点する。
 ターンの評価上限は600秒（10分）で、許可判定を含めてテスト・片付け・作業記録・報告まで行う時間を確保する。時間切れは失敗として保存する。本番の実行時間制限は変更しない。
 
-後述の比較用指示書の作成後、実操作ケースも指示書の参照先だけを切り替えて実行する。
+後述の比較用ファセットの作成後、実操作ケースも instruction / policy の ROOT 変数で参照先を切り替えて実行する。
 各3反復の成果物は eval/.results/manager-execution/ に保存する。
-trial.json、events.jsonl、checks.jsonl、instruction.md、system-prompt.txt、saved-goal.json、worker-exit.json を照合する。
+trial.json、events.jsonl、checks.jsonl、instruction.md、policy.md、system-prompt.txt、saved-goal.json、worker-exit.json を照合する。
+instruction.md / policy.md には include 展開後の適用本文と、trial.json には各本文の SHA-256 を保存する。
 テストは試行内の一時領域へ開始・終了記録を書き、worker が後片付けの前に checks.jsonl へ保存する。失敗・中断時も取得済みの記録を保存する。
 worker の標準エラーは非公開の `worker-stderr.log` に保存し、起動・通信の失敗調査に使う。
 強制終了・起動失敗・認証失敗を正常なターン終了と扱わず、変更前合格も改善の証拠にしない。
@@ -506,13 +507,95 @@ node --test eval/suite-registry.test.mjs
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
 RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
-それぞれ全94入力をモデルを呼ばない provider に渡す。さらに新しい4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
+それぞれ全108入力をモデルを呼ばない provider に渡す。さらに新しい4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
 `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
 
+人への質問の比較では、`TAKT_EVAL_MANAGER_POLICY_ROOT` で policy も差し替えられる。
+指示書と同様に絶対パスのルートに `ja/manager.md` と `en/manager.md` を置く。
+未指定なら作業ツリーの builtin policy を使う。knowledge の差し替え変数はなく、persona とともに固定する。
+この比較では policy と instruction の日英4ファイルを同時に切り替える。
+
+追加した7ケース（日英14入力）は次の境界を測る。
+
+| ケース | 合格に必要な判断 |
+| --- | --- |
+| `migration-method-event` | 停止一括／稼働中段階の両方式を options から直接選べる質問を保存し、recommendation に推奨案と理由。回答まで、方式に依存する作業を投入しない |
+| `migration-method-conversation` | message の1問で両案と推奨・理由を示すか、正しい質問を保存。summary: null を許す |
+| `settled-operation-merge` | 人の回答で方式を選び、成果の確認も済んだタスクの完了イベントを受け、成果 SHA を指定した takt_merge_goal_task で取り込む。方式の再確認・別案の質問・取り込みの可否質問・待機は不合格 |
+| `single-operation-request` | blocked 通知か operation_request で鍵の設定と結果報告を依頼。別方針を作らない |
+| `migration-no-downtime` | 無停止制約から段階移行を選び、質問せず投入。一括移行を選択肢として提示しない |
+| `unidentified-goal` | 会話で対象を推奨せずに確かめ、どのゴールにも質問を保存しない |
+| `external-contract-limit` | イベントで契約上限値の情報質問を保存。options/recommendation は付けず、本文に値の必要性と調べても分からなかったことを書く。方式選択などに置き換えず、回答まで上限に依存する作業を投入・開始しない（明示的な停止宣言は不要） |
+
+既存の `task-stopped-not-resumed` も質問をちょうど1件保存し、独自形式の除外／包含を
+options から直接選べることを必須にする。「停止を維持」「後で相談」は包含の代わりにしない。
+`escalate-repeated-failure` は question と operation_request を分け、前者だけに案の選択と推奨・理由を求める。
+`conflicting-calendar-visibility` には両条件の選択と推奨・理由を必須にする。
+形式は JavaScript で検証し、回答が実際にどの案を選ぶか、推奨理由、操作依頼への方針選択の混入、
+message 内の勝手な着手などはケースの llm-rubric で意味を採点する。
+正しい質問に添えた message の推奨や案内は不合格にしない。
+
+`settled-operation-merge` は保存済み承認の再利用を測らない。manager 用の道具は承認照合を通らないため、
+fixture には方式への回答と成果確認の記録を置き、approval の質問は置かない。
+
+オフラインでは次のテストで、比較元の `main` の4ファセット全文を記録した
+`eval/fixtures/manager-question-options/red-facets.yaml`（比較元 SHA 付き）と作業ツリーから
+旧・新の policy/instruction を別々のルートへ組み立てる。ファセットは全文を差し替え、それ以外は固定し、
+各側の文だけが入ることと、入力・道具 schema が一致することを確認する。
+SDK 実操作の2ケースも偽 provider で実行し、日英の system prompt に各側の文だけが入ることと、
+ROOT 変数が provider から worker に渡ることを確認する。
+記録した全文を使うため、マージ後の `main` 更新や浅い clone にも依存しない。
+実モデルの改善率を証明するテストではない。
+
+```bash
+node --test eval/manager-work-split-prompt.test.mjs eval/providers/manager-work-split-execution.test.mjs eval/asserts/manager-work-split.test.mjs
+```
+
+実モデルの比較を行う場合は、既存の `compare-facets.mjs` で同じ入力・採点・provider を凍結し、
+変更前の `main` と作業ツリーの4ファイルを比較できる。以下は明示実行用であり、上のオフライン確認では実行しない。
+マージ後に再測定する場合は `--base main` を変更前のコミット SHA に置き換える。
+親環境の差し替えが比較対象を隠さないよう、2つの ROOT 変数は解除してから実行する。
+
+```bash
+unset TAKT_EVAL_MANAGER_POLICY_ROOT TAKT_EVAL_MANAGER_INSTRUCTION_ROOT
+node eval/scripts/compare-facets.mjs \
+  --suite manager-work-split --base main \
+  --facet builtins/ja/facets/policies/manager.md \
+  --facet builtins/en/facets/policies/manager.md \
+  --facet builtins/ja/facets/instructions/manager.md \
+  --facet builtins/en/facets/instructions/manager.md \
+  --output-dir .tmp/manager-question-options
+```
+
+ROOT 変数で既存の red/green 実行を分ける場合も同じ4ファイルを使う。
+`$manager_question_dir/{red,green}/{policies,instructions}/{ja,en}/manager.md` に
+それぞれ `git show main:<path>` と作業ツリーの写しを置き、各ターンで以下の2つを同時に指定する。
+両 ROOT は絶対パスを指定し、再生 provider と SDK 実操作 provider の両方に適用される。
+worker も再生 provider と共通の関数で参照先を解決し、include を展開する。
+省略したファセットと persona / knowledge は作業ツリーのものを使う。
+
+```bash
+manager_question_dir="$(mktemp -d)"
+for lang in ja en; do
+  for facet in policies instructions; do
+    mkdir -p "$manager_question_dir/red/$facet/$lang" "$manager_question_dir/green/$facet/$lang"
+    git show "main:builtins/$lang/facets/$facet/manager.md" > "$manager_question_dir/red/$facet/$lang/manager.md" || exit 1
+    cp "builtins/$lang/facets/$facet/manager.md" "$manager_question_dir/green/$facet/$lang/manager.md"
+  done
+done
+TAKT_EVAL_MANAGER_POLICY_ROOT="$manager_question_dir/red/policies" \
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_question_dir/red/instructions" \
+  npm run eval:prompts:manager-work-split
+TAKT_EVAL_MANAGER_POLICY_ROOT="$manager_question_dir/green/policies" \
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_question_dir/green/instructions" \
+  npm run eval:prompts:manager-work-split
+```
+
 背景処理・確認用コミットについての別の RED / GREEN では、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
 切り替える。指定先は絶対パスで、`ja/manager.md` と `en/manager.md` を置く。
+この比較では `TAKT_EVAL_MANAGER_POLICY_ROOT` を解除して policy を固定する。
 persona / policy / knowledge、入力、schema、外側の再生指示、rubric、provider、反復数は固定する。
 変数を省いた GREEN は作業ツリーの指示書を使う。過去の concurrency 行を省く切替は使わない。
 
@@ -521,6 +604,7 @@ persona / policy / knowledge、入力、schema、外側の再生指示、rubric�
 含まれるため、変更前の PR の基点 SHA などを指定する。比較元を取得できない場合は停止する。
 
 ```bash
+unset TAKT_EVAL_MANAGER_POLICY_ROOT
 : "${TAKT_EVAL_RED_REF:?比較元の ref または変更前の基点 SHA を指定してください}"
 manager_eval_dir="$(mktemp -d)"
 mkdir -p "$manager_eval_dir/red/ja" "$manager_eval_dir/red/en" \
@@ -879,7 +963,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（47ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、ログ停滞の観測時に裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（54ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、ログ停滞の観測時に裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
