@@ -630,11 +630,13 @@ describe('manager questions, answers and notifications through production bounda
     } }).trim();
   }
 
-  function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve'): void {
+  function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve', completedOnly = false): void {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'language: en', 'branch_name_strategy: romaji', 'manager:',
       '  auto_run: false', `  main_merge: ${mode}`,
-      ...(disabled === undefined ? [] : ['  notifications:', `    ${disabled}: false`]),
+      ...((disabled === undefined && !completedOnly) ? [] : ['  notifications:',
+        ...(disabled === undefined ? [] : [`    ${disabled}: false`]),
+        ...(completedOnly ? ['    awaiting_merge: false'] : [])]),
     ].join('\n'));
     invalidateResolvedConfigCache(cwd);
   }
@@ -942,12 +944,16 @@ describe('manager questions, answers and notifications through production bounda
       expect(await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha })).toMatchObject({ status: 'merged' });
     } else {
       git(['update-ref', `refs/heads/${branch}`, sha]);
-      await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' });
+      expect(await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' })).toMatchObject({ status: 'awaiting_merge' });
+      if (kind === 'completed') {
+        git(['update-ref', 'refs/heads/main', sha]);
+        expect(await invoke('takt_check_goal_completion')).toMatchObject({ included: true });
+      }
     }
   }
 
   it.each(['progress', 'awaiting_merge', 'completed'] as const)('notifies Slack and the persisted TUI event after actual %s work', async (kind) => {
-    configure(undefined, kind === 'completed' ? 'auto' : 'approve');
+    configure(undefined, kind === 'completed' ? 'auto' : 'approve', kind === 'completed');
     await produce(kind);
     expect(requests).toHaveLength(1);
     expect(requests[0]!.text).toContain(goalId.slice(0, 8));
@@ -968,7 +974,7 @@ describe('manager questions, answers and notifications through production bounda
   });
 
   it.each(kinds)('disables only %s notification delivery while preserving the underlying operation', async (kind) => {
-    configure(kind, kind === 'completed' ? 'auto' : 'approve');
+    configure(kind, kind === 'completed' ? 'auto' : 'approve', kind === 'completed');
     await produce(kind);
     expect(requests).toEqual([]);
     const saved = await new GoalStore(cwd).get(goalId);
@@ -1013,7 +1019,7 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
   });
 
-  it('does not announce completion or human merge readiness after an actual merge conflict', async () => {
+  it('publishes a conflicting goal as a PR under auto and waits for the merge task', async () => {
     configure(undefined, 'auto');
     const base = git(['rev-parse', 'main']);
     for (const branch of ['main', goalRecord().branch]) {
@@ -1027,10 +1033,10 @@ describe('manager questions, answers and notifications through production bounda
       expectedSha: git(['rev-parse', goalRecord().branch]), summary: 'reviewed conflicting work',
     });
 
-    expect(result).toMatchObject({ status: 'conflict' });
-    expect((await new GoalStore(cwd).get(goalId)).status).toBe('created');
-    expect(requests).toEqual([]);
-    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
+    expect(result).toMatchObject({ status: 'awaiting_merge' });
+    expect((await new GoalStore(cwd).get(goalId)).status).toBe('awaiting_merge');
+    expect(requests).toHaveLength(1);
+    expect((await readManagerTestDisplay(cwd)).events).toHaveLength(1);
   });
 
   it('records a free-text TUI answer without treating an AI self-report as a human operation', async () => {

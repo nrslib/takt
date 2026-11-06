@@ -84,6 +84,42 @@ afterEach(async () => {
 });
 
 describe('durable daemon event storage', () => {
+  it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const states = ['queued', 'running', 'settling', 'settled'] as const;
+    for (const [index, state] of states.entries()) {
+      const input = { ...event(state, index + 1), lane: 'other' as const, source: 'watcher' as const,
+        event: { kind: 'watch_observation' as const, observation: { kind: 'goal_pr_retry',
+          targetId: goalId, generation: 'old', observedAt: '2026-11-03T00:00:00Z',
+          repositoryDirectory: '/repo', goalId, failureId: 'failure', expectedSha: 'a'.repeat(40),
+          reason: 'push failed', attempt: 1, maxAttempts: 3 } } };
+      const path = join(directory, 'daemon-events', `${createHash('sha256').update(input.eventId).digest('hex')}.json`);
+      const turn = { conversationId: input.conversationId, operationId: input.operationId, generation: 1 };
+      const record = { state, event: input,
+        ...(state === 'running' ? { turn } : {}),
+        ...(state === 'settling' || state === 'settled' ? { result: { ...turn, event: input, outcome: { kind: 'interrupted' } } } : {}) };
+      await writePrivateFile(path, JSON.stringify(record));
+      await expect(store.accept(input as AcceptedEvent)).rejects.toThrow();
+    }
+    const restarted = new FileEventStore(directory);
+    expect((await restarted.restore()).lastAcceptedSequence).toBe(4);
+    await restarted.accept(event('active', 5));
+    const restored = await restarted.restore();
+    const pending = [];
+    for await (const record of restored.pending) pending.push(record.event.eventId);
+    expect(restored.lastAcceptedSequence).toBe(5);
+    expect(pending).toHaveLength(2);
+    expect(pending).toEqual(expect.arrayContaining(['active', 'settling']));
+    for (const state of states) {
+      const expected = { kind: 'duplicate', state: state === 'settling' ? 'settling' : 'settled' };
+      await expect(restarted.accept(event(state, 6))).resolves.toMatchObject(expected);
+      await expect(restarted.accept({ ...event(`duplicate-${state}`, 6), requestId: state })).resolves.toMatchObject(expected);
+    }
+    await expect(restarted.accept(event('sequence-conflict', 4))).rejects.toThrow('sequence');
+    expect((await readdir(join(directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))).toHaveLength(5);
+  });
+
   it.each([
     { kind: 'project', projectDirectory: '/repo' },
     { kind: 'workspace', workspaceId: '650e8400-e29b-41d4-a716-446655440001' },

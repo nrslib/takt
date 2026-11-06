@@ -339,6 +339,14 @@ describe('GitHub PR command boundary', () => {
     ]));
   });
 
+  it.each([true, false])('preserves or deletes the PR branch according to deleteBranch=%s', (deleteBranch) => {
+    execFileSync.mockReturnValue('');
+    expect(mergePr(7, '/project', 'squash', 'a'.repeat(40), undefined, { deleteBranch })).toEqual({ success: true });
+    const args = execFileSync.mock.calls[0]![1] as string[];
+    expect(args.includes('--delete-branch')).toBe(deleteBranch);
+    expect(args).toEqual(expect.arrayContaining(['--match-head-commit', 'a'.repeat(40), '--squash']));
+  });
+
   it('returns a failure result when merge or close cannot be executed', () => {
     execFileSync.mockImplementation(() => { throw new Error('remote operation failed'); });
 

@@ -1,6 +1,5 @@
-import { GoalPullRequestRetries, type GoalPullRequestRetryTarget } from './goalPullRequestRetries.js';
 import { MAX_WATCH_ENTRIES } from './files.js';
-import type { CommandPort, IoOptions, ProcessPort } from '../../../core/daemon/io.js';
+import type { CommandPort, ProcessPort } from '../../../core/daemon/io.js';
 import type { DaemonIngress, DaemonResources } from '../../../core/daemon/ports.js';
 import { WatchChecks, type LaunchWatchTarget, type RunWatchTarget } from './checks.js';
 import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange } from './directories.js';
@@ -13,9 +12,6 @@ export interface DaemonWatchSource {
   runs(): Promise<readonly RunWatchTarget[]>;
   run(targetId: string): Promise<RunWatchTarget | undefined>;
   pullRequests(): Promise<readonly PullRequestWatchTarget[]>;
-  pullRequestRetries(): Promise<readonly GoalPullRequestRetryTarget[]>;
-  pullRequestRetry(target: GoalPullRequestRetryTarget): Promise<GoalPullRequestRetryTarget | undefined>;
-  notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean>;
   inquiries(): Promise<void>;
   launches(): Promise<readonly LaunchWatchTarget[]>;
   directories(): Promise<readonly DirectoryWatchTarget[]>;
@@ -39,8 +35,7 @@ export function startDaemonWatchers(dependencies: {
 }): DaemonWatchers {
   const observations = new WatchObservations(dependencies.records, dependencies.ingress, dependencies.now);
   const loops: WatchLoop[] = [];
-  const retries = new GoalPullRequestRetries(dependencies.source, dependencies.commands, dependencies.records, observations, dependencies.now);
-  const register = <T extends WatchTarget>(scope: 'process' | 'pr' | 'pr_retry' | 'launch', interval: number, read: () => Promise<readonly T[]>,
+  const register = <T extends WatchTarget>(scope: 'process' | 'pr' | 'launch', interval: number, read: () => Promise<readonly T[]>,
     observe: (checks: WatchChecks, target: T, signal: AbortSignal) => Promise<void>): void => {
     const checks = new WatchChecks(observations, dependencies.now, dependencies.onError, scope);
     let offset = 0;
@@ -60,8 +55,6 @@ export function startDaemonWatchers(dependencies: {
     checks.process(target, dependencies.processes, { signal, timeoutMs: WATCH_INTERVALS.process }, () => dependencies.source.run(target.targetId)));
   register('pr', WATCH_INTERVALS.long, () => dependencies.source.pullRequests(), (_checks, target, signal) =>
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
-  register('pr_retry', WATCH_INTERVALS.long, () => dependencies.source.pullRequestRetries(), (_checks, target, signal) =>
-    retries.observe(target, { signal, timeoutMs: WATCH_INTERVALS.long }));
   loops.push(startWatchLoop(WATCH_INTERVALS.files, () => dependencies.source.inquiries(),
     (error) => dependencies.onError(null, error)));
   register('launch', WATCH_INTERVALS.launch, () => dependencies.source.launches(), (checks, target) => checks.launch(target));

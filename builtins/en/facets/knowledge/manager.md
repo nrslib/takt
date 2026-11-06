@@ -10,7 +10,7 @@ One manager can cover multiple repositories through a workspace. Starting from a
 
 ## Tools and recovery
 
-Use the target cwd and goalId for goal operations and consult argument definitions. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown) and goalIntegrationReason when unknown. A success flag alone does not establish integration.
+Use the target cwd and goalId for goal operations and consult argument definitions. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown / direct_push) and goalIntegrationReason when unknown. direct_push identifies a task that pushes directly to the PR branch; it does not confirm successful integration. A success flag alone does not establish integration.
 
 - takt_enqueue_goal_task accepts workflow names, scope references and paths, and runs in a worktree based on the goal branch. autoPr and shouldPublishBranchToOrigin default to false and can be set on submission. Workflows containing merge_pr / close_pr are supported.
 - takt_requeue_goal_task continues failed / exceeded work from its saved position. Failed work may choose startStep; exceeded work cannot specify it. An unusable position returns the reason and candidates.
@@ -25,11 +25,11 @@ Automatic manager runs respect auto_run, execute goal tasks only and prevent dup
 
 ## Integration and PRs
 
-Collect results on the goal branch, then integrate into the target. manager.main_merge uses project configuration only. The default approve prepares a PR and waits. auto is a continuing integration instruction set by the person and integrates automatically. A checked-out target results in PR preparation.
+Collect results on the goal branch before integration. manager.main_merge uses project configuration only. Both approve and auto publish a PR. The default approve prepares it through a PR merge task with until: prepare and waits for human merge. auto is a continuing integration instruction set by the person and uses until: merge to prepare and merge the PR.
 
 takt_complete_goal takes reviewed expectedSha and evidence in summary, with humanChecks when a PR is needed. awaiting_merge pushes the branch and creates or reuses a PR based on the saved integration target. It checks GitHub, origin and existing PR head/base, saving the number and URL in pullRequest. If push or PR preparation fails before a PR is saved, call takt_complete_goal again after fixing the cause. Manager can inspect push state and correct and retry it itself.
 
-takt_merge_goal_pr runs takt merge with cwd, goalId and a prNumber matching the saved PR. It is also available when a person directly tells manager to merge. Saved PR, awaiting_merge and stopped-state checks remain. Afterwards use takt_check_goal_completion. A matching saved PR merged between the saved head/base can complete even after squash merging or extra commits. A PR closed without merging prevents completion. Awaiting-merge goals whose PR cannot be verified use content comparison. A goal returned to created retaining evidence and PR can also be checked.
+takt_merge_goal_pr requires cwd, goalId, a prNumber matching the saved PR, and until. It enqueues a pending PR merge task belonging to the goal and immediately returns its name. until: prepare selects merge-prepare; until: merge selects merge.workflow, defaulting to merge-review-fix-simple. Pending or running work for the same target is rejected. Saved PR, awaiting_merge and stopped-state checks remain. The task pushes directly to the PR branch and fast-forwards the local goal branch when it is an ancestor. Divergence and checked-out worktrees are preserved and reported in the result and completion event. Outcomes distinguish prepared, merged and unresolved. After merging, takt_check_goal_completion confirms integration. Matching saved head/base permit completion after squash merging or extra commits. Closed unmerged PRs prevent completion. Awaiting-merge goals whose PR cannot be verified use content comparison, and goals returned to created retaining evidence and PR can also be checked. A task queued with until: merge that ends with COMPLETE while the PR remains unmerged is delivered as successful with a prepared result, so the manager reads the result and decides what to do next.
 
 ## Memory, inquiries and notifications
 

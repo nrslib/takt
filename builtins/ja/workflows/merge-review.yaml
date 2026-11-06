@@ -88,7 +88,7 @@ steps:
         pr: "{context:identify.pr.number}"
         body: "TAKT evaluation: approved={structured:judge.approved}. {structured:judge.reason}"
     rules:
-      - condition: when(effect.comment_result.comment_pr.success == true)
+      - condition: when(effect.comment_result.comment_pr.success == true && structured.judge.approved == true)
         next: COMPLETE
       - condition: when(true)
         next: ABORT
@@ -101,7 +101,7 @@ steps:
         body: "TAKT evaluation failed: CI checks failed for head {context:wait_ci.status.headSha}."
     rules:
       - condition: when(effect.ci_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: timeout
@@ -113,7 +113,7 @@ steps:
         body: "TAKT evaluation failed: waiting for CI exceeded 120 retries (30 minutes)."
     rules:
       - condition: when(effect.timeout.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: unmergeable
@@ -125,7 +125,7 @@ steps:
         body: "TAKT evaluation failed: mergeability is {context:wait_ci.status.mergeable}."
     rules:
       - condition: when(effect.unmergeable.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: review_failed
@@ -137,7 +137,7 @@ steps:
         body: "TAKT evaluation failed: child review workflow aborted."
     rules:
       - condition: when(effect.review_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
@@ -149,7 +149,7 @@ steps:
         body: "Caccia が反復上限に到達しました。未解決スレッド数: {effect:caccia.caccia.unresolvedCount}"
     rules:
       - condition: when(effect.caccia_limit.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: caccia_failed

@@ -2,7 +2,7 @@ import type { TaskFileData, TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
-import { TaskLifecycleService } from './taskLifecycleService.js';
+import { TaskLifecycleService, type PrMergeTaskInput } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService, type TaskDeletionCleanup } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions, type RequeueExceededTaskOptions } from './taskExceedService.js';
@@ -12,7 +12,6 @@ import {
   type AutoRequeueResult,
   type TaskRetryOptions,
 } from './taskRetryService.js';
-import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
@@ -66,16 +65,12 @@ export class TaskRunner {
     return this.lifecycle.addTask(content, options);
   }
 
-  startPrMergeTask(input: {
-    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
-    prUrl?: string;
-    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
-    workflow: string; method: MergeMethod; worktreePath: string;
-    threatCheckMaxDiffBytes: number;
-    concurrency?: number;
-    parentTaskName?: string;
-  }): TaskInfo {
+  startPrMergeTask(input: PrMergeTaskInput & { parentTaskName?: string }): TaskInfo {
     return this.lifecycle.startPrMergeTask(input);
+  }
+
+  enqueuePrMergeTask(input: PrMergeTaskInput & { goalId: string }): TaskInfo {
+    return this.lifecycle.enqueuePrMergeTask(input);
   }
 
   clearCompletedPrMergeWorktree(taskName: string): void {

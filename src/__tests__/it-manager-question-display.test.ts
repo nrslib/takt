@@ -1072,11 +1072,11 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain(summary);
-    expect(frame).toMatch(lang === 'ja' ? /release ブランチへマージ/u : /merge them into the release branch/iu);
     const normalized = frame.replace(/\s+/gu, '');
+    expect(normalized).toContain(getLabel('manager.notificationMerge', lang, { branch: 'release' }).replace(/\s+/gu, ''));
     let previous = -1;
-    for (const command of commands) {
-      const token = command.replace(/\s+/gu, '');
+    for (const instruction of instructions) {
+      const token = instruction.replace(/\s+/gu, '');
       const position = normalized.indexOf(token);
       expect(position).toBeGreaterThan(previous);
       expect(normalized.indexOf(token, position + token.length)).toBe(-1);

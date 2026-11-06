@@ -264,7 +264,7 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
     pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
   doubles.getGoal.mockResolvedValue(goal);
-  doubles.mergePr.mockResolvedValue({ success: true, output: 'merged' });
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
   if (source === 'human') {
     f.input.event.event = { kind: 'human_command', command: { kind: 'message', text: 'この PR をマージして' },
       speaker: { namespace: 'human', id: 'owner' } };
@@ -274,10 +274,10 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
     f.input.event.lane = 'other';
   }
   f.execute.mockImplementation(async (turn) => {
-    const result = await mergeTaktGoalPr({ cwd: '/repository', goalId: goal.id, prNumber: 1950 }, {}, turn.abortSignal);
+    const result = await mergeTaktGoalPr({ cwd: '/repository', goalId: goal.id, prNumber: 1950, until: 'merge' }, {}, turn.abortSignal);
     expect(result.isError).toBeUndefined();
     return { message: 'merged', summary: null, sessionId: 'session-after', assignment: turn.assignment };
   });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'merged' } });
-  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith('/repository', 1950, goal.branch, goal.completion.goalSha, f.io.signal);
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith('/repository', goal, 'merge', f.io.signal);
 });

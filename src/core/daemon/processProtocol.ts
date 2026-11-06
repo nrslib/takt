@@ -30,9 +30,6 @@ const repositoryGoal = { repositoryDirectory: text, goalId: id };
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: text, state: z.enum(['MERGED', 'CLOSED']) }).strict(),
-  z.object({ ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: text,
-    failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
-  }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: text, reason: text }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: text }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: text }).strict(),
@@ -53,6 +50,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
   z.object({ kind: z.literal('director_message'), directorConversationId: id, text }).strict(),
+  z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), ...repositoryGoal }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
   z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),

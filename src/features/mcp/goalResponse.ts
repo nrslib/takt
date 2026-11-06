@@ -1,6 +1,5 @@
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 import { truncateUtf8, sliceUtf8 } from '../../shared/utils/utf8.js';
-import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 
 function preview(value: string) {
@@ -39,10 +38,6 @@ export function questionSummary(question: GoalQuestion) {
     ...(answer === undefined ? {} : { answer: { ...answer, text: preview(answer.text) } }) };
 }
 
-function pullRequestFailureSummary(failure: NonNullable<Goal['pullRequestFailure']>) {
-  return { ...failure, error: preview(safeExternalErrorMessage(failure.error)), errorTotalBytes: Buffer.byteLength(failure.error) };
-}
-
 export function goalSummary(goal: Goal) {
   // 巡回では状態・完成手順を先に返し、未回答質問と最近の作業記録を少数残す。
   const questions = goal.questions ?? [];
@@ -51,7 +46,6 @@ export function goalSummary(goal: Goal) {
     id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
     ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
-    ...(goal.pullRequestFailure === undefined ? {} : { pullRequestFailure: pullRequestFailureSummary(goal.pullRequestFailure) }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }),
     objective: preview(goal.objective), acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion,
     questions: pending.slice(0, 3).map(questionSummary),
@@ -74,7 +68,6 @@ export function goalWriteSummary(goal: Goal) {
   return { id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
     ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
-    ...(goal.pullRequestFailure === undefined ? {} : { pullRequestFailure: pullRequestFailureSummary(goal.pullRequestFailure) }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }) };
 }
 

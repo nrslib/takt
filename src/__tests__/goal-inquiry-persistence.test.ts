@@ -36,6 +36,16 @@ beforeEach(() => {
 });
 
 describe('inquiry persistence through GoalStore', () => {
+  it('loads a goal with retired PR failure state and removes it on the next write', async () => {
+    const legacy = JSON.stringify({ ...goalRecord(), pullRequestFailure: { error: 'push failed' } });
+    files.set(path, legacy);
+    const store = new GoalStore('/project');
+    expect(await store.get(goalId)).toEqual(goalRecord());
+    expect(files.get(path)).toBe(legacy);
+    await store.update(goalId, (goal) => goal);
+    expect(JSON.parse(files.get(path)!)).not.toHaveProperty('pullRequestFailure');
+  });
+
   it.each([false, true])('notifies after publishing the answer and before releasing the lock (release failure=%s)', async (failure) => {
     const created = addGoalQuestion(goalRecord(), { body: 'Choose output format' });
     const store = new GoalStore('/project');

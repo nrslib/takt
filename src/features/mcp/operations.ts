@@ -103,7 +103,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
   const task = new TaskRunner(cwd)
     .listTaskStateItems()
     .find((candidate) => candidate.runSlug === runSlug);
-  if (task?.worktreePath === undefined) {
+  if (task?.worktreePath === undefined || task.mergeTask === true) {
     return cwd;
   }
   assertTaskStateWorktreeOwnership(cwd, task);
@@ -117,6 +117,8 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
+    ...(task.mergeTask === undefined ? {} : { mergeTask: task.mergeTask, prNumber: task.prNumber }),
+    ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
     ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
   };
@@ -124,7 +126,7 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     summary.runSlug = task.runSlug;
     try {
       let runCwd = cwd;
-      if (task.worktreePath !== undefined) {
+      if (task.worktreePath !== undefined && task.mergeTask !== true) {
         assertTaskStateWorktreeOwnership(cwd, task);
         runCwd = task.worktreePath;
       }

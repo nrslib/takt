@@ -286,7 +286,7 @@ If the GitHub PR head differs from the clone's starting HEAD, the effect fetches
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -496,6 +496,12 @@ When a pipeline or interactive session checks out a PR in the current directory,
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
+
+## Goal PR preparation
+
+Set project `.takt/config.yaml` `manager.main_merge` to `approve` (default) or `auto`. Both publish a PR on completion submission. With `approve`, manager enqueues preparation using `takt_merge_goal_pr` with `until: prepare` and waits for human merge. `auto` uses `until: merge` to prepare and merge, as does an explicit human merge instruction. Completion does not merge locally, and PR creation failures have no timed or counted automatic retries.
+
+`until: prepare` uses `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
 
 ## Slack conversations with manager
 

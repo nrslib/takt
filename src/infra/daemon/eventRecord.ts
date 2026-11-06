@@ -14,7 +14,7 @@ const repositoryGoal = { repositoryDirectory: z.string(), goalId: id };
 // 廃止した観測は保存データの読み飛ばしにだけ使い、新規受付には戻さない。
 const retiredWatchEvent = z.object({
   event: z.object({ kind: z.literal('watch_observation'), observation: z.object({
-    kind: z.enum(['run_too_long', 'run_step_repeated', 'run_log_stalled', 'inquiry_stalled', 'goal_stalled']),
+    kind: z.enum(['run_too_long', 'run_step_repeated', 'run_log_stalled', 'inquiry_stalled', 'goal_stalled', 'goal_pr_retry']),
   }) }),
 });
 export function isRetiredWatchEvent(input: unknown): boolean {
@@ -23,9 +23,6 @@ export function isRetiredWatchEvent(input: unknown): boolean {
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
-  z.object({ ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: z.string(),
-    failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
-  }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: z.string(), reason: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
@@ -38,6 +35,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
   z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string() }).strict(),
+  z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
   z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),

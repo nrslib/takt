@@ -22,6 +22,7 @@ import { GoalStore } from '../infra/goals/store.js';
 import { readManagerEvents } from '../infra/goals/events.js';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import * as gitProvider from '../infra/git/index.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
@@ -75,26 +76,40 @@ describe('実際の run ログと daemon のプロセス観測', () => {
   async function queuedGoalMerge() {
     const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
     execFileSync('git', ['branch', 'feature/watch-log', headSha], { cwd: project });
+    const prUrl = 'https://github.com/example/project/pull/9';
+    const gitConfig = join(root, 'gitconfig');
+    writeFileSync(gitConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', gitConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    execFileSync('git', ['config', '--file', gitConfig, `url.file://${project}.insteadOf`,
+      'git@github.com:example/project.git'], { cwd: project });
     const provider = new GitHubProvider();
     vi.spyOn(gitProvider, 'getGitProvider').mockReturnValue(provider);
-    vi.spyOn(provider, 'checkCliStatus').mockReturnValue({ available: true });
-    vi.spyOn(provider, 'fetchPrDetails').mockImplementation(async (_number, _cwd, signal) => {
+    vi.spyOn(GitHubProvider.prototype, 'checkCliStatus').mockReturnValue({ available: true });
+    vi.spyOn(GitHubProvider.prototype, 'fetchPrDetails').mockImplementation(async (_number, _cwd, signal) => {
       signal?.throwIfAborted();
       return { number: 9, headSha, headBranch: 'feature/watch-log', baseBranch: 'main',
         sameRepository: true, headRepositoryUrl: project, headRepositoryPushUrls: [project] };
     });
     const status = { number: 9, headSha, merged: false, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' };
-    vi.spyOn(provider, 'fetchPrStatus').mockImplementation(async (_number, _cwd, options) => {
+    vi.spyOn(GitHubProvider.prototype, 'fetchPrStatus').mockImplementation(async (_number, _cwd, options) => {
       options?.signal?.throwIfAborted();
       return status;
     });
-    expect(await executePrWorkflow({ projectCwd: project, prNumber: 9, workflow: 'watch-log',
-      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } })).toEqual({ merged: false });
+    expect(await executePrWorkflow({ projectCwd: project, prNumber: 9, pullRequest: parseGitHubPullRequestTarget(prUrl), workflow: 'watch-log',
+      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } })).toMatchObject({ success: false, merged: false, outcome: 'unresolved',
+        completion: { success: false, workflowResult: 'aborted', mergeOutcome: 'unresolved' }, runSlug: expect.any(String) });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
+    await new GoalStore(project).update(goalId, (goal) => ({ ...goal,
+      branch: 'feature/watch-log', status: 'awaiting_merge', pullRequest: { number: 9, url: prUrl },
+      completion: { goalBranch: 'feature/watch-log', goalSha: headSha, targetBranch: 'main', summary: 'Reviewed',
+        instructions: [], changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } },
+    }));
     new TaskStore(project).update((current) => ({
-      tasks: current.tasks.map((task) => task.name === failed.name ? { ...task, goal_id: goalId } : task),
+      tasks: current.tasks.map((task) => task.name === failed.name ? { ...task, goal_id: goalId, pr_url: prUrl } : task),
     }));
     runner.requeueTask(failed.name, ['failed']);
     const task = runner.claimNextTasks(1)[0]!;
@@ -115,9 +130,10 @@ describe('実際の run ログと daemon のプロセス観測', () => {
     });
     setMockScenario([{ persona: 'worker', status: 'done', content: 'Actual merge run log.' }]);
     try {
-      expect((await executeTaskAndCompleteWithDetails(task, runner, project, executeTaskWithResult,
-        { provider: 'mock' }, { outputMode: 'silent' })).success).toBe(false);
-      expect(observations).toHaveLength(1);
+      const result = await executeTaskAndCompleteWithDetails(task, runner, project, executeTaskWithResult,
+        { provider: 'mock' }, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(observations, result.failureReason).toHaveLength(1);
       expect(observations[0]).toHaveLength(1);
       const target = observations[0]![0]!;
       const saved = new TaskStore(project).read().tasks[0]!;
@@ -152,7 +168,8 @@ describe('実際の run ログと daemon のプロセス観測', () => {
       expect(saved.failure!.retryable === false).toBe(status === 'aborted');
       const events = readManagerEvents(project).map(({ event }) => event);
       if (status === 'aborted') {
-        expect(saved.completion).toBeUndefined();
+        expect(saved.completion).toMatchObject({ success: false, interrupted: false, workflowResult: 'aborted',
+          mergeOutcome: 'unresolved', failureReason: saved.failure!.error });
         expect(events).toEqual([]);
         return;
       }
