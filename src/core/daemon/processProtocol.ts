@@ -29,13 +29,8 @@ const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: text, goalId: id };
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_log_stalled'), task, lastUpdatedAt: z.iso.datetime() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_too_long'), task, startedAt: z.iso.datetime() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_step_repeated'), task, workflow: z.string().min(1), step: z.string().min(1), stepIdentity: z.string().min(1), count: z.number().int().positive() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: text, state: z.enum(['MERGED', 'CLOSED']) }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: text, reason: text }).strict(),
-  z.object({ ...observed, kind: z.literal('inquiry_stalled'), repositoryDirectory: text, questionId: id, goalId: id.nullable() }).strict(),
-  z.object({ ...observed, kind: z.literal('goal_stalled'), ...repositoryGoal, lastUpdatedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: text }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: text }).strict(),
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: text, goalId: id.nullable(), state: text }).strict(),

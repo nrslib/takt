@@ -54,14 +54,14 @@ it('parses goal histories in a reusable worker and returns only observation data
   for (const _attempt of [1, 2]) {
     const goals = [];
     for await (const value of readWatchGoals(directory, errors, reader)) goals.push(value);
-    expect(goals).toMatchObject([{ id: goal.id, status: 'created', executionStatus: 'active', lastUpdatedAt: '2026-11-02T00:00:00Z' }]);
+    expect(goals).toMatchObject([{ id: goal.id, status: 'created', executionStatus: 'active' }]);
     expect(goals[0]).not.toHaveProperty('workLog');
   }
   expect(parse.mock.calls.some(([value]) => typeof value === 'string' && value.includes('history-content'))).toBe(false);
   expect(errors).not.toHaveBeenCalled();
 });
 
-it('keeps goals larger than 4 MiB eligible for patrol, progress observation and daemon work', async () => {
+it('keeps goals larger than 4 MiB eligible for patrol and daemon work', async () => {
   const goal = GoalSchema.parse({ ...goalRecord(), createdAt: '2026-11-01T00:00:00Z', workLog: Array.from({ length: 42 }, () => ({
     id: randomUUID(), summary: 'x'.repeat(100 * 1024), recordedAt: '2026-11-02T00:00:00Z',
   })) });
@@ -73,7 +73,6 @@ it('keeps goals larger than 4 MiB eligible for patrol, progress observation and 
   const errors = vi.fn();
   const { source, files } = await watchSource(errors);
   expect(await source.patrolGoalIds(directory)).toEqual([goal.id]);
-  expect(await source.goals()).toMatchObject([{ goalId: goal.id, active: true, lastUpdatedAt: '2026-11-02T00:00:00Z' }]);
   expect(await source.hasWork(files)).toBe(true);
   const observed = await reader.read(directory, goal.id);
   expect(observed).not.toHaveProperty('workLog');

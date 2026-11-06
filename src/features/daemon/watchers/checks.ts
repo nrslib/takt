@@ -1,36 +1,12 @@
-import { stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { isLoopJudgeStepName } from '../../../core/workflow/loop-judge-step.js';
 import type { TaskRef } from '../../../core/daemon/events.js';
 import type { IoOptions, ProcessOwner, ProcessPort } from '../../../core/daemon/io.js';
-import { WATCH_THRESHOLDS } from './loop.js';
+import { RUN_LAUNCH_STALL_MS } from './loop.js';
 import { watchKey, WatchObservations, type WatchTarget } from './observations.js';
-import type { RunProgress } from './runProgress.js';
 
 export interface RunWatchTarget extends WatchTarget {
   task: TaskRef;
   owner: ProcessOwner | null;
   running: boolean;
-  paused: boolean;
-  awaitingAnswer: boolean;
-  logPath: string | null;
-  metaPath: string | null;
-  startedAt: string | null;
-}
-
-export interface InquiryWatchTarget extends WatchTarget {
-  repositoryDirectory: string;
-  questionId: string;
-  goalId: string | null;
-  pending: boolean;
-  createdAt: string | null;
-}
-
-export interface GoalWatchTarget extends WatchTarget {
-  repositoryDirectory: string;
-  goalId: string;
-  active: boolean;
-  lastUpdatedAt: string;
 }
 
 /** 実行可能性・autoRun の解決は業務側が行い、見張りはその小さな結果だけを観測する。 */
@@ -43,34 +19,19 @@ export interface LaunchWatchTarget extends WatchTarget {
   pendingSince: string | null;
 }
 
-export interface LogStamp {
-  identity: string;
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-}
-
-export async function readLogStamp(path: string): Promise<LogStamp> {
-  const value = await stat(path);
-  if (!value.isFile()) throw new Error('Run log is not a regular file');
-  return { identity: `${value.dev}:${value.ino}`, size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs };
-}
-
 export class WatchChecks {
   private readonly failures = new Map<string, number>();
-  private readonly logs = new Map<string, { stamp: LogStamp; updatedAt: number }>();
 
   constructor(
     private readonly observations: WatchObservations,
     private readonly now: () => number,
     private readonly onError: (target: WatchTarget, error: unknown) => void,
-    private readonly scope: 'process' | 'log' | 'run' | 'pr' | 'pr_retry' | 'inquiry' | 'goal' | 'launch',
+    private readonly scope: 'process' | 'pr' | 'pr_retry' | 'launch',
   ) {}
 
   retain(targets: readonly WatchTarget[]): void {
     const keys = new Set(targets.map((target) => JSON.stringify([target.targetId, target.generation])));
     for (const key of this.failures.keys()) if (!keys.has(key)) this.failures.delete(key);
-    for (const key of this.logs.keys()) if (!keys.has(key)) this.logs.delete(key);
   }
 
   /** unknown は正常への復帰とも異常の確定とも扱わない。 */
@@ -111,83 +72,13 @@ export class WatchChecks {
     });
   }
 
-  async log(target: RunWatchTarget, stamp: (path: string) => Promise<LogStamp>,
-    reread: () => Promise<RunWatchTarget | undefined>): Promise<void> {
-    const key = JSON.stringify([target.targetId, target.generation]);
-    if (!target.running || target.paused || target.awaitingAnswer) {
-      this.logs.delete(key);
-      return this.observations.normal(target, 'run_log_stalled');
-    }
-    let updatedAt: number;
-    if (target.logPath === null) {
-      if (target.startedAt === null) return;
-      updatedAt = Date.parse(target.startedAt);
-      if (!Number.isFinite(updatedAt)) return;
-    } else {
-      const value = await stamp(target.logPath);
-      const previous = this.logs.get(key);
-      const changed = previous !== undefined && (previous.stamp.identity !== value.identity
-        || previous.stamp.size !== value.size || previous.stamp.mtimeMs !== value.mtimeMs || previous.stamp.ctimeMs !== value.ctimeMs);
-      updatedAt = changed ? this.now() : previous?.updatedAt ?? Math.max(value.mtimeMs, value.ctimeMs);
-      this.logs.set(key, { stamp: value, updatedAt });
-    }
-    const current = await reread();
-    if (current === undefined || current.generation !== target.generation || current.logPath !== target.logPath
-      || !current.running || current.paused || current.awaitingAnswer) return;
-    if (this.now() - updatedAt < WATCH_THRESHOLDS.log) return this.observations.normal(target, 'run_log_stalled');
-    await this.observations.abnormal(target, {
-      ...this.observations.evidence(target), kind: 'run_log_stalled', task: target.task,
-      lastUpdatedAt: new Date(updatedAt).toISOString(),
-    });
-  }
-
-  async inquiry(target: InquiryWatchTarget): Promise<void> {
-    if (!target.pending) return this.observations.normal(target, 'inquiry_stalled');
-    if (target.createdAt === null || !Number.isFinite(Date.parse(target.createdAt))) throw new Error('Inquiry creation time is unknown');
-    if (this.now() - Date.parse(target.createdAt) < WATCH_THRESHOLDS.inquiry) return this.observations.normal(target, 'inquiry_stalled');
-    await this.observations.abnormal(target, {
-      ...this.observations.evidence(target), kind: 'inquiry_stalled', repositoryDirectory: target.repositoryDirectory,
-      questionId: target.questionId, goalId: target.goalId,
-    });
-  }
-
-  async runProgress(target: RunWatchTarget, read: (path: string) => Promise<RunProgress | undefined>,
-    reread: () => Promise<RunWatchTarget | undefined>): Promise<void> {
-    if (!target.running || target.metaPath === null || target.task.runSlug === undefined) return;
-    const progress = await read(target.metaPath);
-    if (progress === undefined || !progress.running) return;
-    if (progress.runSlug !== target.task.runSlug) throw new Error('Run metadata slug differs from its task');
-    const current = await reread();
-    if (current === undefined || current.generation !== target.generation || !current.running || current.metaPath !== target.metaPath) return;
-    const run = { ...target, generation: progress.runSlug };
-    if (this.now() - Date.parse(progress.startedAt) > WATCH_THRESHOLDS.runDuration) {
-      await this.observations.abnormal(run, { ...this.observations.evidence(run), kind: 'run_too_long',
-        task: target.task, startedAt: progress.startedAt });
-    }
-    for (const step of progress.steps) {
-      if (isLoopJudgeStepName(step.step)) continue;
-      if (step.count <= WATCH_THRESHOLDS.stepRepetitions) continue;
-      const repeated = { ...run, targetId: createHash('sha256').update(JSON.stringify([target.targetId, step.identity])).digest('hex') };
-      await this.observations.abnormal(repeated, { ...this.observations.evidence(repeated), kind: 'run_step_repeated',
-        task: target.task, workflow: step.workflow, step: step.step, stepIdentity: step.identity, count: step.count });
-    }
-  }
-
-  async goal(target: GoalWatchTarget): Promise<void> {
-    const updatedAt = Date.parse(target.lastUpdatedAt);
-    if (!Number.isFinite(updatedAt)) throw new Error('Goal update time is unknown');
-    if (!target.active || this.now() - updatedAt < WATCH_THRESHOLDS.inquiry) return this.observations.normal(target, 'goal_stalled');
-    await this.observations.abnormal(target, { ...this.observations.evidence(target), kind: 'goal_stalled',
-      repositoryDirectory: target.repositoryDirectory, goalId: target.goalId, lastUpdatedAt: target.lastUpdatedAt });
-  }
-
   async launch(target: LaunchWatchTarget): Promise<void> {
     if (!target.autoRun || !target.runnablePending || target.owner === 'present' || target.launching === true) {
       return this.observations.normal(target, 'run_launch_stalled');
     }
     if (target.owner === 'unknown' || target.launching === null || target.pendingSince === null
       || !Number.isFinite(Date.parse(target.pendingSince))) throw new Error('Run launch state is unknown');
-    if (this.now() - Date.parse(target.pendingSince) < WATCH_THRESHOLDS.launch) return this.observations.normal(target, 'run_launch_stalled');
+    if (this.now() - Date.parse(target.pendingSince) < RUN_LAUNCH_STALL_MS) return this.observations.normal(target, 'run_launch_stalled');
     await this.observations.abnormal(target, {
       ...this.observations.evidence(target), kind: 'run_launch_stalled', repositoryDirectory: target.repositoryDirectory,
     });

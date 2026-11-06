@@ -87,9 +87,11 @@ steps:
         as: status
         rerun_from: "{effect:rerun_ci.rerun_ci.rerun}"
     wait:
-      until: 'when(context.wait_ci.status.rerunHeadChanged == true || context.wait_ci.status.ci.finished == true && context.wait_ci.status.headSha == effect.caccia.caccia.headSha)'
+      until: 'when(context.wait_ci.status.headSha != effect.caccia.caccia.headSha || context.wait_ci.status.rerunHeadChanged == true || context.wait_ci.status.ci.finished == true && context.wait_ci.status.headSha == effect.caccia.caccia.headSha)'
       on_timeout: timeout
     rules:
+      - condition: when(context.wait_ci.status.headSha != effect.caccia.caccia.headSha)
+        next: head_changed
       - condition: when(context.wait_ci.status.rerunHeadChanged == true)
         next: collect_ci_failure
       - condition: when(context.wait_ci.status.ci.passed == false)
@@ -102,6 +104,16 @@ steps:
         next: changes_requested
       - condition: when(true)
         next: prepared
+  - name: head_changed
+    description: Caccia後にPRの先端が変わったことを報告して準備を止める
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "TAKT preparation stopped: PR head changed from {effect:caccia.caccia.headSha} to {context:wait_ci.status.headSha} after Caccia. Prepare the new head again."
+    rules:
+      - condition: when(true)
+        next: ABORT
   - name: changes_requested
     description: 変更を求めるGitHubレビューが残っていることをPRにコメントする
     mode: system

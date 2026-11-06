@@ -1,15 +1,13 @@
 import { Worker } from 'node:worker_threads';
 import type { Goal } from '../../../infra/goals/schema.js';
-import type { RunProgress } from './runProgress.js';
 import { WATCH_INTERVALS } from './loop.js';
 
 export type WatchGoal = Pick<Goal, 'id' | 'status' | 'executionStatus' | 'questions' | 'pullRequest' | 'branch' | 'integrationBranch'> & {
-  lastUpdatedAt: string | undefined;
   blockedNotifications: string[];
 };
-type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string } | { kind: 'run'; path: string };
+type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string };
 export type WatchReadRequest = { id: number } & WatchReadOperation;
-type WatchReadResult = { kind: 'goal'; goal: WatchGoal } | { kind: 'run'; progress: RunProgress | undefined };
+type WatchReadResult = { kind: 'goal'; goal: WatchGoal };
 export type WatchReadReply = { id: number } & (({ ok: true } & WatchReadResult) | { ok: false; message: string });
 
 /** daemon ごとに1ワーカー、未完了の依頼は最大32件に制限する。 */
@@ -24,14 +22,6 @@ export class WatchGoalReader {
     const result = await this.request({ kind: 'goal', cwd, goalId }, AbortSignal.timeout(WATCH_INTERVALS.long));
     if (result.kind !== 'goal') throw new Error('Unexpected goal reader reply');
     return result.goal;
-  }
-
-  async readRunProgress(path: string, signal?: AbortSignal): Promise<RunProgress | undefined> {
-    const deadline = AbortSignal.timeout(WATCH_INTERVALS.long);
-    const cancellation = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-    const result = await this.request({ kind: 'run', path }, cancellation);
-    if (result.kind !== 'run') throw new Error('Unexpected run reader reply');
-    return result.progress;
   }
 
   private async request(operation: WatchReadOperation, signal?: AbortSignal): Promise<WatchReadResult> {

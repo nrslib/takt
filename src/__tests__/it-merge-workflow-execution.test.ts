@@ -68,6 +68,7 @@ import { runAgent } from '../agents/runner.js';
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
 interface Scenario {
+  headChangesDuringCi?: boolean;
   concurrency?: number;
   lateConflicts?: number;
   resyncConflicted?: boolean;
@@ -157,7 +158,7 @@ describe('Builtin PR merge workflow execution', () => {
 
   function harness(name: string, scenario: Scenario = {}, language = 'ja') {
     if (language !== 'ja' && language !== 'en') throw new Error(`Unsupported test language: ${language}`);
-    const simple = name === 'merge-review-fix-simple';
+    const simple = name === 'merge-review-fix-simple' || name === 'merge-prepare';
     const actualReview = simple || scenario.fullInitialReview === true;
     mkdirSync(join(project, '.takt'), { recursive: true });
     writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -421,6 +422,7 @@ describe('Builtin PR merge workflow execution', () => {
         evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn() },
       systemStepServicesFactory: (options) => ({
         resolveSystemInput: (input, state, stepName, resolutionContext) => {
+          if (stepName === 'wait_ci' && scenario.headChangesDuringCi) remoteHeadOverride = 'f'.repeat(40);
           if (stepName === 'report_review') {
             const context = (options as unknown as { prExecutionContext?: { prNumber: number } }).prExecutionContext;
             childContexts.push({ cwd: options.cwd, projectCwd: options.projectCwd, prNumber: context?.prNumber });
@@ -1350,6 +1352,15 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.calls).not.toContain('merge_pr');
     expect(h.comments).toHaveLength(1);
     expect(h.comments[0]).toContain('b'.repeat(40));
+  });
+
+  it.each(['ja', 'en'] as const)('%sのmerge-prepareは通常のCI待機でも先端の変更を報告して止まる', async (language) => {
+    const h = harness('merge-prepare', { headChangesDuringCi: true }, language);
+    expect((await h.engine.run()).status).toBe('aborted');
+    expect(h.calls).not.toContain('merge_pr');
+    expect(h.comments).toHaveLength(1);
+    expect(h.comments[0]).toContain('b'.repeat(40));
+    expect(h.comments[0]).toContain('f'.repeat(40));
   });
 
   it.each(['ja', 'en'].flatMap((language) => [

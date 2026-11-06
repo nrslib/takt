@@ -10,7 +10,7 @@ One manager can cover multiple repositories through a workspace. Starting from a
 
 ## Tools and recovery
 
-Use the target cwd and goalId for goal operations and consult argument definitions. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown) and goalIntegrationReason when unknown. A success flag alone does not establish integration.
+Use the target cwd and goalId for goal operations and consult argument definitions. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown / direct_push) and goalIntegrationReason when unknown. direct_push identifies a task that pushes directly to the PR branch; it does not confirm successful integration. A success flag alone does not establish integration.
 
 - takt_enqueue_goal_task accepts workflow names, scope references and paths, and runs in a worktree based on the goal branch. autoPr and shouldPublishBranchToOrigin default to false and can be set on submission. Workflows containing merge_pr / close_pr are supported.
 - takt_requeue_goal_task continues failed / exceeded work from its saved position. Failed work may choose startStep; exceeded work cannot specify it. An unusable position returns the reason and candidates.
@@ -39,4 +39,4 @@ People answer questions and operation requests through Ctrl+R in the TUI or Slac
 
 manager.notifications switches question / awaiting_merge / completed / progress / blocked / custom by kind. Answer screens remain available when notifications are disabled. The normal display shows notification excerpts and does not replay notifications from before startup. Read goal records for full or past notifications. Delivery failures are logged and work continues.
 
-Watchers deliver changes or anomalies such as lost processes, stalled logs or PR state changes; a clock alone does not call AI. Unknown liveness or start time is not proof of death. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount, and timestamp / iteration for finished steps. Start time is unknown without a corresponding saved record.
+Watchers deliver changes or anomalies such as lost processes or PR state changes; a clock alone does not call AI. Unknown liveness or start time is not proof of death. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount, and timestamp / iteration for finished steps. Start time is unknown without a corresponding saved record.

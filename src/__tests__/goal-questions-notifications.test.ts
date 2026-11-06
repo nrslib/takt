@@ -249,24 +249,23 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect({ goal, notification }).toEqual(before);
   });
 
-  it.each([{ worktrees: [] }, { worktrees: ["/human's tree"] }])('retains the reviewed merge commands and execution location with worktrees $worktrees', ({ worktrees }) => {
+  it.each([{ worktrees: [] }, { worktrees: ["/human's tree"] }])('retains PR preparation instructions independently of checked-out worktrees $worktrees', ({ worktrees }) => {
     const goalSha = 'a'.repeat(40);
-    const git = worktrees.length === 0 ? 'git' : "git -C '/human'\\''s tree'";
     const commands = [
-      `${git} status --short`, ...(worktrees.length === 0 ? ["git switch 'release'"] : []),
-      `${git} merge --no-ff --no-edit '${goalSha}'`,
+      `takt_complete_goal goalId=${goalRecord().id} expectedSha=${goalSha}`,
+      'takt_merge_goal_pr until=prepare',
     ];
     const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
       goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary: 'Ready for integration',
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
       ...(worktrees.length === 0 ? {} : { worktrees }),
-      instructions: [...(worktrees.length === 0 ? ['Run in a clean worktree of this repository where switching branches is possible.'] : []), ...commands],
+      instructions: commands,
     } };
     const text = formatGoalNotification(goal, { kind: 'awaiting_merge', body: 'Verified result. '.repeat(1000) }, language, 'customer-export');
 
     expect(text).toContain('release');
     for (const command of commands) expect(text.split('\n').map((line) => line.trim())).toContain(command);
-    expect(text).toMatch(language === 'ja' ? /実行|作業ツリー|リポジトリ/u : /run|worktree|repository/iu);
+    expect(text).not.toContain('git merge');
     if (language === 'ja') expect(text).not.toContain('Run in a clean worktree');
     expect(text.length).toBeLessThan(2000);
   });
@@ -295,14 +294,12 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(goal).toEqual(before);
   });
 
-  it.each([false, true])('renders old and new merge notices from completion without duplicating commands (worktree=%s)', (withWorktree) => {
+  it.each([false, true])('renders old and new notice bodies from PR completion instructions without duplicating them (worktree=%s)', (withWorktree) => {
     const goalSha = 'a'.repeat(40);
     const directory = '/human/review';
-    const git = withWorktree ? `git -C '${directory}'` : 'git';
-    const commands = [`${git} status --short`, ...(withWorktree ? [] : ["git switch 'release'"]),
-      `${git} merge --no-ff --no-edit '${goalSha}'`];
+    const commands = ['takt_complete_goal', 'takt_merge_goal_pr until=prepare'];
     const summary = 'Acceptance checks passed';
-    const instructions = [...(withWorktree ? [] : ['Run in a clean worktree of this repository where switching branches is possible.']), ...commands];
+    const instructions = commands;
     const completion = { goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary,
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
       ...(withWorktree ? { worktrees: [directory] } : {}), instructions };
@@ -316,9 +313,10 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       expect(old).toBe(current);
       const lines = old.split('\n');
       expect(lines[2]).toBe(summary);
-      expect(lines.filter((line) => line.startsWith('git'))).toEqual(commands);
+      expect(lines.filter((line) => line.startsWith('takt_'))).toEqual(commands);
       expect(lines.filter((line) => line.includes('release') && !line.startsWith('git'))).toHaveLength(1);
-      expect(lines[4]).toContain(withWorktree ? directory : 'customer-export');
+      expect(lines.slice(-instructions.length)).toEqual(instructions);
+      expect(old).not.toContain('git merge');
       const custom = formatGoalNotification(goal, { kind: 'custom', body: oldBody }, language, 'customer-export', destination);
       if (destination === 'slack') expect(custom.split('\n').slice(2).join('\n')).toBe(oldBody);
       else {

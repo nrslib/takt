@@ -27,19 +27,11 @@ ja:
         summary: "seed-index を takt/goal/museum-import に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-museum-import
-      generation: 650e8400-e29b-41d4-a716-446655440103
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: museum-import
-        runSlug: run-museum-import
-        executionId: 650e8400-e29b-41d4-a716-446655440103
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -614,19 +606,11 @@ en:
         summary: "Integrated seed-index into takt/goal/museum-import. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-museum-import
-      generation: 650e8400-e29b-41d4-a716-446655440103
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: museum-import
-        runSlug: run-museum-import
-        executionId: 650e8400-e29b-41d4-a716-446655440103
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000

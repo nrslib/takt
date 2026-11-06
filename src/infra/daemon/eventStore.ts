@@ -5,13 +5,13 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
 import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
-import { AcceptedEventSchema, EventRecordSchema, StoredResultSchema, StoredTurnSchema, type EventRecord, RetiredEventRecordSchema, type RetiredEventRecord } from './eventRecord.js';
+import { AcceptedEventSchema, EventRecordSchema, isRetiredWatchEvent, StoredResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
 import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
 
 const MAX_RECORD_BYTES = 4 * 1024 * 1024;
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
-const requestKey = (event: Pick<AcceptedEvent, 'conversationId' | 'requestId'>): string => JSON.stringify([event.conversationId, event.requestId]);
+const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
 export class FileEventStore implements EventStore {
   private readonly directory: string;
@@ -28,22 +28,10 @@ export class FileEventStore implements EventStore {
     return this.lock.exclusive(join(this.directory, '.lock'), action, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
-  private async readRecord(path: string): Promise<EventRecord | RetiredEventRecord> {
+  private async read(path: string): Promise<EventRecord> {
     const content = await readPrivateFile(path, MAX_RECORD_BYTES);
     if (content === undefined) throw new Error(`Missing stored event: ${path}`);
     const input: unknown = JSON.parse(content.toString('utf8'));
-    const retired = RetiredEventRecordSchema.safeParse(input);
-    if (retired.success) {
-      const record = retired.data;
-      if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
-      const turn = record.state === 'running' ? record.turn
-        : record.state === 'queued' ? undefined : record.result;
-      if (turn !== undefined && (record.event.conversationId !== turn.conversationId
-        || record.event.operationId !== turn.operationId)) throw new Error('Turn does not match stored event');
-      if ((record.state === 'settling' || record.state === 'settled')
-        && !isDeepStrictEqual(record.event, record.result.event)) throw new Error('Result does not match stored event');
-      return { state: 'retired', event: record.event };
-    }
     const record = EventRecordSchema.parse(input);
     if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
     if (record.state === 'running') this.assertTurn(record.event, record.turn);
@@ -51,15 +39,9 @@ export class FileEventStore implements EventStore {
     return record;
   }
 
-  private async read(path: string): Promise<EventRecord> {
-    const record = await this.readRecord(path);
-    if (record.state === 'retired') throw new Error('Stored watcher event is retired');
-    return record;
-  }
-
   private path(eventId: string): string { return join(this.directory, `${fileKey(eventId)}.json`); }
 
-  private index(record: EventRecord | RetiredEventRecord, path: string): void {
+  private index(record: EventRecord, path: string): void {
     const { event } = record;
     const request = requestKey(event);
     const previous = this.requests.get(request);
@@ -77,7 +59,10 @@ export class FileEventStore implements EventStore {
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
       const path = join(this.directory, entry.name);
-      if (!this.knownFiles.has(path)) this.index(await this.readRecord(path), path);
+      if (!this.knownFiles.has(path)) {
+        const record = await this.read(path);
+        this.index(record, path);
+      }
     }
   }
 
@@ -97,7 +82,9 @@ export class FileEventStore implements EventStore {
         const path = this.ids.get(event.eventId) ?? this.requests.get(requestKey(event));
         if (path !== undefined) {
           const stored = await this.read(path);
-          return { kind: 'duplicate', event: stored.event, state: stored.state };
+          // 廃止した待機・実行中イベントを duplicate 経由で再びキューへ戻さない。
+          const state = isRetiredWatchEvent(stored.event) && stored.state !== 'settling' ? 'settled' : stored.state;
+          return { kind: 'duplicate', event: stored.event, state };
         }
         const record: EventRecord = { state: 'queued', event };
         const sequence = this.sequences.get(event.acceptedSequence);
@@ -179,8 +166,7 @@ export class FileEventStore implements EventStore {
     await ensurePrivateDirectory(this.directory);
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const record = await this.readRecord(join(this.directory, entry.name));
-      if (record.state === 'retired') continue;
+      const record = await this.read(join(this.directory, entry.name));
       const { event } = record.event;
       if (event.kind === 'goal_registered' && event.repositoryDirectory === repositoryDirectory && event.goalId === goalId) return true;
     }
@@ -190,7 +176,8 @@ export class FileEventStore implements EventStore {
   private async *pending(): AsyncGenerator<StoredEvent> {
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const record = await this.readRecord(join(this.directory, entry.name));
+      const record = await this.read(join(this.directory, entry.name));
+      if (isRetiredWatchEvent(record.event) && record.state !== 'settling') continue;
       if (record.state === 'settling') yield { ...record, state: 'settling' };
       else if (record.state === 'queued') yield { state: 'queued', event: record.event };
       else if (record.state === 'running') yield { state: 'running', event: record.event, turn: record.turn };

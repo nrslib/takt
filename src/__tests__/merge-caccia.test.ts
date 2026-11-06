@@ -35,6 +35,7 @@ vi.mock('../features/caccia/index.js', async (original) => ({
 }));
 vi.mock('../infra/github/pr.js', () => ({
   fetchCodeRabbitReviewStatus: mocks.reviewStatus,
+  fetchPrDetails: mocks.details, fetchPrStatus: mocks.status, mergePr: mocks.merge,
 }));
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWorktreePath: vi.fn() }));
 
@@ -43,6 +44,7 @@ import { createDefaultSystemStepServices } from '../infra/workflow/system/Defaul
 import { TaskRunner } from '../infra/task/index.js';
 import { TaskStore } from '../infra/task/store.js';
 import { GoalStore } from '../infra/goals/store.js';
+import * as goalGit from '../infra/goals/git-command.js';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
@@ -133,14 +135,21 @@ describe('Merge workflows own Caccia execution', () => {
   it.each(['paused', 'aborted'] as const)('ゴールの %s でマージを止め、監視を解放して clone を保持する', async (status) => {
     mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
     await expect(run()).rejects.toThrow('initial failure');
-    await new GoalStore(project).create({ ...goalRecord(), branch: details.headBranch });
+    const prUrl = `https://github.com/org/repo/pull/${details.number}`;
+    await new GoalStore(project).create({ ...goalRecord(), branch: details.headBranch,
+      status: 'awaiting_merge', pullRequest: { number: details.number, url: prUrl },
+      completion: { goalBranch: details.headBranch, goalSha: headSha, targetBranch: details.baseBranch,
+        summary: 'verified', instructions: [], humanChecks: 'Read the result',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } } });
     const store = new TaskStore(project);
-    store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, goal_id: goalId })) }));
+    store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, goal_id: goalId, pr_url: prUrl })) }));
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
     runner.requeueTask(failed.name, ['failed']);
     const claimed = runner.claimNextTasks(1)[0]!;
     const stop = vi.spyOn(GoalAbortMonitor.prototype, 'stop');
+    const unpublished = vi.spyOn(goalGit, 'hasUnpublishedPrWork').mockResolvedValue(false);
     mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
       const signal = request.abortSignal!;
       await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
@@ -150,6 +159,8 @@ describe('Merge workflows own Caccia execution', () => {
     const settled = execution.catch((error: unknown) => error);
     try {
       await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledTimes(2));
+      expect(mocks.workflow).toHaveBeenLastCalledWith(expect.objectContaining({ goalId,
+        prExecutionContext: expect.objectContaining({ prUrl }) }), expect.any(Object));
       await setGoalExecutionStatus(project, goalId, status, new AbortController().signal);
       const result = await settled;
       const saved = store.read().tasks[0]!;
@@ -165,12 +176,14 @@ describe('Merge workflows own Caccia execution', () => {
       expect(existsSync(failed.worktreePath!)).toBe(true);
       expect(mocks.merge).not.toHaveBeenCalled();
       expect(stop).toHaveBeenCalledOnce();
+      expect(unpublished).not.toHaveBeenCalled();
       if (status === 'paused') {
         await setGoalExecutionStatus(project, goalId, 'active', new AbortController().signal);
         runner.requeueTask(claimed.name, ['failed']);
         const retried = runner.claimNextTasks(1)[0]!;
         mocks.workflow.mockResolvedValueOnce({ success: true });
         expect(await executePersistedPrMergeTask(retried, runner, project)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
+        expect(unpublished).toHaveBeenCalledExactlyOnceWith(failed.worktreePath, details.headBranch, undefined, undefined);
         expect(existsSync(failed.worktreePath!)).toBe(false);
         expect(stop).toHaveBeenCalledTimes(2);
       }

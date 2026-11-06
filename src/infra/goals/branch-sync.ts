@@ -12,6 +12,7 @@ export class GoalBranchSyncError extends Error {
 
 export async function synchronizeGoalBranch(
   cwd: string, branch: string, signal: AbortSignal | undefined,
+  archivedHead?: { cwd: string; sha: string },
 ): Promise<GoalBranchSync> {
   const deadline = AbortSignal.timeout(30_000);
   const cancellation = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
@@ -21,8 +22,15 @@ export async function synchronizeGoalBranch(
   const ref = toLocalBranchRef(branch);
   const advertised = await runGoalGit(cwd, ['ls-remote', '--exit-code', '--heads', 'origin', ref], 4096, cancellation, [0, 2]);
   if (advertised.truncated) throw new Error('Goal remote ref output exceeds the limit');
-  if (advertised.code === 2) return { status: 'unpublished', localSha };
-  const remoteSha = await fetchGoalIntegrationBranchSha(cwd, branch, cancellation);
+  if (advertised.code === 2 && archivedHead === undefined) return { status: 'unpublished', localSha };
+  let remoteSha: string;
+  if (advertised.code === 2 && archivedHead !== undefined) {
+    // GitHub may delete the PR branch after merging; retain its verified head from the task clone.
+    await goalGitText(cwd, ['fetch', '--no-tags', '--no-write-fetch-head', '--', archivedHead.cwd, archivedHead.sha], cancellation);
+    remoteSha = archivedHead.sha;
+  } else {
+    remoteSha = await fetchGoalIntegrationBranchSha(cwd, branch, cancellation);
+  }
   if (localSha === remoteSha) return { status: 'unchanged', localSha, remoteSha };
   if (await isGoalCommitIncluded(cwd, remoteSha, localSha, cancellation)) {
     return { status: 'local_ahead', localSha, remoteSha };

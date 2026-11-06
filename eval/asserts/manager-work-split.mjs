@@ -34,8 +34,8 @@ const patrolRequiredCases = new Set([
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
-const verificationTellCases = new Set(['verification-repeated', 'verification-mixed']);
-const verificationNoTellCases = new Set(['verification-once', 'verification-told']);
+const verificationTellCases = new Set(['verification-once', 'verification-mixed']);
+const verificationNoTellCases = new Set(['verification-repeated', 'verification-told']);
 const planWaitCases = new Set(['plan-dependent', 'plan-queued']);
 const finalPlanCases = new Set(['integration-check', 'plan-cancelled', 'plan-integrated', 'final-impact-tests']);
 const verificationPlanCases = new Set(['stopped-background-check', 'integrated-task-verification', 'verification-before-integration']);
@@ -235,7 +235,7 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (verificationTellCases.has(caseId)) {
     return result(tells.length === 1 && workLogs.length > 0,
-      'Send one verification instruction and record its reason; substance is graded by llm-rubric');
+      'Correct the out-of-scope requirement and record its reason; substance is graded by llm-rubric');
   }
   if (verificationNoTellCases.has(caseId) || planWaitCases.has(caseId)) {
     return result(true, 'No new task or instruction; assess the reason with llm-rubric');

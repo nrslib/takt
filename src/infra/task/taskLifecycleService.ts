@@ -18,6 +18,8 @@ import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { parseGitHubPullRequestTarget } from '../github/pull-request-target.js';
+import type { Goal } from '../goals/schema.js';
 import { GoalStore } from '../goals/store.js';
 import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
@@ -55,18 +57,26 @@ export class TaskLifecycleService {
     return withGoalExecutionLock(this.projectDir, () => {
       const goal = new GoalStore(this.projectDir).getSync(input.goalId);
       if (isGoalPaused(goal) || goal.executionStatus === 'aborted' || goal.status !== 'awaiting_merge'
-        || goal.pullRequest?.number !== input.prNumber || goal.pullRequest.url !== input.prUrl
+        || goal.pullRequest?.number !== input.prNumber || input.prUrl === undefined
+        || parseGitHubPullRequestTarget(goal.pullRequest.url).url !== parseGitHubPullRequestTarget(input.prUrl).url
         || goal.branch !== input.headBranch || goal.integrationBranch !== input.baseBranch) {
         throw new Error('Goal is no longer available for this PR merge task');
       }
-      return this.createPrMergeTask(input, 'pending');
+      return this.createPrMergeTask(input, 'pending', goal);
     });
   }
 
   private createPrMergeTask(
-    input: PrMergeTaskInput & { parentTaskName?: string; goalId?: string }, status: 'pending' | 'running',
+    input: PrMergeTaskInput & { parentTaskName?: string; goalId?: string }, status: 'pending' | 'running', goal?: Goal,
   ): TaskInfo {
-    const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
+    const content = [
+      `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`,
+      ...(goal === undefined ? [] : [
+        `Goal: ${goal.objective}`,
+        `Constraints:\n${goal.constraints.map((constraint) => `- ${constraint}`).join('\n')}`,
+        `Acceptance criteria:\n${goal.acceptanceCriteria.map((criterion) => `- ${criterion}`).join('\n')}`,
+      ]),
+    ].join('\n\n');
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
     const state = this.store.update((current) => {
       const parent = input.parentTaskName === undefined ? undefined

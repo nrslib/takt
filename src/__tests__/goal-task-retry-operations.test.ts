@@ -4,11 +4,13 @@ import { requeueTaktGoalTask,retryTaktGoalTask } from '../features/mcp/goalTaskR
 import type { Goal } from '../infra/goals/schema.js';
 import type { TaskState } from '../infra/task/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), states: vi.fn(), tasks: vi.fn(), exceeded: vi.fn(), ensure: vi.fn(), remove: vi.fn(), included: vi.fn(), sha: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), states: vi.fn(), tasks: vi.fn(), exceeded: vi.fn(), ensure: vi.fn(), remove: vi.fn(), included: vi.fn(), sha: vi.fn(), unpublished: vi.fn(), lstat: vi.fn(), assertWorktree: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.states; listAllTaskItems = doubles.tasks; listFailedTasks = doubles.tasks; requeueExceededTask = doubles.exceeded; } }));
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({ deleteTaskResources: doubles.remove }));
-vi.mock('../infra/goals/git-command.js', () => ({ resolveGoalBranchSha: doubles.sha, isGoalCommitIncluded: doubles.included }));
+vi.mock('../infra/goals/git-command.js', () => ({ resolveGoalBranchSha: doubles.sha, isGoalCommitIncluded: doubles.included, hasUnpublishedPrWork: doubles.unpublished }));
+vi.mock('../shared/utils/pathBoundary.js', async (original) => ({ ...await original<typeof import('../shared/utils/pathBoundary.js')>(), lstatIfExists: doubles.lstat }));
+vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({ assertReusableWorktreePath: doubles.assertWorktree }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificationOptions: () => ({ policy: {}, mainMerge: 'approve' }), sendSavedGoalNotifications: vi.fn() }));
 vi.mock('../features/mcp/operations.js', async (original) => ({ ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: vi.fn() }));
@@ -135,3 +137,37 @@ it.each(['pending', 'completed'] as const)('removes a %s PR merge task without t
   expect(doubles.included).not.toHaveBeenCalled();
   expect(doubles.remove).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: input.taskName, kind: status }), { quiet: true, requireCleanupSuccess: true });
 });
+
+it.each(['pending', 'completed', 'failed', 'exceeded', 'pr_failed'] as const)(
+  'requires explicit discard for unpublished work in a %s PR merge clone', async (status) => {
+    goal = { ...goal, status: 'awaiting_merge' };
+    state = { ...state, kind: status, status, mergeTask: true, branch: goal.branch, worktreePath: '/clone' };
+    doubles.lstat.mockReturnValue({});
+    doubles.unpublished.mockResolvedValue(true);
+    for (const discardUnmerged of [undefined, false]) {
+      expect((await removeTaktGoalTask({ ...input, reason: '片付け', discardUnmerged }, {}, signal)).isError).toBe(true);
+    }
+    expect(doubles.assertWorktree).toHaveBeenCalledWith(input.cwd, '/clone');
+    expect(doubles.unpublished).toHaveBeenCalledWith('/clone', goal.branch, undefined, signal);
+    expect(doubles.remove).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect((await removeTaktGoalTask({ ...input, reason: '破棄', discardUnmerged: true }, {}, signal)).isError).toBeUndefined();
+    expect(doubles.remove).toHaveBeenCalledOnce();
+    expect(goal.workLog.at(-1)!.summary).toContain('discardUnmerged: true');
+  },
+);
+
+it.each(['published', 'missing', 'inspection failure', 'invalid path'] as const)(
+  'handles a PR merge clone with %s before removal', async (condition) => {
+    state = { ...state, kind: 'completed', status: 'completed', mergeTask: true, branch: goal.branch, worktreePath: '/clone' };
+    doubles.lstat.mockReturnValue(condition === 'missing' ? null : {});
+    doubles.unpublished.mockResolvedValue(false);
+    if (condition === 'inspection failure') doubles.unpublished.mockRejectedValue(new Error('Git unavailable'));
+    if (condition === 'invalid path') doubles.assertWorktree.mockImplementation(() => { throw new Error('Invalid path'); });
+    const rejected = condition === 'inspection failure' || condition === 'invalid path';
+    expect((await removeTaktGoalTask({ ...input, reason: '片付け' }, {}, signal)).isError).toBe(rejected ? true : undefined);
+    expect(doubles.remove).toHaveBeenCalledTimes(rejected ? 0 : 1);
+    expect(doubles.update).toHaveBeenCalledTimes(rejected ? 0 : 1);
+    if (condition === 'missing' || condition === 'invalid path') expect(doubles.unpublished).not.toHaveBeenCalled();
+  },
+);

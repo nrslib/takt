@@ -57,6 +57,7 @@ import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.j
 import { completeGoal, getGoalTaskSource, integrateGoalTask } from '../infra/goals/integration.js';
 import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { removeTaktGoalTask } from '../features/mcp/goalTaskRemovalOperations.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -987,6 +988,9 @@ describe('Merge PR persistent clone ownership', () => {
     writeFileSync(join(project, '.takt/config.yaml'), `allow_git_filters: ${allowGitFilters}\n`);
     mocks.details.mockResolvedValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+    mocks.status.mockResolvedValue({ number: 123, headSha: prHead, merged: false,
+      ci: { finished: true, passed: true }, mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' });
     mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
       executedCwd = request.cwd;
       expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(prHead);
@@ -1193,19 +1197,18 @@ describe('Merge PR persistent clone ownership', () => {
   });
 
   describe('goal PR merge tasks through the daemon worker pool', () => {
-    async function queuedGoal(until: 'prepare' | 'merge') {
-      vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'config'));
+    async function queuedGoal(until: 'prepare' | 'merge', trailingSlash = false) {
       mkdirSync(join(project, '.takt'), { recursive: true });
       writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  auto_run: false\n');
       git(root, 'config', '--file', join(root, 'gitconfig'), '--unset-all', `url.file://${project}.insteadOf`);
       git(root, 'config', '--file', join(root, 'gitconfig'), `url.file://${fork}.insteadOf`, 'git@github.com:org/repo.git');
       git(project, 'remote', 'add', 'origin', 'git@github.com:org/repo.git');
       git(project, 'fetch', fork, 'refs/heads/feature/pr:refs/heads/feature/pr');
-      const goal = { ...goalRecord(), branch: 'feature/pr', status: 'awaiting_merge' as const,
+      const goal = { ...goalRecord(), constraints: ['Preserve the public API'], branch: 'feature/pr', status: 'awaiting_merge' as const,
         completion: { goalBranch: 'feature/pr', goalSha: prHead, targetBranch: 'main', summary: 'verified', instructions: [],
           humanChecks: 'Read the result', changeSummary: { filesChanged: 2, additions: 2, deletions: 0,
             files: [], truncated: false, totalsTruncated: false } },
-        pullRequest: { number: 123, url: 'https://github.com/org/repo/pull/123' } };
+        pullRequest: { number: 123, url: `https://github.com/org/repo/pull/123${trailingSlash ? '/' : ''}` } };
       await new GoalStore(project).create(goal);
       mocks.details.mockResolvedValue({ number: 123, headBranch: goal.branch, baseBranch: 'main', headSha: prHead,
         headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: true });
@@ -1217,14 +1220,14 @@ describe('Merge PR persistent clone ownership', () => {
       return { goal, runner, queued };
     }
 
-    it.each(['prepared', 'merged', 'unmerged', 'workflow_failed', 'diverged', 'checked_out'] as const)(
+    it.each(['prepared', 'merged', 'deleted_head', 'unmerged', 'workflow_failed', 'both_failed', 'both_aborted', 'diverged', 'checked_out'] as const)(
       'delivers %s with the published head and safe branch synchronization', async (scenario) => {
-        const until = scenario === 'merged' || scenario === 'unmerged' ? 'merge' : 'prepare';
+        const until = scenario === 'merged' || scenario === 'deleted_head' || scenario === 'unmerged' ? 'merge' : 'prepare';
         const { goal, runner, queued } = await queuedGoal(until);
         const originalHead = git(project, 'rev-parse', 'HEAD');
         const originalFile = readFileSync(join(project, 'code.txt'), 'utf8');
         let localHead = prHead;
-        if (scenario === 'diverged') {
+        if (scenario === 'diverged' || scenario === 'both_failed' || scenario === 'both_aborted') {
           localHead = git(project, 'commit-tree', `${prHead}^{tree}`, '-p', prHead, '-m', 'local goal work');
           git(project, 'update-ref', 'refs/heads/feature/pr', localHead);
         }
@@ -1234,6 +1237,9 @@ describe('Merge PR persistent clone ownership', () => {
         mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
           expect(request.workflowIdentifier).toBe(until === 'prepare' ? 'merge-prepare' : 'merge-review-fix-simple');
           expect(request.prExecutionContext?.preserveHeadBranch).toBe(true);
+          for (const requirement of [...goal.constraints, ...goal.acceptanceCriteria]) {
+            expect(request.taskSpec?.orderContent).toContain(requirement);
+          }
           expect(git(request.cwd, 'remote', 'get-url', 'origin')).toBe(fork);
           git(request.cwd, 'config', 'user.name', 'Merge Worker');
           git(request.cwd, 'config', 'user.email', 'merge@example.com');
@@ -1241,18 +1247,21 @@ describe('Merge PR persistent clone ownership', () => {
           git(request.cwd, 'add', 'prepared.txt'); git(request.cwd, 'commit', '-m', 'prepare goal PR');
           publishedHead = git(request.cwd, 'rev-parse', 'HEAD');
           await request.prGitOperations!.push('HEAD:refs/heads/feature/pr');
-          mocks.status.mockResolvedValue({ merged: scenario === 'merged' });
+          mocks.status.mockResolvedValue({ merged: scenario === 'merged' || scenario === 'deleted_head', headSha: publishedHead });
+          if (scenario === 'deleted_head') git(fork, 'update-ref', '-d', 'refs/heads/feature/pr');
+          if (scenario === 'both_failed') throw new Error('CI stopped: https://user:fixture-secret@github.com/org/repo.git');
           if (scenario === 'workflow_failed') throw new Error('CI investigation stopped after push');
+          if (scenario === 'both_aborted') return { success: false, reason: 'CI stopped after workflow rejection' };
           return { success: true };
         });
         const result = await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true);
-        const success = scenario === 'prepared' || scenario === 'merged' || scenario === 'unmerged';
+        const success = scenario === 'prepared' || scenario === 'merged' || scenario === 'deleted_head' || scenario === 'unmerged';
         expect(result).toMatchObject({ success: success ? 1 : 0, fail: success ? 0 : 1 });
         const saved = runner.listTaskStateItems()[0]!;
         expect(saved.status).toBe(success ? 'completed' : 'failed');
-        expect(git(fork, 'rev-parse', 'feature/pr')).toBe(publishedHead);
+        if (scenario !== 'deleted_head') expect(git(fork, 'rev-parse', 'feature/pr')).toBe(publishedHead);
         expect(git(project, 'rev-parse', 'feature/pr')).toBe(
-          scenario === 'diverged' || scenario === 'checked_out' ? localHead : publishedHead);
+          scenario === 'diverged' || scenario === 'both_failed' || scenario === 'both_aborted' || scenario === 'checked_out' ? localHead : publishedHead);
         expect(git(project, 'rev-parse', 'HEAD')).toBe(originalHead);
         expect(readFileSync(join(project, 'code.txt'), 'utf8')).toBe(originalFile);
         if (scenario === 'checked_out') {
@@ -1262,16 +1271,92 @@ describe('Merge PR persistent clone ownership', () => {
         const [record] = readManagerEvents(project);
         expect(record!.event).toMatchObject({ kind: 'completion', goalId: goal.id, taskName: queued.taskName,
           runSlug: saved.runSlug, result: { success, mergeOutcome: scenario === 'prepared' || scenario === 'unmerged' || scenario === 'diverged' || scenario === 'checked_out' ? 'prepared'
-              : scenario === 'merged' ? 'merged' : 'unresolved',
-            branchSynchronization: { status: scenario === 'diverged' || scenario === 'checked_out' ? scenario : 'fast_forward',
+              : scenario === 'merged' || scenario === 'deleted_head' ? 'merged' : 'unresolved',
+            branchSynchronization: { status: scenario === 'both_failed' || scenario === 'both_aborted' ? 'diverged' : scenario === 'diverged' || scenario === 'checked_out' ? scenario : 'fast_forward',
               localSha: localHead, remoteSha: publishedHead } } });
         expect(managerInboxTurnEvent(project, record!.event)).toMatchObject({
           kind: success ? 'task_completed' : 'task_failed', result: saved.completion,
         });
+        if (scenario === 'both_failed' || scenario === 'both_aborted') {
+          expect(saved.completion?.failureReason).toContain('CI stopped');
+          expect(saved.completion?.failureReason).toContain('diverged');
+          expect(JSON.stringify(saved)).not.toContain('fixture-secret');
+          expect(JSON.stringify(record)).not.toContain('fixture-secret');
+        }
         await expect(getGoalTaskSource(project, goal, queued.taskName)).rejects.toThrow();
         expect((await new GoalStore(project).get(goal.id)).status).toBe('awaiting_merge');
       },
     );
+
+    it('normalizes a saved PR URL with a trailing slash before enqueue validation', async () => {
+      const { runner } = await queuedGoal('prepare', true);
+      expect(runner.listPendingTaskItems()).toHaveLength(1);
+    });
+
+    it('does not run an agent after the queued goal has completed', async () => {
+      const { goal, runner } = await queuedGoal('prepare');
+      await new GoalStore(project).update(goal.id, (current) => ({ ...current, status: 'completed',
+        completion: { ...current.completion!, targetSha: baseHead } }));
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 0, fail: 1 });
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(runner.listTaskStateItems()[0]?.completion?.success).toBe(false);
+    });
+
+    it.each(['uncommitted', 'staged', 'unpushed', 'untracked-hidden-by-config'] as const)('keeps %s changes after completion until explicitly discarded', async (kind) => {
+      const { goal, runner, queued } = await queuedGoal('prepare');
+      let clone = '';
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        clone = request.cwd;
+        writeFileSync(join(clone, 'unpublished.txt'), 'retain this result\n');
+        if (kind === 'staged') git(clone, 'add', 'unpublished.txt');
+        if (kind === 'unpushed') {
+          git(clone, 'config', 'user.name', 'Merge Worker');
+          git(clone, 'config', 'user.email', 'merge@example.com');
+          git(clone, 'add', 'unpublished.txt'); git(clone, 'commit', '-m', 'unpublished work');
+        }
+        return { success: true };
+      });
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 1, fail: 0 });
+      expect(readFileSync(join(clone, 'unpublished.txt'), 'utf8')).toBe('retain this result\n');
+      expect(runner.listAllTaskItems()[0]?.worktreePath).toBe(clone);
+      if (kind === 'untracked-hidden-by-config') {
+        git(clone, 'config', 'status.showUntrackedFiles', 'no');
+        expect(git(clone, 'status', '--porcelain')).toBe('');
+      }
+      const input = { cwd: project, goalId: goal.id, taskName: queued.taskName, reason: '片付け' };
+      const signal = new AbortController().signal;
+      const before = await new GoalStore(project).get(goal.id);
+      expect((await removeTaktGoalTask(input, {}, signal)).isError).toBe(true);
+      expect(readFileSync(join(clone, 'unpublished.txt'), 'utf8')).toBe('retain this result\n');
+      expect(runner.listAllTaskItems()[0]?.worktreePath).toBe(clone);
+      expect(await new GoalStore(project).get(goal.id)).toEqual(before);
+      expect((await removeTaktGoalTask({ ...input, discardUnmerged: true }, {}, signal)).isError).toBeUndefined();
+      expect(existsSync(clone)).toBe(false);
+      expect(runner.listAllTaskItems()).toHaveLength(0);
+      expect((await new GoalStore(project).get(goal.id)).workLog.at(-1)?.summary).toContain('discardUnmerged: true');
+    });
+
+    it('removes a retained PR merge clone without discard after its work is published', async () => {
+      const { goal, runner, queued } = await queuedGoal('prepare');
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        git(request.cwd, 'config', 'user.name', 'Merge Worker');
+        git(request.cwd, 'config', 'user.email', 'merge@example.com');
+        writeFileSync(join(request.cwd, 'published.txt'), 'publish this result\n');
+        git(request.cwd, 'add', 'published.txt'); git(request.cwd, 'commit', '-m', 'prepared work');
+        return { success: true };
+      });
+      expect(await runWithWorkerPool(runner, [], 1, project, { provider: 'mock' }, undefined, 10, 'run', undefined, true))
+        .toMatchObject({ success: 1, fail: 0 });
+      const clone = runner.listAllTaskItems()[0]!.worktreePath!;
+      expect(existsSync(clone)).toBe(true);
+      git(clone, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      expect((await removeTaktGoalTask({ cwd: project, goalId: goal.id, taskName: queued.taskName, reason: '片付け' },
+        {}, new AbortController().signal)).isError).toBeUndefined();
+      expect(existsSync(clone)).toBe(false);
+      expect(runner.listAllTaskItems()).toHaveLength(0);
+    });
 
     it('refreshes a lagging goal before publication and requires verification of the new tip', async () => {
       const { goal } = await queuedGoal('prepare');

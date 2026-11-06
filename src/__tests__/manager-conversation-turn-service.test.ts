@@ -219,6 +219,14 @@ it('inspects active patrol goals together using the saved conversation and no re
   const turn = f.execute.mock.calls[0]![0];
   expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
+  const { instruction } = JSON.parse(turn.prompt);
+  expect(instruction).toMatch(/latest reports, review findings and intended fixes/);
+  expect(instruction).toMatch(/task instructions and acceptance criteria/);
+  expect(instruction).toMatch(/deviations from the requested work/);
+  expect(instruction).toMatch(/takt_tell_run/);
+  expect(instruction).toMatch(/only findings confirmed to be outside the requested work/);
+  expect(instruction).toMatch(/Do not judge by execution time or step counts/);
+  expect(instruction).not.toMatch(/Check run duration|repeated steps/);
   expect(turn).toMatchObject({ patrol: true, sessionId: 'shared-session' });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();

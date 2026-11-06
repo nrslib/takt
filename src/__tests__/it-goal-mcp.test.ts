@@ -987,7 +987,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     });
   });
 
-  it.each(['approve', 'default', 'auto root', 'auto linked'])('records human merge instructions without moving references for %s', async (mode) => {
+  it.each(['approve', 'default', 'auto root', 'auto linked'])('records PR merge instructions without moving references for %s', async (mode) => {
     configure(mode.startsWith('auto') ? 'auto' : mode === 'default' ? undefined : 'approve');
     const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
@@ -1005,7 +1005,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(saved.status).not.toBe('completed');
       for (const text of [JSON.stringify(saved), firstTextContent(result.content)]) {
         for (const value of [branch, sha, 'main', summary]) expect(text).toContain(value);
-        expect(text).toMatch(/git[^\n]*merge/);
+        expect(text).toContain('takt_merge_goal_pr');
         if (mode.startsWith('auto')) expect(text).toContain(directory);
       }
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
@@ -1017,7 +1017,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     { mode: 'auto', location: 'linked' },
     { mode: 'approve', location: 'linked' },
     { mode: 'approve', location: 'root' },
-  ] as const)('executes the returned human merge commands in the $location target worktree in $mode mode', async ({ mode, location }) => {
+  ] as const)('returns PR preparation instructions without changing the $location target worktree in $mode mode', async ({ mode, location }) => {
     configure(mode);
     const sha = await commitFiles(branch, { 'result.txt': 'ready\n', 'src/a.ts': 'new one\nnew two\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
@@ -1039,23 +1039,12 @@ describe('local goal integration and inspection through manager MCP', () => {
         truncated: false, totalsTruncated: false,
       });
       expect(completion.instructions).toHaveLength(2);
-      for (const command of completion.instructions) {
-        execFileSync('/bin/sh', ['-c', command], {
-          cwd, stdio: 'pipe',
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Goal Test', GIT_AUTHOR_EMAIL: 'goal@example.test',
-            GIT_COMMITTER_NAME: 'Goal Test', GIT_COMMITTER_EMAIL: 'goal@example.test',
-          },
-        });
-      }
+      expect(completion.instructions.join('\n')).toContain('takt_merge_goal_pr');
+      expect(completion.instructions.join('\n')).not.toContain('git merge');
       expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(originalBranch);
       expect(git(directory, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
-      expect(readFileSync(join(directory, 'result.txt'), 'utf8')).toBe('ready\n');
-      expectIncluded(sha, 'main');
-      expect((await call(client, checkTool)).isError).toBeUndefined();
-      expect((await new GoalStore(cwd).get(goalId)).completion?.changeSummary).toEqual(completion.changeSummary);
-      expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
+      expect(existsSync(join(directory, 'result.txt'))).toBe(false);
+      expect((await new GoalStore(cwd).get(goalId)).status).toBe('awaiting_merge');
     });
   });
 
@@ -1109,9 +1098,9 @@ describe('local goal integration and inspection through manager MCP', () => {
       }
       expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
       expect(completion.worktrees).toBeUndefined();
-      expect(completion.instructions.slice(1)).toEqual([
-        'git status --short', "git switch 'main'", `git merge --no-ff --no-edit '${sha}'`,
-      ]);
+      expect(completion.instructions.join('\n')).toContain('takt_complete_goal');
+      expect(completion.instructions.join('\n')).toContain(sha);
+      expect(completion.instructions.join('\n')).not.toContain('git merge');
     });
   });
 

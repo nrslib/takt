@@ -982,7 +982,7 @@ for (const lang of ['ja', 'en']) {
       const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
       const record = { tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Decision and reason.' } };
       const output = { response: { message: 'Decision recorded.', summary: null }, calls: [record] };
-      if (['verification-repeated', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
+      if (['verification-once', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
       if (caseId === 'plan-missing') output.calls.unshift(enqueue(fixture, 'usage-docs'));
       assertSemanticGrader(caseId, lang);
       assert.equal(score(output, caseId, lang).pass, true, caseId);
@@ -997,11 +997,11 @@ for (const lang of ['ja', 'en']) {
       const extraWork = structuredClone(output);
       extraWork.calls.push(enqueue(fixture, 'check-only'));
       assert.equal(score(extraWork, caseId, lang).pass, false, caseId);
-      if (['verification-once', 'verification-told'].includes(caseId)) {
+      if (['verification-repeated', 'verification-told'].includes(caseId)) {
         output.calls.push(tellRun(fixture));
         assert.equal(score(output, caseId, lang).pass, false);
       }
-      if (['verification-repeated', 'verification-mixed', 'plan-missing'].includes(caseId)) {
+      if (['verification-once', 'verification-mixed', 'plan-missing'].includes(caseId)) {
         const missingAction = structuredClone(output);
         missingAction.calls.shift();
         assert.equal(score(missingAction, caseId, lang).pass, false);

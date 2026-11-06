@@ -13,7 +13,7 @@ manager:
 
 Patrols enter the non-human event queue. Processing priority is human input, ordinary events, then patrols; a patrol starts only when neither of the first two has waiting input. Accepting human input from the TUI or Slack in the same conversation interrupts a running patrol so the human input can be processed first. The interrupted patrol is not retried; patrols resume at the next interval. Queued input and events remain intact. Human input does not interrupt other running turns. Pending or running patrols do not accumulate, and missed intervals while the daemon is stopped are not replayed. While the TUI is connected, it displays one short result from a completed patrol, such as “Patrol: 2 goals, no anomalies”, without intermediate output. Details remain in work records. Inspection records alone do not count as progress. No Slack or other notification is sent when nothing is wrong. The manager uses existing notification or inquiry tools when a problem requires attention.
 
-Code watchers also notify the manager once per run after more than two hours, and once per run and step after more than five executions of that step. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
+Patrols compare the latest reports and records from running runs against the task instructions and acceptance criteria to check for deviations from the requested work. Threats or assumptions beyond the target scope, impossible premises, requirements absent from the acceptance criteria and unnecessary machinery are reported to the run with supporting evidence. Execution time and step counts do not determine anomalies. The `run_launch_stalled` observation remains to report a TAKT failure when a pending task has not started after 30 seconds. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
 
 ## Discussion and registration
 
@@ -80,7 +80,7 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 ## Events and watchers
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 ## Workspace
 
@@ -128,7 +128,7 @@ Manager listing (`takt_list_managers`) reports unreadable projects with reasons 
 
 ### Events and notifications
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 Set director options in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
 

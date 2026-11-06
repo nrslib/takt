@@ -391,10 +391,10 @@ function cloneWorkingLocations(cwd, fixture, source) {
   }
 }
 
-test('watcher fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
+test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
   const required = new Set(['mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
-    'report-publish-replacement', 'verification-repeated', 'verification-mixed']);
+    'report-publish-replacement', 'verification-once', 'verification-mixed']);
   const optional = new Set(['reservation-validation', 'legacy-date-format', 'archive-test-coverage',
     'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility']);
   try {
@@ -404,7 +404,7 @@ test('watcher fixtures support real run retrieval and all accepted live instruct
     let instructed = 0;
     let optionallyInstructed = 0;
     for (const { case: caseId, lang, fixture } of fixtures) {
-      if (fixture.event?.kind !== 'watch_observation') continue;
+      if (fixture.event?.kind !== 'patrol') continue;
       const cwd = join(root, caseId, lang);
       const task = fixture.tasks.find(({ status }) => status === 'running');
       assert.equal(task.worktree, true);
@@ -429,7 +429,7 @@ test('watcher fixtures support real run retrieval and all accepted live instruct
       if (required.has(caseId) || optional.has(caseId)) {
         const sent = await issueTellableRunningTask(cwd, task.runSlug, 'Keep the original criteria and apply the recorded repair decision.');
         assert.equal(sent.target.worktreePath, record.worktree_path);
-        assert.equal(sent.target.task.executionId, fixture.event.observation.task.executionId);
+        assert.equal(sent.target.task.executionId, task.executionId);
         assert.equal(sent.instructionId, 1);
         if (required.has(caseId)) instructed++;
         else optionallyInstructed++;

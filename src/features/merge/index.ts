@@ -33,7 +33,9 @@ import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../tasks/ex
 import type { GoalBranchSync, GoalTaskResult } from '../../infra/goals/schema.js';
 import { TaskStoppedError } from '../../infra/task/taskStop.js';
 import { GoalBranchSyncError, synchronizeGoalBranch } from '../../infra/goals/branch-sync.js';
+import { hasUnpublishedPrWork } from '../../infra/goals/git-command.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { synchronizeRetryPrHead } from './retry-sync.js';
 
 const log = createLogger('merge');
@@ -156,8 +158,18 @@ export async function executePersistedPrMergeTask(
     });
   let branchSynchronization: GoalBranchSync | undefined;
   let mergeOutcome: PrMergeResult['outcome'] = 'unresolved';
+  let workflowFailure: string | undefined;
   try {
     signal?.throwIfAborted();
+    if (data.goal_id !== undefined) {
+      const goal = await new GoalStore(projectCwd).get(data.goal_id);
+      if (goal.status !== 'awaiting_merge' || goal.executionStatus !== 'active'
+        || goal.branch !== data.branch || goal.integrationBranch !== data.base_branch
+        || goal.pullRequest?.number !== data.pr_number || task.prUrl === undefined
+        || parseGitHubPullRequestTarget(goal.pullRequest.url).url !== parseGitHubPullRequestTarget(task.prUrl).url) {
+        throw new Error('Goal is no longer available for this PR merge task');
+      }
+    }
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     const execution = await runPrMergeWorkflow({
       projectCwd, prNumber: data.pr_number, workflow: data.workflow,
@@ -171,10 +183,15 @@ export async function executePersistedPrMergeTask(
       (error: unknown) => ({ ok: false as const, error }),
     );
     if (execution.ok) mergeOutcome = execution.result.outcome;
+    workflowFailure = !execution.ok ? getErrorMessage(execution.error)
+      : execution.result.success ? undefined : execution.result.failureReason
+        ?? `PR #${data.pr_number} has unresolved work; inspect ${task.name} with takt list`;
     if (data.goal_id !== undefined) {
       const goal = await new GoalStore(projectCwd).get(data.goal_id);
       if (goal.branch !== data.branch) throw new Error('Goal branch changed during PR merge execution');
-      branchSynchronization = await synchronizeGoalBranch(projectCwd, goal.branch, undefined);
+      branchSynchronization = await synchronizeGoalBranch(projectCwd, goal.branch, undefined,
+        execution.ok && execution.result.merged && execution.result.headSha !== undefined
+          ? { cwd: task.worktreePath, sha: execution.result.headSha } : undefined);
     }
     if (!execution.ok) throw execution.error;
     const result = execution.result;
@@ -184,7 +201,7 @@ export async function executePersistedPrMergeTask(
       success: result.success, interrupted: false,
       workflowResult: result.success ? 'completed' : 'aborted', mergeOutcome: result.outcome,
       ...(branchSynchronization === undefined ? {} : { branchSynchronization }),
-      ...(!result.success ? { failureReason: `PR #${data.pr_number} has unresolved work; inspect ${task.name} with takt list` } : {}),
+      ...(workflowFailure === undefined ? {} : { failureReason: sanitizeSensitiveText(workflowFailure) }),
     };
     const terminal = { task: runningTask, success: result.success,
       response: completion.failureReason ?? (result.merged ? 'PR merged' : 'PR prepared'), completion,
@@ -197,8 +214,10 @@ export async function executePersistedPrMergeTask(
     runner.completeTask(terminal);
     try {
       assertReusableWorktreePath(projectCwd, task.worktreePath);
-      rmSync(task.worktreePath, { recursive: true, force: true });
-      runner.clearCompletedPrMergeWorktree(task.name);
+      if (!await hasUnpublishedPrWork(task.worktreePath, data.branch!, execution.result.headSha, undefined)) {
+        rmSync(task.worktreePath, { recursive: true, force: true });
+        runner.clearCompletedPrMergeWorktree(task.name);
+      }
     } catch (cleanupError) {
       log.error('PR workflow clone cleanup failed; the completed task retains its clone path', {
         prNumber: data.pr_number, taskName: task.name, error: getErrorMessage(cleanupError),
@@ -211,7 +230,9 @@ export async function executePersistedPrMergeTask(
     const current = runner.listAllTaskItems().find((item) => item.name === task.name);
     if (current?.kind === 'running') {
       const saveFailure = (failure: unknown): GoalTaskResult => {
-        const reason = getErrorMessage(failure);
+        const failureMessage = getErrorMessage(failure);
+        const reason = sanitizeSensitiveText(workflowFailure !== undefined && workflowFailure !== failureMessage
+          ? `${workflowFailure}; ${failureMessage}` : failureMessage);
         const completion: GoalTaskResult = {
           success: false,
           interrupted: failure instanceof TaskStoppedError || failure instanceof GoalPausedError,
@@ -246,7 +267,7 @@ export async function executePersistedPrMergeTask(
 
 async function runPrMergeWorkflow(
   request: PrWorkflowRequest, task: TaskInfo, runner: TaskRunner, runSlug: string,
-): Promise<PrMergeResult> {
+): Promise<PrMergeResult & { headSha?: string; failureReason?: string }> {
   const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) throw new Error('The VCS provider does not support PR merge workflow execution');
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
@@ -406,9 +427,10 @@ async function runPrMergeWorkflow(
     skipWorktreeRuntimeProtection: true,
   }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
-  const merged = (await provider.fetchPrStatus(request.prNumber, request.projectCwd,
-    { signal: request.abortSignal })).merged;
-  return { success: result.success, merged,
+  const { merged, headSha: publishedHeadSha } = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
+    { signal: request.abortSignal });
+  return { success: result.success, merged, headSha: publishedHeadSha,
+    ...(!result.success && result.reason !== undefined ? { failureReason: sanitizeSensitiveText(result.reason) } : {}),
     outcome: result.success ? (merged ? 'merged' : 'prepared') : 'unresolved' };
 }
 

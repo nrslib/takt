@@ -88,25 +88,16 @@ export async function integrateGoalTask(
     ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
-function shellQuote(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
-}
-
 function completionRecord(
   goal: Goal, expectedSha: string, targetBranch: string, summary: string,
   changeSummary: NonNullable<Goal['completion']>['changeSummary'], worktrees: string[],
 ): NonNullable<Goal['completion']> {
-  const directory = worktrees[0];
-  const git = directory === undefined ? 'git' : `git -C ${shellQuote(directory)}`;
   return {
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      ...(directory === undefined
-        ? ['Run in a clean worktree of this repository where switching branches is possible.'] : []),
-      `${git} status --short`,
-      ...(directory === undefined ? [`${git} switch ${shellQuote(targetBranch)}`] : []),
-      `${git} merge --no-ff --no-edit ${shellQuote(expectedSha)}`,
+      `Use takt_complete_goal to create or recover this goal PR (expectedSha: ${expectedSha}).`,
+      'Use takt_merge_goal_pr with until: prepare for approval mode, or until: merge for automatic or explicitly requested merging, after review and CI.',
     ],
   };
 }

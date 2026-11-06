@@ -84,7 +84,7 @@ afterEach(async () => {
 });
 
 describe('durable daemon event storage', () => {
-  it('indexes retired PR retry observations in every lifecycle state without replaying them', async () => {
+  it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
     const states = ['queued', 'running', 'settling', 'settled'] as const;
@@ -109,10 +109,12 @@ describe('durable daemon event storage', () => {
     const pending = [];
     for await (const record of restored.pending) pending.push(record.event.eventId);
     expect(restored.lastAcceptedSequence).toBe(5);
-    expect(pending).toEqual(['active']);
+    expect(pending).toHaveLength(2);
+    expect(pending).toEqual(expect.arrayContaining(['active', 'settling']));
     for (const state of states) {
-      await expect(restarted.accept(event(state, 6))).rejects.toThrow('retired');
-      await expect(restarted.accept({ ...event(`duplicate-${state}`, 6), requestId: state })).rejects.toThrow('retired');
+      const expected = { kind: 'duplicate', state: state === 'settling' ? 'settling' : 'settled' };
+      await expect(restarted.accept(event(state, 6))).resolves.toMatchObject(expected);
+      await expect(restarted.accept({ ...event(`duplicate-${state}`, 6), requestId: state })).resolves.toMatchObject(expected);
     }
     await expect(restarted.accept(event('sequence-conflict', 4))).rejects.toThrow('sequence');
     expect((await readdir(join(directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))).toHaveLength(5);

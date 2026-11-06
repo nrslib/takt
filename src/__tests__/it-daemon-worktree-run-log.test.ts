@@ -22,6 +22,7 @@ import { GoalStore } from '../infra/goals/store.js';
 import { readManagerEvents } from '../infra/goals/events.js';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import * as gitProvider from '../infra/git/index.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
@@ -30,7 +31,7 @@ import { TaskStore } from '../infra/task/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-describe('daemon による実際の run ログの検出', () => {
+describe('実際の run ログと daemon のプロセス観測', () => {
   let root: string;
   let project: string;
   let globalDirectory: string;
@@ -75,34 +76,47 @@ describe('daemon による実際の run ログの検出', () => {
   async function queuedGoalMerge() {
     const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
     execFileSync('git', ['branch', 'feature/watch-log', headSha], { cwd: project });
+    const prUrl = 'https://github.com/example/project/pull/9';
+    const gitConfig = join(root, 'gitconfig');
+    writeFileSync(gitConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', gitConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    execFileSync('git', ['config', '--file', gitConfig, `url.file://${project}.insteadOf`,
+      'git@github.com:example/project.git'], { cwd: project });
     const provider = new GitHubProvider();
     vi.spyOn(gitProvider, 'getGitProvider').mockReturnValue(provider);
-    vi.spyOn(provider, 'checkCliStatus').mockReturnValue({ available: true });
-    vi.spyOn(provider, 'fetchPrDetails').mockImplementation(async (_number, _cwd, signal) => {
+    vi.spyOn(GitHubProvider.prototype, 'checkCliStatus').mockReturnValue({ available: true });
+    vi.spyOn(GitHubProvider.prototype, 'fetchPrDetails').mockImplementation(async (_number, _cwd, signal) => {
       signal?.throwIfAborted();
       return { number: 9, headSha, headBranch: 'feature/watch-log', baseBranch: 'main',
         sameRepository: true, headRepositoryUrl: project, headRepositoryPushUrls: [project] };
     });
     const status = { number: 9, headSha, merged: false, ci: { finished: true, passed: true },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' };
-    vi.spyOn(provider, 'fetchPrStatus').mockImplementation(async (_number, _cwd, options) => {
+    vi.spyOn(GitHubProvider.prototype, 'fetchPrStatus').mockImplementation(async (_number, _cwd, options) => {
       options?.signal?.throwIfAborted();
       return status;
     });
-    expect(await executePrWorkflow({ projectCwd: project, prNumber: 9, workflow: 'watch-log',
+    expect(await executePrWorkflow({ projectCwd: project, prNumber: 9, pullRequest: parseGitHubPullRequestTarget(prUrl), workflow: 'watch-log',
       settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } })).toMatchObject({ success: false, merged: false, outcome: 'unresolved',
         completion: { success: false, workflowResult: 'aborted', mergeOutcome: 'unresolved' }, runSlug: expect.any(String) });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
+    await new GoalStore(project).update(goalId, (goal) => ({ ...goal,
+      branch: 'feature/watch-log', status: 'awaiting_merge', pullRequest: { number: 9, url: prUrl },
+      completion: { goalBranch: 'feature/watch-log', goalSha: headSha, targetBranch: 'main', summary: 'Reviewed',
+        instructions: [], changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } },
+    }));
     new TaskStore(project).update((current) => ({
-      tasks: current.tasks.map((task) => task.name === failed.name ? { ...task, goal_id: goalId } : task),
+      tasks: current.tasks.map((task) => task.name === failed.name ? { ...task, goal_id: goalId, pr_url: prUrl } : task),
     }));
     runner.requeueTask(failed.name, ['failed']);
     const task = runner.claimNextTasks(1)[0]!;
     return { runner, task, provider, status };
   }
 
-  it('本物の merge run が元リポジトリに書いたログを検出する', async () => {
+  it('本物の merge run を観測し、元リポジトリへログを書く', async () => {
     const { runner, task, provider, status } = await queuedGoalMerge();
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
@@ -116,18 +130,20 @@ describe('daemon による実際の run ログの検出', () => {
     });
     setMockScenario([{ persona: 'worker', status: 'done', content: 'Actual merge run log.' }]);
     try {
-      expect((await executeTaskAndCompleteWithDetails(task, runner, project, executeTaskWithResult,
-        { provider: 'mock' }, { outputMode: 'silent' })).success).toBe(false);
-      expect(observations).toHaveLength(1);
+      const result = await executeTaskAndCompleteWithDetails(task, runner, project, executeTaskWithResult,
+        { provider: 'mock' }, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(observations, result.failureReason).toHaveLength(1);
       expect(observations[0]).toHaveLength(1);
       const target = observations[0]![0]!;
       const saved = new TaskStore(project).read().tasks[0]!;
       expect(saved.merge_task).toBe(true);
       expect(saved.worktree_path).not.toBe(project);
-      expect(target.logPath).toEqual(expect.any(String));
+      expect(target.task).toMatchObject({ taskName: task.name, runSlug: saved.run_slug });
       const logsDirectory = join(project, '.takt', 'runs', saved.run_slug!, 'logs');
-      expect(readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl')).map((file) => join(logsDirectory, file))).toContain(target.logPath);
-      expect(readFileSync(target.logPath!, 'utf8')).toContain('Actual merge run log.');
+      const logs = readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl'));
+      expect(logs).not.toHaveLength(0);
+      expect(logs.map((file) => readFileSync(join(logsDirectory, file), 'utf8')).join('\n')).toContain('Actual merge run log.');
       expect(existsSync(join(saved.worktree_path!, '.takt', 'runs', saved.run_slug!, 'logs'))).toBe(false);
       expect(errors).not.toHaveBeenCalled();
     } finally { await conversations.close(); }
@@ -221,13 +237,13 @@ describe('daemon による実際の run ログの検出', () => {
       expect(observations[0]).toHaveLength(1);
       const target = observations[0]![0]!;
       const saved = new TaskStore(project).read().tasks[0]!;
-      expect(target).toMatchObject({ running: true, paused: false,
-        task: { repositoryDirectory: project, taskName: task.name, runSlug: saved.run_slug }, logPath: expect.any(String) });
+      expect(target).toMatchObject({ running: true,
+        task: { repositoryDirectory: project, taskName: task.name, runSlug: saved.run_slug } });
       const executionDirectory = worktree ? saved.worktree_path! : project;
       const logsDirectory = join(executionDirectory, '.takt', 'runs', saved.run_slug!, 'logs');
       const logs = readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl')).map((file) => join(logsDirectory, file));
-      expect(logs).toContain(target.logPath);
-      const content = readFileSync(target.logPath!, 'utf8');
+      expect(logs).not.toHaveLength(0);
+      const content = logs.map((path) => readFileSync(path, 'utf8')).join('\n');
       expect(content).toContain('Real mock run for daemon log observation.');
       expect(content.trim().split('\n').map((line) => JSON.parse(line))).not.toHaveLength(0);
       if (worktree) {
