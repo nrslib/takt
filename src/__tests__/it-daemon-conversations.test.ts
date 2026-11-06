@@ -123,9 +123,18 @@ it('reopens the same conversation and approves its restored summary with Up and 
     await waitForManager(first, fixture.summary.objective);
     await vi.waitFor(async () => expect((await fixture.state())?.pending?.summary).toEqual(fixture.summary), { timeout: 30000 });
     const saved = (await fixture.state())!;
+    const firstFrame = await first.frame();
     await first.exit();
     const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, fixture.summary.objective);
+    const notice = getLabel('manager.experimentalNotice', 'en').replace(/\s+/gu, '');
+    for (const frame of [firstFrame, await second.frame()]) {
+      const text = stripVTControlCharacters(frame).replace(/\s+/gu, '');
+      expect(text.startsWith(notice)).toBe(true);
+      expect(text.split(notice)).toHaveLength(2);
+      expect(text.indexOf(notice)).toBeLessThan(text.indexOf(fixture.summary.objective.replace(/\s+/gu, '')));
+    }
+    expect(JSON.stringify(await fixture.state()).replace(/\s+/gu, '')).not.toContain(notice);
     const opens = fixture.readObservations().filter(({ event, method }) => event === 'request' && method === 'open');
     expect(opens.filter(({ pid }) => pid === first.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     expect(opens.filter(({ pid }) => pid === second.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
@@ -376,8 +385,7 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
   const expectProposalFrame = (frame: string, updated: boolean): void => {
     const rows = stripVTControlCharacters(frame).split('\n');
     const heading = getLabel('manager.assignmentHeading', language, { name: basename(fixture.repository) });
-    const status = [heading, getLabel('manager.counts', language, { goals: '0', questions: '0' }),
-      getLabel('manager.statusExperimental', language)].join(' | ');
+    const status = [heading, getLabel('manager.counts', language, { goals: '0', questions: '0' })].join(' | ');
     expect(rows.filter((row) => row.trim() === status)).toHaveLength(1);
     expect(rows.filter((row) => row.trim() !== '').at(-1)?.trim()).toBe(status);
     const confirmation = getLabel('manager.summary.confirmation', language);

@@ -21,13 +21,13 @@ Start `takt manager` in an interactive terminal and describe the objective, scop
 
 Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a goal proposal itself.
 
-The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries, and the experimental label on one line. Long assignment headings are truncated in the middle to preserve the counts and experimental label. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message.
+The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message.
 
 Below the input box, key hints are followed by the status line (example below). The `/make-goal` explanation appears in slash completion rather than as a permanent hint. The full experimental notice appears once at startup.
 
 ```text
 Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
-Assignment: takt | Ongoing 1 / Pending 0 | experimental
+Assignment: takt | Ongoing 1 / Pending 0
 ```
 
 The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting **Register goal** and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.

@@ -1085,8 +1085,7 @@ describe('manager questions, answers and notifications through production bounda
     const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
     const project = basename(cwd);
     const status = [getLabel('manager.assignmentHeading', 'en', { name: project }),
-      getLabel('manager.counts', 'en', { goals: '1', questions: '0' }),
-      getLabel('manager.statusExperimental', 'en')].join(' | ');
+      getLabel('manager.counts', 'en', { goals: '1', questions: '0' })].join(' | ');
     const customHeading = getLabel('manager.notificationHeadings.custom', 'en', { project });
     const blockedHeading = getLabel('manager.notificationHeadings.blocked', 'en', { project });
     const goalLine = getLabel('manager.notificationGoal', 'en', { objective: goalRecord().objective, id: goalId.slice(0, 8) });

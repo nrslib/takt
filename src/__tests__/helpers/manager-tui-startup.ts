@@ -9,23 +9,22 @@ it.each(['ja', 'en'] as const)('shows the status line and assignment without sen
   const context = mount(lang);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain('manager-repository');
-    expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(getLabel('manager.statusExperimental', lang).replace(/\s+/gu, ''));
+    expect(context.app.lastFrame()!.split('\n').at(-1)).not.toMatch(/実験的|experimental/iu);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
 });
 
-it.each([40, 80])('keeps Japanese guidance and the status line within %i columns', async (width) => {
+it.each([30, 80])('keeps Japanese guidance and the status line within %i columns', async (width) => {
   const context = mount('ja');
   Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: width });
   context.app.stdout.emit('resize');
   await waitFor(() => {
     const frame = context.app.lastFrame()!;
-    for (const line of frame.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(width);
+    for (const line of promptFrame(context).split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(width);
     expect(frame.replace(/\s+/gu, '')).toContain(getLabel('manager.inputHint', 'ja').replace(/\s+/gu, ''));
     const heading = getLabel('manager.assignmentHeading', 'ja', { name: 'manager-repository' });
-    const details = [getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }),
-      getLabel('manager.statusExperimental', 'ja')].join(' | ');
-    expect(frame.split('\n').slice(width === 40 ? -2 : -1)).toEqual(width === 40 ? [heading, details] : [`${heading} | ${details}`]);
+    const details = getLabel('manager.counts', 'ja', { goals: '0', questions: '0' });
+    expect(frame.split('\n').slice(width === 30 ? -2 : -1)).toEqual(width === 30 ? [heading, details] : [`${heading} | ${details}`]);
   });
 });
 
@@ -41,8 +40,7 @@ it.each(['ja', 'en'] as const)('shows key guidance followed by one status line a
     expect(footer).toEqual([
       getLabel('manager.inputHint', lang),
       [getLabel('manager.assignmentHeading', lang, { name: 'manager-repository' }),
-        getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
-        getLabel('manager.statusExperimental', lang)].join(' | '),
+        getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '),
     ]);
     expect(rows.slice(0, end + 1).join('\n')).not.toContain('manager-repository');
     expect(rows.join('\n')).not.toContain('/make-goal');
@@ -52,7 +50,7 @@ it.each(['ja', 'en'] as const)('shows key guidance followed by one status line a
 
 it.each(['ja', 'en'] as const)('shows approval guidance above the status line in %s', async (lang) => {
   const context = mount(lang);
-  await waitFor(() => expect(promptFrame(context)).toContain(getLabel('manager.statusExperimental', lang)));
+  await waitFor(() => expect(promptFrame(context)).toContain(getLabel('manager.counts', lang, { goals: '0', questions: '0' })));
   await showProposal(context);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(summaryA.objective);
@@ -74,9 +72,9 @@ it.each(['ja', 'en'] as const)('wraps guidance only between whole key items at w
     const end = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
     expect(end).toBeGreaterThan(0);
     const hints = rows.slice(end + 1).map((row) => row.trim()).filter(Boolean);
-    expect(hints.at(-1)).toContain(getLabel('manager.statusExperimental', lang));
+    expect(hints.at(-1)).toContain(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
     expect(hints.slice(0, -1).flatMap((row) => row.split(/ {2,}/u))).toEqual(items);
-    for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
+    for (const row of promptFrame(context).split('\n')) expect(stringWidth(row)).toBeLessThanOrEqual(80);
   });
 });
 
@@ -98,7 +96,7 @@ it.each(['ja', 'en'] as const)('offers only /make-goal with its description belo
     const candidate = rows.indexOf(candidates[0]!);
     expect(candidate).toBe(promptEnd + 1);
     expect(rows[candidate + 1]).toContain('Enter');
-    for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
+    for (const row of promptFrame(context).split('\n')) expect(stringWidth(row)).toBeLessThanOrEqual(80);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
 });
@@ -194,8 +192,7 @@ it.each(['ja', 'en'] as const)('projects new notices once while preserving assig
   expect(context.client.refresh).toHaveBeenCalled();
   const rows = context.app.lastFrame()!.split('\n');
   expect(rows.at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: 'manager-repository' }),
-    getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
-    getLabel('manager.statusExperimental', lang)].join(' | '));
+    getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '));
 });
 
 it('shows a failed read without replacing the prior complete data with an empty assignment', async () => {

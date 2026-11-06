@@ -483,7 +483,6 @@ manager:
   assignmentHeadingMultiple: "担当: {name} ほか {count} 件"
   counts: "進行中 {goals} ／ 未回答 {questions}"
   inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了"
-  statusExperimental: "実験的機能"
   makeGoalDescription: "ゴールの登録案を作る・作り直す"
   slackGoalApprove: "登録する"
   slackGoalDismiss: "登録せずに会話に戻る"

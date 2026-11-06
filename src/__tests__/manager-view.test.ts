@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { createElement } from 'react';
+import { renderToString } from 'ink';
+import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
 import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
+import { FALLBACK_USER_MESSAGE_COLORS } from '../features/tui/terminalColors.js';
+import { stripAnsi } from '../shared/utils/text.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { cwd, DOWN, ENTER, ManagerClientDouble, mount, promptFrame, QUESTION_MENU, waitFor } from './helpers/manager-tui-fixtures.js';
 
@@ -17,7 +21,43 @@ vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
 const entries = () => vi.mocked(TranscriptView).mock.calls.at(-1)![0].entries;
 
 describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
-  it('shows assignment, counts and experimental status on one bottom row after the key hints', async () => {
+  it('shows the full startup notice once before conversation output without adding it to messages or commands', async () => {
+    const { app, client } = mount(lang);
+    const notice = getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, '');
+    const checkNotice = (): void => {
+      const text = app.lastFrame()!.replace(/\s+/gu, '');
+      expect(text.startsWith(notice)).toBe(true);
+      expect(text.split(notice)).toHaveLength(2);
+      expect(app.lastFrame()!.split('\n').at(-1)).not.toMatch(/実験的|experimental/iu);
+    };
+    await waitFor(checkNotice);
+    expect(entries()).toEqual([]);
+    expect(client.submit).not.toHaveBeenCalled();
+    client.output({ kind: 'reply', operationId: randomUUID(), message: 'Conversation reply' });
+    await waitFor(() => expect(app.lastFrame()).toContain('Conversation reply'));
+    checkNotice();
+    expect(entries()).toEqual([{ role: 'assistant', content: 'Conversation reply' }]);
+    app.stdin.write('Hello\r');
+    await waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: 'Hello' }]));
+    checkNotice();
+  });
+
+  it.each([24, 40, 80])('wraps the full yellow startup notice within %i columns', (columns) => {
+    const level = chalk.level;
+    try {
+      chalk.level = 3;
+      const output = renderToString(createElement(TranscriptView, {
+        entries: [], startupNotice: getLabel('manager.experimentalNotice', lang),
+        userMessageColors: FALLBACK_USER_MESSAGE_COLORS,
+      }), { columns });
+      expect(output).toContain('\x1b[33m');
+      const text = stripAnsi(output);
+      expect(text.replace(/\s+/gu, '')).toBe(getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, ''));
+      for (const row of text.split('\n')) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+    } finally { chalk.level = level; }
+  });
+
+  it('shows assignment and counts on one bottom row after the key hints', async () => {
     const client = new ManagerClientDouble();
     const assignment = client.getSnapshot().items[0]!;
     client.change({ items: [assignment, { kind: 'goal', goal: { ...goalRecord(), repositoryDirectory: cwd } }, {
@@ -29,13 +69,13 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     context.app.stdout.emit('resize');
     const heading = getLabel('manager.assignmentHeading', lang, { name: 'manager-repository' });
     const counts = getLabel('manager.counts', lang, { goals: '1', questions: '1' });
-    const status = [heading, counts, getLabel('manager.statusExperimental', lang)].join(' | ');
+    const status = [heading, counts].join(' | ');
     await waitFor(() => {
       const rows = context.app.lastFrame()!.split('\n');
       expect(rows.slice(-2)).toEqual([getLabel('manager.inputHint', lang), status]);
       expect(rows.filter((row) => row.includes(heading) || row.includes(counts))).toEqual([status]);
       expect(rows.join('\n')).not.toContain('/make-goal');
-      expect(rows.join('').replace(/\s+/gu, '')).not.toContain(getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, ''));
+      expect(rows.join('').replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, ''));
     });
     expect(client.submit).not.toHaveBeenCalled();
     context.app.stdin.write('/');
@@ -51,7 +91,6 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     await waitFor(() => expect(app.lastFrame()!.split('\n').at(-1)).toBe([
       getLabel('manager.assignmentHeadingMultiple', lang, { name: 'manager-repository', count: '2' }),
       getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
-      getLabel('manager.statusExperimental', lang),
     ].join(' | ')));
   });
 
@@ -64,12 +103,11 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     await waitFor(() => expect(app.lastFrame()!.split('\n').at(-1)).toBe([
       getLabel('manager.selectionEmpty.repository', lang),
       getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
-      getLabel('manager.statusExperimental', lang),
     ].join(' | ')));
     expect(app.lastFrame()).not.toContain('manager-repository');
   });
 
-  it.each([52, 54])('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
+  it.each(lang === 'ja' ? [36, 38] : [38, 40])('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
     const { app } = mount(lang);
     Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
     app.stdout.emit('resize');
@@ -79,13 +117,13 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       const [heading] = status.split(' | ');
       const counts = getLabel('manager.counts', lang, { goals: '0', questions: '0' });
       expect(heading).toContain('…');
-      expect(status.split(' | ')).toEqual([heading, counts, getLabel('manager.statusExperimental', lang)]);
+      expect(status.split(' | ')).toEqual([heading, counts]);
       expect(rows.filter((row) => row.includes(counts))).toEqual([status]);
-      for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+      for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
     });
   });
 
-  it.each([52, 80])('truncates only the assignment heading and preserves counts and experimental status within %i columns', async (columns) => {
+  it.each([52, 80])('truncates only the assignment heading and preserves counts within %i columns', async (columns) => {
     const name = '開発repository'.repeat(30);
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
       kind: 'repository', repositoryDirectory: `/test/${name}`, repositoryDirectories: [`/test/${name}`],
@@ -96,16 +134,15 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     await waitFor(() => {
       const rows = app.lastFrame()!.split('\n');
       const status = rows.at(-1)!;
-      const [heading, counts, experimental] = status.split(' | ');
+      const [heading, counts] = status.split(' | ');
       expect(heading).toContain('…');
       expect(counts).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
-      expect(experimental).toBe(getLabel('manager.statusExperimental', lang));
       expect(rows.filter((row) => row.includes(counts!))).toEqual([status]);
-      for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+      for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
     });
   });
 
-  it.each(lang === 'ja' ? [34, 40, 42] : [36, 40, 42])('shows the assignment above counts and experimental status within %i columns', async (columns) => {
+  it.each(lang === 'ja' ? [24, 28, 30] : [26, 30, 32])('shows the assignment above counts within %i columns', async (columns) => {
     const name = `開発-${'repository'.repeat(10)}-末尾`;
     const repositoryDirectory = `/test/${name}`;
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
@@ -119,7 +156,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     app.stdout.emit('resize');
     const fullHeading = getLabel('manager.assignmentHeading', lang, { name });
     const counts = getLabel('manager.counts', lang, { goals: '1', questions: '1' });
-    const details = `${counts} | ${getLabel('manager.statusExperimental', lang)}`;
+    const details = counts;
     await waitFor(() => {
       const rows = app.lastFrame()!.split('\n');
       const heading = rows.at(-2)!.trimEnd();
@@ -130,7 +167,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       expect(fullHeading.endsWith(end!)).toBe(true);
       expect(rows.at(-1)).toBe(details);
       expect(rows.filter((row) => row.includes(counts))).toEqual([details]);
-      for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+      for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
     });
   });
 
@@ -142,8 +179,8 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     } }] });
     const { app } = mount(lang, client);
     const counts = getLabel('manager.counts', lang, { goals: '0', questions: '0' });
-    const details = `${counts} | ${getLabel('manager.statusExperimental', lang)}`;
-    for (const columns of [1, 2, 8, 12, 20, 30]) {
+    const details = counts;
+    for (const columns of [1, 2, 8, 12]) {
       Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
       app.stdout.emit('resize');
       await waitFor(() => {
@@ -153,7 +190,6 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
         const truncatedDetails = rows[1]!.trimEnd();
         expect(truncatedDetails).toMatch(/…$/u);
         expect(details.startsWith(truncatedDetails.slice(0, -1))).toBe(true);
-        if (columns === 30) expect(truncatedDetails).toContain(counts);
         for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
       });
     }
@@ -173,7 +209,6 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     const { app } = mount(lang, client);
     const fullHeading = getLabel('manager.assignmentHeadingMultiple', lang, { name, count: '2' });
     const counts = getLabel('manager.counts', lang, { goals: '12', questions: '3' });
-    const experimental = getLabel('manager.statusExperimental', lang);
     for (const columns of [80, 60, 120]) {
       Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
       app.stdout.emit('resize');
@@ -181,14 +216,14 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
         const rows = app.lastFrame()!.split('\n');
         const status = rows.at(-1)!;
         const [heading] = status.split(' | ');
-        expect(status.split(' | ')).toEqual([heading, counts, experimental]);
+        expect(status.split(' | ')).toEqual([heading, counts]);
         const [start, end] = heading!.trimEnd().split('…');
         expect(start!.length).toBeGreaterThan(0);
         expect(end!.length).toBeGreaterThan(0);
         expect(fullHeading.startsWith(start!)).toBe(true);
         expect(fullHeading.slice(-end!.length)).toBe(end);
         expect(rows.filter((row) => row.includes(counts))).toEqual([status]);
-        for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
+        for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
       });
     }
   });

@@ -85,18 +85,18 @@ describe('manager summary transcript and terminal height', () => {
     ...summary.constraints, summary.startBranch!, summary.integrationBranch!,
   ];
 
-  function mountTerminal(lang: 'ja' | 'en', summary = makeSummary(4)) {
+  function mountTerminal(lang: 'ja' | 'en', summary = makeSummary(4), columns = 80) {
     const client = new ManagerClientDouble();
     client.proposal(summary, 4);
     const frames: string[] = [];
-    const stdout = Object.assign(new PassThrough(), { columns: 80, rows: 24, isTTY: true });
+    const stdout = Object.assign(new PassThrough(), { columns, rows: 24, isTTY: true });
     stdout.on('data', (chunk: Buffer) => { frames.push(chunk.toString()); });
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true, setRawMode: () => stdin, ref: () => stdin, unref: () => stdin,
     });
     const stderr = new PassThrough();
     stderr.resume();
-    const terminal = new Terminal({ allowProposedApi: true, cols: 80, rows: 24, convertEol: true, scrollback: 10_000 });
+    const terminal = new Terminal({ allowProposedApi: true, cols: columns, rows: 24, convertEol: true, scrollback: 10_000 });
     const app = renderInk(createElement(ManagerView, { cwd: summaryRepository, lang, client,
       assignment: { kind: 'repository', repositoryDirectory: summaryRepository, repositoryDirectories: [summaryRepository] },
       initialDiagnostics: [], onExit: vi.fn() }), {
@@ -121,6 +121,24 @@ describe('manager summary transcript and terminal height', () => {
       },
     };
   }
+
+  describe.each(['ja', 'en'] as const)('startup notice in %s', (lang) => {
+    it.each([24, 40, 80])('prints the full notice once before a restored proposal within %i columns', async (columns) => {
+      const summary = makeSummary(4);
+      const context = mountTerminal(lang, summary, columns);
+      try {
+        await waitFor(() => expect(proposalEntries(summary)).toHaveLength(1));
+        const text = await context.text();
+        const normalized = text.replace(/\s+/gu, '');
+        const notice = getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, '');
+        expect(normalized.startsWith(notice)).toBe(true);
+        expect(normalized.split(notice)).toHaveLength(2);
+        expect(normalized).toContain(summary.objective.replace(/\s+/gu, ''));
+        expect(text.split('\n').at(-1)).not.toMatch(/実験的|experimental/iu);
+        for (const row of text.split('\n')) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
+      } finally { context.dispose(); }
+    });
+  });
 
   it.each(['patrol', 'human'] as const)('displays a %s result once when markSettled fails after delivery and storage is retried', async (kind) => {
     const context = mountTerminal('ja');
@@ -173,6 +191,10 @@ describe('manager summary transcript and terminal height', () => {
           getLabel('manager.counts', lang, { goals: String(index), questions: '0' })));
       }
       const text = await context.text();
+      const notice = getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, '');
+      expect(text.replace(/\s+/gu, '').startsWith(notice)).toBe(true);
+      expect(text.replace(/\s+/gu, '').split(notice)).toHaveLength(2);
+      expect(transcript().some((entry) => entry.content.includes(getLabel('manager.experimentalNotice', lang)))).toBe(false);
       for (const value of summaryValues(summary)) expect(text.split(value)).toHaveLength(2);
       const rows = text.split('\n');
       expect(rows.filter((row) => row.startsWith(getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) }) + ' | '))).toHaveLength(1);
@@ -589,7 +611,7 @@ describe('manager polling and answer cancellation', () => {
     app!.stdout.emit('resize');
     await waitFor(() => {
       const rows = app!.lastFrame()!.split('\n');
-      expect(rows.at(-1)).toBe(`担当: ${basename(cwd)} | 進行中 0 ／ 未回答 0 | 実験的機能`);
+      expect(rows.at(-1)).toBe(`担当: ${basename(cwd)} | 進行中 0 ／ 未回答 0`);
       expect(rows.slice(0, -1).join('\n')).not.toMatch(/担当:|進行中/u);
       expect(rows.join('')).not.toContain(cwd);
       for (const row of rows) {
@@ -603,7 +625,7 @@ describe('manager polling and answer cancellation', () => {
     for (const directory of directories.slice(1)) mkdirSync(directory);
     await mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '作業用workspace', repositoryDirectories: directories }, []);
     await waitFor(() => {
-      expect(app!.lastFrame()!.split('\n').at(-1)).toBe(`担当: ${basename(cwd)} ほか 2 件 | 進行中 0 ／ 未回答 0 | 実験的機能`);
+      expect(app!.lastFrame()!.split('\n').at(-1)).toBe(`担当: ${basename(cwd)} ほか 2 件 | 進行中 0 ／ 未回答 0`);
     });
   });
 
@@ -618,10 +640,10 @@ describe('manager polling and answer cancellation', () => {
         const rows = app!.lastFrame()!.split('\n');
         const status = rows.at(-1)!;
         expect(status).toMatch(/^担当: 開発-0-/u);
-        expect(status).toContain(' | 進行中 0 ／ 未回答 0 | 実験的機能');
+        expect(status).toContain(' | 進行中 0 ／ 未回答 0');
         expect(stringWidth(status)).toBeLessThanOrEqual(80);
         if (name === '開発-0-作業') {
-          expect(status).toBe(`担当: ${name}${count > 1 ? ' ほか 2 件' : ''} | 進行中 0 ／ 未回答 0 | 実験的機能`);
+          expect(status).toBe(`担当: ${name}${count > 1 ? ' ほか 2 件' : ''} | 進行中 0 ／ 未回答 0`);
         } else expect(status).toContain('…');
         expect(rows.slice(0, -1).join('\n')).not.toMatch(/担当:|進行中/u);
       });
@@ -635,8 +657,7 @@ describe('manager polling and answer cancellation', () => {
     const checkHeading = () => {
       const rows = app!.lastFrame()!.split('\n');
       expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
-        getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
-        getLabel('manager.statusExperimental', lang)].join(' | '));
+        getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '));
       for (const value of [basename(cwd), assignment.workspaceId]) expect(rows.at(-1)).not.toContain(value);
     };
     checkHeading();
@@ -647,7 +668,7 @@ describe('manager polling and answer cancellation', () => {
     });
   });
 
-  describe.each([80, 40])('input guidance at width %i', (columns) => {
+  describe.each([80, 30])('input guidance at width %i', (columns) => {
     it('shows the complete Japanese key guidance below the input and the status line last', async () => {
       await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
@@ -658,18 +679,17 @@ describe('manager polling and answer cancellation', () => {
         const rows = frame.split('\n');
         const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
         expect(promptEnd).toBeGreaterThan(0);
-        const statusRows = columns === 40 ? 2 : 1;
+        const statusRows = columns === 30 ? 2 : 1;
         const hintRows = rows.slice(promptEnd + 1, -statusRows).filter((row) => row.trim() !== '');
         expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
-        if (columns === 40) expect(hintRows.length).toBeGreaterThan(1);
+        if (columns === 30) expect(hintRows.length).toBeGreaterThan(1);
         else expect(hintRows).toHaveLength(1);
-        for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
+        for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
         const heading = getLabel('manager.assignmentHeading', 'ja', { name: basename(cwd) });
-        const details = [getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }),
-          getLabel('manager.statusExperimental', 'ja')].join(' | ');
-        expect(rows.slice(-statusRows)).toEqual(columns === 40 ? [heading, details] : [`${heading} | ${details}`]);
+        const details = getLabel('manager.counts', 'ja', { goals: '0', questions: '0' });
+        expect(rows.slice(-statusRows)).toEqual(columns === 30 ? [heading, details] : [`${heading} | ${details}`]);
         const beforeInput = rows.slice(0, rows.map((row) => row.startsWith('╭')).lastIndexOf(true)).join('');
-        expect(beforeInput.replace(/\s+/gu, '')).not.toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
+        expect(beforeInput.replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
         expect(beforeInput).not.toMatch(/担当:|進行中/u);
       });
     });
@@ -689,7 +709,7 @@ describe('manager polling and answer cancellation', () => {
       expect(hint).not.toContain('/make-goal');
       expect(hint).not.toMatch(/\^[ONP]/u);
       for (const row of rows.slice(promptEnd + 1)) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
-      for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
+      for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(stringWidth(row)).toBeLessThanOrEqual(80);
     });
   });
 
@@ -716,7 +736,7 @@ describe('manager polling and answer cancellation', () => {
       expect(row).not.toMatch(/provider.*API|API.*(?:費用|cost)/iu);
     }
     expect(rows.join('').replace(/\s+/gu, '')).not.toContain(getLabel('manager.costNotice', lang).replace(/\s+/gu, ''));
-    expect(app!.lastFrame()!.replace(/\s+/gu, '')).toContain(getLabel('manager.statusExperimental', lang).replace(/\s+/gu, ''));
+    expect(countLine(lang)).not.toMatch(/実験的|experimental/iu);
   });
 
   it.each(['ja', 'en'] as const)('refreshes counts after status and inquiry changes in the same %s screen', async (lang) => {
