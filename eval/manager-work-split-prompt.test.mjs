@@ -25,10 +25,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 108 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 112 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 108);
+  assert.equal(suite.tests.length, 112);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -75,6 +75,8 @@ test('question expectations match choice, information and operation scenarios in
     'task-stopped-not-resumed': 'choice',
     'migration-method-event': 'choice',
     'migration-method-conversation': 'choice',
+    'csv-export-scope-conversation': 'choice',
+    'search-index-scope-conversation': 'choice',
     'conflicting-calendar-visibility': 'choice',
     'escalate-repeated-failure': 'choice-or-operation',
     'external-contract-limit': 'information',
@@ -391,6 +393,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
     'stopped-background-execution', 'integrated-task-execution',
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
+    'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
@@ -576,6 +579,43 @@ test('question fixtures preserve the human input boundary and constraints', () =
     assert.equal(new Set(unidentified.goals.map((candidate) => GoalSchema.parse(candidate).id)).size, 2);
     assert.deepEqual(unidentified.readResults[0].result.goals,
       unidentified.goals.map((candidate) => goalSummary(GoalSchema.parse(candidate))));
+  }
+});
+
+test('scope consultations replay substantial investigation after the human request without inventing a registered goal', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['csv-export-scope-conversation', 'search-index-scope-conversation']) {
+      const fixture = loadManagerCase(caseId, lang);
+      assert.equal(fixture.turn, 'conversation');
+      assert.equal(fixture.expectedQuestionType, 'choice');
+      assert.equal(fixture.goal, undefined);
+      assert.deepEqual(fixture.tasks, []);
+      const reads = fixture.readResults;
+      assert.deepEqual(reads.map(({ tool }) => tool), [
+        'takt_list_goals', 'takt_list_standalone_inquiries', 'Bash', 'Bash', 'Bash', 'Agent',
+      ]);
+      for (const [index, collection] of ['goals', 'inquiries'].entries()) {
+        assert.deepEqual(reads[index].result, {
+          [collection]: [], collection, totalCount: 0, returnedCount: 0,
+          omittedCount: 0, offset: 0, nextOffset: null, truncated: false,
+        });
+      }
+      const research = reads.slice(2);
+      assert.ok(research.every(({ result }) => typeof result === 'string' && result.length > 0));
+      assert.ok(research.reduce((total, read) => total + read.result.length, 0) > 6000,
+        'Preserve the extended investigation rather than reducing it to a short comparison of alternatives');
+      assert.equal(reads.at(-1).arguments.subagent_type, 'Explore');
+      assert.match(reads.at(-1).result, /src\/.*:\d+/);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      const input = prompt.split('\n\nUSER:\n')[1];
+      assert.ok(input.startsWith(fixture.user));
+      assert.ok(input.includes(JSON.stringify(reads)));
+      assert.doesNotMatch(input, /llm-rubric|expectedQuestionType|\/Users\/|Slack|Webhook|合格|不合格/);
+      const rows = suite.tests.filter(({ vars }) => vars.case === caseId && vars.lang === lang);
+      assert.equal(rows.length, 1);
+      assert.deepEqual(rows[0].providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      assert.equal(rows[0].assert[0].type, 'llm-rubric');
+    }
   }
 });
 
