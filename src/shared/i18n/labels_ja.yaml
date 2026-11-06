@@ -450,8 +450,7 @@ director:
   managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
   goalPr:
-    retryLimitReached: "PR の準備の自動再試行は上限の 6 回に達したため停止しました。原因を確認し、必要なら完成申請をやり直してください。原因: {reason}"
-    preparationFailed: "PR の準備に失敗しました。TAKT が時間を空けて自動で再試行します。原因: {reason}"
+    preparationFailed: "PR の準備に失敗しました。原因を確認し、次の操作を判断してください。原因: {reason}"
     objective: "目的"
     changes: "変更"
     verification: "確かめたこと"
@@ -584,9 +583,7 @@ manager:
   notificationMoreOptions: "ほかに{count}件の選択肢があります。すべての選択肢はTUIで確認できます。"
   notificationRecommendation: "推奨: {recommendation}"
   notificationAnswer: "{project}で takt manager を開き、TUIで Ctrl+R を押し、一覧から問い合わせを選択して回答してください。"
-  notificationMerge: "変更内容を確認し、{branch} ブランチへマージしてください。"
-  notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
-  notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
+  notificationMerge: "マージ用タスクでPRを準備し、レビューとCIの通過後にPRを {branch} ブランチへマージしてください。"
   notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
   notificationFullMessage: "{project}で takt manager を開き、TUIで会話と現在の作業状態を確認してください。"
   notificationDigestHint: "本文の続きは省略しています。"

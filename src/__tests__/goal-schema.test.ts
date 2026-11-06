@@ -4,6 +4,15 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
 describe('Goal saved record schema', () => {
+  it('discards retired PR retry state while continuing to reject unknown fields', () => {
+    const goal = goalRecord();
+    expect(GoalSchema.parse({ ...goal, pullRequestFailure: {
+      id: '650e8400-e29b-41d4-a716-446655440001', goalSha: 'a'.repeat(40),
+      recordedAt: '2026-11-03T00:00:00Z', error: 'push failed',
+    } })).toEqual(goal);
+    expect(GoalSchema.safeParse({ ...goal, unexpected: true }).success).toBe(false);
+  });
+
   it('preserves the pull request number and URL in a saved goal', () => {
     const record = { ...goalRecord(), pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
     expect(GoalSchema.parse(record)).toEqual(record);

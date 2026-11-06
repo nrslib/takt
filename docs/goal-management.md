@@ -13,7 +13,7 @@ manager:
 
 Patrols enter the non-human event queue. Processing priority is human input, ordinary events, then patrols; a patrol starts only when neither of the first two has waiting input. Accepting human input from the TUI or Slack in the same conversation interrupts a running patrol so the human input can be processed first. The interrupted patrol is not retried; patrols resume at the next interval. Queued input and events remain intact. Human input does not interrupt other running turns. Pending or running patrols do not accumulate, and missed intervals while the daemon is stopped are not replayed. While the TUI is connected, it displays one short result from a completed patrol, such as “Patrol: 2 goals, no anomalies”, without intermediate output. Details remain in work records. Inspection records alone do not count as progress. No Slack or other notification is sent when nothing is wrong. The manager uses existing notification or inquiry tools when a problem requires attention.
 
-Code watchers also notify the manager once per run after more than two hours, and once per run and step after more than five executions of that step. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
+Patrols compare the latest reports and records from running runs against the task instructions and acceptance criteria to check for deviations from the requested work. Threats or assumptions beyond the target scope, impossible premises, requirements absent from the acceptance criteria and unnecessary machinery are reported to the run with supporting evidence. Execution time and step counts do not determine anomalies. The `run_launch_stalled` observation remains to report a TAKT failure when a pending task has not started after 30 seconds. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
 
 ## Discussion and registration
 
@@ -57,7 +57,7 @@ Every turn, manager reviews unanswered inquiries both with and without a goal. I
 
 Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers with `full` permissions, preserving configured provider options. There is no manager-specific permission judge, read-scope review or execution control based on saved approvals.
 
-Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. PR merge instructions include deletion of that PR branch; instructions already given are not reconfirmed. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
+Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. Instructions already given are not reconfirmed. The goal branch is kept after its PR is merged for subsequent checks and work. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
 
 Legacy `manager.sensitive_paths` and runtime `provider.targets.internal_agents.manager-permission-judge` are deprecated. Existing configuration files remain readable, but these settings are ignored and have no effect. Old permission Markdown and approval answers do not decide execution. Historical inquiry records remain readable and withdrawable.
 
@@ -80,7 +80,7 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 ## Events and watchers
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 ## Workspace
 
@@ -93,7 +93,7 @@ Workflows may use names, scope references or file paths, including workflows wit
 
 `takt_remove_goal_task` may cancel pending work while paused. To discard an unintegrated completed result, supply `discardUnmerged: true` and a reason. Running-state, ownership and cleanup-success checks remain.
 
-`takt_merge_goal_pr` takes `cwd`, `goalId` and a `prNumber` matching the saved PR, without a conversation ID or director-only authorization. Stopped-state, saved PR and SHA checks remain. Manager may investigate and recover push or PR preparation failures itself; calling `takt_complete_goal` again retries preparation when `awaiting_merge` has no saved PR. Final verification may be delegated, with manager responsible for checking target SHA, methods and result evidence.
+`takt_merge_goal_pr` requires `cwd`, `goalId`, a `prNumber` matching the saved PR, and `until`, without a conversation ID or director-only authorization. Stopped-state, saved PR and head/base checks remain. Manager may investigate and recover push or PR preparation failures itself; calling `takt_complete_goal` again retries preparation when `awaiting_merge` has no saved PR. Final verification may be delegated, with manager responsible for checking target SHA, methods and result evidence.
 
 ## Director responsibilities
 
@@ -128,7 +128,7 @@ Manager listing (`takt_list_managers`) reports unreadable projects with reasons 
 
 ### Events and notifications
 
-Code watchers observe process loss, stalled logs, and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
+Code watchers observe process loss and PR state changes and emit events only for changes or anomalies. Manager patrols run once per repository at the interval described above. Director is never called by a clock. Unknown process liveness or start time is not treated as proof of death. A persistent child process per conversation owns turn preparation, AI, MCP, and business operations. The daemon owns admission, persistence, routing, and observation. A child crash records the current turn as failed without automatically retrying it.
 
 Set director options in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
 
@@ -199,11 +199,15 @@ manager:
   main_merge: approve
 ```
 
-The default `main_merge: approve` prepares a PR and waits. Merge instructions may be given directly to manager or relayed by director. `auto` is a continuing integration instruction set by the person and merges automatically; a checked-out target results in PR preparation.
+Both `main_merge: approve` and `auto` publish a PR. With the default `approve`, manager calls `takt_merge_goal_pr` with `until: prepare`, finishes preparation and waits for human merge. `auto` is a continuing integration instruction set by the person and uses `until: merge`. An explicit human instruction to merge also uses `until: merge`.
 
-A completion request that enters `awaiting_merge` pushes the reviewed SHA to `origin` and creates or reuses a PR from the goal branch to its saved integration branch. If push or PR creation fails, the error is saved in the work log and `pullRequestFailure`; the goal remains `awaiting_merge` without a PR. If `blocked` is enabled in notification settings, the first failure also saves a `blocked` notification with the cause and automatic retry guidance for display in the TUI and Slack. Retrying the same failure does not add more notifications. The daemon watcher sends the manager up to six retry events: one minute after the initial failure, then 5, 15, 30, 30, and 30 minutes after the preceding event. Each event includes the attempt count, limit, and expectedSha. The manager checks the key failure and calls takt_complete_goal again with that SHA. The watcher does not launch a dedicated child process. Events count when accepted, regardless of manager results or whether they are processed. Counts, acceptance timestamps and limit notification state are persisted across daemon restarts and workspace assignment. PR failures left in older work logs are also eligible.
+Completion pushes the reviewed SHA to `origin` and creates or reuses a PR from the goal branch to its saved integration target. Failures remain in work logs and `blocked` notifications. Manager inspects causes and side effects and decides what to do next; no timed or counted automatic PR-creation retries run. When no PR is saved, call `takt_complete_goal` again after fixing the cause.
 
-Success saves `pullRequest` and enters normal PR merge observation. Pushing an already published branch is safe, and an existing PR is checked and reused. Retries are skipped when a pause, abort, reopened completion, changed tip SHA, or saved PR is detected. The interval clock keeps running while retries are ineligible; resuming after a deadline sends only the next event. After the sixth event is accepted, if the next observation still finds the failure, the watcher directly saves one blocked notification with the limit and cause, then stops retry events. The manager reports the PR number and URL on success. It also checks failure records before asking the human how to integrate the work. Calling `takt_complete_goal` again with the same `expectedSha` can also recover the operation.
+`takt_merge_goal_pr` requires `cwd`, `goalId`, `prNumber` and `until`. It enqueues a pending task with `merge_task: true` and `goal_id` in `tasks.yaml` and immediately returns its name. `prepare` selects `merge-prepare`; `merge` selects `merge.workflow`, defaulting to `merge-review-fix-simple`. Pending or running work for the same target is rejected.
+
+The daemon executes it like other goal tasks: incorporate the target branch, resolve conflicts, review and fix, push, run Caccia and wait for CI. Conflicting PRs use this same path instead of ordinary conflict-fix tasks. PR merge tasks push directly to the PR branch and must not be integrated with `takt_merge_goal_task`. `takt_list_tasks` shows `mergeTask` and completion results. Completion events include `mergeOutcome` (`prepared`, `merged` or `unresolved`) and `branchSynchronization`. When merged, manager completes the goal with `takt_check_goal_completion`.
+
+After push, the original repository fast-forwards its goal branch if it is an ancestor of origin. Divergent histories are preserved and reported as failure in task results and events. Checked-out working copies are preserved and synchronization stops with a report. The same checks run before task integration and completion publication. If synchronization changes the tip, verify acceptance criteria at that new SHA before submitting completion again.
 
 ## Stopped work and notifications
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { toJSONSchema } from 'zod/v4';
+import { buildManagerEventPrompt } from '../../dist/features/daemon/inboxEvent.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
 
 export default class ManagerWorkSplitOfflineProvider {
@@ -26,9 +27,14 @@ export default class ManagerWorkSplitOfflineProvider {
     assert.deepEqual(reads.map(({ tool }) => tool), fixture.readResults.map(({ tool }) => tool));
     if (fixture.turn === 'event') {
       const user = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-      assert.equal(user.instruction, 'Handle this event for the existing goals. Do not propose a new registration.');
-      const reference = user.event.task ?? user.event.observation?.task ?? user.event;
-      assert.equal(reference.goalId, fixture.goal.id);
+      assert.equal(user.instruction, JSON.parse(buildManagerEventPrompt(user.event)).instruction);
+      if (user.event.kind === 'patrol') {
+        assert.equal(user.event.repositoryDirectory, fixture.cwd);
+        assert.deepEqual(user.event.goalIds, [fixture.goal.id]);
+      } else {
+        const reference = user.event.task ?? user.event.observation?.task ?? user.event;
+        assert.equal(reference.goalId, fixture.goal.id);
+      }
       assert.ok(!Object.hasOwn(user, 'tasks'));
       assert.ok(!Object.hasOwn(user, 'goal'));
     } else {

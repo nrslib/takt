@@ -1,0 +1,1452 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: 検索とエクスポートのヘルプを現行操作に合わせる
+    outOfScope:
+      - 本番への公開と外部サービスの追加
+    acceptanceCriteria:
+      - 検索ヘルプが検索操作を、エクスポートヘルプが既存の出力操作を正しく説明する
+    constraints: []
+    mode: local
+    status: awaiting_merge
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "result-1 を takt/goal/catalog に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。検索ヘルプを更新する"
+      - id: 650e8400-e29b-41d4-a716-000000000033
+        recordedAt: 2026-10-11T00:25:00Z
+        summary: "result-2 を takt/goal/catalog に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。エクスポートヘルプを更新する"
+      - id: 650e8400-e29b-41d4-a716-000000000034
+        recordedAt: 2026-10-11T00:26:00Z
+        summary: "ゴール先端で受け入れ条件を確認し、完成申請で PR #1950 を作成した。PR の同期、レビュー、CodeRabbit、CI の仕上げはまだ実行していない。"
+    questions: []
+    pullRequest:
+      number: 1950
+      url: https://github.com/example/project/pull/1950
+    completion:
+      goalBranch: takt/goal/catalog
+      goalSha: cccccccccccccccccccccccccccccccccccccccc
+      targetBranch: main
+      summary: ゴール先端で受け入れ条件を確認済み。対象テストとレビューが成功した。
+      humanChecks: 検索とエクスポートのヘルプを開く。
+      instructions: []
+      changeSummary:
+        filesChanged: 2
+        additions: 2
+        deletions: 0
+        files: []
+        truncated: false
+        totalsTruncated: false
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:24:00.000Z
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: search-doc
+      goalPurpose: 検索ヘルプを更新する
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:19:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: 検索ヘルプを更新する
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440225
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion: *a1
+      goalWorkKey: export-doc
+      goalPurpose: エクスポートヘルプを更新する
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:24:00.000Z
+      taskDir: .takt/tasks/result-2
+      summary: エクスポートヘルプを更新する
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440226
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: docs/search.mdとdocs/export.mdは別ページ。互いを参照せず、目次・共通用語の変更もない。既存画面の説明のみ。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 30
+          returnedBytes: 0
+          truncated: true
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            sizeBytes: 642
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: task
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: 検索ヘルプを更新する
+          totalBytes: 30
+          offset: 0
+          returnedBytes: 30
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 30
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: docs/search.md に、検索語の入力、検索ボタンによる実行、状態フィルターの変更と結果一覧の読み方を追記した。src/ui/search.ts の submitSearch と statusFilter の処理、画面の「検索」「状態」の表記に各手順を照合した。見本データで検索語を入れて実行すると該当する行だけが表示され、状態を選ぶとその状態の行だけが残った。記載した結果が画面の結果と一致した。ページ内の検索結果見出しへのリンクはリンク検査で解決し、エクスポートページへのリンクは追加していない。
+          totalBytes: 642
+          offset: 0
+          returnedBytes: 642
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 42
+          returnedBytes: 0
+          truncated: true
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            sizeBytes: 660
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: task
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: エクスポートヘルプを更新する
+          totalBytes: 42
+          offset: 0
+          returnedBytes: 42
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 42
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: docs/export.md に、出力形式で CSV を選び、エクスポートボタンを押してファイルを取得する手順と、対象データがないときの案内を追記した。src/ui/export.ts の formatSelect と downloadExport の処理、画面の「CSV」「エクスポート」の表記に照合した。見本データ2件ではヘッダーと2行の CSV が取得でき、0件では画面に「出力するデータがありません」と表示された。説明と実際の結果が一致した。ページ内の出力形式見出しへのリンクはリンク検査で解決し、検索ページへのリンクは追加していない。
+          totalBytes: 660
+          offset: 0
+          returnedBytes: 660
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_goal_diff
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        file: docs/search.md
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        comparisonBranch: main
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        comparisonSha: dddddddddddddddddddddddddddddddddddddddd
+        files: &a2
+          - path: docs/search.md
+            additions: 7
+            deletions: 1
+          - path: docs/export.md
+            additions: 6
+            deletions: 1
+        patch: |
+          diff --git a/docs/search.md b/docs/search.md
+          --- a/docs/search.md
+          +++ b/docs/search.md
+          @@ -1,1 +1,7 @@
+          -# 検索
+          +# 検索
+          +
+          +検索語を入力して「検索」を押すと、一致する行を結果一覧に表示します。
+          +「状態」を選ぶと、その状態の行だけを表示します。
+          +
+          +## 検索結果
+          +行を選ぶと詳細を表示します。[検索結果](#検索結果)を参照してください。
+        truncated: false
+    - tool: takt_get_goal_diff
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        file: docs/export.md
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        comparisonBranch: main
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        comparisonSha: dddddddddddddddddddddddddddddddddddddddd
+        files: *a2
+        patch: |
+          diff --git a/docs/export.md b/docs/export.md
+          --- a/docs/export.md
+          +++ b/docs/export.md
+          @@ -1,1 +1,6 @@
+          -# エクスポート
+          +# エクスポート
+          +
+          +## 出力形式
+          +「CSV」を選び「エクスポート」を押すと、ヘッダーと対象データを含むファイルを取得できます。
+          +対象が0件の場合は「出力するデータがありません」と表示します。
+          +[出力形式](#出力形式)を参照してください。
+        truncated: false
+    - tool: takt_get_goal_history
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        commits:
+          - sha: cccccccccccccccccccccccccccccccccccccccc
+            message: result-2 をゴール用ブランチへ取り込む
+            truncated: false
+          - sha: "2222222222222222222222222222222222222222"
+            message: エクスポートヘルプを更新する
+            truncated: false
+          - sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            message: result-1 をゴール用ブランチへ取り込む
+            truncated: false
+          - sha: "1111111111111111111111111111111111111111"
+            message: 検索ヘルプを更新する
+            truncated: false
+          - sha: dddddddddddddddddddddddddddddddddddddddd
+            message: プロジェクトの初期状態
+            truncated: false
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 4
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: gh pr view 1950 --json number,headRefName,baseRefName,mergeable,state
+      result:
+        number: 1950
+        headRefName: takt/goal/catalog
+        baseRefName: main
+        mergeable: MERGEABLE
+        state: OPEN
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          status: awaiting_merge
+          executionStatus: active
+          branch: takt/goal/catalog
+          integrationBranch: main
+          pullRequest:
+            number: 1950
+            url: https://github.com/example/project/pull/1950
+          completion:
+            goalBranch: takt/goal/catalog
+            goalSha: cccccccccccccccccccccccccccccccccccccccc
+            targetBranch: main
+            changeSummary:
+              filesChanged: 2
+              additions: 2
+              deletions: 0
+              files: []
+              truncated: false
+              totalsTruncated: false
+            instructions: []
+            summary: ゴール先端で受け入れ条件を確認済み。対象テストとレビューが成功した。
+            humanChecks: 検索とエクスポートのヘルプを開く。
+          objective: 検索とエクスポートのヘルプを現行操作に合わせる
+          acceptanceCriteriaVersion: 1
+          questions: []
+          pendingQuestionCount: 0
+          questionCount: 0
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-000000000034
+              recordedAt: 2026-10-11T00:26:00Z
+              summary: "ゴール先端で受け入れ条件を確認し、完成申請で PR #1950 を作成した。PR の同期、レビュー、CodeRabbit、CI の仕上げはまだ実行していない。"
+              summaryTotalBytes: 185
+            - id: 650e8400-e29b-41d4-a716-000000000033
+              recordedAt: 2026-10-11T00:25:00Z
+              summary: "result-2 を takt/goal/catalog に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。エクスポートヘルプを更新する"
+              summaryTotalBytes: 219
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:20:00Z
+              summary: "result-1 を takt/goal/catalog に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。検索ヘルプを更新する"
+              summaryTotalBytes: 207
+          workLogCount: 3
+          notificationCount: 0
+          truncated: true
+          omissions:
+            objective:
+              totalBytes: 69
+            questions:
+              totalCount: 0
+            workLog:
+              totalCount: 3
+            notifications:
+              totalCount: 0
+              returnedCount: 0
+            acceptanceCriteria:
+              totalCount: 1
+              returnedCount: 0
+            constraints:
+              totalCount: 0
+              returnedCount: 0
+            outOfScope:
+              totalCount: 1
+              returnedCount: 0
+          retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+        content: 検索とエクスポートのヘルプを現行操作に合わせる
+        totalBytes: 69
+        offset: 0
+        returnedBytes: 69
+        direction: forward
+        truncated: false
+        nextOffset: null
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+        items:
+          - 本番への公開と外部サービスの追加
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+        items:
+          - 検索ヘルプが検索操作を、エクスポートヘルプが既存の出力操作を正しく説明する
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+        items:
+          - summary: "result-1 を takt/goal/catalog に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。検索ヘルプを更新する"
+            id: 650e8400-e29b-41d4-a716-000000000032
+            recordedAt: 2026-10-11T00:20:00Z
+          - summary: "result-2 を takt/goal/catalog に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。エクスポートヘルプを更新する"
+            id: 650e8400-e29b-41d4-a716-000000000033
+            recordedAt: 2026-10-11T00:25:00Z
+          - summary: "ゴール先端で受け入れ条件を確認し、完成申請で PR #1950 を作成した。PR の同期、レビュー、CodeRabbit、CI の仕上げはまだ実行していない。"
+            id: 650e8400-e29b-41d4-a716-000000000034
+            recordedAt: 2026-10-11T00:26:00Z
+        collection: items
+        totalCount: 3
+        returnedCount: 3
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            status: completed
+            executionId: 650e8400-e29b-41d4-a716-446655440225
+            summary: 検索ヘルプを更新する
+            startedAt: 2026-10-11T00:05:00Z
+            workflow: default
+            runSlug: run-result-1
+            goalIntegration: integrated
+          - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            status: completed
+            executionId: 650e8400-e29b-41d4-a716-446655440226
+            summary: エクスポートヘルプを更新する
+            startedAt: 2026-10-11T00:05:00Z
+            workflow: default
+            runSlug: run-result-2
+            goalIntegration: integrated
+        collection: tasks
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/tasks.yaml
+      result:
+        tasks:
+          - goal_id: 650e8400-e29b-41d4-a716-446655440000
+            goal_purpose: 検索ヘルプを更新する
+            goal_work_key: search-doc
+            worktree: true
+            branch: takt/task/result-1
+            base_branch: takt/goal/catalog
+            workflow: default
+            auto_pr: false
+            should_publish_branch_to_origin: false
+            name: result-1
+            status: completed
+            slug: result-1
+            run_slug: run-result-1
+            execution_id: 650e8400-e29b-41d4-a716-446655440225
+            summary: 検索ヘルプを更新する
+            task_dir: .takt/tasks/result-1
+            created_at: 2026-10-11T00:00:00Z
+            started_at: 2026-10-11T00:05:00Z
+            completed_at: 2026-10-11T00:19:00.000Z
+            owner_pid: null
+            owner_start_time: null
+            completion:
+              success: true
+              interrupted: false
+              branch: takt/task/result-1
+              sha: "1111111111111111111111111111111111111111"
+              workflowResult: completed
+          - goal_id: 650e8400-e29b-41d4-a716-446655440000
+            goal_purpose: エクスポートヘルプを更新する
+            goal_work_key: export-doc
+            worktree: true
+            branch: takt/task/result-2
+            base_branch: takt/goal/catalog
+            workflow: default
+            auto_pr: false
+            should_publish_branch_to_origin: false
+            name: result-2
+            status: completed
+            slug: result-2
+            run_slug: run-result-2
+            execution_id: 650e8400-e29b-41d4-a716-446655440226
+            summary: エクスポートヘルプを更新する
+            task_dir: .takt/tasks/result-2
+            created_at: 2026-10-11T00:00:00Z
+            started_at: 2026-10-11T00:05:00Z
+            completed_at: 2026-10-11T00:24:00.000Z
+            owner_pid: null
+            owner_start_time: null
+            completion:
+              success: true
+              interrupted: false
+              branch: takt/task/result-2
+              sha: "2222222222222222222222222222222222222222"
+              workflowResult: completed
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: 検索ヘルプを更新する
+        workflow: default
+        runSlug: run-result-1
+        runRoot: .takt/runs/run-result-1
+        reportDirectory: .takt/runs/run-result-1/reports
+        contextDirectory: .takt/runs/run-result-1/context
+        logsDirectory: .takt/runs/run-result-1/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:19:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: 検索ヘルプを更新する
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:19:00.000Z
+      reports:
+        - filename: implementation.md
+          content: docs/search.md に、検索語の入力、検索ボタンによる実行、状態フィルターの変更と結果一覧の読み方を追記した。src/ui/search.ts の submitSearch と statusFilter の処理、画面の「検索」「状態」の表記に各手順を照合した。見本データで検索語を入れて実行すると該当する行だけが表示され、状態を選ぶとその状態の行だけが残った。記載した結果が画面の結果と一致した。ページ内の検索結果見出しへのリンクはリンク検査で解決し、エクスポートページへのリンクは追加していない。
+    - directory: /workspace/project
+      meta:
+        task: エクスポートヘルプを更新する
+        workflow: default
+        runSlug: run-result-2
+        runRoot: .takt/runs/run-result-2
+        reportDirectory: .takt/runs/run-result-2/reports
+        contextDirectory: .takt/runs/run-result-2/context
+        logsDirectory: .takt/runs/run-result-2/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:24:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: エクスポートヘルプを更新する
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:24:00.000Z
+      reports:
+        - filename: implementation.md
+          content: docs/export.md に、出力形式で CSV を選び、エクスポートボタンを押してファイルを取得する手順と、対象データがないときの案内を追記した。src/ui/export.ts の formatSelect と downloadExport の処理、画面の「CSV」「エクスポート」の表記に照合した。見本データ2件ではヘッダーと2行の CSV が取得でき、0件では画面に「出力するデータがありません」と表示された。説明と実際の結果が一致した。ページ内の出力形式見出しへのリンクはリンク検査で解決し、検索ページへのリンクは追加していない。
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: Align search and export help with current UI operations
+    outOfScope:
+      - Production publishing and adding external services
+    acceptanceCriteria:
+      - Search help explains search operations and export help explains existing export operations
+    constraints: []
+    mode: local
+    status: awaiting_merge
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "Integrated result-1 into takt/goal/catalog. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Update search help"
+      - id: 650e8400-e29b-41d4-a716-000000000033
+        recordedAt: 2026-10-11T00:25:00Z
+        summary: "Integrated result-2 into takt/goal/catalog. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Update export help"
+      - id: 650e8400-e29b-41d4-a716-000000000034
+        recordedAt: 2026-10-11T00:26:00Z
+        summary: "Verified acceptance criteria at the goal tip and published PR #1950 through completion submission. PR synchronization, review, CodeRabbit and CI preparation have not run."
+    questions: []
+    pullRequest:
+      number: 1950
+      url: https://github.com/example/project/pull/1950
+    completion:
+      goalBranch: takt/goal/catalog
+      goalSha: cccccccccccccccccccccccccccccccccccccccc
+      targetBranch: main
+      summary: Acceptance criteria verified at the goal tip; tests and review passed.
+      humanChecks: Open search and export help.
+      instructions: []
+      changeSummary:
+        filesChanged: 2
+        additions: 2
+        deletions: 0
+        files: []
+        truncated: false
+        totalsTruncated: false
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a3
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:24:00.000Z
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: search-doc
+      goalPurpose: Update search help
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:19:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: Update search help
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440225
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00Z
+      startedAt: 2026-10-11T00:05:00Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion: *a3
+      goalWorkKey: export-doc
+      goalPurpose: Update export help
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:24:00.000Z
+      taskDir: .takt/tasks/result-2
+      summary: Update export help
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440226
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/repository-layout.md
+      result: docs/search.md and docs/export.md are separate pages without cross-references, contents or shared-vocabulary changes. They only describe existing UIs.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 18
+          returnedBytes: 0
+          truncated: true
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            sizeBytes: 460
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: task
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: Update search help
+          totalBytes: 18
+          offset: 0
+          returnedBytes: 18
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 18
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: Added search-term entry, the Search button, status-filter changes and result-list guidance to docs/search.md. Matched each step against submitSearch and statusFilter in src/ui/search.ts and the Search/Status UI labels. With sample data, entering a term returned only matching rows; choosing a status retained only rows with that status. Documented outcomes matched the UI. Link checking resolved the local search-results heading; no export-page link was added.
+          totalBytes: 460
+          offset: 0
+          returnedBytes: 460
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 18
+          returnedBytes: 0
+          truncated: true
+        stepLogs: []
+        reports:
+          - filename: implementation.md
+            sizeBytes: 460
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: task
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: Update export help
+          totalBytes: 18
+          offset: 0
+          returnedBytes: 18
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 18
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: Added CSV format selection, the Export button, downloading the file and the empty-data message to docs/export.md. Matched the instructions against formatSelect and downloadExport in src/ui/export.ts and the CSV/Export UI labels. Two sample records produced a header and two CSV rows; zero records displayed No data to export. Documented outcomes matched the actual results. Link checking resolved the local output-format heading; no search-page link was added.
+          totalBytes: 460
+          offset: 0
+          returnedBytes: 460
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_goal_diff
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        file: docs/search.md
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        comparisonBranch: main
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        comparisonSha: dddddddddddddddddddddddddddddddddddddddd
+        files: &a4
+          - path: docs/search.md
+            additions: 7
+            deletions: 1
+          - path: docs/export.md
+            additions: 6
+            deletions: 1
+        patch: |
+          diff --git a/docs/search.md b/docs/search.md
+          --- a/docs/search.md
+          +++ b/docs/search.md
+          @@ -1,1 +1,7 @@
+          -# Search
+          +# Search
+          +
+          +Enter a search term and press Search to display matching rows.
+          +Choose a Status to display only rows with that status.
+          +
+          +## Search results
+          +Select a row to display details. See [Search results](#search-results).
+        truncated: false
+    - tool: takt_get_goal_diff
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        file: docs/export.md
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        comparisonBranch: main
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        comparisonSha: dddddddddddddddddddddddddddddddddddddddd
+        files: *a4
+        patch: |
+          diff --git a/docs/export.md b/docs/export.md
+          --- a/docs/export.md
+          +++ b/docs/export.md
+          @@ -1,1 +1,6 @@
+          -# Export
+          +# Export
+          +
+          +## Output format
+          +Choose CSV and press Export to download a file with a header and the selected records.
+          +If there are zero records, the screen displays No data to export.
+          +See [Output format](#output-format).
+        truncated: false
+    - tool: takt_get_goal_history
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        limit: 50
+      result:
+        sourceBranch: takt/goal/catalog
+        sourceSha: cccccccccccccccccccccccccccccccccccccccc
+        commits:
+          - sha: cccccccccccccccccccccccccccccccccccccccc
+            message: Merge result-2 into goal branch
+            truncated: false
+          - sha: "2222222222222222222222222222222222222222"
+            message: Update export help
+            truncated: false
+          - sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            message: Merge result-1 into goal branch
+            truncated: false
+          - sha: "1111111111111111111111111111111111111111"
+            message: Update search help
+            truncated: false
+          - sha: dddddddddddddddddddddddddddddddddddddddd
+            message: Initial project
+            truncated: false
+        truncated: false
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 4
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+        collection: workflows
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: gh pr view 1950 --json number,headRefName,baseRefName,mergeable,state
+      result:
+        number: 1950
+        headRefName: takt/goal/catalog
+        baseRefName: main
+        mergeable: MERGEABLE
+        state: OPEN
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          status: awaiting_merge
+          executionStatus: active
+          branch: takt/goal/catalog
+          integrationBranch: main
+          pullRequest:
+            number: 1950
+            url: https://github.com/example/project/pull/1950
+          completion:
+            goalBranch: takt/goal/catalog
+            goalSha: cccccccccccccccccccccccccccccccccccccccc
+            targetBranch: main
+            changeSummary:
+              filesChanged: 2
+              additions: 2
+              deletions: 0
+              files: []
+              truncated: false
+              totalsTruncated: false
+            instructions: []
+            summary: Acceptance criteria verified at the goal tip; tests and review passed.
+            humanChecks: Open search and export help.
+          objective: Align search and export help with current UI operations
+          acceptanceCriteriaVersion: 1
+          questions: []
+          pendingQuestionCount: 0
+          questionCount: 0
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-000000000034
+              recordedAt: 2026-10-11T00:26:00Z
+              summary: "Verified acceptance criteria at the goal tip and published PR #1950 through completion submission. PR synchronization, review, CodeRabbit and CI preparation have not run."
+              summaryTotalBytes: 170
+            - id: 650e8400-e29b-41d4-a716-000000000033
+              recordedAt: 2026-10-11T00:25:00Z
+              summary: "Integrated result-2 into takt/goal/catalog. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Update export help"
+              summaryTotalBytes: 186
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:20:00Z
+              summary: "Integrated result-1 into takt/goal/catalog. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Update search help"
+              summaryTotalBytes: 186
+          workLogCount: 3
+          notificationCount: 0
+          truncated: true
+          omissions:
+            objective:
+              totalBytes: 55
+            questions:
+              totalCount: 0
+            workLog:
+              totalCount: 3
+            notifications:
+              totalCount: 0
+              returnedCount: 0
+            acceptanceCriteria:
+              totalCount: 1
+              returnedCount: 0
+            constraints:
+              totalCount: 0
+              returnedCount: 0
+            outOfScope:
+              totalCount: 1
+              returnedCount: 0
+          retrieval: Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: objective
+        content: Align search and export help with current UI operations
+        totalBytes: 55
+        offset: 0
+        returnedBytes: 55
+        direction: forward
+        truncated: false
+        nextOffset: null
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: outOfScope
+        items:
+          - Production publishing and adding external services
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: acceptanceCriteria
+        items:
+          - Search help explains search operations and export help explains existing export operations
+        collection: items
+        totalCount: 1
+        returnedCount: 1
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: constraints
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: workLog
+        items:
+          - summary: "Integrated result-1 into takt/goal/catalog. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Update search help"
+            id: 650e8400-e29b-41d4-a716-000000000032
+            recordedAt: 2026-10-11T00:20:00Z
+          - summary: "Integrated result-2 into takt/goal/catalog. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Update export help"
+            id: 650e8400-e29b-41d4-a716-000000000033
+            recordedAt: 2026-10-11T00:25:00Z
+          - summary: "Verified acceptance criteria at the goal tip and published PR #1950 through completion submission. PR synchronization, review, CodeRabbit and CI preparation have not run."
+            id: 650e8400-e29b-41d4-a716-000000000034
+            recordedAt: 2026-10-11T00:26:00Z
+        collection: items
+        totalCount: 3
+        returnedCount: 3
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+      result:
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+        path: questions
+        items: []
+        collection: items
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            status: completed
+            executionId: 650e8400-e29b-41d4-a716-446655440225
+            summary: Update search help
+            startedAt: 2026-10-11T00:05:00Z
+            workflow: default
+            runSlug: run-result-1
+            goalIntegration: integrated
+          - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            status: completed
+            executionId: 650e8400-e29b-41d4-a716-446655440226
+            summary: Update export help
+            startedAt: 2026-10-11T00:05:00Z
+            workflow: default
+            runSlug: run-result-2
+            goalIntegration: integrated
+        collection: tasks
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/tasks.yaml
+      result:
+        tasks:
+          - goal_id: 650e8400-e29b-41d4-a716-446655440000
+            goal_purpose: Update search help
+            goal_work_key: search-doc
+            worktree: true
+            branch: takt/task/result-1
+            base_branch: takt/goal/catalog
+            workflow: default
+            auto_pr: false
+            should_publish_branch_to_origin: false
+            name: result-1
+            status: completed
+            slug: result-1
+            run_slug: run-result-1
+            execution_id: 650e8400-e29b-41d4-a716-446655440225
+            summary: Update search help
+            task_dir: .takt/tasks/result-1
+            created_at: 2026-10-11T00:00:00Z
+            started_at: 2026-10-11T00:05:00Z
+            completed_at: 2026-10-11T00:19:00.000Z
+            owner_pid: null
+            owner_start_time: null
+            completion:
+              success: true
+              interrupted: false
+              branch: takt/task/result-1
+              sha: "1111111111111111111111111111111111111111"
+              workflowResult: completed
+          - goal_id: 650e8400-e29b-41d4-a716-446655440000
+            goal_purpose: Update export help
+            goal_work_key: export-doc
+            worktree: true
+            branch: takt/task/result-2
+            base_branch: takt/goal/catalog
+            workflow: default
+            auto_pr: false
+            should_publish_branch_to_origin: false
+            name: result-2
+            status: completed
+            slug: result-2
+            run_slug: run-result-2
+            execution_id: 650e8400-e29b-41d4-a716-446655440226
+            summary: Update export help
+            task_dir: .takt/tasks/result-2
+            created_at: 2026-10-11T00:00:00Z
+            started_at: 2026-10-11T00:05:00Z
+            completed_at: 2026-10-11T00:24:00.000Z
+            owner_pid: null
+            owner_start_time: null
+            completion:
+              success: true
+              interrupted: false
+              branch: takt/task/result-2
+              sha: "2222222222222222222222222222222222222222"
+              workflowResult: completed
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: Update search help
+        workflow: default
+        runSlug: run-result-1
+        runRoot: .takt/runs/run-result-1
+        reportDirectory: .takt/runs/run-result-1/reports
+        contextDirectory: .takt/runs/run-result-1/context
+        logsDirectory: .takt/runs/run-result-1/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:19:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: Update search help
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:19:00.000Z
+      reports:
+        - filename: implementation.md
+          content: Added search-term entry, the Search button, status-filter changes and result-list guidance to docs/search.md. Matched each step against submitSearch and statusFilter in src/ui/search.ts and the Search/Status UI labels. With sample data, entering a term returned only matching rows; choosing a status retained only rows with that status. Documented outcomes matched the UI. Link checking resolved the local search-results heading; no export-page link was added.
+    - directory: /workspace/project
+      meta:
+        task: Update export help
+        workflow: default
+        runSlug: run-result-2
+        runRoot: .takt/runs/run-result-2
+        reportDirectory: .takt/runs/run-result-2/reports
+        contextDirectory: .takt/runs/run-result-2/context
+        logsDirectory: .takt/runs/run-result-2/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:24:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: Update export help
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:24:00.000Z
+      reports:
+        - filename: implementation.md
+          content: Added CSV format selection, the Export button, downloading the file and the empty-data message to docs/export.md. Matched the instructions against formatSelect and downloadExport in src/ui/export.ts and the CSV/Export UI labels. Two sample records produced a header and two CSV rows; zero records displayed No data to export. Documented outcomes matched the actual results. Link checking resolved the local output-format heading; no search-page link was added.

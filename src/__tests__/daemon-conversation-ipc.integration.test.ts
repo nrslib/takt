@@ -704,12 +704,12 @@ it.each(['answered', 'withdrawn'] as const)('keeps the TUI attached when the wat
   expect(value.socket.destroyed).toBe(false);
 });
 
-it('keeps a stall inspection reply out of the goal work log', async () => {
+it('keeps a PR mismatch inspection reply out of the goal work log', async () => {
   const goal = { ...goalRecord(), createdAt: '2026-11-01T00:00:00Z' }; saveGoal(goal);
-  const eventId = 'stall-inspection';
+  const eventId = 'pr-mismatch-inspection';
   expect(await fixture.dispatcher.accept({ eventId, requestId: eventId, conversationId: selected.conversationId, source: 'watcher',
-    occurredAt: '2026-11-03T00:00:00Z', event: { kind: 'watch_observation', observation: { kind: 'goal_stalled', targetId: goal.id,
-      generation: 'old', observedAt: '2026-11-03T00:00:00Z', repositoryDirectory: repository, goalId: goal.id, lastUpdatedAt: goal.createdAt } } })).toMatchObject({ kind: 'accepted' });
+    occurredAt: '2026-11-03T00:00:00Z', event: { kind: 'watch_observation', observation: { kind: 'pr_mismatch', targetId: goal.id,
+      generation: 'old', observedAt: '2026-11-03T00:00:00Z', repositoryDirectory: repository, goalId: goal.id, url: 'https://github.com/test/project/pull/1', reason: 'head branch mismatch' } } })).toMatchObject({ kind: 'accepted' });
   await fixture.settled();
   expect(execute).toHaveBeenCalledOnce();
   expect((await new GoalStore(repository).get(goal.id)).workLog).toEqual([]);

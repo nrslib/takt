@@ -7,6 +7,11 @@ export function withoutDiagnosticLogging<T>(action: () => T): T {
   return privateDiagnostics.run(true, action);
 }
 
+/** Allow an operational warning without exposing surrounding private diagnostics. */
+export function withDiagnosticLogging<T>(action: () => T): T {
+  return privateDiagnostics.run(false, action);
+}
+
 export function diagnosticLoggingSuppressed(): boolean {
   return privateDiagnostics.getStore() === true;
 }

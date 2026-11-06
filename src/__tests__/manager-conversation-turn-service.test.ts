@@ -434,6 +434,14 @@ it('inspects active patrol goals together using the saved conversation and no re
   const turn = f.execute.mock.calls[0]![0];
   expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
+  const { instruction } = JSON.parse(turn.prompt);
+  expect(instruction).toMatch(/latest reports, review findings and intended fixes/);
+  expect(instruction).toMatch(/task instructions and acceptance criteria/);
+  expect(instruction).toMatch(/deviations from the requested work/);
+  expect(instruction).toMatch(/takt_tell_run/);
+  expect(instruction).toMatch(/only findings confirmed to be outside the requested work/);
+  expect(instruction).toMatch(/Do not judge by execution time or step counts/);
+  expect(instruction).not.toMatch(/Check run duration|repeated steps/);
   expect(turn).toMatchObject({ patrol: true, sessionId: 'shared-session' });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
@@ -471,7 +479,7 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
     pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
   doubles.getGoal.mockResolvedValue(goal);
-  doubles.mergePr.mockResolvedValue({ success: true, output: 'merged' });
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
   if (source === 'human') {
     f.input.event.event = { kind: 'human_command', command: { kind: 'message', text: 'この PR をマージして' },
       speaker: { namespace: 'human', id: 'owner' } };
@@ -481,10 +489,10 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
     f.input.event.lane = 'other';
   }
   f.execute.mockImplementation(async (turn) => {
-    const result = await mergeTaktGoalPr({ cwd: '/repository', goalId: goal.id, prNumber: 1950 }, {}, turn.abortSignal);
+    const result = await mergeTaktGoalPr({ cwd: '/repository', goalId: goal.id, prNumber: 1950, until: 'merge' }, {}, turn.abortSignal);
     expect(result.isError).toBeUndefined();
     return { message: 'merged', summary: null, sessionId: 'session-after', assignment: turn.assignment };
   });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'merged' } });
-  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith('/repository', 1950, goal.branch, goal.completion.goalSha, f.io.signal);
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith('/repository', goal, 'merge', f.io.signal);
 });

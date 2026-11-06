@@ -175,7 +175,7 @@ export interface GitProvider {
 
   closePr(prNumber: number, cwd?: string): MergeResult;
 
-  mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string): MergeResult;
+  mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string, options?: { deleteBranch: boolean }): MergeResult;
 
   fetchPrCiFailure?(prNumber: number, headSha: string, cwd: string,
     options?: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions,

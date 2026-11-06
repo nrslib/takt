@@ -31,7 +31,7 @@ describe('Merge AI selection decisions', () => {
     mocks.provider.mockReturnValue({ fetchPrSelectionData });
     fetchPrSelectionData.mockReturnValue({ number: 10, title: '利用ガイド更新', body: 'PR #10 の手順を説明する', files: [...files],
       patch: 'PRIVATE_DIFF_BODY', comments: ['PRIVATE_REVIEW_COMMENT'] });
-    executePrWorkflow.mockResolvedValue({ merged: true });
+    executePrWorkflow.mockResolvedValue({ success: true, merged: true, outcome: 'merged' });
     mocks.agent.mockResolvedValue({ persona: 'selector', status: 'done', content: '',
       structuredOutput: { selected: true, reason: '文書のみの変更' } });
   });
@@ -39,7 +39,7 @@ describe('Merge AI selection decisions', () => {
   it.each([true, false])('構造化されたselected=%sの判定を実行対象へ反映する', async (selected) => {
     mocks.agent.mockResolvedValue({ status: 'done', content: selected ? '除外してください' : '選択してください',
       structuredOutput: { selected, reason: selected ? '文書の判定' : '' } });
-    expect(await run()).toEqual({ processedCount: selected ? 1 : 0, mergedCount: selected ? 1 : 0, exitCode: 0 });
+    expect(await run()).toEqual({ processedCount: selected ? 1 : 0, mergedCount: selected ? 1 : 0, preparedCount: 0, exitCode: 0 });
     expect(mocks.agent).toHaveBeenCalledOnce();
     expect(executePrWorkflow).toHaveBeenCalledTimes(selected ? 1 : 0);
     if (selected) expect(executePrWorkflow.mock.calls[0]?.[0]).toMatchObject({ prNumber: 10 });

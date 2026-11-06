@@ -1,5 +1,7 @@
 import { checkGoalCompletion, completeGoal, integrateGoalTask, reopenGoal } from '../../infra/goals/integration.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
+import { ensureManagerRun } from '../manager/autoRun.js';
+import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { mergeGoalPr } from '../manager/mergeGoalPr.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { McpOperationDependencies } from './operations.js';
@@ -20,14 +22,25 @@ export function completeTaktGoal(input: CompleteGoalInput, deps: McpOperationDep
   }, 'Goal integration failed', 'complete');
 }
 
-export function mergeTaktGoalPr(input: MergeGoalPrInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async () => {
-    const goal = await new GoalStore(input.cwd).get(input.goalId);
-    if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a merge');
-    if (goal.pullRequest?.number !== input.prNumber) throw new Error('PR number does not match the saved goal PR');
-    signal.throwIfAborted();
-    return mergeGoalPr(input.cwd, input.prNumber, goal.branch, goal.completion.goalSha, signal);
-  }, 'Goal PR merge failed', 'merge_pr');
+export async function mergeTaktGoalPr(input: MergeGoalPrInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  let enqueued = false;
+  try {
+    return await goalWrite(input, deps, signal, async () => {
+      const store = new GoalStore(input.cwd);
+      const goal = await store.get(input.goalId);
+      if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a merge');
+      if (goal.pullRequest?.number !== input.prNumber) throw new Error('PR number does not match the saved goal PR');
+      signal.throwIfAborted();
+      const result = await mergeGoalPr(input.cwd, goal, input.until, signal);
+      enqueued = true;
+      await store.update(goal.id, (current) => appendGoalWorkLog(current, {
+        summary: `Submitted ${result.taskName} for PR #${input.prNumber} (until: ${input.until})`,
+      }));
+      return result;
+    }, 'Goal PR merge failed', 'merge_pr');
+  } finally {
+    if (enqueued) await ensureManagerRun(input.cwd);
+  }
 }
 
 export function checkTaktGoalCompletion(input: GoalIdentityInput, deps: McpOperationDependencies, signal: AbortSignal) {

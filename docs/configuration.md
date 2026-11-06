@@ -286,7 +286,7 @@ If the GitHub PR head differs from the clone's starting HEAD, the effect fetches
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -496,6 +496,12 @@ When a pipeline or interactive session checks out a PR in the current directory,
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
+
+## Goal PR preparation
+
+Set project `.takt/config.yaml` `manager.main_merge` to `approve` (default) or `auto`. Both publish a PR on completion submission. With `approve`, manager enqueues preparation using `takt_merge_goal_pr` with `until: prepare` and waits for human merge. `auto` uses `until: merge` to prepare and merge, as does an explicit human merge instruction. Completion does not merge locally, and PR creation failures have no timed or counted automatic retries.
+
+`until: prepare` uses `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
 
 ## Slack conversations with manager
 
@@ -1351,6 +1357,10 @@ TAKT uses three provider-independent permission modes:
 | `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
 | `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + generated `--config` allow rules (`exec`, `edit`, `Write(**)`) |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode; permission requests answered `allow_once` |
+
+For the Claude SDK (`claude-sdk` and its `claude` alias), organizational policy can prevent `full` from taking effect as `bypassPermissions`. TAKT checks the actual mode reported by `system/init` for both new and resumed sessions. If it is not `bypassPermissions`, TAKT holds tool execution until a switch to `auto` settles. Claude CLI still decides whether to allow or deny each tool. TAKT logs a warning with the requested, actual, and target modes. If switching to `auto` also fails, TAKT logs the failure, releases waiting tools, and continues in the mode reported by init. These warnings follow the normal logging settings even when private manager conversation diagnostics are suppressed. This behavior does not apply to `claude-headless` or `claude-terminal`.
+
+The manager pre-approves its own MCP tools through the SDK's `allowedTools`. Other built-in tools and user MCP tools remain available under their respective permission settings. The director already pre-approves its own MCP tools through its dedicated tool restrictions.
 
 Devin runs through `devin acp` (Agent Client Protocol over stdio) rather than print mode, so permission modes are enforced in three layers: the ACP session mode set with `session/set_mode` (`ask` for `readonly`, `accept-edits` for `edit` and unset, `bypass` for `full`), permission rules appended to a generated `--config` file seeded from the user's own Devin config (`$XDG_CONFIG_HOME/devin/config.json`, default `~/.config/devin/config.json`; `%APPDATA%\devin\config.json` on Windows), and answers to `session/request_permission` — for requests that reach TAKT, `allow_once` is selected only in `full` mode and `allow_always` is never selected because it would persist decisions into the Devin config. `strict-readonly` internal-agent isolation additionally denies `Fetch(**)`.
 

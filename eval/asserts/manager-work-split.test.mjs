@@ -982,7 +982,7 @@ for (const lang of ['ja', 'en']) {
       const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
       const record = { tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Decision and reason.' } };
       const output = { response: { message: 'Decision recorded.', summary: null }, calls: [record] };
-      if (['verification-repeated', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
+      if (['verification-once', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
       if (caseId === 'plan-missing') output.calls.unshift(enqueue(fixture, 'usage-docs'));
       assertSemanticGrader(caseId, lang);
       assert.equal(score(output, caseId, lang).pass, true, caseId);
@@ -997,11 +997,11 @@ for (const lang of ['ja', 'en']) {
       const extraWork = structuredClone(output);
       extraWork.calls.push(enqueue(fixture, 'check-only'));
       assert.equal(score(extraWork, caseId, lang).pass, false, caseId);
-      if (['verification-once', 'verification-told'].includes(caseId)) {
+      if (['verification-repeated', 'verification-told'].includes(caseId)) {
         output.calls.push(tellRun(fixture));
         assert.equal(score(output, caseId, lang).pass, false);
       }
-      if (['verification-repeated', 'verification-mixed', 'plan-missing'].includes(caseId)) {
+      if (['verification-once', 'verification-mixed', 'plan-missing'].includes(caseId)) {
         const missingAction = structuredClone(output);
         missingAction.calls.shift();
         assert.equal(score(missingAction, caseId, lang).pass, false);
@@ -1464,4 +1464,28 @@ for (const lang of ['ja', 'en']) {
       }
     }
   });
+}
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']) {
+    test(`${lang}: ${caseId} grades tool and required argument structure`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const args = { cwd: fixture.cwd, goalId: fixture.goal.id, prNumber: fixture.goal.pullRequest.number,
+        until: caseId === 'explicit-goal-pr-merge' ? 'merge' : 'prepare' };
+      const grade = (calls) => evaluate(JSON.stringify({ response: { message: '処理します', summary: null }, calls }), { vars: { case: caseId, lang } });
+      const call = { tool: 'takt_merge_goal_pr', arguments: args };
+      assert.equal(grade([call]).pass, true);
+      assert.equal(grade([]).pass, false);
+      assert.equal(grade([call, call]).pass, false);
+      for (const field of ['cwd', 'goalId', 'prNumber', 'until']) {
+        const missing = { ...args }; delete missing[field];
+        assert.equal(grade([{ ...call, arguments: missing }]).pass, false);
+      }
+      assert.equal(grade([{ ...call, arguments: { ...args, until: args.until === 'prepare' ? 'merge' : 'prepare' } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, prNumber: 1951 } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, workflow: 'default' } }]).pass, false);
+      assert.equal(grade([{ tool: 'takt_enqueue_goal_task', arguments: { cwd: args.cwd, goalId: args.goalId,
+        workflow: 'default', task: 'Resolve main conflicts', purpose: 'Resolve main conflicts' } }]).pass, false);
+    });
+  }
 }

@@ -2,7 +2,6 @@ import { installDaemonErrorLog, reportDaemonError } from '../infra/daemon/diagno
 import { DaemonLogger } from '../infra/daemon/logger.js';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { Worker } from 'node:worker_threads';
 import type { ChildProcess } from 'node:child_process';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
@@ -918,23 +917,6 @@ it('persists daemon diagnostics through the owned asynchronous logger before shu
   } finally { restore(); await logger.close(); }
 });
 
-it('excludes normal waiting states from goal stalls and ignores patrol and notification timestamps', async () => {
-  const f = await fixture();
-  const old = '2026-11-01T00:00:00Z'; const recent = '2026-11-03T00:00:00Z';
-  const path = join(f.repository, '.takt', 'goals', goalRecord().id, 'goal.json');
-  await mkdir(join(path, '..'), { recursive: true });
-  const goal = { ...goalRecord(), createdAt: old, workLog: [{ id: randomUUID(), kind: 'patrol', summary: 'inspection', recordedAt: recent }] };
-  const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
-  await writeFile(path, JSON.stringify(goal));
-  expect((await source.goals())[0]).toMatchObject({ active: true, lastUpdatedAt: old });
-  await writeFile(path, JSON.stringify({ ...goal, questions: [{ id: randomUUID(), body: 'answer?', recipient: 'human', status: 'pending', createdAt: old }] }));
-  expect((await source.goals())[0]?.active).toBe(false);
-  await writeFile(path, JSON.stringify(goal));
-  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{ name: 'running', status: 'running', goal_id: goal.id,
-    created_at: old, started_at: old, completed_at: null }] }));
-  expect((await source.goals())[0]?.active).toBe(false);
-});
-
 it('observes every running task when one saved worktree path is empty', async () => {
   const f = await fixture();
   const goal = goalRecord();
@@ -957,7 +939,7 @@ it('observes every running task when one saved worktree path is empty', async ()
   const errors = vi.fn();
   const source = createWatchSource(f.conversations, async () => {}, errors);
   expect(await source.runs()).toMatchObject(tasks.map((task) => ({
-    task: { taskName: task.name }, startedAt, logPath: join(f.repository, '.takt', 'runs', task.run_slug, 'logs', 'run.jsonl'),
+    task: { taskName: task.name },
   })));
   expect(errors).not.toHaveBeenCalled();
 });
@@ -977,8 +959,7 @@ it('pages more than 128 inbox files while goals and tasks exceed the old total c
   })) }));
   expect(await readWatchTasks(f.repository)).toHaveLength(130);
   const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
-  expect(await source.goals()).toHaveLength(130);
-  expect(await source.inquiries()).toEqual([]);
+  await source.inquiries();
   const targets = (await source.directories()).filter((target) => target.kind === 'inbox');
   const accept = vi.fn(async () => ({ kind: 'accepted' as const, eventId: 'accepted', operationId: randomUUID(), acceptedSequence: 1 }));
   const errors = vi.fn();
@@ -1014,7 +995,6 @@ it('admits director turns for saved goal and inquiry changes and deduplicates un
   await source().inquiries();
   const second = await f.runner.started(2);
   expect(second.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'director_state_changed', goalId: goal.id } });
-  expect((await source().goals())[0]?.active).toBe(false);
   await f.runner.finish(second);
   await writeFile(path, JSON.stringify({ ...goal, questions: [{ id: randomUUID(), body: 'question', status: 'pending', recipient: 'human' }] }));
   await source().inquiries(); await f.runner.started(3);
@@ -1076,7 +1056,7 @@ it.each(['run', undefined])('watches a running PID without a start time and acce
     goal_id: goal.id, run_slug: runSlug, execution_id: 'execution', owner_pid: 12345, owner_start_time: null, created_at: timestamp, started_at: timestamp, completed_at: null }] }));
   const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
   const targets = await source.runs();
-  expect(targets).toMatchObject([{ owner: { pid: 12345, startTime: null }, task: { executionId: 'execution' }, logPath: null }]);
+  expect(targets).toMatchObject([{ owner: { pid: 12345, startTime: null }, task: { executionId: 'execution' } }]);
   const target = targets[0]!;
   expect(target.task.runSlug).toBe(runSlug);
   const checks = new WatchChecks(new WatchObservations(new FileWatchRecords(f.directory), f.dispatcher, Date.now), Date.now,
@@ -1208,7 +1188,7 @@ it('seeds existing goal and standalone inquiries without publishing and publishe
   await writeFile(join(inquiryDirectory, `${standalone.id}.json`), JSON.stringify(standalone));
   const publish = vi.fn(async () => {});
   const source = createWatchSource(f.conversations, publish, (error) => { throw error; });
-  expect(await source.inquiries()).toHaveLength(2);
+  await source.inquiries();
   await source.inquiries();
   expect(publish).not.toHaveBeenCalled();
   const next = { ...question, id: randomUUID(), body: 'new' };
@@ -1240,8 +1220,7 @@ it('observes tasks and goals above 256 KiB without excluding runs, PRs or inquir
   const source = createWatchSource(f.conversations, async () => {}, errors);
   expect(await source.runs()).toMatchObject([{ task: { goalId: goal.id } }]);
   expect(await source.pullRequests()).toMatchObject([{ goalId: goal.id }]);
-  expect(await source.inquiries()).toMatchObject([{ questionId: question.id }]);
-  expect(await source.goals()).toMatchObject([{ goalId: goal.id }]);
+  await source.inquiries();
   expect(errors).not.toHaveBeenCalled();
 });
 
@@ -1259,9 +1238,8 @@ it('continues monitoring later repositories after an unreadable tasks file', asy
   await writeFile(join(other, '.takt', 'tasks.yaml'), JSON.stringify({ tasks }));
   const errors = vi.fn(); const source = createWatchSource(f.conversations, async () => {}, errors);
   expect(await source.runs()).toMatchObject([{ task: { repositoryDirectory: other } }]);
-  expect(await source.goals()).toMatchObject([{ repositoryDirectory: other }]);
   expect(await source.launches()).toMatchObject([{ repositoryDirectory: other }]);
-  expect(errors).toHaveBeenCalledTimes(3);
+  expect(errors).toHaveBeenCalledTimes(2);
 });
 
 it('selects active patrol goals per repository and resolves project, global and default intervals', async () => {
@@ -1348,41 +1326,6 @@ it('interrupts a patrol for TUI input without delivering partial patrol output',
   expect(f.runner.calls).toHaveLength(2);
 });
 
-it.each([false, true])('reads run metadata in the execution directory (merge task: %s)', async (mergeTask) => {
-  const f = await fixture();
-  const goal = goalRecord();
-  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
-  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
-  const execution = mergeTask ? f.repository : join(f.repository, 'clone');
-  const runDirectory = join(execution, '.takt', 'runs', 'run');
-  await mkdir(runDirectory, { recursive: true });
-  await writeFile(join(runDirectory, 'meta.json'), JSON.stringify({ runSlug: 'run', status: 'running',
-    startTime: '2026-11-03T00:00:00Z', resume_point: { stack: [
-      { workflow: 'root', workflow_ref: 'root.yaml', step: 'call', occurrence: 1, step_iterations: { call: 1 } },
-      { workflow: 'child', workflow_ref: 'child.yaml', step: 'review', occurrence: 6, step_iterations: { review: 6 } },
-    ] } }));
-  await writeFile(join(f.repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{ name: 'task', status: 'running',
-    goal_id: goal.id, run_slug: 'run', worktree_path: 'clone', merge_task: mergeTask,
-    created_at: '2026-11-03T00:00:00Z', started_at: '2026-11-03T00:00:00Z', completed_at: null }] }));
-  const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
-  const post = vi.spyOn(Worker.prototype, 'postMessage');
-  const [target] = await source.runs();
-  expect(target!.metaPath).toBe(join(runDirectory, 'meta.json'));
-  const records = new FileWatchRecords(f.directory);
-  const checks = new WatchChecks(new WatchObservations(records, f.dispatcher, () => Date.parse('2026-11-03T02:00:01Z')),
-    () => Date.parse('2026-11-03T02:00:01Z'), (error) => { throw error; }, 'run');
-  await checks.runProgress(target!, (path) => source.readRunProgress(path), () => source.run(target!.targetId));
-  expect(await source.readRunProgress(target!.metaPath!)).toMatchObject({ runSlug: 'run', running: true });
-  expect(new Set(post.mock.calls.map(([request]) => (request as { kind: string }).kind))).toEqual(new Set(['goal', 'run']));
-  expect(new Set(post.mock.contexts).size).toBe(1);
-  const long = await f.runner.started(1);
-  expect(long.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'run_too_long' } });
-  await f.runner.finish(long);
-  const repeated = await f.runner.started(2);
-  expect(repeated.input.event.event).toMatchObject({ kind: 'watch_observation', observation: { kind: 'run_step_repeated', workflow: 'child', step: 'review', count: 6 } });
-  await f.runner.finish(repeated);
-});
-
 it('marks work records from a patrol tool call even when the model omits kind', async () => {
   const f = await fixture();
   const goal = goalRecord();
@@ -1406,4 +1349,27 @@ it('marks work records from a patrol tool call even when the model omits kind', 
     const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
     expect(saved.workLog.map((entry) => entry.kind)).toEqual(['patrol', undefined]);
   } finally { await client.close(); await server.close(); }
+});
+
+it('delivers a saved PR publication failure through inbox admission to the manager', async () => {
+  const goal = goalRecord();
+  const f = await fixture();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, JSON.stringify({ ...goal, pullRequestFailure: { error: 'old failure' } }));
+  const failure = { kind: 'pr_failed' as const, goalId: goal.id, expectedSha: 'a'.repeat(40), reason: 'push failed' };
+  saveManagerEvent(f.repository, failure);
+  const files = new DaemonPersistedFiles(f.directory);
+  expect(await files.readGoal(f.repository, goal.id)).toEqual(goal);
+  const inbox = await files.inboxDirectory(f.repository);
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(1);
+  const target = { targetId: f.repository, generation: 'inbox', conversationId: f.id, kind: 'inbox' as const, directory: inbox };
+  await receiveInboxChange({ path: join(inbox, names[0]!), target, generation: 'failure', value: null, removed: false },
+    files, f.conversations, f.dispatcher);
+  const turn = await f.runner.started(1);
+  expect(turn.input.event.event).toEqual({ kind: 'goal_pr_failed', repositoryDirectory: f.repository,
+    goalId: goal.id, expectedSha: failure.expectedSha, reason: failure.reason });
+  expect(await readdir(inbox)).toEqual([]);
+  await f.runner.finish(turn);
 });

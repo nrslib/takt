@@ -85,6 +85,14 @@ export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {
 export type GoalQuestionInput = z.input<typeof GoalInquiryInputSchema>;
 export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
 
+export const GoalBranchSyncSchema = z.object({
+  status: z.enum(['no_origin', 'unpublished', 'unchanged', 'local_ahead', 'fast_forward', 'diverged', 'checked_out']),
+  localSha: goalSha,
+  remoteSha: goalSha.optional(),
+  worktrees: z.array(z.string()).optional(),
+}).strict();
+export type GoalBranchSync = z.infer<typeof GoalBranchSyncSchema>;
+
 export const GoalTaskResultSchema = z.object({
   success: z.boolean(),
   interrupted: z.boolean(),
@@ -92,6 +100,8 @@ export const GoalTaskResultSchema = z.object({
   sha: z.string().optional(),
   shaUnavailableReason: z.string().optional(),
   failureReason: z.string().optional(),
+  mergeOutcome: z.enum(['prepared', 'merged', 'unresolved']).optional(),
+  branchSynchronization: GoalBranchSyncSchema.optional(),
   workflowResult: z.enum(['completed', 'aborted', 'exceeded', 'error']).optional(),
 }).strict();
 export type GoalTaskResult = z.infer<typeof GoalTaskResultSchema>;
@@ -166,12 +176,11 @@ export const GoalRecordObjectSchema = z.object({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
-  pullRequestFailure: z.object({
-    id: z.uuid(), goalSha, recordedAt: z.iso.datetime(), error: goalText,
-  }).strict().optional(),
   pullRequest: z.object({ number: z.number().int().safe().positive(), url: z.url() }).strict().optional(),
 }).strict();
-export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
+const readableGoal = GoalRecordObjectSchema.extend({ pullRequestFailure: z.unknown().optional() })
+  .transform(({ pullRequestFailure: _retiredFailure, ...goal }) => goal);
+export const GoalSchema = readableGoal.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {
     ctx.addIssue({ code: 'custom', path: ['completion'], message: 'Completion evidence is required' });
   }

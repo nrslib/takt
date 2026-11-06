@@ -82,10 +82,9 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
     expect(lines.slice(2).join('\n')).toBe(body);
   });
 
-  it('takes the digest from completion and keeps every merge instruction after it', () => {
+  it('takes the digest from completion and keeps every PR preparation instruction after it', () => {
     const summary = ['first summary', 'second summary', 'third summary', 'hidden summary'].join('\n');
-    const command = "git -C '/Users/nrs/work/git/takt3' merge --no-ff --no-edit b89dc7274403152da8933cda80a76a4751c7901d";
-    const instructions = ["git -C '/Users/nrs/work/git/takt3' status --short", command, 'x'.repeat(800)];
+    const instructions = ['takt_complete_goal', 'takt_merge_goal_pr until=prepare', 'x'.repeat(800)];
     const goal: Goal = { ...goalRecord(), completion: {
       goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary,
       worktrees: ['/Users/nrs/work/git/takt3'], instructions,
@@ -97,11 +96,9 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
     expect(lines.slice(2, 5)).toEqual(summary.split('\n').slice(0, 3));
     expect(lines[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
     expect(lines[5]).not.toMatch(/Ctrl\+N|\^N/u);
-    expect(lines.slice(6, 8)).toEqual([
-      getLabel('manager.notificationMerge', lang, { branch: 'main' }),
-      getLabel('manager.notificationMergeWorktree', lang, { directory: '/Users/nrs/work/git/takt3' }),
-    ]);
-    expect(lines.slice(8)).toEqual(instructions);
+    expect(lines[6]).toBe(getLabel('manager.notificationMerge', lang, { branch: 'main' }));
+    expect(lines.slice(7)).toEqual(instructions);
+    expect(lines.join('\n')).not.toContain('git merge');
   });
 
   it('leaves Slack multiline text and its existing character limit unchanged', () => {
