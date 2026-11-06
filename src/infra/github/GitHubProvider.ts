@@ -88,8 +88,10 @@ export class GitHubProvider implements GitProvider {
     return closePr(prNumber, cwd ?? process.cwd(), ...this.targetArguments(prNumber));
   }
 
-  mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): MergeResult {
-    return mergePr(prNumber, cwd ?? process.cwd(), method, expectedHeadSha, ...this.targetArguments(prNumber));
+  mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string, options?: { deleteBranch: boolean }): MergeResult {
+    const targetArgs: [GitHubPullRequestTarget?, { deleteBranch: boolean }?] = options === undefined
+      ? this.targetArguments(prNumber) : [this.targetArguments(prNumber)[0], options];
+    return mergePr(prNumber, cwd ?? process.cwd(), method, expectedHeadSha, ...targetArgs);
   }
 
   fetchPrStatus(prNumber: number, cwd?: string, options?: PrStatusFetchOptions) {

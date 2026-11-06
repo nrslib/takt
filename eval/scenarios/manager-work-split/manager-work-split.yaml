@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: Manager work submission, completion, watcher repair and pause resumption decisions (56 cases x ja/en = 112 turns; 54 replay and 2 execution cases)
+description: Manager work submission, completion, watcher repair and pause resumption decisions (59 cases x ja/en = 118 turns; 57 replay and 2 execution cases)
 prompts:
   - file://../../manager-work-split-prompt.mjs
 providers:
@@ -1458,3 +1458,33 @@ tests:
           Ask for the negotiated daily transfer limit, an already established value only the account owner knows. This is an event for an identified goal: save one human-directed takt_ask_goal_question with kind: question (including default) directly asking the owner for the missing contractual limit. Its body must briefly state both what decision needs the value and what was checked without finding it. A summary of the need, such as transfer control, and unsuccessful checks of configuration, contract materials or the read API suffices; do not require every checked item or fixed wording. Fail when the reason or investigation results appear only in message or work logs and not in the body. JS already checks that options and recommendation are absent. Do not add alternatives or a recommendation in the body either, or replace asking for the missing value with choosing an approach, granting permission or changing acceptance criteria. A question asking the owner to select a required-configuration design while deferring provision of the value also fails.
           Treat limit-dependent work as withheld when no such work is submitted and no statement says it will start before the answer. Do not require an explicit stop/wait declaration or instruction. Fail adopting a public standard or guessed value, offering fabricated values as choices, submitting dependent work or declaring its start before the answer, message-only or notification-only questions, or waiting without a question.
           JS already checks takt_ask_goal_question structure, kind and recipient using the production schema defaults (kind: question, recipient: human). Do not fail omitted kind or recipient. Explicit invalid values and director recipients fail JS; judge substance here.
+  - description: "ja: approve-unprepared-pr"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: approve-unprepared-pr
+      lang: ja
+  - description: "en: approve-unprepared-pr"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: approve-unprepared-pr
+      lang: en
+  - description: "ja: conflicting-goal-pr"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: conflicting-goal-pr
+      lang: ja
+  - description: "en: conflicting-goal-pr"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: conflicting-goal-pr
+      lang: en
+  - description: "ja: explicit-goal-pr-merge"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: explicit-goal-pr-merge
+      lang: ja
+  - description: "en: explicit-goal-pr-merge"
+    providers: [codex-sol-low, claude-opus-5, codex-luna-max, codex-terra-medium]
+    vars:
+      case: explicit-goal-pr-merge
+      lang: en

@@ -1,3 +1,7 @@
+vi.mock('../infra/goals/branch-sync.js', () => ({ synchronizeGoalBranch: vi.fn(async () => ({ status: 'unchanged', localSha: 'a'.repeat(40) })) }));
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+import { saveManagerEvent } from '../infra/goals/events.js';
+import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
@@ -519,14 +523,7 @@ it.each([
     let started!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
     const starting = new Promise<void>((resolve) => { started = resolve; });
-    if (path === 'auto' || path === 'checked_out') {
-      doubles.merge.mockImplementationOnce(async () => {
-        started();
-        await waiting;
-        return path === 'auto' ? { status: 'merged', sha: targetSha }
-          : { status: 'checked_out', worktrees: ['/target-worktree'] };
-      });
-    } else if (path === 'approve') {
+    if (path === 'auto' || path === 'checked_out' || path === 'approve') {
       doubles.worktrees.mockImplementationOnce(async () => {
         started();
         await waiting;
@@ -568,7 +565,7 @@ it.each([
       expect(goal).toEqual(before);
       expect(doubles.update).not.toHaveBeenCalled();
     } else {
-      const completed = path === 'included' || path === 'auto';
+      const completed = path === 'included';
       expect(result).toMatchObject({ status: completed ? 'merged' : 'awaiting_merge', goal });
       expect(goal).toMatchObject({ status: completed ? 'completed' : 'awaiting_merge', completion: {
         goalSha: sourceSha, ...(completed ? { targetSha } : { worktrees: ['/target-worktree'] }),
@@ -635,12 +632,12 @@ it.each(['created', 'completed'] as const)('rejects a completion check when the 
   await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
   expect(goal).toEqual(before);
 });
-it('automatically completes only after a successful target merge and does not repeat it', async () => {
+it('publishes and reuses a PR for auto completion without merging locally', async () => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check the result', 'ja');
-  expect(goal).toMatchObject({ status: 'completed', completion: { targetSha } });
-  expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check the result', 'ja')).toEqual({ goal });
-  expect(doubles.merge).toHaveBeenCalledOnce(); expect(goal.notifications).toHaveLength(1);
-  expect(prepareGoalPullRequest).not.toHaveBeenCalled();
+  expect(goal).toMatchObject({ status: 'awaiting_merge', pullRequest: { number: 1950 } });
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check the result', 'ja');
+  expect(doubles.merge).not.toHaveBeenCalled();
+  expect(prepareGoalPullRequest).toHaveBeenCalledOnce();
 });
 it('preserves awaiting-merge evidence on repeated completion requests', async () => {
   goal = { ...goal, questions: completionInquiries() };
@@ -650,74 +647,15 @@ it('preserves awaiting-merge evidence on repeated completion requests', async ()
   expect(goal).toEqual(before); expect(doubles.diff).toHaveBeenCalledOnce();
 });
 
-it.each((['auto merge', 'included content', 'awaiting merge included content', 'awaiting merge auto merge', 'completion check'] as const).flatMap((path) =>
-  [false, true].map((paused) => ({ path, paused })),
-))('checks the latest pause state via $path with paused=$paused', async ({ path, paused }) => {
-  goal = { ...goal, questions: completionInquiries() };
-  if (path === 'completion check' || path === 'awaiting merge included content' || path === 'awaiting merge auto merge') {
-    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
-    expect(goal).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sourceSha } });
-  }
-  const autoMerge = path === 'auto merge' || path === 'awaiting merge auto merge';
-  const expectedSha = path === 'awaiting merge auto merge' ? 'c'.repeat(40) : sourceSha;
-  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? expectedSha : targetSha);
-  doubles.contentIncluded.mockResolvedValue(!autoMerge);
-  doubles.contentIncluded.mockClear();
-  doubles.merge.mockClear();
-  doubles.update.mockClear();
-  const observed: Goal[] = [];
-  const update = doubles.update.getMockImplementation()!;
-  doubles.update.mockImplementation(async (id: string, transform: (current: Goal) => Goal) => update(id, (current: Goal) => {
-    observed.push(structuredClone(current));
-    return transform(current);
-  }));
-  let started!: () => void;
-  let release!: () => void;
-  const starting = new Promise<void>((resolve) => { started = resolve; });
-  const waiting = new Promise<void>((resolve) => { release = resolve; });
-  if (autoMerge) {
-    doubles.merge.mockImplementationOnce(async () => {
-      started();
-      await waiting;
-      return { status: 'merged', sha: targetSha };
-    });
-  } else {
-    doubles.contentIncluded.mockImplementationOnce(async () => {
-      started();
-      await waiting;
-      return true;
-    });
-  }
-  const complete = () => path === 'completion check' ? checkGoalCompletion('/project', goal.id, undefined, policy)
-    : completeGoal('/project', goal.id, expectedSha, 'evidence', autoMerge ? 'auto' : 'approve', undefined, policy, 'Check the result', 'ja');
-  expect(goal.executionStatus).toBe('active');
-  const completing = complete();
-  await Promise.race([starting, completing]);
-  expect(doubles.contentIncluded).toHaveBeenCalledExactlyOnceWith('/project', expectedSha, targetSha, undefined);
-  if (autoMerge) expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', expectedSha, goal.integrationBranch, undefined);
-  else expect(doubles.merge).not.toHaveBeenCalled();
-  expect(doubles.update).not.toHaveBeenCalled();
-  if (paused) goal = { ...goal, executionStatus: 'paused' };
+it.each(['auto', 'approve'] as const)('rechecks the pause state before saving %s PR publication', async (mode) => {
   const before = structuredClone(goal);
-  release();
-
-  if (paused) {
-    await expect(completing).rejects.toThrow();
-    expect(goal).toEqual(before);
-    expect(observed).toEqual([before]);
-    goal = { ...goal, executionStatus: 'active' };
-    await complete();
-  } else {
-    expect(await completing).toMatchObject({ goal: { status: 'completed' } });
-    expect(observed).toEqual([before]);
-  }
-  expect(goal).toMatchObject({ status: 'completed', executionStatus: 'active', completion: { goalSha: expectedSha, targetSha } });
-  expect(goal.questions).toEqual([
-    ...before.questions!.slice(0, 3).map((question) => ({ ...question, status: 'withdrawn',
-      withdrawalReason: completionReason, withdrawnAt: now })),
-    ...before.questions!.slice(3),
-  ]);
-  expect(goal.notifications).toEqual([...before.notifications ?? [], expect.objectContaining({ kind: 'completed' })]);
+  vi.mocked(prepareGoalPullRequest).mockImplementationOnce(async () => {
+    goal = { ...goal, executionStatus: 'paused' };
+    return { number: 1950, url: 'https://github.com/example/project/pull/1950' };
+  });
+  await expect(completeGoal('/project', goal.id, sourceSha, 'evidence', mode, undefined, policy, 'Check', 'ja')).rejects.toThrow();
+  expect(goal).toEqual({ ...before, executionStatus: 'paused' });
+  expect(doubles.merge).not.toHaveBeenCalled();
 });
 
 it.each(['auto merge', 'included content', 'completion check'] as const)(
@@ -727,7 +665,7 @@ it.each(['auto merge', 'included content', 'completion check'] as const)(
     const before = structuredClone(goal);
     doubles.update.mockClear();
     doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? sourceSha : targetSha);
-    doubles.contentIncluded.mockResolvedValue(path !== 'auto merge');
+    doubles.contentIncluded.mockResolvedValue(true);
 
     const result = path === 'completion check' ? await checkGoalCompletion('/project', goal.id, undefined, policy)
       : await completeGoal('/project', goal.id, sourceSha, 'evidence', path === 'auto merge' ? 'auto' : 'approve', undefined, policy, 'Check the result', 'ja');
@@ -836,17 +774,15 @@ it.each(['approve', 'checked_out'] as const)('preserves every inquiry when compl
   expect(result.goal).toEqual(goal);
 });
 
-it('preserves every inquiry when the automatic completion merge conflicts', async () => {
+it('preserves inquiries and publishes a PR without attempting a conflicting local merge in auto mode', async () => {
   goal = { ...goal, questions: completionInquiries() };
-  const before = structuredClone(goal);
+  const questions = structuredClone(goal.questions);
   doubles.merge.mockResolvedValue({ status: 'conflict', conflicts: ['file'] });
-
-  expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check the result', 'ja'))
-    .toMatchObject({ status: 'conflict' });
-
-  expect(goal).toEqual(before);
-  expect(doubles.update).not.toHaveBeenCalled();
-  expect(prepareGoalPullRequest).not.toHaveBeenCalled();
+  expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check', 'ja'))
+    .toMatchObject({ status: 'awaiting_merge' });
+  expect(goal.questions).toEqual(questions);
+  expect(doubles.merge).not.toHaveBeenCalled();
+  expect(prepareGoalPullRequest).toHaveBeenCalledOnce();
 });
 
 it('lets the manager integrate reviewed useful work from a failed task', async () => {
@@ -871,6 +807,7 @@ it.each(['  追加の修正が必要  ', '理'.repeat(128 * 1024)])('reopens wai
 });
 
 it.each(['created', 'completed'] as const)('rejects reopening a %s goal without saving', async (status) => {
+  if (status === 'completed') doubles.contentIncluded.mockResolvedValue(true);
   if (status === 'completed') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy, 'Check the result', 'ja');
   const before = structuredClone(goal);
   doubles.update.mockClear();
@@ -1088,11 +1025,11 @@ it('preserves an existing approval and notifies the first PR failure on a repeat
 it.each([
   'Goal PR push failed: commit_refs',
   'Goal PR creation failed: GitHub unavailable',
-])('saves one visible failure notification across repeated completion requests for %s', async (failure) => {
+])('records each PR publication failure without a retry machine for %s', async (failure) => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError(failure));
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   const notification = goal.notifications?.find((saved) => saved.kind === 'blocked');
-  expect(notification).toMatchObject({ id: goal.pullRequestFailure?.id, severity: 'error', body: expect.stringContaining(failure) });
+  expect(notification).toMatchObject({ id: goal.workLog.at(-1)!.id, severity: 'error', body: expect.stringContaining(failure) });
   const events = [...projectManagerDisplayEvents(goal, '/project', 'ja', Date.parse(now), policy)];
   expect(events.filter((event) => event.message.includes(failure))).toEqual([
     expect.objectContaining({
@@ -1100,35 +1037,22 @@ it.each([
       message: expect.stringContaining(failure),
     }),
   ]);
-  for (let attempt = 0; attempt < 6; attempt++) {
-    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-    expect(goal.notifications?.filter((saved) => saved.kind === 'blocked')).toEqual([notification]);
-    expect([...projectManagerDisplayEvents(goal, '/project', 'ja', Date.parse(now), policy)]).toEqual(events);
-  }
-  expect(goal.notifications?.filter((saved) => saved.kind === 'blocked')).toEqual([notification]);
-  expect(prepareGoalPullRequest).toHaveBeenCalledTimes(7);
-  expect(goal.workLog).toHaveLength(7);
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  expect(goal.notifications?.filter((saved) => saved.kind === 'blocked')).toHaveLength(2);
+  expect(prepareGoalPullRequest).toHaveBeenCalledTimes(2);
+  expect(goal.workLog).toHaveLength(2);
+  expect(saveManagerEvent).toHaveBeenCalledTimes(2);
+  expect(saveManagerEvent).toHaveBeenLastCalledWith('/project', { kind: 'pr_failed', goalId: goal.id, expectedSha: sourceSha, reason: failure });
 });
 
 it('respects disabled blocked notifications while retaining PR failure evidence', async () => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, { ...policy, blocked: false }, 'Check', 'ja');
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['awaiting_merge']);
-  expect(goal.pullRequestFailure?.error).toContain('commit_refs');
+  expect(vi.mocked(saveManagerEvent)).toHaveBeenLastCalledWith('/project', expect.objectContaining({ kind: 'pr_failed', expectedSha: sourceSha, reason: expect.stringContaining('commit_refs') }));
   expect(goal.workLog.at(-1)?.summary).toContain('commit_refs');
 });
 
-it('notifies a legacy PR failure once when automatic retries begin', async () => {
-  vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  const failure = goal.pullRequestFailure!;
-  goal = { ...goal, pullRequestFailure: undefined, notifications: goal.notifications?.filter((notice) => notice.kind !== 'blocked') };
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  expect(goal.notifications?.filter((notice) => notice.kind === 'blocked')).toEqual([
-    expect.objectContaining({ id: failure.id, body: expect.stringContaining('commit_refs') }),
-  ]);
-});
 
 it('does not save completion after cancellation while attempting a PR', async () => {
   const before = structuredClone(goal);
@@ -1143,22 +1067,6 @@ it('does not save completion after cancellation while attempting a PR', async ()
   expect(doubles.update).not.toHaveBeenCalled();
 });
 
-it('keeps a stable PR failure identity across completion retries and clears it on success', async () => {
-  vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  expect(goal).toMatchObject({ status: 'awaiting_merge', pullRequestFailure: {
-    goalSha: sourceSha, error: expect.stringContaining('commit_refs'),
-  } });
-  const failure = structuredClone(goal.pullRequestFailure);
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  expect(goal.pullRequestFailure).toEqual(failure);
-  expect(prepareGoalPullRequest).toHaveBeenCalledTimes(2);
-  expect(goal.workLog).toHaveLength(2);
-  vi.mocked(prepareGoalPullRequest).mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  expect(goal.pullRequest?.number).toBe(1950);
-  expect(goal.pullRequestFailure).toBeUndefined();
-});
 
 it.each(['paused', 'aborted'] as const)('does not publish a %s goal on a repeated completion request', async (executionStatus) => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
@@ -1175,7 +1083,7 @@ it('a repeated completion request reuses completion and saves the PR after a fai
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(prepareGoalPullRequest).toHaveBeenCalledTimes(2);
   expect(goal.pullRequest?.number).toBe(1950);
-  expect(goal.pullRequestFailure).toBeUndefined();
+  expect(goal).not.toHaveProperty('pullRequestFailure');
 });
 
 it('a repeated completion request does not publish a changed goal tip', async () => {
@@ -1187,20 +1095,6 @@ it('a repeated completion request does not publish a changed goal tip', async ()
   expect(prepareGoalPullRequest).not.toHaveBeenCalled();
 });
 
-it('starts a fresh failure episode when a newly reviewed goal SHA is submitted', async () => {
-  vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
-  const previous = goal.pullRequestFailure!;
-  const nextSha = 'c'.repeat(40);
-  vi.setSystemTime(Date.now() + 3600_000);
-  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? nextSha : targetSha);
-  await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, 'Check', 'ja');
-  expect(goal.pullRequestFailure?.goalSha).toBe(nextSha);
-  expect(goal.pullRequestFailure?.id).not.toBe(previous.id);
-  expect(goal.pullRequestFailure?.recordedAt).toBe(new Date().toISOString());
-  expect(goal.notifications?.filter((notice) => notice.kind === 'blocked').map((notice) => notice.id))
-    .toEqual([previous.id, goal.pullRequestFailure!.id]);
-});
 
 it('keeps an existing PR usable when the manager explicitly submits a newly reviewed SHA', async () => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
@@ -1234,10 +1128,10 @@ it('records a failed push of a newly reviewed SHA and restores the existing PR o
   expect(result).toMatchObject({ status: 'awaiting_merge', goal: { pullRequest: undefined, completion: { goalSha: nextSha } } });
   expect(goal.pullRequest).toBeUndefined();
   expect(goal.status).toBe('awaiting_merge');
-  expect(goal.pullRequestFailure).toMatchObject({ goalSha: nextSha, error: expect.stringContaining('commit_refs') });
+  expect(vi.mocked(saveManagerEvent)).toHaveBeenLastCalledWith('/project', expect.objectContaining({ kind: 'pr_failed', expectedSha: nextSha, reason: expect.stringContaining('commit_refs') }));
   expect(goal.workLog.at(-1)?.summary).toContain('commit_refs');
   expect(goal.notifications?.filter((notice) => notice.kind === 'blocked')).toEqual([
-    expect.objectContaining({ id: goal.pullRequestFailure!.id, severity: 'error' }),
+    expect.objectContaining({ id: goal.workLog.at(-1)!.id, severity: 'error' }),
   ]);
   expect(publication.find).not.toHaveBeenCalled();
   const completion = structuredClone(goal.completion);
@@ -1251,5 +1145,17 @@ it('records a failed push of a newly reviewed SHA and restores the existing PR o
   expect(retried).toMatchObject({ status: 'awaiting_merge', goal: { pullRequest, completion } });
   expect(goal.pullRequest).toEqual(pullRequest);
   expect(goal.completion).toEqual(completion);
-  expect(goal.pullRequestFailure).toBeUndefined();
+  expect(goal).not.toHaveProperty('pullRequestFailure');
+});
+
+it.each(['integrate', 'complete'] as const)('stops %s before changing or publishing a divergent goal branch', async (operation) => {
+  const error = new Error('Goal branch diverged from origin');
+  vi.mocked(synchronizeGoalBranch).mockRejectedValueOnce(error);
+  const pending = operation === 'integrate'
+    ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')
+    : completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  await expect(pending).rejects.toBe(error);
+  expect(doubles.merge).not.toHaveBeenCalled();
+  expect(prepareGoalPullRequest).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
 });

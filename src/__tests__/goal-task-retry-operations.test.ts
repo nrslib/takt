@@ -118,3 +118,20 @@ it('rejects a removal record exceeding the saved text limit before deleting reso
   expect(doubles.remove).not.toHaveBeenCalled();
   expect(goal.workLog).toHaveLength(0);
 });
+
+it('requeues a goal PR task while the goal awaits merge', async () => {
+  goal = { ...goal, status: 'awaiting_merge' };
+  state = { ...state, mergeTask: true };
+  expect((await requeueTaktGoalTask(input, {}, signal)).isError).toBeUndefined();
+  expect(doubles.exceeded).toHaveBeenCalledOnce();
+  expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith(input.cwd);
+});
+it.each(['pending', 'completed'] as const)('removes a %s PR merge task without treating it as unintegrated goal work', async (status) => {
+  goal = { ...goal, status: 'awaiting_merge' };
+  state = { ...state, kind: status, status, mergeTask: true,
+    ...(status === 'completed' ? { completion: { success: true, interrupted: false, mergeOutcome: 'prepared' } } : {}) };
+  expect((await removeTaktGoalTask({ ...input, reason: '仕上げタスクの片付け' }, {}, signal)).isError).toBeUndefined();
+  expect(doubles.sha).not.toHaveBeenCalled();
+  expect(doubles.included).not.toHaveBeenCalled();
+  expect(doubles.remove).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: input.taskName, kind: status }), { quiet: true, requireCleanupSuccess: true });
+});

@@ -3,12 +3,17 @@ import type {
   WorkflowStep,
 } from '../models/types.js';
 import { getAllParallelSubSteps } from '../models/types.js';
+import type { WorkflowEffect } from '../models/workflow-system-input-types.js';
 import { isWorkflowCallStep } from './step-kind.js';
 
 export function hasCacciaEffect(steps: readonly WorkflowStep[]): boolean {
+  return hasWorkflowEffect(steps, 'caccia');
+}
+
+function hasWorkflowEffect(steps: readonly WorkflowStep[], type: WorkflowEffect['type']): boolean {
   return steps.some((step) => (
-    (step.kind === 'system' && step.effects?.some((effect) => effect.type === 'caccia') === true)
-    || (step.parallel !== undefined && hasCacciaEffect(getAllParallelSubSteps(step.parallel)))
+    (step.kind === 'system' && step.effects?.some((effect) => effect.type === type) === true)
+    || (step.parallel !== undefined && hasWorkflowEffect(getAllParallelSubSteps(step.parallel), type))
   ));
 }
 

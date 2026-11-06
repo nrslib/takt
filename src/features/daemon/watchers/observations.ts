@@ -3,7 +3,6 @@ import type { EventInput, WatchObservation } from '../../../core/daemon/events.j
 import type { DaemonIngress } from '../../../core/daemon/ports.js';
 
 export interface WatchRecord {
-  retry?: { attempts: number; lastAttemptAt: string; limitNotified?: boolean };
   episode: number;
   active: boolean;
   input: EventInput | null;
@@ -23,10 +22,7 @@ export interface WatchTarget {
 }
 
 export function watchKey(target: WatchTarget, kind: WatchObservation['kind']): string {
-  // Workspace assignment changes the destination, but must not reset a goal failure's retry budget or notification.
-  const identity = kind === 'goal_pr_retry'
-    ? [target.targetId, target.generation, kind]
-    : [target.conversationId, target.targetId, target.generation, kind];
+  const identity = [target.conversationId, target.targetId, target.generation, kind];
   return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }
 
@@ -50,10 +46,7 @@ export class WatchObservations {
     const previous = record?.input?.event;
     const prChanged = observation.kind === 'pr_changed' && previous?.kind === 'watch_observation'
       && previous.observation.kind === 'pr_changed' && previous.observation.state !== observation.state;
-    const retryChanged = observation.kind === 'goal_pr_retry' && previous?.kind === 'watch_observation'
-      && previous.observation.kind === 'goal_pr_retry'
-      && previous.observation.attempt !== observation.attempt;
-    if (!record?.active || prChanged || retryChanged) {
+    if (!record?.active || prChanged) {
       const episode = record === undefined ? 1 : record.episode + 1;
       const id = `watch-${key}-${episode}`;
       record = { ...record, episode, active: true, accepted: false, input: {
@@ -66,10 +59,7 @@ export class WatchObservations {
     if (record.input === null) throw new Error('Active watch record has no event');
     const admission = await this.ingress.accept(record.input);
     if (admission.kind === 'rejected') throw new Error(`Watch admission rejected: ${admission.reason}`);
-    const event = record.input.event;
-    const retry = event.kind === 'watch_observation' && event.observation.kind === 'goal_pr_retry'
-      ? { attempts: event.observation.attempt, lastAttemptAt: new Date(this.now()).toISOString() } : record.retry;
-    await this.records.write(key, { ...record, accepted: true, ...(retry === undefined ? {} : { retry }) });
+    await this.records.write(key, { ...record, accepted: true });
   }
 
   /** settled が真の対象（完了・中止したゴール）は、初めて見たときは知らせず、状態だけ記録する。 */

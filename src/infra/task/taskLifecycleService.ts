@@ -26,6 +26,16 @@ import type { PrExecutionContext } from '../../core/workflow/system/pr-execution
 import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
 import { assertTaskStopHandled } from './taskStop.js';
 
+export interface PrMergeTaskInput {
+  prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+  prUrl?: string;
+  headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
+  until?: 'prepare' | 'merge';
+  workflow: string; method: MergeMethod; worktreePath: string;
+  threatCheckMaxDiffBytes: number;
+  concurrency?: number;
+}
+
 export class TaskClaimLockAcquisitionError extends Error {}
 
 export class TaskLifecycleService {
@@ -37,15 +47,25 @@ export class TaskLifecycleService {
     private readonly goalTasksOnly?: boolean,
   ) {}
 
-  startPrMergeTask(input: {
-    prNumber: number; headBranch: string; baseBranch: string; headSha: string;
-    prUrl?: string;
-    headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
-    workflow: string; method: MergeMethod; worktreePath: string;
-    threatCheckMaxDiffBytes: number;
-    concurrency?: number;
-    parentTaskName?: string;
-  }): TaskInfo {
+  startPrMergeTask(input: PrMergeTaskInput & { parentTaskName?: string }): TaskInfo {
+    return this.createPrMergeTask(input, 'running');
+  }
+
+  enqueuePrMergeTask(input: PrMergeTaskInput & { goalId: string }): TaskInfo {
+    return withGoalExecutionLock(this.projectDir, () => {
+      const goal = new GoalStore(this.projectDir).getSync(input.goalId);
+      if (isGoalPaused(goal) || goal.executionStatus === 'aborted' || goal.status !== 'awaiting_merge'
+        || goal.pullRequest?.number !== input.prNumber || goal.pullRequest.url !== input.prUrl
+        || goal.branch !== input.headBranch || goal.integrationBranch !== input.baseBranch) {
+        throw new Error('Goal is no longer available for this PR merge task');
+      }
+      return this.createPrMergeTask(input, 'pending');
+    });
+  }
+
+  private createPrMergeTask(
+    input: PrMergeTaskInput & { parentTaskName?: string; goalId?: string }, status: 'pending' | 'running',
+  ): TaskInfo {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;
     const state = this.store.update((current) => {
@@ -62,13 +82,16 @@ export class TaskLifecycleService {
       const record = TaskRecordSchema.parse({
         name: generateTaskName(slug, current.tasks.map((task) => task.name)),
         slug, summary: `Merge PR #${input.prNumber}`, content,
-        status: 'running', created_at: nowIso(), started_at: nowIso(), completed_at: null,
-        owner_pid: process.pid, owner_start_time: ownerStartTime,
+        status, created_at: nowIso(), started_at: status === 'running' ? nowIso() : null, completed_at: null,
+        owner_pid: status === 'running' ? process.pid : null,
+        owner_start_time: status === 'running' ? ownerStartTime : null,
+        ...(input.goalId === undefined ? {} : { goal_id: input.goalId }),
         worktree: true, worktree_path: input.worktreePath,
         source: 'pr_review', pr_number: input.prNumber, branch: input.headBranch,
         ...(input.prUrl === undefined ? {} : { pr_url: input.prUrl }),
         base_branch: input.baseBranch, workflow: input.workflow,
         merge_task: true, merge_method: input.method,
+        merge_until: input.until,
         merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
         merge_concurrency: input.concurrency,
         merge_head_repository_url: input.headRepositoryUrl,

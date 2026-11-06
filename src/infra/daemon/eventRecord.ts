@@ -17,9 +17,6 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_too_long'), task, startedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('run_step_repeated'), task, workflow: z.string().min(1), step: z.string().min(1), stepIdentity: z.string().min(1), count: z.number().int().positive() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
-  z.object({ ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: z.string(),
-    failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
-  }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: z.string(), reason: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('inquiry_stalled'), repositoryDirectory: z.string(), questionId: id, goalId: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('goal_stalled'), ...repositoryGoal, lastUpdatedAt: z.iso.datetime() }).strict(),
@@ -34,6 +31,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
   z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string() }).strict(),
+  z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
   z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
@@ -84,3 +82,21 @@ export const EventRecordSchema = z.discriminatedUnion('state', [
   z.object({ state: z.enum(['settling', 'settled']), event: storedEvent, result: StoredResultSchema }).strict(),
 ]);
 export type EventRecord = z.infer<typeof EventRecordSchema>;
+
+// 廃止した見張りは保存形式だけを読めるようにし、新しい受付には戻さない。
+const retiredObservation = z.object({
+  ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: z.string(),
+  failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
+}).strict();
+const retiredEvent = EventInputSchema.extend({
+  event: z.object({ kind: z.literal('watch_observation'), observation: retiredObservation }).strict(),
+  operationId: id, acceptedSequence: sequence, lane: z.literal('other'),
+}).strict();
+const retiredResult = z.object({ ...StoredTurnSchema.shape, event: retiredEvent, outcome }).strict();
+export const RetiredEventRecordSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('queued'), event: retiredEvent }).strict(),
+  z.object({ state: z.literal('running'), event: retiredEvent, turn: StoredTurnSchema }).strict(),
+  z.object({ state: z.enum(['settling', 'settled']), event: retiredEvent, result: retiredResult }).strict(),
+]);
+export type RetiredEventRecord = { state: 'retired'; event: z.infer<typeof retiredEvent> };

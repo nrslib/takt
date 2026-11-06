@@ -1,4 +1,3 @@
-import type { GoalPullRequestRetryTarget } from './watchers/goalPullRequestRetries.js';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -17,10 +16,9 @@ import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } fro
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import type { IoOptions } from '../../core/daemon/io.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import type { ManagerPatrolTarget } from './patrols.js';
-import { WatchGoalReader, type WatchGoal } from './watchers/goalReader.js';
+import { WatchGoalReader } from './watchers/goalReader.js';
 import type { RunProgress } from './watchers/runProgress.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -28,15 +26,6 @@ const safeName = (name: string): string => {
   if (!/^[a-zA-Z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error('Invalid run slug');
   return name;
 };
-
-function pullRequestRetryTarget(goal: WatchGoal, project: { repositoryDirectory: string; conversationId: string }): GoalPullRequestRetryTarget | undefined {
-  const retry = goal.pullRequestRetry;
-  if (retry === undefined) return undefined;
-  const { failure } = retry;
-  return { targetId: digest([project.repositoryDirectory, goal.id]), generation: retry.generation,
-    conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory, goalId: goal.id,
-    expectedSha: failure.goalSha, failureId: failure.id, failedAt: failure.recordedAt, error: failure.error, headBranch: goal.branch };
-}
 
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
@@ -156,38 +145,6 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     return targets;
   }
 
-  async pullRequestRetries(): Promise<readonly GoalPullRequestRetryTarget[]> {
-    const targets: GoalPullRequestRetryTarget[] = [];
-    for await (const project of this.projects()) {
-      try {
-        for await (const goal of readWatchGoals(project.repositoryDirectory, this.onError, this.goalReader)) {
-          const target = pullRequestRetryTarget(goal, project);
-          if (target !== undefined) targets.push(target);
-        }
-      } catch (error) { this.onError(error); }
-    }
-    return targets;
-  }
-
-  async pullRequestRetry(target: GoalPullRequestRetryTarget): Promise<GoalPullRequestRetryTarget | undefined> {
-    for await (const project of this.projects()) {
-      if (project.repositoryDirectory !== target.repositoryDirectory) continue;
-      try {
-        return pullRequestRetryTarget(await readWatchGoal(project.repositoryDirectory, target.goalId, this.goalReader), project);
-      } catch (error) { this.onError(error); }
-    }
-    return undefined;
-  }
-
-  async notifyPullRequestRetryLimit(target: GoalPullRequestRetryTarget, options: IoOptions): Promise<boolean> {
-    const directory = this.conversations.routing.directory;
-    const global = await globalDaemonConfiguration(directory);
-    const config = await readDaemonConfiguration(join(target.repositoryDirectory, '.takt', 'config.yaml'));
-    if ((config.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked) === false) return true;
-    return this.goalReader.savePullRequestRetryLimit(target.repositoryDirectory, target.goalId,
-      target.failureId, target.expectedSha, config.language ?? global.language ?? 'en', options);
-  }
-
   async inquiries(): Promise<readonly InquiryWatchTarget[]> {
     const targets: InquiryWatchTarget[] = [];
     const present = new Set<string>();
@@ -282,7 +239,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
           if (task.status !== 'pending' || task.goal_id === undefined) continue;
           try {
             const goal = await readWatchGoal(project.repositoryDirectory, task.goal_id, this.goalReader);
-            if (goal.status === 'created' && goal.executionStatus === 'active') pending.push(task);
+            if ((goal.status === 'created' || task.merge_task === true && goal.status === 'awaiting_merge') && goal.executionStatus === 'active') pending.push(task);
           } catch (error) { this.onError(error); }
         }
         if (pending.length === 0) continue;

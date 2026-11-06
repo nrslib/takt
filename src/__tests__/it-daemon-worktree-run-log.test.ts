@@ -90,7 +90,8 @@ describe('daemon による実際の run ログの検出', () => {
       return status;
     });
     expect(await executePrWorkflow({ projectCwd: project, prNumber: 9, workflow: 'watch-log',
-      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } })).toEqual({ merged: false });
+      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } })).toMatchObject({ success: false, merged: false, outcome: 'unresolved',
+        completion: { success: false, workflowResult: 'aborted', mergeOutcome: 'unresolved' }, runSlug: expect.any(String) });
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
     new TaskStore(project).update((current) => ({
@@ -151,7 +152,8 @@ describe('daemon による実際の run ログの検出', () => {
       expect(saved.failure!.retryable === false).toBe(status === 'aborted');
       const events = readManagerEvents(project).map(({ event }) => event);
       if (status === 'aborted') {
-        expect(saved.completion).toBeUndefined();
+        expect(saved.completion).toMatchObject({ success: false, interrupted: false, workflowResult: 'aborted',
+          mergeOutcome: 'unresolved', failureReason: saved.failure!.error });
         expect(events).toEqual([]);
         return;
       }

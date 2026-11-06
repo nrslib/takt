@@ -10,6 +10,8 @@ export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): T
         ...(saved.runSlug === undefined ? {} : { runSlug: saved.runSlug }) },
       result: saved.result,
     };
+    case 'pr_failed': return { kind: 'goal_pr_failed', repositoryDirectory: directory,
+      goalId: saved.goalId, expectedSha: saved.expectedSha, reason: saved.reason };
     case 'answer': return { kind: 'inquiry_answered', repositoryDirectory: directory,
       goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer };
     case 'registered': case 'resumed': return { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed',

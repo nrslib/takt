@@ -41,7 +41,9 @@ const finalPlanCases = new Set(['integration-check', 'plan-cancelled', 'plan-int
 const verificationPlanCases = new Set(['stopped-background-check', 'integrated-task-verification', 'verification-before-integration']);
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
+const goalPrCases = new Set(['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']);
 const caseWriteTools = {
+  ...Object.fromEntries([...goalPrCases].map((id) => [id, new Set(['takt_merge_goal_pr'])])),
   'migration-method-event': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
   'migration-method-conversation': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
   'csv-export-scope-conversation': new Set(),
@@ -195,6 +197,12 @@ export default function assertManagerWorkSplit(output, context) {
     return result(questions.length === 0 && blocked.length > 0
       || questions.length === 1 && questions[0].arguments.kind === 'operation_request',
     'Notify the required action or save one operation request; action and absence of policy choices are graded semantically');
+  }
+  if (goalPrCases.has(caseId)) {
+    const merges = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_pr');
+    const until = caseId === 'explicit-goal-pr-merge' ? 'merge' : 'prepare';
+    return result(merges.length === 1 && merges[0].arguments.prNumber === fixture.goal.pullRequest.number
+      && merges[0].arguments.until === until, 'Enqueue exactly one saved goal PR merge task with the required until');
   }
   if (caseId === 'settled-operation-merge') {
     const merges = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');

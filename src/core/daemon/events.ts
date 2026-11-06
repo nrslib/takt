@@ -26,8 +26,7 @@ export type WatchObservation = {
   | { kind: 'run_too_long'; task: TaskRef; startedAt: string }
   | { kind: 'run_step_repeated'; task: TaskRef; workflow: string; step: string; stepIdentity: string; count: number }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
-  | { kind: 'goal_pr_retry'; repositoryDirectory: string; goalId: string; failureId: string; expectedSha: string; reason: string;
-      attempt: number; maxAttempts: number }
+
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
   | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
   | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }
@@ -43,6 +42,7 @@ export type TurnEvent =
   | { kind: 'inquiry_answer'; command: Extract<ConversationCommand, { kind: 'answer_question' }> }
   | { kind: 'task_completed' | 'task_failed'; task: TaskRef; result: GoalTaskResult }
   | { kind: 'director_message'; directorConversationId: string; text: string }
+  | { kind: 'goal_pr_failed'; repositoryDirectory: string; goalId: string; expectedSha: string; reason: string }
   | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation }
@@ -51,7 +51,7 @@ export type TurnEvent =
 export function eventGoalReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
-    case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
+    case 'goal_pr_failed': case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
     case 'patrol': return { repositoryDirectory: event.repositoryDirectory };
     case 'watch_observation': {
       const observation = event.observation;
