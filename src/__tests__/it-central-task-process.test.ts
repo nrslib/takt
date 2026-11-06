@@ -32,7 +32,6 @@ async function setup() {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, project, repository };
 }
@@ -178,7 +177,6 @@ describe('central task process ownership', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     })).resolves.toBeDefined();
   });
 
@@ -214,7 +212,6 @@ describe('central task process ownership', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     })).rejects.toThrow(/central state lock is busy/i);
     await expect(readFile(lockPath, 'utf8').then(JSON.parse)).resolves.toMatchObject({ processIdentity });
   });

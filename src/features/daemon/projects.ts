@@ -9,7 +9,7 @@ import { listWatchEntries, readSmallJson, MAX_WATCH_ENTRIES } from './watchers/f
 
 const RegistrationSchema = z.object({
   version: z.literal(2), locationId: z.string().regex(/^[a-f0-9]{64}$/u), stateId: z.uuid(),
-  canonicalDirectory: z.string().refine(isAbsolute), fingerprint: z.object({ dev: z.number().int(), ino: z.number().int() }),
+  canonicalDirectory: z.string().refine(isAbsolute),
   managerUsed: z.boolean().optional(),
 });
 const WorkspaceSchema = z.object({
@@ -45,8 +45,7 @@ export async function readDaemonProjectRoutes(globalConfigDirectory: string,
         const directory = await realpath(project.canonicalDirectory);
         await access(directory, constants.R_OK | constants.X_OK);
         const info = await stat(directory);
-        available = directory === project.canonicalDirectory && info.isDirectory()
-          && info.dev === project.fingerprint.dev && info.ino === project.fingerprint.ino;
+        available = directory === project.canonicalDirectory && info.isDirectory();
       } catch (error) { onReadError(error); }
       registrations.set(project.canonicalDirectory, { available, managerUsed: project.managerUsed === true });
     } catch (error) { onReadError(error); }

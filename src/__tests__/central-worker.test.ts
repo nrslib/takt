@@ -35,7 +35,6 @@ async function setupWorkerFixture() {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, projectDirectory, project, repository };
 }

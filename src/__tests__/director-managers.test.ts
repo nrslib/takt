@@ -21,7 +21,7 @@ vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ warn: double
 function project(directory: string, overrides: Partial<RegisteredProject> = {}): RegisteredProject {
   const id = createHash('sha256').update(directory).digest('hex');
   return { version: 2, locationId: id, id, canonicalDirectory: directory, projectDirectory: directory,
-    stateId: '550e8400-e29b-41d4-a716-446655440000', fingerprint: { dev: 1, ino: 1 },
+    stateId: '550e8400-e29b-41d4-a716-446655440000',
     displayName: directory, createdAt: '2026-10-30T00:00:00Z', lastSeenAt: '2026-10-30T00:00:00Z',
     lastCommand: 'manager', managerUsed: true, available: true, ...overrides };
 }
