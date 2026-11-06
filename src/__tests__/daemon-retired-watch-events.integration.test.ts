@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { AcceptedEvent } from '../core/daemon/events.js';
+import type { AcceptedEvent, EventInput } from '../core/daemon/events.js';
 import { AcceptedEventSchema } from '../infra/daemon/eventRecord.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { writePrivateFile } from '../infra/daemon/privateFile.js';
@@ -146,20 +146,32 @@ it.each(retiredObservations)('applies and settles the saved $kind result across 
     } } };
   const path = join(directory, 'daemon-events', `${createHash('sha256').update(input.eventId).digest('hex')}.json`);
   await writePrivateFile(path, JSON.stringify({ state: 'settling', event: input, result }));
-  const errors = vi.fn();
-  const owner = new DaemonConversations(state, new DaemonRouting(directory), new DaemonNotifications(directory), async () => {}, errors);
-  for (let restart = 0; restart < 2; restart++) {
+  for (let restart = 0; restart < 3; restart++) {
+    const errors = vi.fn();
+    const store = new FileEventStore(directory);
+    const settlementFailure = new Error('Settlement unavailable');
+    if (restart === 0) vi.spyOn(store, 'markSettled').mockRejectedValueOnce(settlementFailure);
+    const owner = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
+      new DaemonNotifications(directory), async () => {}, errors);
+    const apply = vi.spyOn(owner, 'apply');
     const runner = new ControlledTurnRunner();
-    const dispatcher = await createDaemonDispatcher({ store: new FileEventStore(directory), conversations: owner, runner,
+    const dispatcher = await createDaemonDispatcher({ store, conversations: owner, runner,
       stateRequests: { handle: vi.fn() }, resources: { close: vi.fn() },
       limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: errors });
     runner.bus = dispatcher;
-    await dispatcher.control({ kind: 'stop' });
+    if (restart === 0) {
+      await expect(dispatcher.control({ kind: 'stop' })).rejects.toBeInstanceOf(AggregateError);
+      expect(errors).toHaveBeenCalledExactlyOnceWith({ phase: 'settle', event: input, error: settlementFailure });
+    } else {
+      await dispatcher.control({ kind: 'stop' });
+      expect(errors).not.toHaveBeenCalled();
+    }
+    if (restart < 2) expect(apply).toHaveBeenCalledExactlyOnceWith(result);
+    else expect(apply).not.toHaveBeenCalled();
     expect(runner.calls).toEqual([]);
     expect((await state.read(record.id))?.state).toMatchObject({ version: 1, revision: 5, pending: null,
       session: { sessionId: 'saved-session' } });
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ state: 'settled', event: input, result });
-    expect(errors).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ state: restart === 0 ? 'settling' : 'settled', event: input, result });
   }
 });
 
@@ -179,7 +191,11 @@ it('does not issue stalled observations for real pending inquiries after weeks o
   const records = new Map<string, WatchRecord>();
   const watchRecords = { async read(key: string) { return records.get(key); },
     async write(key: string, record: WatchRecord) { records.set(key, structuredClone(record)); } };
-  const accept = vi.fn(async () => ({ kind: 'accepted' as const, eventId: 'accepted', operationId: 'accepted', acceptedSequence: 1 }));
+  const accept = vi.fn(async (_input: EventInput) => ({ kind: 'accepted' as const, eventId: 'accepted', operationId: 'accepted', acceptedSequence: 1 }));
+  const expectNoRetiredObservations = () => {
+    const kinds = accept.mock.calls.flatMap(([input]) => input.event.kind === 'watch_observation' ? [input.event.observation.kind] : []);
+    for (const observation of retiredObservations) expect(kinds).not.toContain(observation.kind);
+  };
   const publish = vi.fn(async () => {});
   const observations = new WatchObservations(watchRecords, { accept }, Date.now);
   const source = new FileDaemonWatchSource(conversations, publish, errors, observations);
@@ -190,18 +206,19 @@ it('does not issue stalled observations for real pending inquiries after weeks o
   try {
     await watchers.drain();
     expect(errors).not.toHaveBeenCalled();
-    const originalObservations = accept.mock.calls.length;
+    expectNoRetiredObservations();
     for (let week = 0; week < 3; week++) {
       vi.setSystemTime(Date.now() + 7 * 24 * 60 * 60_000);
       watchers.changed();
       await watchers.drain();
+      expectNoRetiredObservations();
     }
-    expect(accept).toHaveBeenCalledTimes(originalObservations);
     expect(publish).not.toHaveBeenCalled();
     // 読取経路が動作していることを、同じ pending inquiry の内容変更の配信で確かめる。
     await writePrivateFile(inquiryPath, JSON.stringify({ ...question, body: 'Updated question' }));
     watchers.changed();
     await watchers.drain();
+    expectNoRetiredObservations();
     expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ question: expect.objectContaining({ id: question.id, status: 'pending', body: 'Updated question' }) }));
     expect(errors).not.toHaveBeenCalled();
   } finally {
