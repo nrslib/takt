@@ -263,7 +263,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
-  const summaryVisible = pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
+  const summaryVisible = !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
   const startupRepositoryDirectory = assignment.startupRepositoryDirectory ?? cwd;
