@@ -10,6 +10,7 @@ export function ManagerSummaryDialog({ approve, lang }: {
       <Text bold>{getLabel('manager.summary.confirmation', lang)}</Text>
       <Text inverse={approve}>{getLabel('manager.summary.approve', lang)}</Text>
       <Text inverse={!approve}>{getLabel('manager.summary.continue', lang)}</Text>
+      <Text dimColor>{getLabel('manager.summary.dismissHint', lang)}</Text>
     </Box>
   );
 }

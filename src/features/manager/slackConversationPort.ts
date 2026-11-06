@@ -14,6 +14,7 @@ import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiry
 import type { PendingQuestion } from './inquiryAnswer.js';
 import { buildSlackInquiry, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
 import { formatGoalName } from './goalDisplay.js';
+import { formatSummaryList } from './summaryDisplay.js';
 import type { KnownBlock } from '@slack/types';
 
 export const SLACK_GOAL_APPROVE = 'takt_goal_approve';
@@ -115,11 +116,14 @@ export function createSlackConversationPort(options: {
           const pending = output.state.pending;
           const summary = pending.summary;
           const sections = [
-            `${getLabel('manager.slackGoalObjective', options.language)}\n${summary.objective}`,
-            `${getLabel('manager.slackGoalOutOfScope', options.language)}\n${summary.outOfScope.join('\n')}`,
-            `${getLabel('manager.slackGoalAcceptance', options.language)}\n${summary.acceptanceCriteria.join('\n')}`,
-            `${getLabel('manager.slackGoalConstraints', options.language)}\n${summary.constraints.join('\n')}`,
+            `${getLabel('manager.summary.repository', options.language)}: ${pending.repositoryDirectory}`,
+            `${getLabel('manager.summary.objective', options.language)}:\n${summary.objective}`,
+            `${getLabel('manager.summary.outOfScope', options.language)}:\n${formatSummaryList(summary.outOfScope, options.language)}`,
+            `${getLabel('manager.summary.acceptanceCriteria', options.language)}:\n${formatSummaryList(summary.acceptanceCriteria, options.language)}`,
+            `${getLabel('manager.summary.constraints', options.language)}:\n${formatSummaryList(summary.constraints, options.language)}`,
           ];
+          if (summary.startBranch !== undefined) sections.push(`${getLabel('manager.summary.startBranch', options.language)}: ${summary.startBranch}`);
+          if (summary.integrationBranch !== undefined) sections.push(`${getLabel('manager.summary.integrationBranch', options.language)}: ${summary.integrationBranch}`);
           let fragments: string[] = [];
           for (const section of sections) {
             for (let offset = 0; offset < section.length;) {

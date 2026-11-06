@@ -339,7 +339,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
   await send('Prepare export');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'), { timeout: 10_000 });
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Proposed goal'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
@@ -545,8 +545,8 @@ it.each([
   await waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
-    expect(app!.lastFrame()!.split('\n').find((row) => /^(?:進行中|in progress|ongoing|active)/iu.test(row))).toMatch(lang === 'ja'
-      ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
+    expect(app!.lastFrame()!.split('\n').find((row) => /(?:進行中|Ongoing)\s+\d/u.test(row))).toMatch(lang === 'ja'
+      ? /進行中\s+0\b/u : /Ongoing\s+0\b/u);
   };
   await waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();

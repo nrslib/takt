@@ -147,7 +147,7 @@ it.each(['ja', 'en'] as const)('creates a proposal from a conversation with /mak
   ]));
   await showProposal(context, summaryA, 5);
   await finish(context, 'Proposal ready');
-  expect(context.app.lastFrame()).toContain(getLabel('manager.summaryInputHint', lang));
+  expect(context.app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', lang).replace(/\s/gu, ''));
   context.app.stdin.write(UP);
   context.app.stdin.write(DOWN);
   context.app.stdin.write(UP);
@@ -248,7 +248,7 @@ it.each(['ja', 'en'] as const)('approves exactly the restored revision with Up a
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(goal.id);
     expect(context.app.lastFrame()).toContain(goal.branch);
-    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録を承認' : 'Approve registration');
+    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録する' : 'Register goal');
     expect(context.app.lastFrame()).toContain(summaryB.objective);
   });
 });
@@ -260,7 +260,7 @@ it.each(['ja', 'en'] as const)('returns to conversation input without registrati
   context.app.stdin.write(ENTER);
   await waitFor(() => {
     expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
-    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録を承認' : 'Approve registration');
+    expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録する' : 'Register goal');
     expect(promptFrame(context)).toContain(lang === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
   });
   await finish(context, 'Continue discussing the goal');
@@ -287,7 +287,7 @@ it('restores the authoritative proposal when immediate withdrawal is refused', a
   await waitFor(() => {
     expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
     expect(context.app.lastFrame()).toContain(summaryA.objective);
-    expect(context.app.lastFrame()).toContain('Approve registration');
+    expect(context.app.lastFrame()).toContain('Register goal');
     expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, ''));
   });
 });

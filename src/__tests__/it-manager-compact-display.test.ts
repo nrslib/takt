@@ -175,31 +175,36 @@ describe('manager summary transcript and terminal height', () => {
       const text = await context.text();
       for (const value of summaryValues(summary)) expect(text.split(value)).toHaveLength(2);
       const rows = text.split('\n');
-      expect(rows.filter((row) => row === getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) }))).toHaveLength(1);
-      const approve = lang === 'ja' ? '登録を承認' : 'Approve registration';
+      expect(rows.filter((row) => row.startsWith(getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) }) + ' | '))).toHaveLength(1);
+      const approve = lang === 'ja' ? '登録する' : 'Register goal';
       const dialogs = boxes(text).filter((box) => box.includes(approve));
       expect(dialogs).toHaveLength(1);
       expect(proposalEntries(summary)).toHaveLength(1);
     } finally { context.dispose(); }
   });
 
-  it.each(['ja', 'en'] as const)('keeps the entire live area within twenty-four rows with only a heading and two summary choices in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('keeps the live area within twenty-four rows with two summary choices and a bottom status line in %s', async (lang) => {
     const context = mountTerminal(lang);
     try {
       await waitFor(() => expect(prompt().disabled).toBe(true));
       const rows = (await context.text()).split('\n');
       const heading = getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) });
-      const start = rows.lastIndexOf(heading);
+      expect(rows.at(-1)).toContain(heading + ' | ');
+      const confirmation = getLabel('manager.summary.confirmation', lang);
+      const confirmationRow = rows.map((row) => row.includes(confirmation)).lastIndexOf(true);
+      expect(confirmationRow).toBeGreaterThan(0);
+      const start = rows.slice(0, confirmationRow).map((row) => row.startsWith('╭')).lastIndexOf(true);
       expect(start).toBeGreaterThanOrEqual(0);
       const liveRows = rows.slice(start);
       expect(liveRows.length).toBeLessThanOrEqual(24);
-      const approve = lang === 'ja' ? '登録を承認' : 'Approve registration';
-      const resume = lang === 'ja' ? '会話を続ける' : 'Continue conversation';
+      const approve = lang === 'ja' ? '登録する' : 'Register goal';
+      const resume = getLabel('manager.summary.continue', lang);
       const dialog = boxes(liveRows.join('\n')).find((box) => box.includes(approve));
       const contents = contentRows(dialog);
-      expect(contents).toHaveLength(3);
+      expect(contents.length).toBeGreaterThanOrEqual(4);
       expect(contents[0]!.length).toBeGreaterThan(0);
-      expect(contents.slice(1)).toEqual([approve, resume]);
+      expect(contents.slice(1, 3)).toEqual([approve, resume]);
+      expect(contents.slice(3).join('').replace(/\s/gu, '')).toBe(getLabel('manager.summary.dismissHint', lang).replace(/\s/gu, ''));
       if (lang === 'en') expect(contents.join('\n')).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
     } finally { context.dispose(); }
   });
@@ -547,12 +552,12 @@ describe('manager polling and answer cancellation', () => {
 
   const countLine = (lang: 'ja' | 'en'): string => {
     const rows = app!.lastFrame()!.split('\n')
-      .filter((row) => (lang === 'ja' ? /^進行中/u : /^(?:in progress|ongoing|active)/iu).test(row));
+      .filter((row) => (lang === 'ja' ? /\| 進行中/u : /\| (?:in progress|ongoing|active)/iu).test(row));
     expect(rows).toHaveLength(1);
     return rows[0]!;
   };
 
-  it.each(['ja', 'en'] as const)('shows two ongoing goals and four inquiries on the second line without key guidance in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('shows two ongoing goals and four inquiries on the bottom status line without key guidance in %s', async (lang) => {
     await store.create({ ...goalRecord(), questions: [question({}), question({ id: nextQuestionId })] });
     await store.create({ ...goalRecord(), id: randomUUID(), executionStatus: 'paused',
       questions: [question({ id: randomUUID() })] });
@@ -563,28 +568,29 @@ describe('manager polling and answer cancellation', () => {
       const line = countLine(lang);
       expect(line).toMatch(lang === 'ja' ? /進行中\s*2/u : /(?:in progress|ongoing|active)\s*:?\s*2/iu);
       expect(line).toMatch(lang === 'ja' ? /未回答\s*4/u : /(?:pending|unanswered)\s*:?\s*4/iu);
-      expect(app!.lastFrame()!.split('\n')[1]).toBe(line);
+      expect(app!.lastFrame()!.split('\n').at(-1)).toBe(line);
       expect(line).not.toMatch(/\^|Enter|Esc|Ctrl/u);
     });
   });
 
-  it.each(['ja', 'en'] as const)('keeps zero counts on the second line without key guidance in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('keeps zero counts on the bottom status line without key guidance in %s', async (lang) => {
     await mount(lang, undefined, []);
     await waitFor(() => {
       expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*0.*未回答\s*0/u
         : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*0/iu);
-      expect(app!.lastFrame()!.split('\n')[1]).toBe(countLine(lang));
+      expect(app!.lastFrame()!.split('\n').at(-1)).toBe(countLine(lang));
       expect(countLine(lang)).not.toMatch(/\^|Enter|Esc|Ctrl/u);
     });
   });
 
-  it('shows the single repository heading and counts as the first two lines at width 80', async () => {
+  it('shows the single repository heading and counts on the bottom status line at width 80', async () => {
     await mount('ja', undefined, []);
     vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
     app!.stdout.emit('resize');
     await waitFor(() => {
       const rows = app!.lastFrame()!.split('\n');
-      expect(rows.slice(0, 2)).toEqual([`担当: ${basename(cwd)}`, '進行中 0 ／ 未回答 0']);
+      expect(rows.at(-1)).toBe(`担当: ${basename(cwd)} | 進行中 0 ／ 未回答 0 | 実験的機能`);
+      expect(rows.slice(0, -1).join('\n')).not.toMatch(/担当:|進行中/u);
       expect(rows.join('')).not.toContain(cwd);
       for (const row of rows) {
         expect(row).not.toMatch(/^manager\s*—/u);
@@ -597,7 +603,7 @@ describe('manager polling and answer cancellation', () => {
     for (const directory of directories.slice(1)) mkdirSync(directory);
     await mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '作業用workspace', repositoryDirectories: directories }, []);
     await waitFor(() => {
-      expect(app!.lastFrame()!.split('\n')[0]).toBe(`担当: ${basename(cwd)} ほか 2 件`);
+      expect(app!.lastFrame()!.split('\n').at(-1)).toBe(`担当: ${basename(cwd)} ほか 2 件 | 進行中 0 ／ 未回答 0 | 実験的機能`);
     });
   });
 
@@ -610,11 +616,14 @@ describe('manager polling and answer cancellation', () => {
       app!.stdout.emit('resize');
       await waitFor(() => {
         const rows = app!.lastFrame()!.split('\n');
-        expect(rows[0]).toMatch(/^担当: 開発-0-/u);
-        expect(stringWidth(rows[0]!)).toBeLessThanOrEqual(80);
-        if (count > 1) expect(rows[0]).toMatch(/ほか 2 件$/u);
-        if (name === '開発-0-作業') expect(rows[0]).toBe(`担当: ${name}${count > 1 ? ' ほか 2 件' : ''}`);
-        expect(rows[1]).toBe('進行中 0 ／ 未回答 0');
+        const status = rows.at(-1)!;
+        expect(status).toMatch(/^担当: 開発-0-/u);
+        expect(status).toContain(' | 進行中 0 ／ 未回答 0 | 実験的機能');
+        expect(stringWidth(status)).toBeLessThanOrEqual(80);
+        if (name === '開発-0-作業') {
+          expect(status).toBe(`担当: ${name}${count > 1 ? ' ほか 2 件' : ''} | 進行中 0 ／ 未回答 0 | 実験的機能`);
+        } else expect(status).toContain('…');
+        expect(rows.slice(0, -1).join('\n')).not.toMatch(/担当:|進行中/u);
       });
       app!.unmount();
     }
@@ -625,9 +634,10 @@ describe('manager polling and answer cancellation', () => {
     const { read } = await mount(lang, assignment, []);
     const checkHeading = () => {
       const rows = app!.lastFrame()!.split('\n');
-      expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
-      for (const value of [basename(cwd), assignment.workspaceId]) expect(rows[0]).not.toContain(value);
-      expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+      expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
+        getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+        getLabel('manager.statusExperimental', lang)].join(' | '));
+      for (const value of [basename(cwd), assignment.workspaceId]) expect(rows.at(-1)).not.toContain(value);
     };
     checkHeading();
     await waitFor(() => {
@@ -638,7 +648,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   describe.each([80, 40])('input guidance at width %i', (columns) => {
-    it('shows the complete Japanese key guidance below the input and keeps the notice above it', async () => {
+    it('shows the complete Japanese key guidance below the input and the status line last', async () => {
       await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
       app!.stdout.emit('resize');
@@ -648,13 +658,19 @@ describe('manager polling and answer cancellation', () => {
         const rows = frame.split('\n');
         const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
         expect(promptEnd).toBeGreaterThan(0);
-        const hintRows = rows.slice(promptEnd + 1).filter((row) => row.trim() !== '');
-        expect(hintRows.join('').replace(/\s+/gu, '')).toBe((expected + '/make-goal でゴールの登録案を作る').replace(/\s+/gu, ''));
-        expect(hintRows.length).toBeGreaterThan(1);
+        const statusRows = columns === 40 ? 2 : 1;
+        const hintRows = rows.slice(promptEnd + 1, -statusRows).filter((row) => row.trim() !== '');
+        expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
+        if (columns === 40) expect(hintRows.length).toBeGreaterThan(1);
+        else expect(hintRows).toHaveLength(1);
         for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
-        expect(rows[1]).toBe('進行中 0 ／ 未回答 0');
+        const heading = getLabel('manager.assignmentHeading', 'ja', { name: basename(cwd) });
+        const details = [getLabel('manager.counts', 'ja', { goals: '0', questions: '0' }),
+          getLabel('manager.statusExperimental', 'ja')].join(' | ');
+        expect(rows.slice(-statusRows)).toEqual(columns === 40 ? [heading, details] : [`${heading} | ${details}`]);
         const beforeInput = rows.slice(0, rows.map((row) => row.startsWith('╭')).lastIndexOf(true)).join('');
-        expect(beforeInput.replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
+        expect(beforeInput.replace(/\s+/gu, '')).not.toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
+        expect(beforeInput).not.toMatch(/担当:|進行中/u);
       });
     });
   });
@@ -665,14 +681,14 @@ describe('manager polling and answer cancellation', () => {
     app!.stdout.emit('resize');
     await waitFor(() => {
       const rows = app!.lastFrame()!.split('\n');
-      expect(rows[0]).toMatch(/^[A-Za-z][^:]*: /u);
-      expect(rows[0]).toContain(basename(cwd));
+      expect(rows.at(-1)).toMatch(/^[A-Za-z][^:]*: /u);
+      expect(rows.at(-1)).toContain(basename(cwd));
       const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
       const hint = rows.slice(promptEnd + 1).join(' ');
       expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^C/iu);
-      expect(hint).toContain('/make-goal');
+      expect(hint).not.toContain('/make-goal');
       expect(hint).not.toMatch(/\^[ONP]/u);
-      for (const row of [rows[0]!, ...rows.slice(promptEnd + 1)]) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
+      for (const row of rows.slice(promptEnd + 1)) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
       for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
     });
   });
@@ -700,7 +716,7 @@ describe('manager polling and answer cancellation', () => {
       expect(row).not.toMatch(/provider.*API|API.*(?:費用|cost)/iu);
     }
     expect(rows.join('').replace(/\s+/gu, '')).not.toContain(getLabel('manager.costNotice', lang).replace(/\s+/gu, ''));
-    expect(app!.lastFrame()!.replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, ''));
+    expect(app!.lastFrame()!.replace(/\s+/gu, '')).toContain(getLabel('manager.statusExperimental', lang).replace(/\s+/gu, ''));
   });
 
   it.each(['ja', 'en'] as const)('refreshes counts after status and inquiry changes in the same %s screen', async (lang) => {

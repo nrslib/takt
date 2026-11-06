@@ -18,25 +18,25 @@ function mounted(items: Exclude<SnapshotItem, { kind: 'state' | 'remove' }>[]) {
   client.change({ items: [...client.getSnapshot().items, ...items] });
   return mount('en', client);
 }
-function expectCommandHint(context: ReturnType<typeof mount>, visible: boolean): void {
+function expectInputHint(context: ReturnType<typeof mount>): void {
   const rows = context.app.lastFrame()!.split('\n');
   const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
   expect(promptEnd).toBeGreaterThan(0);
-  const hints = rows.slice(promptEnd + 1).filter((row) => /^\s*\/make-goal\b/u.test(row));
-  expect(hints).toHaveLength(visible ? 1 : 0);
+  const footer = rows.slice(promptEnd + 1).join('').replace(/\s+/gu, '');
+  expect(footer).toContain(getLabel('manager.inputHint', 'en').replace(/\s+/gu, ''));
 }
 async function chooseGoal(context: ReturnType<typeof mount>, action: 'pause' | 'resume' | 'abort') {
-  await waitFor(() => expectCommandHint(context, true));
+  await waitFor(() => expectInputHint(context));
   context.app.stdin.write(GOAL_MENU);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', 'en'));
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   context.app.stdin.write(ENTER);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.action', 'en'));
     expect(context.app.lastFrame()).toContain(getLabel('manager.goalActions.' + action, 'en'));
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   if (action === 'abort') context.app.stdin.write(DOWN);
   context.app.stdin.write(ENTER);
@@ -44,33 +44,33 @@ async function chooseGoal(context: ReturnType<typeof mount>, action: 'pause' | '
 async function openAnswer(context: ReturnType<typeof mount>) {
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain('Pending 1');
-    expectCommandHint(context, true);
+    expectInputHint(context);
   });
   context.app.stdin.write(QUESTION_MENU);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en'));
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   context.app.stdin.write(ENTER);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain('Free text');
     expect(promptFrame(context)).toContain('Enter your answer');
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
 }
 
-it.each(['answer', 'goal'] as const)('hides command guidance in the %s list and restores it after Escape on the same screen', async (kind) => {
+it.each(['answer', 'goal'] as const)('keeps key guidance in the %s list and after Escape on the same screen', async (kind) => {
   const context = mounted([question(), goal()]);
-  await waitFor(() => expectCommandHint(context, true));
+  await waitFor(() => expectInputHint(context));
   context.app.stdin.write(kind === 'answer' ? QUESTION_MENU : GOAL_MENU);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.' + kind, 'en'));
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   context.app.stdin.write(ESC);
   await waitFor(() => {
     expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.' + kind, 'en'));
-    expectCommandHint(context, true);
+    expectInputHint(context);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
 });
@@ -94,13 +94,13 @@ it.each([ENTER, ESC])('requires explicit abort confirmation and cancels it with 
   await chooseGoal(context, 'abort');
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write(cancel);
   await waitFor(() => {
     expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
-    expectCommandHint(context, true);
+    expectInputHint(context);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
 });
@@ -118,7 +118,7 @@ it('sends abort only after the human selects approval and preserves retry confir
     result: { kind: 'error', code: 'operation_failed', message: 'Task invalidation failed' } });
   await waitFor(() => expect(context.app.lastFrame()).toContain('Task invalidation failed'));
   expect(context.app.lastFrame()).toMatch(/retry|再試行/iu);
-  expectCommandHint(context, false);
+  expectInputHint(context);
 });
 
 it('sends the selected target and structured answer, then closes the saved answer on its completion event', async () => {
@@ -135,7 +135,7 @@ it('sends the selected target and structured answer, then closes the saved answe
   await waitFor(() => {
     expect(promptFrame(context)).toContain('Discuss your goal');
     expect(context.app.lastFrame()).toContain('Answer saved');
-    expectCommandHint(context, true);
+    expectInputHint(context);
   });
 });
 
@@ -204,7 +204,7 @@ it('sends /make-goal as a free-text inquiry answer without requesting a goal pro
   context.app.stdin.write('/make-goal');
   await waitFor(() => {
     expect(promptFrame(context)).toContain('/make-goal');
-    expectCommandHint(context, false);
+    expectInputHint(context);
   });
   context.app.stdin.write(ENTER);
   await waitFor(() => expect(context.client.commands()).toEqual([{
@@ -215,7 +215,7 @@ it('sends /make-goal as a free-text inquiry answer without requesting a goal pro
   await waitFor(() => {
     expect(promptFrame(context)).toContain('Discuss your goal');
     expect(context.app.lastFrame()).toContain('/make-goal');
-    expectCommandHint(context, true);
+    expectInputHint(context);
   });
 });
 

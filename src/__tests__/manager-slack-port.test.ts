@@ -8,27 +8,89 @@ import type { ConversationDelivery, ConversationInput, SnapshotRead, SnapshotIte
 import type { SlackClient } from '../infra/slack/client.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const inquiries = vi.hoisted(() => ({ find: vi.fn(), question: vi.fn(), save: vi.fn() }));
-vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
+vi.mock('../shared/i18n/index.js', () => ({ getLabel: vi.fn((key: string) => key) }));
 vi.mock('../infra/slack/inquiryBindings.js', async (original) => ({ ...await original<typeof import('../infra/slack/inquiryBindings.js')>(),
   SlackInquiryBindings: class { find = inquiries.find; question = inquiries.question; save = inquiries.save; } }));
 beforeEach(() => {
   for (const mock of Object.values(inquiries)) mock.mockReset();
+  vi.mocked(getLabel).mockImplementation((key: string) => key);
 });
 const endpoint = { teamId: 'T1', channelId: 'C0123', userId: 'U0AAA', parentTs: '1700000000.000001' };
-function fixture() {
+function fixture(language: 'ja' | 'en' = 'ja') {
   const input: ConversationInput = { open: vi.fn(), submit: vi.fn(), snapshot: vi.fn(), detach: vi.fn() };
   const client: SlackClient = { start: vi.fn(), postMessage: vi.fn().mockResolvedValue({ kind: 'delivered', parentTs: endpoint.parentTs }),
     postThreadMessage: vi.fn().mockResolvedValue({ kind: 'delivered' }), stopAccepting: vi.fn(), close: vi.fn() };
   const resolveAssignment = vi.fn<() => Promise<ManagerAssignment>>(async () => ({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] }));
-  const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', resolveAssignment, channelId: 'C0123', input, client, language: 'ja' });
+  const port = createSlackConversationPort({ repositoryDirectory: '/canonical', configDirectory: '/config', resolveAssignment, channelId: 'C0123', input, client, language });
   return { input, client, port, resolveAssignment };
 }
 function read(items: SnapshotItem[] = []): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
     mode: 'initial', items: (async function* () { yield* items; })(), complete: vi.fn(), cancel: vi.fn() };
 }
+it.each(['ja', 'en'] as const)('posts labeled repository and optional branches with registration buttons in %s', async (lang) => {
+  const labels = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
+  vi.mocked(getLabel).mockImplementation(labels.getLabel);
+  const { port, input, client } = fixture(lang);
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '/make-goal');
+  const record = conversationRecord('/canonical');
+  const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository' };
+  try {
+    for (const branches of [{}, { startBranch: 'release' }, { integrationBranch: 'main' }, { startBranch: 'release', integrationBranch: 'main' }]) {
+      await port.delivery.deliver(record.id, { kind: 'pending', state: { conversationId: record.id, assignment: record.assignment,
+        revision: record.revision, pending: { ...pending, summary: { ...pending.summary, ...branches } },
+        approval: null, running: null, interrupted: false } },
+      { revision: record.revision, stateSequence: 1, operationId: 'operation' });
+      const [, text, blocks] = vi.mocked(client.postThreadMessage).mock.calls.at(-1)!;
+      expect(text).toContain(lang === 'ja' ? 'リポジトリ: /workspace/selected-repository' : 'Repository: /workspace/selected-repository');
+      expect(text).toContain(`${getLabel('manager.summary.objective', lang)}:\n${pending.summary.objective}`);
+      for (const field of ['startBranch', 'integrationBranch'] as const) {
+        const label = getLabel(`manager.summary.${field}`, lang);
+        if (branches[field] === undefined) expect(text).not.toContain(label);
+        else expect(text).toContain(`${label}: ${branches[field]}`);
+      }
+      expect(text).not.toContain(getLabel('manager.summary.dismissHint', lang));
+      expect(blocks).toContainEqual(expect.objectContaining({ type: 'actions', elements: [
+        expect.objectContaining({ action_id: SLACK_GOAL_APPROVE, text: { type: 'plain_text', text: lang === 'ja' ? '登録する' : 'Register goal' } }),
+        expect.objectContaining({ text: { type: 'plain_text', text: lang === 'ja' ? '登録せずに会話に戻る' : 'Return to conversation without registering' } }),
+      ] }));
+    }
+  } finally { await port.close(); }
+});
+it.each(['ja', 'en'] as const)('posts explicit empty list items and preserves populated lists in %s', async (lang) => {
+  const labels = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
+  vi.mocked(getLabel).mockImplementation(labels.getLabel);
+  const { port, input, client } = fixture(lang);
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '/make-goal');
+  const record = conversationRecord('/canonical');
+  const fields = ['outOfScope', 'acceptanceCriteria', 'constraints'] as const;
+  try {
+    for (const empty of [[], ['outOfScope'], ['acceptanceCriteria'], ['constraints'], [...fields]]) {
+      const summary = { ...record.pending!.summary,
+        outOfScope: empty.includes('outOfScope') ? [] : ['Notifications', 'Email'],
+        acceptanceCriteria: empty.includes('acceptanceCriteria') ? [] : ['Export CSV'],
+        constraints: empty.includes('constraints') ? [] : ['Use mocks'],
+      };
+      await port.delivery.deliver(record.id, { kind: 'pending', state: { conversationId: record.id, assignment: record.assignment,
+        revision: record.revision, pending: { ...record.pending!, summary }, approval: null, running: null, interrupted: false } },
+      { revision: record.revision, stateSequence: 1, operationId: 'operation' });
+      const [, text, blocks] = vi.mocked(client.postThreadMessage).mock.calls.at(-1)!;
+      for (const field of fields) {
+        const items = summary[field].length === 0 ? [lang === 'ja' ? 'なし' : 'None'] : summary[field];
+        const section = `${getLabel(`manager.summary.${field}`, lang)}:\n${items.map((item) => `- ${item}`).join('\n')}`;
+        expect(text).toContain(section);
+        expect(blocks).toContainEqual({ type: 'section', text: { type: 'plain_text', text: section } });
+      }
+    }
+  } finally { await port.close(); }
+});
 it.each(['invalid', '{}', '{"conversationId":"other","revision":4}', '{"conversationId":"other","revision":-1}'])('ignores an invalid or mismatched goal button value %s', async (value) => {
   const { port, input } = fixture();
   await port.receiveAction(endpoint, SLACK_GOAL_APPROVE, value);
