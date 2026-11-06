@@ -24,6 +24,7 @@ import type { ImageAttachmentStore } from '../features/interactive/imageAttachme
 import { getLabel } from '../shared/i18n/index.js';
 import { describeExecutionResult } from '../features/interactive/operationFeedback.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import { inspectProviderInstallation } from '../infra/managed-providers/loader.js';
 
 const {
   mockRender,
@@ -2237,6 +2238,9 @@ describe('runTui', () => {
 
       expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
       expect(tree.conversationProps().modelLabel()).toContain('claude');
+      expect(inspectProviderInstallation).toHaveBeenLastCalledWith('claude-sdk');
+      expect(vi.mocked(inspectProviderInstallation).mock.invocationCallOrder.at(-1))
+        .toBeLessThan(mockRender.mock.invocationCallOrder[1]!);
       expect(tree.conversationProps().modelLabel()).not.toContain('mock-model');
       expect(recovered.submit).not.toHaveBeenCalled();
       expect(await tree.conversationProps().conversation.submit(submitInput())).toMatchObject({

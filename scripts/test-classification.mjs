@@ -357,6 +357,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tmpdir.test.ts',
   'src/__tests__/traceReport.test.ts',
   'src/__tests__/tui-live-intervention-status.test.tsx',
+  'src/__tests__/tui-managed-provider.test.ts',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/web-ui-directory-browser.test.ts',

@@ -1,7 +1,15 @@
 import { managedProviderFor, MANAGED_PROVIDER_SIZE_MB } from './definitions.js';
 import { inspectProviderInstallation, installProvider, ManagedProviderInstallRequiredError, warnStaleProvider } from './loader.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
 
 export type ConfirmManagedProvider = (message: string) => Promise<boolean>;
+
+export class ManagedProviderInstallError extends Error {
+  constructor(cause: unknown) {
+    super(getErrorMessage(cause), { cause });
+    this.name = 'ManagedProviderInstallError';
+  }
+}
 
 export async function checkManagedProviders(providers: Iterable<string>, confirm: ConfirmManagedProvider | undefined, signal?: AbortSignal): Promise<void> {
   const required = new Set([...providers].map(managedProviderFor).filter((provider) => provider !== undefined));
@@ -17,8 +25,14 @@ export async function checkManagedProviders(providers: Iterable<string>, confirm
     const size = MANAGED_PROVIDER_SIZE_MB[provider];
     const accepted = await confirm(`${state.state === 'missing' ? 'Install' : 'Update'} ${provider} SDK (approximately ${size} MB; varies by OS)?`);
     signal?.throwIfAborted();
-    if (accepted) await installProvider(provider, { signal });
-    else if (state.state === 'missing') throw new ManagedProviderInstallRequiredError(provider);
+    if (accepted) {
+      try {
+        await installProvider(provider, { signal });
+      } catch (cause) {
+        if (signal?.aborted || (cause instanceof Error && cause.name === 'AbortError')) throw cause;
+        throw new ManagedProviderInstallError(cause);
+      }
+    } else if (state.state === 'missing') throw new ManagedProviderInstallRequiredError(provider);
     else warnStaleProvider(provider);
   }
 }
