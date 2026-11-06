@@ -1254,6 +1254,14 @@ for (const lang of ['ja', 'en']) {
       const unknownWorkflow = structuredClone(output);
       unknownWorkflow.calls[1].arguments.workflow = 'missing-workflow';
       assert.equal(score(unknownWorkflow, caseId, lang).pass, false);
+      const duplicate = structuredClone(output);
+      duplicate.calls.push(structuredClone(independent));
+      assert.equal(score(duplicate, caseId, lang).pass, false, 'Do not submit the same independent work twice');
+      const distinct = structuredClone(duplicate);
+      distinct.calls[2].arguments.workKey = 'ledger-report';
+      assert.equal(score(distinct, caseId, lang).pass, true);
+      for (const call of distinct.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task')) delete call.arguments.workKey;
+      assert.equal(score(distinct, caseId, lang).pass, true, 'Omitting optional work keys does not establish duplication');
     }
   });
 

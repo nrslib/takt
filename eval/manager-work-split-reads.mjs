@@ -11,7 +11,9 @@ export function managerStateReads(fixture) {
   const identity = { cwd: fixture.cwd, goalId: goal.id };
   const reads = fixture.readResults.filter(({ tool }) => !['takt_get_goal', 'takt_list_tasks'].includes(tool)).map((read) => {
     if (read.tool === 'takt_list_standalone_inquiries') {
-      const { inquiries } = read.result;
+      const inquiries = read.result.inquiries.map((inquiry) => ({
+        ...inquiry, kind: inquiry.kind ?? 'question', createdAt: inquiry.createdAt ?? null,
+      }));
       const offset = read.arguments.offset ?? 0;
       return { ...read, result: payload(pagedResult('inquiries',
         inquiries.slice(offset, offset + (read.arguments.limit ?? 50)), inquiries.length, offset)) };
