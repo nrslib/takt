@@ -1498,26 +1498,42 @@ describe('callClaudeHeadless', () => {
     expect(argv[i + 1]).toBe('acceptEdits');
   });
 
-  it('maps permissionMode full to bypassPermissions', async () => {
+  it.each<Partial<ClaudeHeadlessCallOptions>>([
+    { permissionMode: 'full' },
+    { bypassPermissions: true },
+    { permissionMode: 'readonly', bypassPermissions: true },
+    { permissionMode: 'full', bypassPermissions: false },
+  ])('enables CLI permission bypass for %j', async (options) => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
     });
-    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', permissionMode: 'full' });
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', ...options });
     const argv = lastSpawnArgv();
     const i = argv.indexOf('--permission-mode');
     expect(argv[i + 1]).toBe('bypassPermissions');
+    expect(argv).toContain('--allow-dangerously-skip-permissions');
   });
 
-  it('maps bypassPermissions to bypassPermissions', async () => {
+  it.each<Partial<ClaudeHeadlessCallOptions>>([
+    {},
+    { bypassPermissions: false },
+    { permissionMode: 'readonly' },
+    { permissionMode: 'edit' },
+    { permissionMode: 'readonly', bypassPermissions: false },
+    { permissionMode: 'edit', bypassPermissions: false },
+  ])('does not enable CLI permission bypass for %j', async (options) => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
     });
-    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', permissionMode: 'readonly', bypassPermissions: true });
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', ...options });
     const argv = lastSpawnArgv();
     const i = argv.indexOf('--permission-mode');
-    expect(argv[i + 1]).toBe('bypassPermissions');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(argv[i + 1]).not.toBe('bypassPermissions');
+    expect(argv).not.toContain('--allow-dangerously-skip-permissions');
+    expect(argv).not.toContain('--dangerously-skip-permissions');
   });
 
   it('passes --model when set', async () => {

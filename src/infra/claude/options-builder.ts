@@ -126,6 +126,10 @@ export class SdkOptionsBuilder {
       settingSources: isStrictReadonly || strictTools !== undefined ? [] : ['project'],
     };
 
+    if (permissionMode === 'bypassPermissions') {
+      sdkOptions.allowDangerouslySkipPermissions = true;
+    }
+
     if (isStrictReadonly) {
       sdkOptions.tools = readonlyArtifactPaths.length > 0 ? ['Read'] : [];
       sdkOptions.skills = [];
