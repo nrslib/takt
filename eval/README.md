@@ -273,9 +273,9 @@ llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript
 追加した10ケースは次を測る。
 
 - `verification-repeated` / `verification-once` / `verification-mixed` / `verification-told`:
-  裁定が変わらない実行中のタスクで、別々に終わった確認が同じ項目を2回続けて未完了と
-  した場合の介入。対象と基準を保ち、読む量を分けて必要な照合を終えさせる指示と理由を
-  採点する。1回だけ、実装の不足との混在、同じ項目への送信済みの指示を対照にする。
+  実行中のタスクで、未完了の理由を元の要求・受け入れ条件と照合する判断。必要な照合を
+  進めているなら確認が複数回でも待ち、範囲外の要求があれば確認が1回でもその要求だけを
+  外す指示と理由を採点する。実装に残る不具合との混在、送信済みの指示を対照にする。
   報告本文を読み取り結果として渡すため、報告を読みに行く行動や見張りの発火時機は測らない。
 - `plan-missing` / `plan-dependent` / `plan-cancelled` / `plan-integrated` / `plan-queued`:
   取り込みが保存された終了イベントから、objective の5項目の計画と作業の記録を
@@ -342,11 +342,10 @@ Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較す�
 `no-check-docs`、`no-check-same-module`、`integration-already-checked`。
 ほかの場面の判断意図は維持する。モデルによる回帰の合否は別途確認が必要である。
 
-巡回イベントは現在の daemon から配られないため、次の15場面をすべて
-`watch_observation` の `run_log_stalled` に移した。除外した場面はない。
-各場面で実行中の同じ run のログ更新が31分止まったことを観測し、保存されたレビュー・修正・確認の履歴を読む。
-`observedAt` と `lastUpdatedAt` は本番の30分の閾値を満たす。プロセス消失や作業自体の失敗には置き換えていない。
-起動のきっかけだけを変更し、次の判断と既存の採点条件を維持する。
+次の15場面は、本番の daemon が配る `patrol` イベントで、動いているゴールを点検する。
+保存されたレビュー・修正・確認の履歴を指示書と受け入れ条件に照らして読み、作業の逸脱を判断する。
+実行時間や段階の回数を異常の基準にしない。`snapshotAt` は評価の記録時刻であり、本番イベントのフィールドではない。
+各場面の日時を評価時刻へそろえ、次の判断と既存の採点条件を維持する。
 15場面すべてで実行中タスクに `worktree: true` と clone の `worktreePath` を保存し、
 `runArtifacts.directory` もその clone を指す。`takt_get_run` の cwd は元のリポジトリのままとし、
 本番と同じく保存タスクから clone 内の run を読む。
@@ -358,21 +357,21 @@ conflicting-calendar-visibility は裁定後の fix、unchanged-adjudication は
 
 | 場面 | 移行先 | 維持する判断 |
 | --- | --- | --- |
-| mail-dispatch-state | run_log_stalled | 必要な失敗・再試行時の保証を保ち、過剰な修正方法を替える |
-| local-config-tampering | run_log_stalled | 方針で除外された改変対策を修正対象から外す |
-| offline-sync-queue | run_log_stalled | 必要な振る舞いを保って単純な作りへ替える |
-| report-publish-replacement | run_log_stalled | 根拠のない公開方法の変更を止める |
-| reservation-validation | run_log_stalled | 元の受け入れ条件に必要な検証を維持する |
-| legacy-date-format | run_log_stalled | 維持を求められた既存形式の修正を外さない |
-| archive-test-coverage | run_log_stalled | 受け入れ条件のテスト不足を修正対象に保つ |
-| quoted-csv-fields | run_log_stalled | 形式の仕様が求める振る舞いを保つ |
-| inventory-retry-idempotency | run_log_stalled | 再試行時に必要な保証を落とさない |
-| conflicting-calendar-visibility | run_log_stalled | 矛盾する受け入れ条件の判断を人に求める |
-| unchanged-adjudication | run_log_stalled | 変わっていない裁定について指示を重ねない |
-| verification-repeated | run_log_stalled | 同じ項目の確認が2回未完了なら読み方を指示する |
-| verification-once | run_log_stalled | 未完了が1回だけなら次の確認を待つ |
-| verification-mixed | run_log_stalled | 未完了の原因を項目ごとに区別する |
-| verification-told | run_log_stalled | 同じ run に伝えた指示を重ねない |
+| mail-dispatch-state | patrol | 必要な失敗・再試行時の保証を保ち、過剰な修正方法を替える |
+| local-config-tampering | patrol | 方針で除外された改変対策を修正対象から外す |
+| offline-sync-queue | patrol | 必要な振る舞いを保って単純な作りへ替える |
+| report-publish-replacement | patrol | 根拠のない公開方法の変更を止める |
+| reservation-validation | patrol | 元の受け入れ条件に必要な検証を維持する |
+| legacy-date-format | patrol | 維持を求められた既存形式の修正を外さない |
+| archive-test-coverage | patrol | 受け入れ条件のテスト不足を修正対象に保つ |
+| quoted-csv-fields | patrol | 形式の仕様が求める振る舞いを保つ |
+| inventory-retry-idempotency | patrol | 再試行時に必要な保証を落とさない |
+| conflicting-calendar-visibility | patrol | 矛盾する受け入れ条件の判断を人に求める |
+| unchanged-adjudication | patrol | 変わっていない裁定について指示を重ねない |
+| verification-repeated | patrol | 必要な照合を進めていれば複数回の未完了でも介入しない |
+| verification-once | patrol | 確認が1回でも範囲外の要求があればその要求だけを外す |
+| verification-mixed | patrol | 範囲外の要求だけを外し、必要な不具合修正を残す |
+| verification-told | patrol | 同じ run に伝えた指示を重ねない |
 
 追加の4場面は、すべて日英の保存 completion イベントで定義し、共有の変換関数を通して `task_failed` にする。
 
@@ -1015,7 +1014,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（54ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、ログ停滞の観測時に裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（54ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |

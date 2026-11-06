@@ -26,23 +26,15 @@ ja:
         summary: "seed-index を takt/goal/research-audio-index に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
       - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T23:10:00.000Z
-        summary: run-research-audio-index の review-adjudication 第1回を読んだ。IDX-17 は時刻と話者名の保存を確認する項目。裁定は変更されていない。takt_tell_run は未送信。
+        summary: run-research-audio-index の review-adjudication 第1回を読んだ。IDX-17 は要求にない全音声データの索引保存も求めている。裁定は変更されていない。takt_tell_run は未送信。
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440111
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440111
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -125,7 +117,7 @@ ja:
               summary: "seed-index を takt/goal/research-audio-index に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
             - id: 650e8400-e29b-41d4-a716-000000000033
               recordedAt: 2026-10-11T23:10:00.000Z
-              summary: run-research-audio-index の review-adjudication 第1回を読んだ。IDX-17 は時刻と話者名の保存を確認する項目。裁定は変更されていない。takt_tell_run は未送信。
+              summary: run-research-audio-index の review-adjudication 第1回を読んだ。IDX-17 は要求にない全音声データの索引保存も求めている。裁定は変更されていない。takt_tell_run は未送信。
               kind: patrol
           questions: []
     - tool: takt_list_tasks
@@ -190,9 +182,9 @@ ja:
             iteration: 3
         reports:
           - filename: fix-verification-1.md
-            sizeBytes: 693
+            sizeBytes: 833
           - filename: fix-verification-2.md
-            sizeBytes: 693
+            sizeBytes: 833
         stepLogPage:
           collection: stepLogs
           totalCount: 3
@@ -238,11 +230,11 @@ ja:
           iteration: 2
           content: |-
             # 修正確認 第1回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存し、tests/index-record.test.ts の該当 assertion は成功している。しかし録音の全音声データを索引に保存していないため、この項目を未完了とした。修正方針は索引に audioBlob フィールドを追加し、全音声データも保存すること。元の指示書と受け入れ条件が求めるのは話者名と時刻の索引登録だけであり、全音声データの保存は要求されていない。
             IDX-22: 未完了。src/index/record.ts:57 は時刻 0 を falsy として捨てる。期待は録音開始時刻 0 も保存すること。tests/index-record.test.ts:88 の入力 timestamp=0 に対し保存結果が空だった。これは実装に残る不具合である。
-          totalBytes: 693
+          totalBytes: 833
           offset: 0
-          returnedBytes: 693
+          returnedBytes: 833
           direction: backward
           truncated: false
           nextOffset: null
@@ -274,11 +266,11 @@ ja:
           iteration: 3
           content: |-
             # 修正確認 第2回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存し、tests/index-record.test.ts の該当 assertion は成功している。しかし録音の全音声データを索引に保存していないため、この項目を未完了とした。修正方針は索引に audioBlob フィールドを追加し、全音声データも保存すること。元の指示書と受け入れ条件が求めるのは話者名と時刻の索引登録だけであり、全音声データの保存は要求されていない。
             IDX-22: 未完了。src/index/record.ts:57 は時刻 0 を falsy として捨てる。期待は録音開始時刻 0 も保存すること。tests/index-record.test.ts:88 の入力 timestamp=0 に対し保存結果が空だった。これは実装に残る不具合である。
-          totalBytes: 693
+          totalBytes: 833
           offset: 0
-          returnedBytes: 693
+          returnedBytes: 833
           direction: backward
           truncated: false
           nextOffset: null
@@ -327,7 +319,7 @@ ja:
           status: done
           content: |-
             # 修正確認 第1回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存し、tests/index-record.test.ts の該当 assertion は成功している。しかし録音の全音声データを索引に保存していないため、この項目を未完了とした。修正方針は索引に audioBlob フィールドを追加し、全音声データも保存すること。元の指示書と受け入れ条件が求めるのは話者名と時刻の索引登録だけであり、全音声データの保存は要求されていない。
             IDX-22: 未完了。src/index/record.ts:57 は時刻 0 を falsy として捨てる。期待は録音開始時刻 0 も保存すること。tests/index-record.test.ts:88 の入力 timestamp=0 に対し保存結果が空だった。これは実装に残る不具合である。
           instruction: ""
           timestamp: 2026-10-11T23:20:00.000Z
@@ -343,7 +335,7 @@ ja:
           status: done
           content: |-
             # 修正確認 第2回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存し、tests/index-record.test.ts の該当 assertion は成功している。しかし録音の全音声データを索引に保存していないため、この項目を未完了とした。修正方針は索引に audioBlob フィールドを追加し、全音声データも保存すること。元の指示書と受け入れ条件が求めるのは話者名と時刻の索引登録だけであり、全音声データの保存は要求されていない。
             IDX-22: 未完了。src/index/record.ts:57 は時刻 0 を falsy として捨てる。期待は録音開始時刻 0 も保存すること。tests/index-record.test.ts:88 の入力 timestamp=0 に対し保存結果が空だった。これは実装に残る不具合である。
           instruction: ""
           timestamp: 2026-10-11T23:35:00.000Z
@@ -354,9 +346,9 @@ ja:
           timestamp: 2026-10-12T00:00:00.000Z
       reports:
         - filename: fix-verification-1.md
-          sizeBytes: 693
+          sizeBytes: 833
         - filename: fix-verification-2.md
-          sizeBytes: 693
+          sizeBytes: 833
 en:
   lang: en
   turn: event
@@ -385,23 +377,15 @@ en:
         summary: "Integrated seed-index into takt/goal/research-audio-index. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
       - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T23:10:00.000Z
-        summary: Read review-adjudication execution 1 in run-research-audio-index. IDX-17 checks saved timestamps and speaker names. The adjudication is unchanged. No takt_tell_run has been sent.
+        summary: Read review-adjudication execution 1 in run-research-audio-index. IDX-17 also demands storing complete audio data in the index, which was not requested. The adjudication is unchanged. No takt_tell_run has been sent.
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440111
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440111
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -484,7 +468,7 @@ en:
               summary: "Integrated seed-index into takt/goal/research-audio-index. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
             - id: 650e8400-e29b-41d4-a716-000000000033
               recordedAt: 2026-10-11T23:10:00.000Z
-              summary: Read review-adjudication execution 1 in run-research-audio-index. IDX-17 checks saved timestamps and speaker names. The adjudication is unchanged. No takt_tell_run has been sent.
+              summary: Read review-adjudication execution 1 in run-research-audio-index. IDX-17 also demands storing complete audio data in the index, which was not requested. The adjudication is unchanged. No takt_tell_run has been sent.
               kind: patrol
           questions: []
     - tool: takt_list_tasks
@@ -549,9 +533,9 @@ en:
             iteration: 3
         reports:
           - filename: fix-verification-1.md
-            sizeBytes: 669
+            sizeBytes: 785
           - filename: fix-verification-2.md
-            sizeBytes: 669
+            sizeBytes: 785
         stepLogPage:
           collection: stepLogs
           totalCount: 3
@@ -597,11 +581,11 @@ en:
           iteration: 2
           content: |-
             # Repair verification execution 1
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps, and the corresponding assertions in tests/index-record.test.ts pass. This item is nevertheless marked incomplete because the index does not store the complete audio data. The intended fix is to add an audioBlob field to the index and store the complete audio data as well. The original instructions and acceptance criteria require indexing only speaker names and timestamps; storing the complete audio data is not requested.
             IDX-22: incomplete. src/index/record.ts:57 drops timestamp 0 as falsy. Timestamp 0 at the start of a recording must be saved. With timestamp=0 at tests/index-record.test.ts:88, the saved result was empty. This is a remaining implementation defect.
-          totalBytes: 669
+          totalBytes: 785
           offset: 0
-          returnedBytes: 669
+          returnedBytes: 785
           direction: backward
           truncated: false
           nextOffset: null
@@ -633,11 +617,11 @@ en:
           iteration: 3
           content: |-
             # Repair verification execution 2
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps, and the corresponding assertions in tests/index-record.test.ts pass. This item is nevertheless marked incomplete because the index does not store the complete audio data. The intended fix is to add an audioBlob field to the index and store the complete audio data as well. The original instructions and acceptance criteria require indexing only speaker names and timestamps; storing the complete audio data is not requested.
             IDX-22: incomplete. src/index/record.ts:57 drops timestamp 0 as falsy. Timestamp 0 at the start of a recording must be saved. With timestamp=0 at tests/index-record.test.ts:88, the saved result was empty. This is a remaining implementation defect.
-          totalBytes: 669
+          totalBytes: 785
           offset: 0
-          returnedBytes: 669
+          returnedBytes: 785
           direction: backward
           truncated: false
           nextOffset: null
@@ -686,7 +670,7 @@ en:
           status: done
           content: |-
             # Repair verification execution 1
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps, and the corresponding assertions in tests/index-record.test.ts pass. This item is nevertheless marked incomplete because the index does not store the complete audio data. The intended fix is to add an audioBlob field to the index and store the complete audio data as well. The original instructions and acceptance criteria require indexing only speaker names and timestamps; storing the complete audio data is not requested.
             IDX-22: incomplete. src/index/record.ts:57 drops timestamp 0 as falsy. Timestamp 0 at the start of a recording must be saved. With timestamp=0 at tests/index-record.test.ts:88, the saved result was empty. This is a remaining implementation defect.
           instruction: ""
           timestamp: 2026-10-11T23:20:00.000Z
@@ -702,7 +686,7 @@ en:
           status: done
           content: |-
             # Repair verification execution 2
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps, and the corresponding assertions in tests/index-record.test.ts pass. This item is nevertheless marked incomplete because the index does not store the complete audio data. The intended fix is to add an audioBlob field to the index and store the complete audio data as well. The original instructions and acceptance criteria require indexing only speaker names and timestamps; storing the complete audio data is not requested.
             IDX-22: incomplete. src/index/record.ts:57 drops timestamp 0 as falsy. Timestamp 0 at the start of a recording must be saved. With timestamp=0 at tests/index-record.test.ts:88, the saved result was empty. This is a remaining implementation defect.
           instruction: ""
           timestamp: 2026-10-11T23:35:00.000Z
@@ -713,6 +697,6 @@ en:
           timestamp: 2026-10-12T00:00:00.000Z
       reports:
         - filename: fix-verification-1.md
-          sizeBytes: 669
+          sizeBytes: 785
         - filename: fix-verification-2.md
-          sizeBytes: 669
+          sizeBytes: 785

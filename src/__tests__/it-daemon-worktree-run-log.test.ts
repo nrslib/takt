@@ -30,7 +30,7 @@ import { TaskStore } from '../infra/task/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-describe('daemon による実際の run ログの検出', () => {
+describe('実際の run ログと daemon のプロセス観測', () => {
   let root: string;
   let project: string;
   let globalDirectory: string;
@@ -101,7 +101,7 @@ describe('daemon による実際の run ログの検出', () => {
     return { runner, task, provider, status };
   }
 
-  it('本物の merge run が元リポジトリに書いたログを検出する', async () => {
+  it('本物の merge run を観測し、元リポジトリへログを書く', async () => {
     const { runner, task, provider, status } = await queuedGoalMerge();
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
@@ -123,10 +123,11 @@ describe('daemon による実際の run ログの検出', () => {
       const saved = new TaskStore(project).read().tasks[0]!;
       expect(saved.merge_task).toBe(true);
       expect(saved.worktree_path).not.toBe(project);
-      expect(target.logPath).toEqual(expect.any(String));
+      expect(target.task).toMatchObject({ taskName: task.name, runSlug: saved.run_slug });
       const logsDirectory = join(project, '.takt', 'runs', saved.run_slug!, 'logs');
-      expect(readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl')).map((file) => join(logsDirectory, file))).toContain(target.logPath);
-      expect(readFileSync(target.logPath!, 'utf8')).toContain('Actual merge run log.');
+      const logs = readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl'));
+      expect(logs).not.toHaveLength(0);
+      expect(logs.map((file) => readFileSync(join(logsDirectory, file), 'utf8')).join('\n')).toContain('Actual merge run log.');
       expect(existsSync(join(saved.worktree_path!, '.takt', 'runs', saved.run_slug!, 'logs'))).toBe(false);
       expect(errors).not.toHaveBeenCalled();
     } finally { await conversations.close(); }
@@ -219,13 +220,13 @@ describe('daemon による実際の run ログの検出', () => {
       expect(observations[0]).toHaveLength(1);
       const target = observations[0]![0]!;
       const saved = new TaskStore(project).read().tasks[0]!;
-      expect(target).toMatchObject({ running: true, paused: false,
-        task: { repositoryDirectory: project, taskName: task.name, runSlug: saved.run_slug }, logPath: expect.any(String) });
+      expect(target).toMatchObject({ running: true,
+        task: { repositoryDirectory: project, taskName: task.name, runSlug: saved.run_slug } });
       const executionDirectory = worktree ? saved.worktree_path! : project;
       const logsDirectory = join(executionDirectory, '.takt', 'runs', saved.run_slug!, 'logs');
       const logs = readdirSync(logsDirectory).filter((file) => file.endsWith('.jsonl')).map((file) => join(logsDirectory, file));
-      expect(logs).toContain(target.logPath);
-      const content = readFileSync(target.logPath!, 'utf8');
+      expect(logs).not.toHaveLength(0);
+      const content = logs.map((path) => readFileSync(path, 'utf8')).join('\n');
       expect(content).toContain('Real mock run for daemon log observation.');
       expect(content.trim().split('\n').map((line) => JSON.parse(line))).not.toHaveLength(0);
       if (worktree) {

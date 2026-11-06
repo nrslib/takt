@@ -11,18 +11,22 @@ const sequence = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const task = z.object({ repositoryDirectory: z.string(), goalId: id, taskName: z.string(), runSlug: id.optional(), executionId: id.optional() }).strict();
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: z.string(), goalId: id };
+// 廃止した観測は保存データの読み飛ばしにだけ使い、新規受付には戻さない。
+const retiredWatchEvent = z.object({
+  event: z.object({ kind: z.literal('watch_observation'), observation: z.object({
+    kind: z.enum(['run_too_long', 'run_step_repeated', 'run_log_stalled', 'inquiry_stalled', 'goal_stalled']),
+  }) }),
+});
+export function isRetiredWatchEvent(input: unknown): boolean {
+  return retiredWatchEvent.safeParse(input).success;
+}
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_log_stalled'), task, lastUpdatedAt: z.iso.datetime() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_too_long'), task, startedAt: z.iso.datetime() }).strict(),
-  z.object({ ...observed, kind: z.literal('run_step_repeated'), task, workflow: z.string().min(1), step: z.string().min(1), stepIdentity: z.string().min(1), count: z.number().int().positive() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
   z.object({ ...observed, kind: z.literal('goal_pr_retry'), ...repositoryGoal, reason: z.string(),
     failureId: id, expectedSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), attempt: z.number().int().positive(), maxAttempts: z.number().int().positive(),
   }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: z.string(), reason: z.string() }).strict(),
-  z.object({ ...observed, kind: z.literal('inquiry_stalled'), repositoryDirectory: z.string(), questionId: id, goalId: id.nullable() }).strict(),
-  z.object({ ...observed, kind: z.literal('goal_stalled'), ...repositoryGoal, lastUpdatedAt: z.iso.datetime() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
@@ -44,6 +48,12 @@ export const EventInputSchema = z.object({
 }).strict() satisfies z.ZodType<EventInput>;
 export const AcceptedEventSchema = EventInputSchema.extend({ operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']) })
   .strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) as z.ZodType<AcceptedEvent>;
+const retiredAcceptedEvent = EventInputSchema.omit({ event: true }).extend({
+  operationId: id, acceptedSequence: sequence, lane: z.literal('other'),
+  event: retiredWatchEvent.shape.event.extend({ observation: retiredWatchEvent.shape.event.shape.observation.extend(observed).passthrough() }).strict(),
+}).strict();
+// 旧イベントは不透明な保存値として扱い、索引と結果の確定にだけ渡す。新規受付・ターン実行には使わない。
+const storedAcceptedEvent = z.union([AcceptedEventSchema, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;
 // 保存済みの許可回答だけを正規化し、新しいコマンドの受付スキーマには許可文を戻さない。
 const storedAnswer = z.object({
   kind: z.literal('inquiry_answer'),
@@ -53,7 +63,7 @@ const storedEvent = z.preprocess((input) => {
   if (typeof input !== 'object' || input === null || !('event' in input)) return input;
   const answer = storedAnswer.safeParse(input.event);
   return answer.success ? { ...input, event: answer.data } : input;
-}, AcceptedEventSchema);
+}, storedAcceptedEvent);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
