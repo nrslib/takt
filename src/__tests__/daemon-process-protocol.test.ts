@@ -6,6 +6,7 @@ import {
   type DaemonProcessMessage, type TurnProcessMessage,
 } from '../core/daemon/processProtocol.js';
 import { input, turnState } from './helpers/controlledDaemon.js';
+import { AcceptedEventSchema } from '../infra/daemon/eventRecord.js';
 
 const common = { protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'launch-1' } as const;
 const turn = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -14,6 +15,41 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('transfers and restores a workspace answer without a repository or goal reference', () => {
+    const event = { ...acceptedEvent, lane: 'other', source: 'daemon', event: {
+      kind: 'workspace_inquiry_answered', questionId: '650e8400-e29b-41d4-a716-446655440001',
+      answer: { text: 'Export', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' },
+    } };
+    const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    expect(AcceptedEventSchema.parse(JSON.parse(JSON.stringify(event)))).toEqual(event);
+    const missing = { ...event, event: { kind: 'workspace_inquiry_answered', questionId: event.event.questionId } };
+    expect(() => AcceptedEventSchema.parse(missing)).toThrow();
+    expect(() => parseDaemonProcessMessage({ ...message, input: { ...message.input, event: missing } }, common.launchId)).toThrow();
+  });
+
+  it('limits workspace answer publication to a question ID', () => {
+    const publication = { kind: 'publish_workspace_inquiry_answer', questionId: '650e8400-e29b-41d4-a716-446655440001' };
+    expect(parseTurnProcessMessage({ ...request, request: publication }, common.launchId)).toMatchObject({ request: publication });
+    for (const extra of [{ workspaceId: 'other' }, { conversationId: 'other' }, { answer: { text: 'forged' } }]) {
+      expect(() => parseTurnProcessMessage({ ...request, request: { ...publication, ...extra } }, common.launchId)).toThrow();
+    }
+    expect(() => parseTurnProcessMessage({ ...request, request: { ...publication, questionId: 'invalid' } }, common.launchId)).toThrow();
+  });
+  it('transfers a standalone answer with its saved question ID and answer to a manager turn', () => {
+    const event = { ...acceptedEvent, lane: 'other', source: 'run', event: {
+      kind: 'inquiry_answered', repositoryDirectory: '/repo', goalId: null,
+      questionId: '650e8400-e29b-41d4-a716-446655440002',
+      answer: { text: 'CSV', source: 'slack', answeredAt: '2026-11-06T00:00:00Z' },
+    } };
+    const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+  });
+
+  it.each(['goal_registered', 'goal_resumed'] as const)('keeps a goal ID mandatory for %s events', (kind) => {
+    const event = { ...acceptedEvent, lane: 'other', source: 'run', event: { kind, repositoryDirectory: '/repo', goalId: null } };
+    expect(() => parseDaemonProcessMessage({ ...common, kind: 'start_turn', input: { event, turn, state: turnState() } }, common.launchId)).toThrow();
+  });
   it.each<DaemonProcessMessage>([
     { ...common, kind: 'initialize', conversationId: turn.conversationId, assignment: turnState().assignment, configDirectory: '/config' },
     { ...common, kind: 'start_turn', input: { event: acceptedEvent, turn, state: turnState() } },

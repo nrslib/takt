@@ -9,7 +9,7 @@ import { GoalAnswerSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.j
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
-  z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
   z.object({ ...common, kind: z.literal('resumed') }).strict(),
   // 旧受け箱の読取専用。新しい見回りは daemon の TurnEvent として受け付ける。
@@ -26,7 +26,7 @@ function inboxDirectory(cwd: string): string {
 }
 
 export function saveManagerEvent(cwd: string, input: ManagerEventInput): void {
-  if (new GoalStore(cwd).getSync(input.goalId).executionStatus === 'aborted') return;
+  if (input.goalId !== null && new GoalStore(cwd).getSync(input.goalId).executionStatus === 'aborted') return;
   const event = ManagerEventSchema.parse({ ...input, createdAt: new Date().toISOString() });
   const directory = inboxDirectory(cwd);
   mkdirSync(directory, { recursive: true, mode: 0o700 });

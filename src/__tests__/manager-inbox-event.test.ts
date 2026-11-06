@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
 import type { ManagerEvent } from '../infra/goals/events.js';
+import { ManagerEventSchema } from '../infra/goals/events.js';
 
 const common = { goalId: '650e8400-e29b-41d4-a716-446655440000', createdAt: '2026-11-01T00:00:00.000Z' };
 const directory = '/workspace/project';
 
 describe('managerInboxTurnEvent', () => {
+  it('maps a standalone saved answer without inventing a goal ID', () => {
+    const answer = { text: 'CSV', answeredAt: common.createdAt, source: 'slack' };
+    const saved = ManagerEventSchema.parse({ ...common, kind: 'answer', goalId: null,
+      questionId: '650e8400-e29b-41d4-a716-446655440002', answer });
+    expect(managerInboxTurnEvent(directory, saved)).toEqual({ kind: 'inquiry_answered', repositoryDirectory: directory,
+      goalId: null, questionId: '650e8400-e29b-41d4-a716-446655440002', answer });
+  });
   it('rejects legacy patrol events that the inbox retires without delivery', () => {
     expect(() => managerInboxTurnEvent(directory, { ...common, kind: 'patrol' })).toThrow();
   });

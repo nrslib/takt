@@ -11,8 +11,10 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import type { ConversationCommand } from '../features/manager/conversationPort.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
+import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
 
 const doubles = vi.hoisted(() => ({ event: vi.fn(), run: vi.fn() }));
+const request = vi.fn<TurnIo['request']>();
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
 let directory: string;
@@ -26,7 +28,7 @@ function saveQuestion(value: GoalQuestion) {
   writeFileSync(join(path, 'goal.json'), JSON.stringify({ ...goalRecord(), questions: [value] }));
 }
 function answer(value = command) {
-  return answerConversationInquiry(value, assignment, directory, new AbortController().signal, 'en');
+  return answerConversationInquiry(value, assignment, directory, { signal: new AbortController().signal, request }, 'en');
 }
 async function pendingInquiries() {
   const items = [];
@@ -35,6 +37,7 @@ async function pendingInquiries() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  request.mockResolvedValue({ kind: 'event_accepted', admission: { kind: 'accepted', eventId: 'answer', operationId: 'answer', acceptedSequence: 1 } });
   directory = getGlobalConfigDir();
   repository = join(directory, 'repository');
   mkdirSync(repository);
@@ -98,6 +101,93 @@ it('answers a standalone question with Slack provenance and removes it from pend
     .toMatchObject({ kind: 'answer_saved' });
   expect((await store.get(inquiry.id)).answer).toMatchObject({ text: 'CSV', source: 'slack' });
   expect((await pendingInquiries()).some(({ question }) => question.id === inquiry.id)).toBe(false);
+});
+
+it.each(['tui', 'slack'] as const)('publishes the saved workspace %s answer through its owner after repository removal', async (source) => {
+  const selected = join(directory, 'selected-repository');
+  mkdirSync(selected);
+  assignment = { kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001',
+    name: '担当', repositoryDirectories: [repository, selected] };
+  const owner = { kind: 'workspace' as const, workspaceId: assignment.workspaceId };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: 'どのゴールですか',
+    operation: { cwd: selected, toolName: 'takt_ask_standalone_question', args: '{}' } });
+  assignment = { ...assignment, repositoryDirectories: [repository] };
+
+  expect(await answer({ ...command, source, target: { goalId: null, owner }, questionId: inquiry.id }))
+    .toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  const saved = await store.get(inquiry.id);
+  expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source } });
+  expect(request).toHaveBeenCalledExactlyOnceWith({ kind: 'publish_workspace_inquiry_answer', questionId: inquiry.id });
+  expect(doubles.event).not.toHaveBeenCalled();
+  expect((await pendingInquiries()).some(({ question }) => question.id === inquiry.id)).toBe(false);
+});
+
+it('publishes an answer for an existing standalone question without adding operation metadata', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: repository };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: '既存の相談' });
+  expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id }))
+    .toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  const saved = await store.get(inquiry.id);
+  expect(saved.operation).toBeUndefined();
+  expect(doubles.event).toHaveBeenCalledExactlyOnceWith(repository,
+    { kind: 'answer', goalId: null, questionId: inquiry.id, answer: saved.answer });
+});
+
+it('retains the saved standalone answer when publishing its manager event fails', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: repository };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: 'どのゴールですか',
+    operation: { cwd: repository, toolName: 'takt_ask_standalone_question', args: '{}' } });
+  doubles.event.mockImplementationOnce(() => { throw new Error('event failed'); });
+  expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id }))
+    .toMatchObject({ kind: 'error', answerSaved: true });
+  expect(await store.get(inquiry.id)).toMatchObject({ status: 'answered', answer: { text: 'CSV', source: 'tui' } });
+});
+
+it.each([false, true])('answers a legacy workspace question without operation metadata when empty=%s', async (empty) => {
+  assignment = { kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001',
+    name: '担当', repositoryDirectories: empty ? [] : [repository] };
+  const owner = { kind: 'workspace' as const, workspaceId: assignment.workspaceId };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: '既存の相談' });
+  const result = await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id });
+  expect(result).toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  const saved = await store.get(inquiry.id);
+  expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source: 'tui' } });
+  expect(saved.operation).toBeUndefined();
+  expect(request).toHaveBeenCalledExactlyOnceWith({ kind: 'publish_workspace_inquiry_answer', questionId: inquiry.id });
+  expect(doubles.event).not.toHaveBeenCalled();
+});
+
+it.each(['storage', 'forbidden', 'exception'] as const)('keeps the workspace answer and reports failure when publication returns %s', async (failure) => {
+  assignment = { kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001', name: 'Workspace', repositoryDirectories: [] };
+  const owner = { kind: 'workspace' as const, workspaceId: assignment.workspaceId };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: 'Which goal?' });
+  if (failure === 'exception') request.mockRejectedValueOnce(new Error('storage failed'));
+  else if (failure === 'forbidden') request.mockResolvedValueOnce({ kind: 'error', code: 'forbidden', message: 'Forbidden' });
+  else request.mockResolvedValueOnce({ kind: 'event_accepted', admission: { kind: 'rejected', reason: 'storage' } });
+  expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id }))
+    .toMatchObject({ kind: 'error', answerSaved: true });
+  expect(await store.get(inquiry.id)).toMatchObject({ status: 'answered', answer: { text: 'CSV' } });
+  expect(doubles.event).not.toHaveBeenCalled();
+});
+
+it.each(['wrong-owner', 'withdrawn'] as const)('rejects a workspace %s answer before saving or publication', async (condition) => {
+  assignment = { kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001', name: 'Workspace', repositoryDirectories: [] };
+  const owner = { kind: 'workspace' as const, workspaceId: assignment.workspaceId };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const inquiry = await store.create({ body: 'Which goal?' });
+  if (condition === 'withdrawn') await store.withdraw(inquiry.id, 'Cancelled');
+  const targetOwner = condition === 'wrong-owner' ? { ...owner, workspaceId: '750e8400-e29b-41d4-a716-446655440002' } : owner;
+  const before = await store.get(inquiry.id);
+  expect(await answer({ ...command, target: { goalId: null, owner: targetOwner }, questionId: inquiry.id }))
+    .toMatchObject({ kind: 'error', answerSaved: false });
+  expect(await store.get(inquiry.id)).toEqual(before);
+  expect(request).not.toHaveBeenCalled();
+  expect(doubles.event).not.toHaveBeenCalled();
 });
 
 it('rejects a retained answer target after standalone withdrawal', async () => {

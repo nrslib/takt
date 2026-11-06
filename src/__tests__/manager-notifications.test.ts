@@ -1,14 +1,14 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
-import { formatGoalQuestionNotification } from '../infra/goals/notifications.js';
+import { formatGoalNotification, formatGoalQuestionNotification, formatStandaloneQuestionNotification } from '../infra/goals/notifications.js';
 const doubles = vi.hoisted(() => ({ config: vi.fn(), language: vi.fn(), webhook: vi.fn(), send: vi.fn() }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
   ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
 }));
 vi.mock('../shared/utils/slackWebhook.js', () => ({ getSlackWebhookUrl: doubles.webhook, sendSlackNotification: doubles.send }));
-import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../features/manager/notifications.js';
+import { resolveManagerNotificationOptions, sendSavedGoalNotifications, sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -17,6 +17,42 @@ beforeEach(() => {
   doubles.language.mockReturnValue('ja');
 });
 const notice = { id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom' as const, body: 'saved notice', recordedAt: '2026-10-08T00:00:00Z' };
+
+it.each(['ja', 'en'] as const)('formats a standalone question with the same %s details and guidance as a goal question', (language) => {
+  const question: GoalQuestion = { id: notice.id, recipient: 'human', status: 'pending', body: 'Which output format?',
+    options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recommendation: 'CSV'.repeat(100) };
+  const before = structuredClone(question);
+  const goal = { ...goalRecord(), questions: [question] };
+  const goalText = formatGoalNotification(goal, { kind: 'question', body: formatGoalQuestionNotification(question, language) }, language, 'project').split('\n');
+  expect(formatStandaloneQuestionNotification(question, language, 'project').split('\n'))
+    .toEqual([goalText[0], ...goalText.slice(2)]);
+  expect(question).toEqual(before);
+});
+
+it('awaits standalone question delivery using the policy and language of its repository', async () => {
+  const question: GoalQuestion = { id: notice.id, recipient: 'human', status: 'pending', body: 'Which goal?' };
+  let delivered!: () => void;
+  const pending = new Promise<void>((resolve) => { delivered = resolve; });
+  doubles.send.mockReturnValue(pending);
+  const sending = sendSavedStandaloneQuestionNotification('/work/selected', question);
+  expect(doubles.config).toHaveBeenCalledExactlyOnceWith('/work/selected');
+  expect(doubles.language).toHaveBeenCalledExactlyOnceWith('/work/selected', 'language');
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', formatStandaloneQuestionNotification(question, 'ja', 'selected'));
+  const finished = vi.fn();
+  void sending.then(finished);
+  await Promise.resolve();
+  expect(finished).not.toHaveBeenCalled();
+  delivered();
+  await sending;
+  expect(finished).toHaveBeenCalledOnce();
+});
+
+it.each(['disabled', 'no webhook'] as const)('skips standalone notification delivery when %s', async (condition) => {
+  if (condition === 'disabled') doubles.config.mockReturnValue({ notifications: { ...policy, question: false }, mainMerge: 'approve' });
+  else doubles.webhook.mockReturnValue(undefined);
+  await sendSavedStandaloneQuestionNotification('/project', { id: notice.id, recipient: 'human', status: 'pending', body: 'Which goal?' });
+  expect(doubles.send).not.toHaveBeenCalled();
+});
 
 it('resolves notification switches and webhook once at the operation boundary', () => {
   expect(resolveManagerNotificationOptions('/project')).toEqual({ policy, mainMerge: 'approve', webhookUrl: 'https://example.test/secret' });
