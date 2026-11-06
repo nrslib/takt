@@ -545,8 +545,8 @@ it.each([
   await waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
-    expect(app!.lastFrame()!.split('\n').find((row) => /^(?:進行中|in progress|ongoing|active)/iu.test(row))).toMatch(lang === 'ja'
-      ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
+    expect(app!.lastFrame()!.split('\n').find((row) => /(?:進行中|Ongoing)\s+\d/u.test(row))).toMatch(lang === 'ja'
+      ? /進行中\s+0\b/u : /Ongoing\s+0\b/u);
   };
   await waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
