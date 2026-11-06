@@ -11,7 +11,7 @@ import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './pri
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
-const MAX_CONVERSATION_BYTES = 4 * 1024 * 1024;
+const MAX_CONVERSATION_BYTES = 12 * 1024 * 1024;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const receipt = z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict();
 const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {

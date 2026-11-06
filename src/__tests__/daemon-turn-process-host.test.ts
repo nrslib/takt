@@ -66,6 +66,27 @@ it('initializes once, waits for ready, and reuses a committed conversation proce
   child.exit.resolve({ code: 0, signal: null }); await closing;
   expect(f.post).toHaveBeenCalledTimes(2);
 });
+it('sends a start_turn containing both interrupted and current messages above one MiB', async () => {
+  const child = childFixture(); const f = fixture(); const input = turnStart();
+  const interrupted = 'a'.repeat(600 * 1024);
+  const current = 'b'.repeat(600 * 1024);
+  input.state.interruptedMessage = interrupted;
+  if (input.event.event.kind !== 'human_command' || input.event.event.command.kind !== 'message') throw new Error('Expected human message');
+  input.event.event.command.text = current;
+  f.host.start(input, new AbortController().signal);
+  child.receive({ kind: 'ready' });
+  const started = child.messages.at(-1);
+  expect(started?.kind).toBe('start_turn');
+  expect(Buffer.byteLength(JSON.stringify(started))).toBeGreaterThan(1024 * 1024);
+  if (started?.kind !== 'start_turn') throw new Error('Expected start_turn');
+  expect(started.input.state.interruptedMessage).toBe(interrupted);
+  if (started.input.event.event.kind !== 'human_command' || started.input.event.event.command.kind !== 'message') throw new Error('Expected human message');
+  expect(started.input.event.event.command.text).toBe(current);
+  const closing = f.host.close();
+  child.receive({ kind: 'shutdown_complete' });
+  child.exit.resolve({ code: 0, signal: null });
+  await closing;
+});
 it('does not release an interrupted turn until forced termination is confirmed', async () => {
   const child = childFixture(); const f = fixture(); const input = turnStart();
   f.host.start(input, new AbortController().signal); child.receive({ kind: 'ready' });

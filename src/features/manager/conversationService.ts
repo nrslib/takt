@@ -137,7 +137,6 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               command.text,
               ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
             ].join('\n\n');
-            interruptedMessageDelivered = interruptedMessage != null;
             const output = await resolved.executor.execute({
               prompt,
               sessionId: state.current.session.sessionId ?? undefined,
@@ -146,6 +145,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               patrol: event.kind === 'patrol',
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
+            interruptedMessageDelivered = interruptedMessage != null;
             io.signal.throwIfAborted();
             const latest = assignment.kind === 'daemon' ? assignment
               : await resolveCurrentManagerAssignment(identityOf(assignment), configDirectory);
@@ -189,7 +189,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (io.signal.aborted) {
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
           return { kind: 'interrupted', ...(human && command.kind === 'message'
-            ? { change: state.change({ interruptedMessage: command.text }) } : {}) };
+            ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
+              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
           const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);

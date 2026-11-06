@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { accepted, deferred, harness, input, MemoryEventStore, ControlledTurnRunner, turnState } from './helpers/controlledDaemon.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
-import type { TurnIdentity } from '../core/daemon/messages.js';
+import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
 
@@ -767,6 +767,28 @@ describe('event driven daemon dispatcher', () => {
     expect(runner.calls).toHaveLength(0);
     expect(h.applied.get(t1.turn.operationId)?.outcome).toMatchObject({ kind: 'completed', change: { operationId: 'save-session', expectedVersion: 0, session: { provider: 'mock', model: null, sessionId: 'saved-session' } } });
     expect(h.store.records.get('T1')?.state).toBe('settled');
+  });
+
+  it('reuses a saved interrupted result without adding fields during restoration', async () => {
+    const h = await harness();
+    await h.dispatcher.accept(input('T1'));
+    const active = await h.runner.started(1);
+    const event = h.store.records.get('T1')!.event;
+    const savedResult: TurnResult = { ...active.turn, event, outcome: { kind: 'interrupted', change: {
+      operationId: 'saved-cleanup', expectedVersion: 0, session: { ...turnState().session, sessionId: 'saved-session' },
+    } } };
+    h.store.records.set('T1', { state: 'settling', event, result: savedResult });
+    const runner = new ControlledTurnRunner();
+    const restored = await createDaemonDispatcher({
+      store: h.store, runner, conversations: h.owner, stateRequests: h.stateRequests, resources: h.resources,
+      limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: h.failures,
+    });
+    runner.bus = restored;
+    await restored.drain();
+    expect(h.store.saveResult).toHaveBeenCalledWith('T1', savedResult);
+    expect(h.applied.get(active.turn.operationId)).toEqual(savedResult);
+    expect(h.store.records.get('T1')).toEqual({ state: 'settled', event, result: savedResult });
+    expect(runner.calls).toHaveLength(0);
   });
 
   it('returns durable duplicate admission after restart without queueing a settled event', async () => {

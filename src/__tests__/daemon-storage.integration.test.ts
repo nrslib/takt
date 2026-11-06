@@ -233,6 +233,31 @@ describe('durable daemon event storage', () => {
     await store.markSettled('a', outcome);
   });
 
+  it('persists a legacy interrupted message above one MiB through event and conversation stores', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const text = 'legacy'.repeat(256 * 1024);
+    const legacyEvent: AcceptedEvent = { ...event('legacy-long', 1), conversationId: id, operationId: turn.operationId,
+      event: { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'test', id: 'human' } } };
+    const interrupted: TurnResult = { ...result(legacyEvent), outcome: { kind: 'interrupted', change: {
+      operationId: 'legacy-cleanup', expectedVersion: 0, interruptedMessage: text,
+    } } };
+    await store.accept(legacyEvent);
+    await store.markStarted(legacyEvent.eventId, turn);
+    await store.saveResult(legacyEvent.eventId, interrupted);
+    await new FileEventStore(directory).saveResult(legacyEvent.eventId, interrupted);
+    await store.markSettled(legacyEvent.eventId, interrupted);
+
+    const conversations = new ConversationStateStore(directory);
+    await conversations.create(record());
+    await conversations.apply(interrupted);
+    expect((await conversations.read(id))?.state.interruptedMessage).toBe(text);
+    const restored = await new FileEventStore(directory).restore();
+    const pending = [];
+    for await (const value of restored.pending) pending.push(value);
+    expect(pending).toEqual([]);
+  });
+
   it('normalizes an existing goal question consistently across result retries and settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

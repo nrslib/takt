@@ -6,9 +6,11 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
-export const MAX_PROCESS_MESSAGE_BYTES = 1024 * 1024;
+// 旧形式の中断文と次のイベントを同じ start_turn で転送できるようにする。
+export const MAX_PROCESS_MESSAGE_BYTES = 12 * 1024 * 1024;
 export const MAX_PROCESS_PENDING_REQUESTS = 32;
 export const MAX_PROCESS_PENDING_BYTES = 1024 * 1024;
+export const MAX_PROCESS_SEND_BYTES = MAX_PROCESS_MESSAGE_BYTES;
 export const MAX_PROCESS_PROGRESS_BYTES = 16 * 1024;
 export const MAX_PROCESS_DELIVERY_PORTS = 32;
 

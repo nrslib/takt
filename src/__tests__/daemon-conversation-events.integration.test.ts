@@ -265,7 +265,7 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
   }, async close() {} });
   const runtime = createTurnProcessRuntime({
     createBusiness: () => ({ ...service, async close() {} }),
-    onFatal(error) { throw error; },
+    onFatal(error) { committed.reject(error); },
     transport: { async send(message) {
       if (message.kind === 'daemon_request') {
         const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
@@ -284,14 +284,18 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
       }
     } },
   });
+  cleanups.push(() => runtime.disconnect());
   await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id,
     assignment: active.input.state.assignment, configDirectory: f.directory });
   f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
   await runtime.receive({ ...envelope, kind: 'start_turn', input: active.input });
+  let committedError: unknown;
   try {
     await committed.promise;
-    await f.close();
-  } finally { releaseReply.resolve(); }
+  } catch (error) { committedError = error; }
+  finally { releaseReply.resolve(); }
+  await f.close();
+  if (committedError !== undefined) throw committedError;
   await replied.promise;
   expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({
     version: 3, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',

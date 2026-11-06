@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { DaemonBus, TurnRunner } from '../../core/daemon/ports.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
-import { MAX_PROCESS_PENDING_BYTES, MAX_PROCESS_PENDING_REQUESTS, TURN_PROTOCOL_VERSION,
+import { MAX_PROCESS_PENDING_REQUESTS, MAX_PROCESS_SEND_BYTES, TURN_PROTOCOL_VERSION,
   parseDaemonProcessMessage, parseTurnProcessMessage, processRequestBytes,
   type DaemonProcessMessage, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { spawnManagedProcess, type ManagedProcess } from '../../shared/utils/spawn.js';
@@ -58,7 +58,7 @@ export function createTurnProcessHost(input: {
     parseDaemonProcessMessage(message, entry.launchId);
     if (!entry.process.child.connected) throw new Error('Turn process IPC is disconnected');
     const bytes = Buffer.byteLength(JSON.stringify(message));
-    if (entry.sendCount >= MAX_PROCESS_PENDING_REQUESTS || entry.sendBytes + bytes > MAX_PROCESS_PENDING_BYTES) {
+    if (entry.sendCount >= MAX_PROCESS_PENDING_REQUESTS || entry.sendBytes + bytes > MAX_PROCESS_SEND_BYTES) {
       throw new Error('Turn process send capacity exceeded');
     }
     entry.sendCount++;

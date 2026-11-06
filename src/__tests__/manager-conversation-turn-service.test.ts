@@ -177,19 +177,32 @@ it('passes interrupted context without a session when no session was saved befor
   expect(f.execute.mock.calls[2]![0].prompt).toContain('interrupted without session');
 });
 
-it('replaces the interrupted human message with only the latest original text when interrupted again', async () => {
+it('preserves both human messages when a continuation is interrupted before completing', async () => {
   const f = conversationFixture();
   for (const text of ['older interrupted request', 'latest interrupted request']) {
     const controller = new AbortController(); f.interruptNext(controller);
     await f.run(humanMessage(text), controller);
   }
   expect(f.execute.mock.calls[1]![0].prompt).toContain('older interrupted request');
-  expect(f.state()).toMatchObject({ interruptedMessage: 'latest interrupted request' });
+  expect(f.state()).toMatchObject({ interruptedMessage: 'older interrupted request\n\nlatest interrupted request' });
   await f.run(humanMessage('continue'));
   const prompt = f.execute.mock.calls[2]![0].prompt;
+  expect(prompt).toContain('older interrupted request');
   expect(prompt).toContain('latest interrupted request');
-  expect(prompt).not.toContain('older interrupted request');
-  expect(prompt.split('latest interrupted request')).toHaveLength(2);
+  expect(prompt.indexOf('older interrupted request')).toBeLessThan(prompt.indexOf('latest interrupted request'));
+});
+
+it('preserves the old and current messages when interrupted before executor invocation', async () => {
+  const f = conversationFixture();
+  const firstController = new AbortController(); f.interruptNext(firstController);
+  await f.run(humanMessage('message A'), firstController);
+  const alreadyAborted = new AbortController(); alreadyAborted.abort();
+  expect(await f.run(humanMessage('message B'), alreadyAborted)).toMatchObject({ kind: 'interrupted' });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(f.state()).toMatchObject({ interruptedMessage: 'message A\n\nmessage B' });
+  await f.run(humanMessage('message C'));
+  expect(f.execute.mock.calls[1]![0].prompt).toContain('message A\n\nmessage B');
+  expect(f.execute.mock.calls[1]![0].prompt).toContain('message C');
 });
 
 it('retains the interrupted human message through an interrupted event turn and clears it after an event completes', async () => {
@@ -215,16 +228,29 @@ it('does not save an interrupted event as a human message', async () => {
   expect(f.execute.mock.calls[1]![0]).toMatchObject({ prompt: 'next human request', sessionId: 'shared-session' });
 });
 
-it('clears delivered interrupted context when the next message ends with a handled executor error', async () => {
+it('retains interrupted context when an executor error leaves delivery unconfirmed', async () => {
   const f = conversationFixture();
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run(humanMessage('interrupted request'), controller);
   f.execute.mockRejectedValueOnce(new Error('provider failed'));
   expect(await f.run(humanMessage('failed continuation'))).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
-  expect(f.state()).toMatchObject({ interruptedMessage: null });
+  expect(f.state()).toMatchObject({ interruptedMessage: 'interrupted request' });
   await f.run(humanMessage('next request'));
-  expect(f.execute.mock.calls[2]![0].prompt).toBe('next request');
+  expect(f.execute.mock.calls[2]![0].prompt).toContain('interrupted request');
+  expect(f.execute.mock.calls[2]![0].prompt).toContain('next request');
+});
+
+it('retains interrupted context when runtime preparation fails before executor invocation', async () => {
+  const f = conversationFixture();
+  const controller = new AbortController(); f.interruptNext(controller);
+  await f.run(humanMessage('interrupted request'), controller);
+  f.resolve.mockRejectedValueOnce(new Error('MCP preparation failed'));
+  expect(await f.run(humanMessage('failed continuation'))).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  expect(f.state()).toMatchObject({ interruptedMessage: 'interrupted request' });
+  expect(f.execute).toHaveBeenCalledOnce();
+  await f.run(humanMessage('next request'));
+  expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
 });
 
 it('retains interrupted context when a command is rejected and a patrol does not invoke the executor', async () => {
