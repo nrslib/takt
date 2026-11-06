@@ -1,0 +1,314 @@
+ja:
+  lang: ja
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  user: |-
+    所属チームが決まっていない共有メモは、今は入力画面に下書きとして残るだけで、画面を閉じると探せない。
+    チームに紐付かない共有メモを登録するAPIを足し、検索でも見つかるようにしたい。
+    検索結果からメモを開いて編集し、保存した内容が次の検索にも反映されること。
+    検索の対応経路は、作業量や利用者への影響を見て決めたい。
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals: []
+        collection: goals
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments: {}
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: rg -n 'SharedMemoStore|searchTitles|indexMemo|memo_updated|teamId|router|repository|search|Search|検索' src docs
+        description: メモの保存・検索・更新の入口を探す
+      result: |-
+        src/storage/shared-memo-store.ts:13:export class SharedMemoStore {
+        src/storage/shared-memo-store.ts:18:  async create(input: MemoInput): Promise<Memo>
+        src/storage/shared-memo-store.ts:45:  async update(id: string, revision: number, input: MemoInput): Promise<Memo>
+        src/storage/memo.ts:7:  teamId: string | null;
+        src/http/memo-routes.ts:10:router.get('/shared-memos', listSharedMemos);
+        src/http/memo-routes.ts:11:router.put('/shared-memos/:id', updateSharedMemo);
+        src/http/memo-routes.ts:12:router.post('/teams/:id/memos', createTeamMemo);
+        src/search/title-search.ts:20:export async function searchTitles(query: SearchQuery)
+        src/search/title-search.ts:24:  return repository.findTitles(query);
+        src/search/full-text-index.ts:17:export async function indexMemo(event: TeamMemoUpdated)
+        src/search/full-text-index.ts:21:  const memo = await repository.get(event.teamId, event.memoId);
+        src/events/memo-events.ts:8:type TeamMemoUpdated = { kind: 'memo_updated'; teamId: string; memoId: string; revision: number };
+        docs/search.md:12:タイトル検索は一覧画面から使う。
+        docs/search.md:19:通常の検索欄は全文検索を使う。端末クライアントも同じ検索APIを使う。
+        docs/search.md:28:検索機能は search.enabled で切り替える。
+        docs/editing.md:14:検索結果のリンクはメモIDと所属情報を保持する。
+    - tool: Bash
+      arguments:
+        command: sed -n '1,110p' src/storage/shared-memo-store.ts src/http/memo-routes.ts src/search/title-search.ts src/storage/memo-repository.ts src/search/full-text-index.ts
+        description: チームなしの保存器と二つの検索経路を読む
+      result: |-
+        // src/storage/shared-memo-store.ts
+        export class SharedMemoStore {
+          async create(input: MemoInput): Promise<Memo> {
+            return this.files.append({ ...input, teamId: null, revision: 1 });
+          }
+          async update(id: string, revision: number, input: MemoInput): Promise<Memo> {
+            return this.files.update(id, revision, input);
+          }
+        }
+        // src/http/memo-routes.ts
+        router.get('/shared-memos', listSharedMemos);
+        router.put('/shared-memos/:id', updateSharedMemo);
+        router.post('/teams/:id/memos', createTeamMemo);
+        // src/search/title-search.ts
+        export async function searchTitles(query: SearchQuery) {
+          if (!config.search.enabled) throw new SearchDisabledError();
+          return repository.findTitles(query);
+        }
+        // src/storage/memo-repository.ts
+        async findTitles(query: SearchQuery) {
+          const [teamMemos, sharedMemos] = await Promise.all([
+            this.teams.findTitles(query), this.shared.findTitles(query),
+          ]);
+          return mergeByUpdatedAt(teamMemos, sharedMemos);
+        }
+        // src/search/full-text-index.ts
+        export async function indexMemo(event: TeamMemoUpdated) {
+          const memo = await repository.get(event.teamId, event.memoId);
+          await index.upsert({ id: memo.id, teamId: event.teamId, title: memo.title, body: memo.body, revision: memo.revision });
+        }
+    - tool: Bash
+      arguments:
+        command: rg -n 'memo_updated|team|shared|memos|result|search|full-text|検索|端末' src/http src/search src/events src/__tests__ docs
+        description: 更新通知、検索結果からの編集、設定と関連テストを確認する
+      result: |-
+        src/http/update-team-memo.ts:29:const saved = await store.update(id, revision, input);
+        src/http/update-team-memo.ts:30:await events.publish({ kind: 'memo_updated', teamId, memoId: saved.id, revision: saved.revision });
+        src/http/update-shared-memo.ts:24:return sharedStore.update(id, revision, input);
+        src/search/rebuild-index.ts:18:for (const team of await teams.list()) await indexTeam(team.id);
+        src/search/results.ts:22:const target = { memoId: row.id, teamId: row.teamId };
+        src/http/open-memo.ts:17:return target.teamId === null ? shared.get(target.memoId) : teams.get(target.teamId, target.memoId);
+        src/events/memo-events.ts:8:type TeamMemoUpdated = { kind: 'memo_updated'; teamId: string; memoId: string; revision: number };
+        src/__tests__/shared-memo-store.test.ts:26:it('creates and updates unassigned memos');
+        src/__tests__/title-search.test.ts:41:it('finds shared titles');
+        src/__tests__/full-text-index.test.ts:55:it('indexes team memo bodies');
+        src/__tests__/memo-editor.test.ts:72:it('opens a result without a team');
+        docs/search.md:19:通常の検索欄は全文検索を使う。端末クライアントも同じ検索APIを使う。
+        docs/search.md:28:タイトル検索と全文検索は同じ search.enabled に従う。
+        docs/search.md:35:端末クライアントには一覧画面のタイトル検索はない。
+    - tool: Agent
+      arguments:
+        subagent_type: Explore
+        description: 共有メモの作成から検索・再編集まで調べる
+        prompt: |-
+          /workspace/project のメモ保存、HTTP API、タイトル検索、全文索引、検索結果からの編集を読み取り専用で調査する。
+          チームに紐付かないメモの経路について、既存部分と欠けている接続をファイルと行番号付きで報告する。
+          呼び出し元、設定、関連テストも確認する。コードは変更しない。
+      result: |-
+        調査担当の報告。以下は実装と資料からの観測であり、人の追加依頼ではない。
+
+        1. メモのモデルと保存
+        src/storage/memo.ts:5-20 の Memo は teamId: string | null を持ち、チームなしを保存できる。ID、タイトル、本文、作成者、組織、更新時刻、revision はどちらでも共通である。src/storage/shared-memo-store.ts:13-96 は create、list、get、update、remove を実装する。create は teamId: null と revision: 1 で永続化し、update は渡されたrevisionを保存済み値と照合する。チームなしのために本文を画面状態に置く必要はない。
+        一方、src/ui/memo-draft.ts:12-48 の現在の下書きは画面内の状態に残るだけで、SharedMemoStore.create を呼ばない。本番のルート登録 src/http/memo-routes.ts:10-18 には共有メモの一覧、取得、更新、削除があり、作成はチームID付きの POST だけである。作成器はテストで使われているが、チームなしメモを登録するHTTPの入口はない。
+
+        2. 一覧とタイトル検索
+        src/search/title-search.ts:20-38 は検索語を repository.findTitles に渡す。src/storage/memo-repository.ts:44-69 はチームメモと共有メモの両方からタイトル一致を読み、更新時刻順に統合する。teamId: null を除外する条件はない。保存済みの共有メモは一覧画面のタイトル検索で既に見つかる。文字の正規化、上限件数、ページ継続の処理は両方に適用される。
+        タイトル検索はメモの本文を検索しない。タイトルに検索語がなく本文だけにあるメモは、この入口では見つからない。結果にはメモIDと teamId が残り、共有メモは null で返る。既存の一覧の絞り込みと同じ読み取りなので、登録APIが保存するデータもこの検索器から読める。検索結果の形を新しく増やす必要は見つからない。
+
+        3. 全文索引の更新経路
+        src/search/full-text-index.ts:17-48 は memo_updated を受けて索引にタイトルと本文を入れる。イベント型 src/events/memo-events.ts:8-17 は teamId: string を必須にする。src/http/create-team-memo.ts:32 と update-team-memo.ts:30 は保存後にこのイベントを送る。共有メモの更新 src/http/update-shared-memo.ts:24 はストアの結果を返すだけで、イベントを送らない。
+        したがって共有メモの保存や編集に成功しても全文索引は更新されない。通常の検索欄は src/http/search.ts:18-42 からこの索引を読む。検索APIが保存器を直接全件走査して補う経路はない。索引の行には teamId が必要で、索引側の対象識別も現在はチーム所属を前提としている。タイトル検索が動くことから全文検索も動くとは判断できない。
+
+        4. 初期索引と再構築
+        src/search/rebuild-index.ts:18-52 は登録チームを列挙し、それぞれのメモを索引へ追加する。チームなしメモのストアを走査する呼び出しはない。このためイベントの発行だけを追加した場合でも、新しい更新がない既存共有メモは再構築では拾われない。索引の書き込み器はIDとrevisionで古い更新を除外し、同じメモの更新を無制限に追加する仕組みではない。
+        再構築と逐次更新は別の入口だが、同じ行形式と索引writerを利用する。組織による分離も共通である。共有メモを全文検索に含めるなら対象の解決を両入口でそろえる必要がある。現在のコードに架空のチームIDを当てる処理はない。索引を経由せずタイトル結果だけを通常検索へ混ぜる実装も見つからない。
+
+        5. 検索の利用形態と設定
+        docs/search.md:12-35 によると、一覧画面のタイトル検索は軽量な絞り込みに使われる。通常の検索欄は本文も探す全文検索で、端末クライアントもその検索APIを使う。端末クライアントには一覧画面のタイトル検索がないため、全文索引が検索の入口になっている。タイトル検索と全文検索はともに search.enabled に従う。索引の接続先は既存設定で解決され、調査中の接続エラーはない。
+        現行資料はチームメモの索引登録について説明しているが、チームなしの共有メモを本文検索の対象にするとは記載していない。共有メモを本文検索へ加えると、本文にだけ検索語があるメモも通常の検索結果に現れる。一覧画面のタイトル検索を使うだけなら、その索引の対象は変わらない。登録APIを作ることと索引対象を広げることは別の接続である。
+
+        6. 検索結果からの編集
+        src/search/results.ts:22-39 はメモIDと所属情報をリンクに入れる。src/http/open-memo.ts:17-31 は teamId が null なら SharedMemoStore.get を読む。画面の編集器はどちらの保存先でもタイトル、本文、revisionを表示できる。チームなしのリンクを開くために別画面を作る必要はない。現在の memo-editor.test.ts:72-95 も null の検索結果リンクを開くことを確認している。
+        保存時は共有メモ用のPUTへ現在のrevisionを送り、競合があれば保存を拒否する。成功した更新はストアに残り、次のタイトル検索は更新後の値を直接読む。全文検索は索引を読むため、保存成功だけでは次の検索に反映されない。編集器が保存後に全文索引へ直接書く処理はなく、チームメモではサーバーが発行する更新イベントに任せている。
+
+        7. 認可と対象の解決
+        SharedMemoStore は組織ごとに生成され、チーム未所属は組織外への公開を意味しない。src/http/memo-context.ts:14-40 が認証済みの組織を確定し、一覧、取得、編集の入口へ渡す。タイトル検索も全文検索も組織境界の内側で結果を返す。チームIDがないことを理由に認可全体を外す必要はない。
+        通常の作成APIのタイトル長、本文長、revisionの検証は共有メモにも適用できる。全文索引に共有メモを追加するなら、null を表せる対象と組織を更新イベントへ渡すことになる。認証情報や索引の接続値をメモ本文や結果リンクに書く必要はない。今回確認した不足は作成の入口と索引接続であり、認可の故障や設定値の欠落ではない。
+
+        8. 関連テスト
+        shared-memo-store.test.ts はチームなしの作成、取得、revision付き更新を確認している。title-search.test.ts:41-68 は共有メモをタイトルから検索できることを確認する。full-text-index.test.ts:55-102 はチームメモの本文検索と更新順序を検査するが、チームなしの対象は作らない。rebuild-index.test.ts も登録チームの走査だけを確認している。
+        memo-editor.test.ts は共有メモのリンクを開いて保存するところまで確認するが、保存後の全文検索は確認しない。新しい作成APIから検索し、編集し、次の検索結果に更新が出るまでを通すテストはない。タイトル検索に関しては保存先の更新を直接読む既存の経路がある。全文検索についてはイベント、索引の対象、再構築の列挙にチーム所属の前提が残っている。
+
+        保存器、一覧のタイトル検索、結果リンク、編集器は共有メモを既に扱える。登録APIと全文索引への作成・更新・再構築の接続は存在しない。調査は読み取りだけで、コードと設定は変更していない。
+en:
+  lang: en
+  expectedQuestionType: choice
+  turn: conversation
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  tasks: []
+  user: |-
+    Shared memos without a team currently remain as drafts in the input screen and cannot be found after closing it.
+    Add an API for registering shared memos without a team, and make them findable in search too.
+    People must be able to open and edit a memo from a search result, with saved edits reflected in the next search.
+    I want to decide which search paths to support after understanding the work involved and impact on users.
+  readResults:
+    - tool: takt_list_goals
+      arguments:
+        cwd: /workspace/project
+      result:
+        goals: []
+        collection: goals
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: takt_list_standalone_inquiries
+      arguments: {}
+      result:
+        inquiries: []
+        collection: inquiries
+        totalCount: 0
+        returnedCount: 0
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: rg -n 'SharedMemoStore|searchTitles|indexMemo|memo_updated|teamId|router|repository|search|Search|検索' src docs
+        description: Locate memo storage, search and update entry points
+      result: |-
+        src/storage/shared-memo-store.ts:13:export class SharedMemoStore {
+        src/storage/shared-memo-store.ts:18:  async create(input: MemoInput): Promise<Memo>
+        src/storage/shared-memo-store.ts:45:  async update(id: string, revision: number, input: MemoInput): Promise<Memo>
+        src/storage/memo.ts:7:  teamId: string | null;
+        src/http/memo-routes.ts:10:router.get('/shared-memos', listSharedMemos);
+        src/http/memo-routes.ts:11:router.put('/shared-memos/:id', updateSharedMemo);
+        src/http/memo-routes.ts:12:router.post('/teams/:id/memos', createTeamMemo);
+        src/search/title-search.ts:20:export async function searchTitles(query: SearchQuery)
+        src/search/title-search.ts:24:  return repository.findTitles(query);
+        src/search/full-text-index.ts:17:export async function indexMemo(event: TeamMemoUpdated)
+        src/search/full-text-index.ts:21:  const memo = await repository.get(event.teamId, event.memoId);
+        src/events/memo-events.ts:8:type TeamMemoUpdated = { kind: 'memo_updated'; teamId: string; memoId: string; revision: number };
+        docs/search.md:12:Title search is available from the list screen.
+        docs/search.md:19:The main search box uses full-text search. The terminal client uses the same search API.
+        docs/search.md:28:Search is controlled by search.enabled.
+        docs/editing.md:14:Search result links retain memo ID and ownership.
+    - tool: Bash
+      arguments:
+        command: sed -n '1,110p' src/storage/shared-memo-store.ts src/http/memo-routes.ts src/search/title-search.ts src/storage/memo-repository.ts src/search/full-text-index.ts
+        description: Read the unassigned store and both search paths
+      result: |-
+        // src/storage/shared-memo-store.ts
+        export class SharedMemoStore {
+          async create(input: MemoInput): Promise<Memo> {
+            return this.files.append({ ...input, teamId: null, revision: 1 });
+          }
+          async update(id: string, revision: number, input: MemoInput): Promise<Memo> {
+            return this.files.update(id, revision, input);
+          }
+        }
+        // src/http/memo-routes.ts
+        router.get('/shared-memos', listSharedMemos);
+        router.put('/shared-memos/:id', updateSharedMemo);
+        router.post('/teams/:id/memos', createTeamMemo);
+        // src/search/title-search.ts
+        export async function searchTitles(query: SearchQuery) {
+          if (!config.search.enabled) throw new SearchDisabledError();
+          return repository.findTitles(query);
+        }
+        // src/storage/memo-repository.ts
+        async findTitles(query: SearchQuery) {
+          const [teamMemos, sharedMemos] = await Promise.all([
+            this.teams.findTitles(query), this.shared.findTitles(query),
+          ]);
+          return mergeByUpdatedAt(teamMemos, sharedMemos);
+        }
+        // src/search/full-text-index.ts
+        export async function indexMemo(event: TeamMemoUpdated) {
+          const memo = await repository.get(event.teamId, event.memoId);
+          await index.upsert({ id: memo.id, teamId: event.teamId, title: memo.title, body: memo.body, revision: memo.revision });
+        }
+    - tool: Bash
+      arguments:
+        command: rg -n 'memo_updated|team|shared|memos|result|search|full-text|検索|端末' src/http src/search src/events src/__tests__ docs
+        description: Check update events, editing from results, configuration and tests
+      result: |-
+        src/http/update-team-memo.ts:29:const saved = await store.update(id, revision, input);
+        src/http/update-team-memo.ts:30:await events.publish({ kind: 'memo_updated', teamId, memoId: saved.id, revision: saved.revision });
+        src/http/update-shared-memo.ts:24:return sharedStore.update(id, revision, input);
+        src/search/rebuild-index.ts:18:for (const team of await teams.list()) await indexTeam(team.id);
+        src/search/results.ts:22:const target = { memoId: row.id, teamId: row.teamId };
+        src/http/open-memo.ts:17:return target.teamId === null ? shared.get(target.memoId) : teams.get(target.teamId, target.memoId);
+        src/events/memo-events.ts:8:type TeamMemoUpdated = { kind: 'memo_updated'; teamId: string; memoId: string; revision: number };
+        src/__tests__/shared-memo-store.test.ts:26:it('creates and updates unassigned memos');
+        src/__tests__/title-search.test.ts:41:it('finds shared titles');
+        src/__tests__/full-text-index.test.ts:55:it('indexes team memo bodies');
+        src/__tests__/memo-editor.test.ts:72:it('opens a result without a team');
+        docs/search.md:19:The main search box uses full-text search. The terminal client uses the same search API.
+        docs/search.md:28:Title and full-text search follow the same search.enabled setting.
+        docs/search.md:35:The terminal client has no list-screen title search.
+    - tool: Agent
+      arguments:
+        subagent_type: Explore
+        description: Trace shared memo creation, search and editing
+        prompt: |-
+          Read /workspace/project without changing it. Trace memo persistence, HTTP APIs, title search, full-text indexing and editing from results.
+          Report existing parts and missing connections for memos without a team, with file and line references.
+          Check callers, configuration and related tests. Do not change code.
+      result: |-
+        Investigation report. These are observations from code and documentation, not additional requests from the person.
+
+        1. Memo model and persistence
+        Memo in src/storage/memo.ts:5-20 has teamId: string | null and can persist memos without a team. ID, title, body, author, organization, update time and revision are shared fields. src/storage/shared-memo-store.ts:13-96 implements create, list, get, update and remove. Creation writes teamId: null and revision: 1. Updates compare the supplied revision against the stored one. These memos do not need to remain only in screen state.
+        The current draft in src/ui/memo-draft.ts:12-48 does remain in screen state and never calls SharedMemoStore.create. src/http/memo-routes.ts:10-18 registers list, get, update and delete for shared memos, but creation only has a POST with a team ID. The store's creation method is used by tests; no HTTP entry point registers a memo without a team.
+
+        2. List and title search
+        src/search/title-search.ts:20-38 passes the query to repository.findTitles. src/storage/memo-repository.ts:44-69 reads title matches from both team and shared stores and merges by update time. It does not exclude teamId: null. Persisted shared memos are already findable through title search in the list screen. Text normalization, result limits and continuation apply to both sources.
+        Title search does not inspect memo bodies. A query appearing only in a body produces no match through this entry point. Results retain memo ID and teamId, with null for shared memos. The existing list filtering reads the same storage that a creation API would populate. No additional search result format is needed for persisted shared rows.
+
+        3. Full-text update path
+        src/search/full-text-index.ts:17-48 consumes memo_updated and indexes title and body. The event in src/events/memo-events.ts:8-17 requires teamId: string. Team memo creation and update publish this event from src/http/create-team-memo.ts:32 and update-team-memo.ts:30. Shared memo update in src/http/update-shared-memo.ts:24 only returns the stored result and publishes no event.
+        Successful shared memo persistence therefore does not update the full-text index. The main search box reads this index through src/http/search.ts:18-42. There is no fallback that scans all stored memos. Index rows currently also require team ownership. Working title search does not establish working full-text search.
+
+        4. Initial indexing and rebuild
+        src/search/rebuild-index.ts:18-52 enumerates registered teams and indexes each team's memos. It never scans SharedMemoStore. Adding event publication alone would leave existing shared memos without later edits absent after a rebuild. The writer reconciles ID and revision, rejecting older changes rather than appending unlimited copies of the same memo.
+        Rebuild and incremental updates are separate entry points using the same row format and writer. Both keep organization boundaries. Including shared memos in full-text search would require consistent target resolution in both entry points. Current code does not invent a team ID for shared memos or insert title results into the main search while bypassing indexing.
+
+        5. Search usage and configuration
+        docs/search.md:12-35 describes list-screen title search as a lightweight filter. The main search box finds body content using full-text search. The terminal client uses that same API and has no list-screen title search, so its search entry point is the full-text index. Both title and full-text search follow search.enabled. Existing configuration resolves the index connection; no connection failure was observed.
+        Current documentation describes team memo indexing but does not specify shared memo bodies as indexed content. Adding them would make memos whose bodies alone match appear in ordinary search results. Using only the existing title search would leave that index unchanged. Adding an API and expanding index coverage are separate connections.
+
+        6. Editing from a result
+        src/search/results.ts:22-39 includes memo ID and ownership in links. src/http/open-memo.ts:17-31 reads SharedMemoStore.get for null teamId. The editor displays title, body and revision for both stores. A separate screen is unnecessary for opening an unassigned result. memo-editor.test.ts:72-95 already checks opening that result link.
+        Saving sends the current revision to the shared memo PUT endpoint and rejects conflicts. Successful updates persist and are immediately visible to title search, which reads storage. Full-text search reads the index, so persistence alone does not refresh its next result. The editor never writes directly to the index after saving; team memos rely on a server-side update event.
+
+        7. Authorization and target resolution
+        SharedMemoStore is instantiated per organization; absence of a team does not mean public access outside the organization. src/http/memo-context.ts:14-40 resolves the authenticated organization for list, get and edit. Both search entry points also remain inside that organization boundary. Supporting null teamId does not require removing authorization.
+        The existing title length, body length and revision validation can apply to shared memo creation. Full-text support would require carrying organization and a target that can represent null through update events. Credentials and index connection values do not belong in memo bodies or result links. The observed gaps concern creation and index connections, rather than missing configuration or broken authorization.
+
+        8. Related tests
+        shared-memo-store.test.ts covers creation, retrieval and revision-checked updates without a team. title-search.test.ts:41-68 finds shared memos by title. full-text-index.test.ts:55-102 covers team memo bodies and update ordering but never constructs a target without a team. rebuild-index.test.ts only verifies registered team enumeration.
+        memo-editor.test.ts opens and saves shared memos but does not search the updated full-text index. No integration test traces creation through the new API, search, editing and a subsequent updated result. Title search already reads updated shared storage directly. Full-text events, index target representation and rebuild enumeration still assume team ownership.
+
+        The store, list title search, result links and editor already support shared memos. The registration API and creation, update and rebuild connections to the full-text index are absent. The investigation changed no code or configuration.

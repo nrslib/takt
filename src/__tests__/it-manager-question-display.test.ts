@@ -346,7 +346,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
     await registration;
     if (command.kind !== 'approve_summary') throw new Error('Expected approval');
     await session!.submit({ kind: 'dismiss_summary', revision: command.revision });
-    return { kind: 'reply', message: 'Registration finished' };
+    return { kind: 'notice', message: 'Registration finished' };
   });
   const answer = spyConversationCommand(session!, 'answer_question');
   try {

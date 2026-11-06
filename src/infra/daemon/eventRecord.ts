@@ -67,6 +67,7 @@ export const ConversationChangeSchema = z.object({
   || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
+  z.object({ kind: z.literal('notice'), message: text }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: text }).strict(),
   z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict()

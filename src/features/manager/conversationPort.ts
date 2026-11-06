@@ -47,6 +47,7 @@ export type Submission = { kind: 'accepted'; operationId: string; eventId?: stri
   | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
+  | { kind: 'notice'; message: string }
   | { kind: 'goal_registered'; goal: Goal }
   | { kind: 'answer_saved'; answerSaved: boolean; message: string }
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };

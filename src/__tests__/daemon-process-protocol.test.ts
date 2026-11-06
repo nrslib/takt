@@ -6,6 +6,7 @@ import {
   type DaemonProcessMessage, type TurnProcessMessage,
 } from '../core/daemon/processProtocol.js';
 import { input, turnState } from './helpers/controlledDaemon.js';
+import { StoredResultSchema } from '../infra/daemon/eventRecord.js';
 
 const common = { protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'launch-1' } as const;
 const turn = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -14,6 +15,14 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it.each(['reply', 'notice'] as const)('preserves %s results through process messages and stored results', (kind) => {
+    const outcome = { kind: 'completed' as const, result: { kind, message: 'Same text' } };
+    const message = { ...common, kind: 'turn_finished', turn, outcome };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    const stored = { ...turn, event: acceptedEvent, outcome };
+    expect(StoredResultSchema.parse(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+  });
+
   it.each<DaemonProcessMessage>([
     { ...common, kind: 'initialize', conversationId: turn.conversationId, assignment: turnState().assignment, configDirectory: '/config' },
     { ...common, kind: 'start_turn', input: { event: acceptedEvent, turn, state: turnState() } },

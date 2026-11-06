@@ -558,7 +558,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
       event: 'request', pid: tui.child.pid, command: 'abort_turn', operationId,
     })), { timeout: 30000 });
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
-    expect((await fixture.state())?.interruptedMessage).toBe('Interrupt this turn explicitly');
+    await vi.waitFor(async () => expect((await fixture.state())?.interruptedMessage).toBe('Interrupt this turn explicitly'), { timeout: 30000 });
     expect(tui.child.exitCode).toBeNull();
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toEqual([]);
     fixture.release();

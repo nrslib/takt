@@ -353,7 +353,7 @@ it.each(['command', 'observation'] as const)('accepts human input after 32 defer
   if (abortVia === 'command') {
     accepted(await f.dispatcher.accept({ ...input('abort', f.id), event: { kind: 'human_command',
       speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'abort_goal', goalId: goal.id } } }));
-    expect(await perform(await f.runner.started(next++))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    expect(await perform(await f.runner.started(next++))).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
   } else {
     await writeFile(join(goalPath, 'goal.json'), JSON.stringify({ ...goal, executionStatus: 'aborted' }));
     accepted(await f.dispatcher.accept({ ...input('observed-abort', conversationId({ kind: 'daemon' }), 'other'),
@@ -364,7 +364,7 @@ it.each(['command', 'observation'] as const)('accepts human input after 32 defer
   for (let index = next; index <= 66; index++) {
     const call = await f.runner.started(index);
     if (call.input.event.event.kind === 'watch_observation') await f.runner.finish(call);
-    else expect(await perform(call)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    else expect(await perform(call)).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
   }
   expect(resolve).not.toHaveBeenCalled();
   const pending = [];
@@ -581,7 +581,7 @@ it.each([true, false])('defers a paused task result across restart and handles i
     speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'resume_goal', goalId: goal.id } } }));
   const resumeCommand = await runner.started(2);
   expect(resumeCommand.input.event.event).toMatchObject({ kind: 'human_command', command: { kind: 'resume_goal' } });
-  expect(await perform(resumeCommand)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(await perform(resumeCommand)).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
   const resumedPath = join(inbox, (await readdir(inbox))[0]!);
   await receiveInboxChange({ target, path: resumedPath, removed: false, generation: 'resume', value: {} }, files, f.conversations, restarted);
   const resumed = await runner.started(3);
