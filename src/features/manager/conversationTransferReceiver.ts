@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { ConversationActivitySchema } from '../../shared/types/conversation-activity.js';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssignmentSchema, ConversationIdSchema, PendingSummarySchema,
@@ -62,6 +63,8 @@ const operationResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('activity'), operationId: z.uuid(), generation: sequence,
+    activity: ConversationActivitySchema }).strict(),
   z.object({ kind: z.literal('user_message'), operationId: z.uuid(), message: z.string() }).strict(),
   z.object({ kind: z.literal('notice'), ...noticeSchema.shape }).strict(),
   ...(['reply', 'progress'] as const).map((kind) => z.object({ kind: z.literal(kind), operationId: z.uuid(), message: z.string() }).strict()),

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { conversationTransferFrames, encodeConversationFrame } from '../features/daemon/conversationFrames.js';
-import type { ConversationCommand } from '../features/manager/conversationPort.js';
+import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
 import type { ConversationReadMetadata } from '../features/manager/conversationTransferReceiver.js';
 
 const doubles = vi.hoisted(() => ({ connect: vi.fn(), ensure: vi.fn(), resolve: vi.fn(), owner: {
@@ -101,6 +101,60 @@ function readResponse(target: { request: Request; socket: FakeSocket }, read: Co
     ...(target.request.method === 'open' ? { attachmentId: randomUUID() } : {}), read,
   });
 }
+
+async function sendOutput(output: Exclude<PortOutput, { kind: 'snapshot' }>, stateSequence: number) {
+  const operationId = 'operationId' in output ? output.operationId : output.kind === 'running' || output.kind === 'pending'
+    ? output.state.running?.operationId ?? null : null;
+  for await (const { frame } of conversationTransferFrames(record.id,
+    { transferId: randomUUID(), revision: 4, stateSequence, operationId }, 'output', (async function* () { yield output; })())) {
+    sockets.at(-1)!.emit('data', encodeConversationFrame(frame));
+  }
+}
+
+it('holds only the latest early activity until both the running operation and generation match', async () => {
+  const value = client(); await value.connect();
+  await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+  const state = value.getSnapshot().state!;
+  const output = vi.fn(); value.onOutput(output);
+  const operationId = randomUUID();
+  const activity = { kind: 'activity' as const, operationId, generation: 2, activity: { kind: 'tool' as const, tool: 'EarlyTool' } };
+  await sendOutput({ ...activity, activity: { kind: 'thinking' } }, 4);
+  await sendOutput(activity, 5);
+  const late = vi.fn(); value.onOutput(late);
+  expect(output).not.toHaveBeenCalled();
+  expect(late).not.toHaveBeenCalled();
+  await sendOutput({ kind: 'running', state: { ...state, running: { operationId: randomUUID(), generation: 1, kind: 'turn' } } }, 2);
+  await sendOutput({ kind: 'running', state: { ...state, running: { operationId, generation: 1, kind: 'turn' } } }, 3);
+  expect(output).not.toHaveBeenCalled();
+  await sendOutput({ kind: 'running', state: { ...state, running: { operationId, generation: 2, kind: 'turn' } } }, 4);
+  expect(output.mock.calls).toEqual([[activity]]);
+  expect(late.mock.calls).toEqual([[activity]]);
+  await sendOutput({ kind: 'running', state: { ...state, running: { operationId, generation: 2, kind: 'turn' } } }, 6);
+  expect(output).toHaveBeenCalledOnce();
+  const replay = vi.fn(); value.onOutput(replay);
+  expect(replay).toHaveBeenCalledExactlyOnceWith(activity);
+});
+
+it.each(['idle', 'result', 'disconnect'] as const)('discards early activity after %s', async (ending) => {
+  const value = client(); await value.connect();
+  await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+  const state = value.getSnapshot().state!;
+  const operationId = randomUUID();
+  const output = vi.fn(); value.onOutput(output);
+  await sendOutput({ kind: 'activity', operationId, generation: 1, activity: { kind: 'tool', tool: 'EndedTool' } }, 2);
+  if (ending === 'idle') await sendOutput({ kind: 'pending', state }, 3);
+  else if (ending === 'result') await sendOutput({ kind: 'result', operationId, result: { kind: 'reply', message: 'done' } }, 3);
+  else {
+    sockets[0]!.destroy();
+    await value.connect();
+    await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+  }
+  output.mockClear();
+  await sendOutput({ kind: 'running', state: { ...state, running: { operationId, generation: 1, kind: 'turn' } } }, 4);
+  expect(output).not.toHaveBeenCalled();
+  const replay = vi.fn(); value.onOutput(replay);
+  expect(replay).not.toHaveBeenCalled();
+});
 
 it.each(['complete', 'incomplete'] as const)('publishes display items together when a transfer is %s even when each item arrives in a separate chunk', async (status) => {
   const reads = controlReads('open');

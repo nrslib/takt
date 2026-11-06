@@ -13,14 +13,15 @@ export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
-  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number }>();
+  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number; activitySequence: number | undefined }>();
+  const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
   let accepting = true;
   const attached = (id: string) => {
     const attachment = attachments.get(id);
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): Promise<SnapshotRead> => {
+  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): Promise<SnapshotRead & Pick<ConversationSnapshot, 'generation'>> => {
     const snapshot = await options.ingress.snapshot(id);
     if (snapshot.conversationId !== id) { snapshot.cancel(); throw new ConversationError('invalid_assignment'); }
     const screen = screenSnapshot(snapshot);
@@ -37,7 +38,7 @@ export function createDaemonConversationInput(options: {
         exhausted = true;
       } finally { if (!exhausted) screen.cancel(); }
     })());
-    return { ...projected, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
+    return { ...projected, generation: snapshot.generation, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
       cancel() { projected.cancel(); screen.cancel(); } };
   };
   const input: ConversationInput = {
@@ -47,12 +48,31 @@ export function createDaemonConversationInput(options: {
       if (!['tui', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
       const assignment = await options.resolveAssignment(request.assignment);
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
-      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve(), pendingDeliveries: 0 };
+      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve(), pendingDeliveries: 0,
+        activitySequence: undefined as number | undefined };
       const snapshot = await read(request.conversationId, attachment);
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
       attachments.set(attachmentId, attachment);
-      return { attachmentId, read: snapshot };
+      let completed = false;
+      let exhausted = false;
+      let cancelled = false;
+      return { attachmentId, read: { ...snapshot, items: (async function* () {
+        yield* snapshot.items;
+        exhausted = true;
+      })(), complete() {
+        if (completed || cancelled || !exhausted) return;
+        completed = true;
+        snapshot.complete();
+        const activity = activities.get(request.conversationId);
+        if (request.binding.port !== 'tui' || attachments.get(attachmentId) !== attachment
+          || activity === undefined || activity.output.operationId !== snapshot.operationId
+          || activity.output.generation !== snapshot.generation || attachment.activitySequence === activity.version.stateSequence) return;
+        // 初期スナップショットの状態を受信した後に、現在値を一度だけ配送する。
+        attachment.activitySequence = activity.version.stateSequence;
+        void delivery.deliver(request.conversationId, activity.output, activity.version)
+          .catch(() => { attachments.delete(attachmentId); });
+      }, cancel() { cancelled = true; snapshot.cancel(); } } };
     },
     async submit(request) {
       if (!accepting) return { kind: 'error', code: 'shutting_down', message: 'Daemon is stopping' };
@@ -121,6 +141,16 @@ export function createDaemonConversationInput(options: {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },
     async deliver(id: string, output: PortOutput, version: OutputVersion): Promise<void> {
+      if (output.kind === 'activity') {
+        const previous = activities.get(id);
+        if (previous !== undefined && previous.version.stateSequence > version.stateSequence) return;
+        activities.set(id, { output, version });
+      }
+      else if (output.kind === 'running' || output.kind === 'pending') {
+        const activity = activities.get(id)?.output;
+        if (output.state.running === null || output.state.running.operationId !== activity?.operationId
+          || output.state.running.generation !== activity?.generation) activities.delete(id);
+      } else if (output.kind === 'result' && activities.get(id)?.output.operationId === output.operationId) activities.delete(id);
       const recipients = [...attachments.values()].filter(({ input }) => input.conversationId === id);
       if (output.kind === 'snapshot') {
         output.read.cancel();
@@ -136,6 +166,12 @@ export function createDaemonConversationInput(options: {
       }
       const value = output;
       await Promise.all(recipients.map(async (attachment) => {
+        if (value.kind === 'activity') {
+          if (attachment.input.binding.port !== 'tui') return;
+          attachment.activitySequence = version.stateSequence;
+          await attachment.delivery.deliver(id, value, version);
+          return;
+        }
         if (value.kind === 'progress' && attachment.pendingDeliveries >= 32) return;
         attachment.pendingDeliveries++;
         try { await attachment.delivery.deliver(id, value, version); }
@@ -143,7 +179,7 @@ export function createDaemonConversationInput(options: {
       }));
     },
     stopAccepting() { accepting = false; },
-    close() { accepting = false; attachments.clear(); },
+    close() { accepting = false; attachments.clear(); activities.clear(); },
   };
 }
 

@@ -96,6 +96,39 @@ it('executes provider calls in a conversation child and saves its result in the 
   } finally { await fixture.cleanup(); }
 });
 
+it.each(['ja', 'en'] as const)('displays transient thinking and tool activity from the real turn child (%s)', async (lang) => {
+  const fixture = managerDaemonFixture(lang, ['Activity completed'], true);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await tui.ready();
+    await submitManagerText(tui, 'Show current activity');
+    await waitForManager(tui, getLabel('tui.ui.extendedThinking', lang));
+    fixture.useTool();
+    await waitForManager(tui, 'ActivityToolUnique');
+    expect(await tui.frame()).not.toContain('private-');
+    await tui.exit();
+    const reconnected = await fixture.start(fixture.repository, undefined);
+    await waitForManager(reconnected, 'ActivityToolUnique');
+    expect(await reconnected.frame()).not.toContain('private-');
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    const calls = fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.pid).not.toBe(owner.pid);
+    expect(calls[0]!.pid).not.toBe(tui.child.pid);
+    fixture.release();
+    await waitForManager(reconnected, 'Activity completed');
+    await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 10000 });
+    const frame = await reconnected.frame();
+    expect(frame).not.toContain('ActivityToolUnique');
+    expect(frame).not.toContain(getLabel('tui.ui.extendedThinking', lang));
+    expect(frame).not.toContain('private-');
+    const saved = JSON.stringify(await fixture.state());
+    expect(saved).not.toContain('ActivityToolUnique');
+    expect(saved).not.toContain('private-');
+    await reconnected.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
 it('finishes an accepted turn after Ctrl+C has exited the TUI process', async () => {
   const fixture = managerDaemonFixture('en');
   try {

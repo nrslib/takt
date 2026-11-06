@@ -11,6 +11,7 @@ import * as transcriptView from '../features/tui/TranscriptEntryView.js';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
+import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import * as frames from '../features/daemon/conversationFrames.js';
 import * as goalService from '../infra/goals/service.js';
 import type { SnapshotItem, SnapshotRead } from '../features/manager/conversationPort.js';
@@ -32,6 +33,11 @@ import type { Goal } from '../infra/goals/schema.js';
 import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { makeProvider } from './test-helpers.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { deferred } from './helpers/daemon-turn.js';
+import { measureWidth } from '../shared/utils/grapheme.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -83,6 +89,207 @@ beforeEach(async () => {
 });
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
+
+it('shows provider activity through daemon IPC at width 80 and clears it without saving it or adding transcript entries', async () => {
+  const useTool = deferred<void>();
+  const respond = deferred<void>();
+  const finish = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
+    options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
+    await useTool.promise;
+    options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+    await respond.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
+    options.onStream!({ type: 'text', data: { text: 'private-partial-marker' } });
+    await finish.promise;
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { message: 'Final activity reply', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'activity', executor });
+  const outputs = vi.fn();
+  client.onOutput(outputs);
+  const writes = vi.spyOn(daemonFiles, 'writePrivateFile');
+  const savedResults = vi.spyOn(fixture.events, 'saveResult');
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const transcript = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  const activities = () => outputs.mock.calls.map(([value]) => value).filter((value) => value.kind === 'activity');
+  await waitFor(() => expect(transcript()).toHaveLength(1));
+  const initialEntries = [...transcript()];
+  try {
+    expect(await client.submit({ kind: 'message', text: 'Show activity' })).toMatchObject({ kind: 'accepted' });
+    await waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.extendedThinking', 'en')));
+    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }]);
+    useTool.resolve();
+    await waitFor(() => expect(app.lastFrame()).toContain('ActivityToolUnique'));
+    const activityRow = app.lastFrame()!.split('\n').find((row) => row.includes('ActivityToolUnique'))!;
+    expect(activityRow).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ActivityToolUnique$/u);
+    expect(measureWidth(activityRow)).toBeLessThanOrEqual(80);
+    expect(activities()).toHaveLength(2);
+    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }]);
+    // A periodic snapshot must not clear the active tool from the same running turn.
+    await client.refresh(); await complete();
+    expect(app.lastFrame()).toContain('ActivityToolUnique');
+    respond.resolve();
+    await waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.responding', 'en')));
+    finish.resolve();
+    await fixture.settled();
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain('Final activity reply');
+      expect(app.lastFrame()).not.toContain('ActivityToolUnique');
+      expect(app.lastFrame()).not.toContain(getLabel('tui.ui.responding', 'en'));
+    });
+    expect(activities().map((output) => output.activity).filter((activity) => activity.kind !== 'waiting')).toEqual([
+      { kind: 'thinking' }, { kind: 'tool', tool: 'ActivityToolUnique' }, { kind: 'responding' },
+    ]);
+    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }, { role: 'assistant', content: 'Final activity reply' }]);
+    const read = await fixture.dispatcher.snapshot(client.getSnapshot().state!.conversationId);
+    const items = [];
+    for await (const item of read.items) items.push(item);
+    read.cancel();
+    for (const persisted of [writes.mock.calls, savedResults.mock.calls, items, client.getSnapshot()]) {
+      const json = JSON.stringify(persisted);
+      expect(json).not.toContain('ActivityToolUnique');
+      expect(json).not.toContain('private-');
+      expect(json).not.toContain('"activity"');
+    }
+    expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-');
+  } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); }
+});
+
+it('shows the latest early activity when a connected TUI finally receives the delayed running state', async () => {
+  const reading = deferred<void>();
+  const releaseRunning = deferred<void>();
+  const finish = deferred<void>();
+  const outputs = vi.fn(); client.onOutput(outputs);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const observed = vi.fn();
+  const receiver = new ConversationTransferReceiver(client.getSnapshot().state!.conversationId, {
+    state: vi.fn(), item: vi.fn(), remove: vi.fn(), output: observed, read: vi.fn(),
+  });
+  receiver.authenticated();
+  const decoder = new frames.ConversationFrameDecoder();
+  const transfers = new Set<string>();
+  connections[0]!.socket.on('data', (chunk: Buffer) => {
+    for (const frame of decoder.decode(chunk)) {
+      const envelope = frame as { output?: { kind: string; purpose?: string; transferId: string } };
+      const output = envelope.output;
+      if (output === undefined) continue;
+      if (output.kind === 'transfer_start' && output.purpose === 'output') transfers.add(output.transferId);
+      if (transfers.has(output.transferId)) receiver.receive(frame);
+      if (output.kind === 'transfer_end' || output.kind === 'transfer_error') transfers.delete(output.transferId);
+    }
+  });
+  const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
+  vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
+    const read = await snapshot(id);
+    reading.resolve();
+    await releaseRunning.promise;
+    return read;
+  });
+  execute.mockImplementationOnce(async (input) => {
+    input.onActivity!({ kind: 'thinking' });
+    input.onActivity!({ kind: 'tool', tool: 'EarlyTool' });
+    await finish.promise;
+    return { message: 'Early activity turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  try {
+    const accepted = await client.submit({ kind: 'message', text: 'Start with delayed running' });
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
+    await reading.promise;
+    await waitFor(() => expect(observed).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'activity', activity: { kind: 'tool', tool: 'EarlyTool' },
+    }), expect.anything()));
+    expect(client.getSnapshot().state!.running).toBeNull();
+    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([]);
+    expect(app.lastFrame()).not.toContain('EarlyTool');
+
+    releaseRunning.resolve();
+
+    await waitFor(() => expect(app.lastFrame()).toContain('EarlyTool'));
+    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([[expect.objectContaining({
+      operationId: accepted.operationId, activity: { kind: 'tool', tool: 'EarlyTool' },
+    })]]);
+    finish.resolve();
+    await fixture.settled();
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain('Early activity turn completed');
+      expect(app.lastFrame()).not.toContain('EarlyTool');
+    });
+  } finally { releaseRunning.resolve(); finish.resolve(); await fixture.settled(); }
+});
+
+it('restores current activity for a late TUI and after reconnect, then forgets it when the turn ends', async () => {
+  const finish = deferred<void>();
+  const readingThinking = deferred<void>();
+  const releaseThinking = deferred<void>();
+  let holdThinking = false;
+  const read = fixture.store.read.bind(fixture.store);
+  vi.spyOn(fixture.store, 'read').mockImplementation(async (id) => {
+    if (holdThinking) {
+      holdThinking = false;
+      readingThinking.resolve();
+      await releaseThinking.promise;
+    }
+    return read(id);
+  });
+  execute.mockImplementationOnce(async (input) => {
+    holdThinking = true;
+    input.onActivity!({ kind: 'thinking' });
+    input.onActivity!({ kind: 'tool', tool: 'ReconnectTool' });
+    await finish.promise;
+    return { message: 'Reconnected turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Start before attaching' });
+  await fixture.executing(1);
+  await readingThinking.promise;
+  client.close();
+  client = new ConversationIpcClient(assignment, { provider: 'mock' });
+  const outputs = vi.fn();
+  client.onOutput(outputs);
+  const activities = () => outputs.mock.calls.map(([output]) => output).filter((output) => output.kind === 'activity');
+  try {
+    await client.connect(); await complete();
+    await waitFor(() => expect(activities()).toHaveLength(1));
+    expect(activities()[0]).toMatchObject({ activity: { kind: 'tool', tool: 'ReconnectTool' } });
+    releaseThinking.resolve();
+    await fixture.dispatcher.drain();
+    expect(activities()).toHaveLength(1);
+    // 接続完了後にマウントしても、初期配送の現在値を表示できる。
+    const app = await snapshotView();
+    await waitFor(() => expect(app.lastFrame()).toContain('ReconnectTool'));
+    await client.refresh(); await complete();
+    expect(activities()).toHaveLength(1);
+    connections[1]!.socket.destroy();
+    await waitFor(() => expect(activities()).toHaveLength(2));
+    await waitFor(() => {
+      expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+      expect(app.lastFrame()).toContain('ReconnectTool');
+    });
+    finish.resolve();
+    await fixture.settled();
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain('Reconnected turn completed');
+      expect(app.lastFrame()).not.toContain('ReconnectTool');
+    });
+    connections[2]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(4));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(activities()).toHaveLength(2);
+    expect(app.lastFrame()).not.toContain('ReconnectTool');
+  } finally { releaseThinking.resolve(); finish.resolve(); await fixture.settled(); }
+});
 
 it('shows a goal event reply once while connected and does not copy it to workLog', async () => {
   const goal = goalRecord();
