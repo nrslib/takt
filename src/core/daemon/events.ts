@@ -22,15 +22,10 @@ export type WatchObservation = {
   observedAt: string;
 } & (
   | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
-  | { kind: 'run_log_stalled'; task: TaskRef; lastUpdatedAt: string }
-  | { kind: 'run_too_long'; task: TaskRef; startedAt: string }
-  | { kind: 'run_step_repeated'; task: TaskRef; workflow: string; step: string; stepIdentity: string; count: number }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
   | { kind: 'goal_pr_retry'; repositoryDirectory: string; goalId: string; failureId: string; expectedSha: string; reason: string;
       attempt: number; maxAttempts: number }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
-  | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
-  | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }
   | { kind: 'run_launch_stalled'; repositoryDirectory: string }
   | { kind: 'watch_failed'; reason: string }
   | { kind: 'director_state_changed'; managerConversationId: string; repositoryDirectory: string; goalId: string | null; state: string }
@@ -56,7 +51,7 @@ export function eventGoalReference(event: TurnEvent): { repositoryDirectory: str
     case 'watch_observation': {
       const observation = event.observation;
       switch (observation.kind) {
-        case 'run_process_lost': case 'run_log_stalled': case 'run_too_long': case 'run_step_repeated': return observation.task;
+        case 'run_process_lost': return observation.task;
         case 'watch_failed': case 'director_state_changed': return undefined;
         default: return observation;
       }

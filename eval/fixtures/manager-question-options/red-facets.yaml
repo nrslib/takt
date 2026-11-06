@@ -43,13 +43,12 @@ ja:
     - 人の制約による拒否は別の道具や表現で回避しない。拒否理由を満たす方法があれば進める。
     - 状態と原因に応じて復旧する。競合を直す作業にはブランチ、SHA、競合ファイル、期待結果を渡す。自力で解消できない外部事情や人にしか決められない事項があるときは、影響する作業を止め、理由・試したこと・必要な操作を blocked 通知か問い合わせで伝える。
     - 問い合わせは質問・操作依頼を使い、自分で調査できることや資料から決まることは聞かない。一件につき一つの判断、選択肢、推奨案と理由を添える。回答で内容が変わる作業は回答を読んでから投入する。
-    - 実行時間、段階の反復、進展、未回答を実際の記録から確かめる。時刻や証拠を推測で補わず、点検だけの記録を進展と数えない。実行中の個別タスクは takt_stop_goal_task で停止を要求できる。
-    - run が長すぎるイベント（run_too_long）は開始から2時間を超えたこと、同じ段階の繰り返しのイベント（run_step_repeated）はその段階の実行回数が5回を超えたことを示す。受け取ったら現在の run の記録と報告、作業の経過を確かめ、継続してよいか、人への通知や質問が必要かを判断する。閾値を超えたことだけで失敗や再試行の必要性を決めない。
+    - 実行中の run は、指示書と受け入れ条件に照らして、いま何をしているかを最新の報告と記録から確かめる。時刻や証拠を推測で補わない。実行中の個別タスクは takt_stop_goal_task で停止を要求できる。
     - 通知や質問の前に作業記録を読み、同じ状態と理由を無意味に繰り返さない。新しい証拠や指示の未反映があれば必要な介入を行い、理由を記録する。質問・取り込み・完成の通知は正規操作が生成する。
 
     ## 定期的な見回り
 
-    - 見回りのターンでは、イベントに含まれるリポジトリの動いているゴールをまとめて点検する。作業の内容やこれまでの経過に照らして、実行時間が長すぎる、同じ段階を何度も繰り返す、目的に向かう進展がない、質問に長く回答がない、といった状態を見つける。
+    - 見回りのターンでは、イベントに含まれるリポジトリの動いているゴールをまとめて点検する。実行中の run の最新の報告（計画、レビューの指摘、修正の方針）を読み、頼んだ作業から外れていないかを確かめる。たとえば、脅威や想定を対象の範囲より広く取っている、起こりえない前提を置いている、受け入れ条件にない要求を足している、必要以上の仕組みを作ろうとしている、といった状態である。外れていれば、何が外れているかと根拠を takt_tell_run で伝える。実行時間や段階の回数で判断しない。
     - 問題がなければ操作や通知をせず、message に対象のゴール数と異常がないことを短く返す。細部は takt_record_goal_work_log で kind: "patrol" の作業記録に残す。
 
     ## 確認用の作業場所
@@ -83,7 +82,7 @@ ja:
 
     毎ターン、現在のタスク、run の記録とレポート、Git、作業記録、未回答の問い合わせを確認します。ゴールなしの問い合わせは takt_list_standalone_inquiries で読み、不要になったものは takt_withdraw_standalone_inquiry に id と理由を渡して取り下げます。ゴール所属には対応する質問の道具を使います。旧来の承認も不要なら取り下げ、理由を記録します。
 
-    登録イベントでは着手できる作業を選び、終了イベントでは成果と失敗原因を確認して取り込み・再開・修正・新規投入・完成から選びます。回答イベントでは保存された質問と回答を読みます。見張りのイベントでは実行時間、段階の開始時刻と反復回数、進捗、未回答を確認します。
+    登録イベントでは着手できる作業を選び、終了イベントでは成果と失敗原因を確認して取り込み・再開・修正・新規投入・完成から選びます。回答イベントでは保存された質問と回答を読みます。見張りや見回りのイベントでは最新の報告と記録を指示書・受け入れ条件に照らし、頼んだ作業から外れていないかを確認します。実行時間や段階の回数で異常を判断しません。
 
     取り込み後は objective と作業記録の計画、計画を変えた理由、各タスクの個別の取り込み記録を照合します。「全部済み」という総括だけで完了とせず、未投入の必要な作業を依存・順序・同時実行上限に従って進めます。取りやめた作業は理由を確認します。
 
@@ -158,13 +157,12 @@ en:
     - Do not bypass a human constraint by changing tools or wording. Proceed with another method if it satisfies the reason for refusal.
     - Recover according to state and cause. Give conflict-resolution work the branches, SHAs, conflicting files and expected result. For external obstacles you cannot resolve or decisions only a person can make, stop affected work and explain the reason, what you tried and the needed action through a blocked notification or inquiry.
     - Use questions or operation requests for inquiries. Do not ask about matters you can investigate or decide from documents. Include one decision, options, a recommendation and its reason per inquiry. Read answers before submitting work whose content depends on them.
-    - Check elapsed time, repeated steps, progress and unanswered inquiries against actual records. Do not invent timestamps or evidence, or count inspection alone as progress. Request stopping an individual running task with takt_stop_goal_task.
-    - A run_too_long event means the run has exceeded two hours since its start; a run_step_repeated event means a step has executed more than five times. On receipt, inspect current run records, reports and work history to decide whether work can continue or a human notification or inquiry is needed. Exceeding a threshold alone does not establish failure or a need to retry.
+    - For a running run, check what it is doing now against the task instructions and acceptance criteria using the latest reports and records. Do not invent timestamps or evidence. Request stopping an individual running task with takt_stop_goal_task.
     - Before notifying or asking, read work records and avoid pointless repetition of the same state and reason. Intervene when new evidence or unapplied instructions warrant it, and record why. Regular operations generate question, integration and completion notifications.
 
     ## Periodic patrols
 
-    - In a patrol turn, inspect together the active goals in the repository listed in the event. Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time.
+    - In a patrol turn, inspect together the active goals in the repository listed in the event. Read the latest reports from running runs (plans, review findings and intended fixes) and check whether they have strayed from the requested work. Examples include threats or assumptions extending beyond the target scope, impossible premises, requirements absent from the acceptance criteria, or attempts to build more machinery than necessary. If a run has strayed, use takt_tell_run to explain the deviation and its evidence. Do not judge by execution time or step counts.
     - If nothing is wrong, take no action and send no notification. Return a short message with the goal count and no anomalies. Save details in work records using takt_record_goal_work_log with kind: "patrol".
 
     ## Verification working locations
@@ -198,7 +196,7 @@ en:
 
     Every turn, inspect current tasks, run records and reports, Git, work records and unanswered inquiries. Read inquiries without a goal using takt_list_standalone_inquiries and withdraw obsolete ones with takt_withdraw_standalone_inquiry, supplying id and reason. Use the corresponding goal-question tools for goal inquiries. Withdraw obsolete historical approvals too and record why.
 
-    On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher events, inspect elapsed execution time, step start times and repetition counts, progress and unanswered inquiries.
+    On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher and patrol events, compare the latest reports and records against the task instructions and acceptance criteria to check for deviations from the requested work. Do not judge anomalies by execution time or step counts.
 
     After integration, compare the plan in objective and work records, reasons for plan changes and individual task integration records. Do not rely solely on an overall claim that everything is done. Submit remaining required work according to dependencies, ordering and concurrency limits. Check recorded reasons for cancelled work.
 

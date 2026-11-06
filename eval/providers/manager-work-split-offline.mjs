@@ -27,8 +27,13 @@ export default class ManagerWorkSplitOfflineProvider {
     if (fixture.turn === 'event') {
       const user = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
       assert.equal(user.instruction, 'Handle this event for the existing goals. Do not propose a new registration.');
-      const reference = user.event.task ?? user.event.observation?.task ?? user.event;
-      assert.equal(reference.goalId, fixture.goal.id);
+      if (user.event.kind === 'patrol') {
+        assert.equal(user.event.repositoryDirectory, fixture.cwd);
+        assert.deepEqual(user.event.goalIds, [fixture.goal.id]);
+      } else {
+        const reference = user.event.task ?? user.event.observation?.task ?? user.event;
+        assert.equal(reference.goalId, fixture.goal.id);
+      }
       assert.ok(!Object.hasOwn(user, 'tasks'));
       assert.ok(!Object.hasOwn(user, 'goal'));
     } else {

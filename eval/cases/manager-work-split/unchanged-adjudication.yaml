@@ -31,19 +31,11 @@ ja:
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440110
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440110
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -564,19 +556,11 @@ en:
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440110
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440110
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000

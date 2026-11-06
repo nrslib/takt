@@ -96,7 +96,7 @@ test('stopped-check inputs connect a previous launch to the current process and 
     const outputRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('.log'));
     const launch = fixture.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
     assert.ok(launch);
-    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
+    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
     assert.match(processRead.result, /^exit code: 1\nstdout:\s*\nstderr:\s*$/);
     assert.match(outputRead.result, /RUN /);
     assert.doesNotMatch(outputRead.result, /PASS|FAIL|Tests\s+\d+/);
@@ -129,23 +129,22 @@ test('verification inputs expose integration state, result SHA and a distinct go
   }
 });
 
-test('uses the current time for each watcher case even long after module loading', async (t) => {
+test('uses the current time for each patrol case even long after module loading', async (t) => {
   const now = Date.now();
   const clock = t.mock.method(Date, 'now', () => now - 24 * 60 * 60 * 1000);
-  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-watcher');
+  const { default: buildLaterPrompt, loadManagerCase: loadLaterCase } = await import('./manager-work-split-prompt.mjs?delayed-patrol');
   const earlier = loadLaterCase('mail-dispatch-state', 'ja');
   clock.mock.mockImplementation(() => now);
   const later = loadLaterCase('mail-dispatch-state', 'ja');
-  assert.equal(Date.parse(later.event.observation.observedAt) - Date.parse(earlier.event.observation.observedAt), 24 * 60 * 60 * 1000);
+  assert.equal(Date.parse(later.snapshotAt) - Date.parse(earlier.snapshotAt), 24 * 60 * 60 * 1000);
   const prompt = buildLaterPrompt({ vars: { case: 'mail-dispatch-state', lang: 'ja' } });
   const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-  assert.equal(context.event.kind, 'watch_observation');
-  assert.equal(Date.parse(context.event.observation.observedAt), now);
-  assert.ok(Date.parse(context.event.observation.observedAt) - Date.parse(context.event.observation.lastUpdatedAt) >= 30 * 60000);
+  assert.equal(context.event.kind, 'patrol');
+  assert.equal(Date.parse(later.snapshotAt), now);
   assert.deepEqual(context.event, later.event);
 });
 
-test('watcher fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
+test('patrol fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
   const cases = [
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
@@ -155,12 +154,12 @@ test('watcher fixtures preserve repeated repair history, source documents and th
     for (const caseId of cases) {
       const fixture = loadManagerCase(caseId, lang);
       assert.equal(fixture.turn, 'event');
-      assert.equal(fixture.event.kind, 'watch_observation');
-      assert.equal(fixture.event.observation.kind, 'run_log_stalled');
+      assert.equal(fixture.event.kind, 'patrol');
+      assert.deepEqual(fixture.event.goalIds, [fixture.goal.id]);
       const run = fixture.readResults.find(({ tool }) => tool === 'takt_get_run');
-      assert.equal(fixture.event.observation.task.runSlug, run.result.runSlug);
-      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt));
-      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'watch_observation' ? fixture.event.observation.observedAt : fixture.event.createdAt)));
+      assert.ok(fixture.tasks.some(({ runSlug }) => runSlug === run.result.runSlug));
+      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
+      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt)));
       for (const entry of run.result.stepLogs.filter(({ step }) => ['fix', 'remediation'].includes(step))) {
         assert.doesNotMatch(runLogContent(fixture, run.result.runSlug, entry.index), /次の review|next review/i);
       }
@@ -291,12 +290,12 @@ test('event fixtures use the production event envelope and goal/task reading con
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
     const input = JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event));
-    const event = fixture.event.kind === 'watch_observation' ? fixture.event
+    const event = ['watch_observation', 'patrol'].includes(fixture.event.kind) ? fixture.event
       : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
     assert.deepEqual(input, { event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
     parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
       event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
-        lane: 'other', source: event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
+        lane: 'other', source: event.kind === 'patrol' ? 'daemon' : event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
       turn: { conversationId: 'manager', operationId: 'turn', generation: 1 },
       state: { version: 0, assignment: { kind: 'repository', repositoryDirectory: fixture.cwd },
         session: { provider: 'mock', model: null, sessionId: null }, revision: 0, pending: null, approval: null },
@@ -660,7 +659,7 @@ test('settled-operation fixtures expose an answered method choice and a reviewed
   }
 });
 
-test('verification fixtures distinguish separate finished checks, a single check, mixed causes and prior instruction', () => {
+test('verification fixtures distinguish required checks, out-of-scope demands, real defects and prior instruction', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['verification-repeated', 'verification-once', 'verification-mixed', 'verification-told']) {
       const fixture = loadManagerCase(caseId, lang);
@@ -685,6 +684,7 @@ test('verification fixtures distinguish separate finished checks, a single check
         assert.deepEqual(summary, check);
         assert.ok(content.includes('IDX-17'));
         assert.equal(content.includes('IDX-22'), caseId === 'verification-mixed');
+        assert.equal(content.includes('audioBlob'), caseId !== 'verification-repeated');
         assert.deepEqual({ totalBytes, offset, returnedBytes, direction, truncated, nextOffset }, {
           totalBytes: Buffer.byteLength(content), offset: 0, returnedBytes: Buffer.byteLength(content),
           direction: 'backward', truncated: false, nextOffset: null,

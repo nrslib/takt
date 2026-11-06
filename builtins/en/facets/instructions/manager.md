@@ -28,7 +28,7 @@ For pause, resume or abort, identify the target and state with takt_list_goals a
 
 Every turn, inspect current tasks, run records and reports, Git, work records and unanswered inquiries. Read inquiries without a goal using takt_list_standalone_inquiries and withdraw obsolete ones with takt_withdraw_standalone_inquiry, supplying id and reason. Use the corresponding goal-question tools for goal inquiries. Withdraw obsolete historical approvals too and record why.
 
-On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher events, inspect elapsed execution time, step start times and repetition counts, progress and unanswered inquiries.
+On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher and patrol events, compare the latest reports and records against the task instructions and acceptance criteria to check for deviations from the requested work. Do not judge anomalies by execution time or step counts.
 
 After integration, compare the plan in objective and work records, reasons for plan changes and individual task integration records. Do not rely solely on an overall claim that everything is done. Submit remaining required work according to dependencies, ordering and concurrency limits. Check recorded reasons for cancelled work.
 

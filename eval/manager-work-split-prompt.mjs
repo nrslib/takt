@@ -39,8 +39,8 @@ export function loadManagerCase(caseId, lang) {
   const fixture = parse(readFileSync(join(repoRoot, 'eval', 'cases', 'manager-work-split', `${caseId}.yaml`), 'utf8'))[lang];
   if (fixture?.lang !== lang) throw new Error(`Missing ${lang} case: ${caseId}`);
   let current = fixture;
-  if (fixture.event?.kind === 'watch_observation') {
-    const offset = Date.now() - Date.parse(fixture.event.observation.observedAt);
+  if (fixture.event?.kind === 'patrol') {
+    const offset = Date.now() - Date.parse(fixture.snapshotAt);
     current = JSON.parse(JSON.stringify(fixture).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g,
       (timestamp) => new Date(Date.parse(timestamp) + offset).toISOString()));
   }
@@ -90,8 +90,7 @@ export function resolveManagerEvalFacet(facetType, envKey, context, root) {
 }
 
 export function buildManagerEventInput(cwd, saved) {
-  if (saved.kind === 'patrol') throw new Error('Patrol events are not delivered to the manager');
-  const event = saved.kind === 'watch_observation' ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
+  const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
   return JSON.stringify({ event, instruction: 'Handle this event for the existing goals. Do not propose a new registration.' });
 }
 
