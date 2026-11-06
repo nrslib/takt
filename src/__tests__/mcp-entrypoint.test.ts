@@ -758,6 +758,20 @@ describe('MCP package entrypoint', () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it('advertises goal PR finishing while CI is running through listTools', async () => {
+    const server = createTaktMcpServer();
+    const client = new Client({ name: 'goal-pr-tools', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const { tools } = await client.listTools();
+      const merge = tools.find(({ name }) => name === 'takt_merge_goal_pr')!;
+      expect(merge.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'prNumber', 'until']);
+      expect(merge.description).toMatch(/until: prepare.*without merging/iu);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('advertises the inquiry input contract and retrieval fields through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'inquiry-tools', version: '1' });
@@ -2098,5 +2112,75 @@ describe('MCP package entrypoint', () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+describe('workflow detail MCP', () => {
+  it('resolves names, scoped references, paths and parent-relative calls through production loaders', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-workflow-'));
+    const configDirectory = mkdtempSync(join(tmpdir(), 'takt-mcp-workflow-config-'));
+    vi.stubEnv('TAKT_CONFIG_DIR', configDirectory);
+    const directory = join(cwd, '.takt', 'workflows');
+    const nested = join(directory, 'nested');
+    const global = join(configDirectory, 'workflows');
+    const scoped = join(configDirectory, 'repertoire', '@example', 'workflows', 'workflows');
+    for (const path of [nested, global, scoped]) mkdirSync(path, { recursive: true });
+    const simple = (name: string) => stringifyYaml({ name, initial_step: 'check', steps: [{ name: 'check', mode: 'system',
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }] });
+    writeFileSync(join(global, 'selected.yaml'), simple('global-selected'));
+    writeFileSync(join(directory, 'selected.yaml'), simple('project-selected'));
+    writeFileSync(join(scoped, 'selected.yaml'), simple('scoped-selected'));
+    writeFileSync(join(directory, 'child.yaml'), simple('wrong-child'));
+    writeFileSync(join(nested, 'child.yaml'), stringifyYaml({ name: 'relative-child', subworkflow: { callable: true,
+      params: { worker: { type: 'facet_ref', facet_kind: 'persona' } } }, initial_step: 'work',
+      steps: [{ name: 'work', persona: { $param: 'worker' }, instruction: 'Check the work.', rules: [{ condition: 'done', next: 'COMPLETE' }] }] }));
+    writeFileSync(join(nested, 'worker.md'), 'Verify the work.');
+    writeFileSync(join(nested, 'parent.yaml'), stringifyYaml({ name: 'parent', initial_step: 'review', steps: [{
+      name: 'review', kind: 'workflow_call', call: './child.yaml', args: { worker: './worker.md' },
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    }] }));
+    const server = createTaktMcpServer({}, { allowedProjectRoot: cwd, toolSet: 'all' });
+    const client = new Client({ name: 'workflow-details', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_get_workflow');
+      expect(TAKT_MCP_MANAGER_TOOL_NAMES).toContain('takt_get_workflow');
+      const read = async (input: Record<string, unknown>) => {
+        const result = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd, ...input } });
+        expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+        return JSON.parse(firstTextContent(result.content));
+      };
+      expect((await read({ workflow: 'selected' })).name).toBe('project-selected');
+      expect((await read({ workflow: '@example/workflows/selected' })).name).toBe('scoped-selected');
+      const parent = await read({ workflow: join(nested, 'parent.yaml') });
+      expect(parent.steps[0]).toMatchObject({ kind: 'workflow_call', workflow_call: { name: 'relative-child', path: join(nested, 'child.yaml') } });
+      const child = await read(parent.steps[0].workflow_call.getInput);
+      expect(child).toMatchObject({ name: 'relative-child', steps: [{ name: 'work', kind: 'agent' }] });
+      const builtin = await read({ workflow: 'merge-prepare', limit: 50 });
+      expect(builtin.steps.find(({ name }: { name: string }) => name === 'wait_ci')).toMatchObject({ kind: 'system',
+        wait: { until: expect.any(String), onTimeout: 'timeout' }, system_inputs: expect.any(Array), rules: expect.any(Array) });
+      expect(builtin.steps.find(({ name }: { name: string }) => name === 'sync').effects).toEqual(expect.any(Array));
+      const page = await read({ workflow: 'merge-prepare', limit: 1, offset: 1 });
+      expect(page).toMatchObject({ returnedCount: 1, nextOffset: 2, truncated: true });
+      const outside = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: configDirectory, workflow: 'selected' } });
+      expect(outside.isError).toBe(true);
+    } finally {
+      await client.close(); await server.close(); vi.unstubAllEnvs();
+      rmSync(cwd, { recursive: true, force: true }); rmSync(configDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps workflow inspection and listing unavailable in the read-only tool set', async () => {
+    const server = createTaktMcpServer({}, { toolSet: 'read-only' });
+    const client = new Client({ name: 'read-only-workflows', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport); await client.connect(clientTransport);
+      const names = (await client.listTools()).tools.map(({ name }) => name);
+      expect(names).not.toContain('takt_list_workflows');
+      expect(names).not.toContain('takt_get_workflow');
+    } finally { await client.close(); await server.close(); }
   });
 });

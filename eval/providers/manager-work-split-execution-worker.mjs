@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createTaktMcpServer } from '../../dist/features/mcp/server.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { stringify } from 'yaml';
 import { createManagerConversationPlan } from '../../dist/features/manager/conversationPlan.js';
@@ -22,6 +25,9 @@ import { appendGoalWorkLog } from '../../dist/infra/goals/workLog.js';
 import { invalidateGlobalConfigCache } from '../../dist/infra/config/global/globalConfig.js';
 import * as schemas from '../../dist/features/mcp/schemas.js';
 import { managerWriteSchemas, loadManagerCase } from '../manager-work-split-prompt.mjs';
+import { prepareNoWaitFixture, noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
+import { listTaktWorkflows } from '../../dist/features/mcp/goalOperations.js';
+import { getTaktWorkflow } from '../../dist/features/mcp/workflowOperations.js';
 import { executionConfig } from './manager-work-split-execution.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
@@ -69,6 +75,7 @@ await new Promise((resolve) => setTimeout(resolve, 700));
 const code = canImport(['sku-1']) === true ? 0 : 1;
 emit({kind:'end', code});
 console.log(code === 0 ? 'PASS inventory import' : 'FAIL inventory import');
+console.log('[TAKT_CHECK_RESULT:' + run + ']');
 process.exitCode = code;
 `;
   writeFileSync(join(cwd, 'check.mjs'), check);
@@ -90,12 +97,28 @@ process.exitCode = code;
   return { cwd, resultSha, goalSha, checkHash: sha256(check) };
 }
 
+async function toolDescriptions(state) {
+  const source = createTaktMcpServer({}, { allowedProjectRoot: state.cwd, toolSet: 'manager' });
+  const reader = new Client({ name: 'eval-tool-descriptions', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  let descriptions;
+  try {
+    await source.connect(serverTransport);
+    await reader.connect(clientTransport);
+    descriptions = new Map((await reader.listTools()).tools.map(({ name, description }) => [name, description]));
+  } finally { await reader.close(); await source.close(); }
+  return descriptions;
+}
+
 function localServer(state, saveEvent) {
+  const descriptions = state.descriptions;
   const server = new McpServer({ name: 'manager-eval', version: '1.0.0' });
-  const registerMcpResult = (name, schema, handler) => server.registerTool(name, { inputSchema: schema.shape }, async (args) => {
-    if (args.cwd !== state.cwd || (args.goalId !== undefined && args.goalId !== state.goal.id)) throw new Error('Wrong fixture repository or goal');
+  const registerMcpResult = (name, schema, handler) => server.registerTool(name, { inputSchema: schema.shape, description: descriptions.get(name) }, async (args) => {
+    if (args.cwd !== state.cwd || (args.goalId !== undefined && !(state.goals ?? [state.goal]).some(({ id }) => id === args.goalId))) throw new Error('Wrong fixture repository or goal');
     saveEvent({ type: 'mcp_call', data: { tool: name, input: args } });
-    return handler(args);
+    const result = await handler(args);
+    if (name === 'takt_get_workflow') saveEvent({ type: 'workflow_read', data: { input: args, success: result.isError !== true } });
+    return result;
   });
   const register = (name, schema, handler) => registerMcpResult(name, schema, async (args) => {
     const value = await handler(args);
@@ -107,7 +130,7 @@ function localServer(state, saveEvent) {
     const result = await recordTaktGoalWorkLog(args, { allowedProjectRoot: state.cwd }, state.signal);
     if (!result.isError) {
       const { entry } = JSON.parse(result.content.find(({ type }) => type === 'text').text);
-      const goal = await state.store.get(state.goal.id);
+      const goal = await state.store.get(args.goalId);
       const saved = goal.workLog.find(({ id }) => id === entry.id);
       if (saved === undefined) throw new Error('Saved work-log entry is missing');
       state.workLog.push({ turn: state.turn, summary: saved.summary });
@@ -118,22 +141,36 @@ function localServer(state, saveEvent) {
     saveEvent({ type: 'mcp_call', data: { tool: 'takt_get_goal', input: args } });
     return getTaktGoal(args, { allowedProjectRoot: state.cwd });
   });
-  register('takt_list_goals', schemas.listGoalsInputSchema, async () => ({ goals: [await state.store.get(state.goal.id)] }));
-  register('takt_list_tasks', schemas.listTasksInputSchema, async () => ({ tasks: [{ ...state.task, ...(await getTaskGoalIntegrations(state.cwd, [state.task], undefined))[0] }] }));
-  register('takt_get_goal_relation', schemas.goalWriteInputSchema, () => ({ goalBranch: state.goal.branch, goalSha: state.goalSha,
+  register('takt_list_goals', schemas.listGoalsInputSchema, async () => ({ goals: await Promise.all((state.goals ?? [state.goal]).map(({ id }) => state.store.get(id))) }));
+  register('takt_list_tasks', schemas.listTasksInputSchema, async () => ({ tasks: state.tasks ?? [{ ...state.task, ...(await getTaskGoalIntegrations(state.cwd, [state.task], undefined))[0] }] }));
+  registerMcpResult('takt_list_workflows', schemas.listGoalsInputSchema.omit({ errorOffset: true }), (args) => listTaktWorkflows(args, { allowedProjectRoot: state.cwd }));
+  registerMcpResult('takt_get_workflow', schemas.getWorkflowInputSchema, (args) => getTaktWorkflow(args, { allowedProjectRoot: state.cwd }));
+  register('takt_get_run', schemas.getRunInputSchema, () => ({ currentStep: 'wait_ci', status: 'running', report: { content: 'PR finishing is in progress.' } }));
+  register('takt_get_goal_relation', schemas.goalWriteInputSchema, (args) => ({
+    goalBranch: (state.goals ?? [state.goal]).find(({ id }) => id === args.goalId).branch, goalSha: state.goalSha,
     targetBranch: 'main', targetSha: git(state.cwd, 'rev-parse', 'main'), included: false, ahead: 2 }));
   register('takt_get_goal_history', schemas.goalHistoryInputSchema, (args) => {
     if (args.taskName !== undefined && args.taskName !== state.task.name) throw new Error('Unknown fixture task');
-    const sourceBranch = args.taskName === undefined ? state.goal.branch : state.task.completion.branch;
+    const sourceBranch = args.taskName === undefined
+      ? (state.goals ?? [state.goal]).find(({ id }) => id === args.goalId).branch : state.task.completion.branch;
     const sourceSha = git(state.cwd, 'rev-parse', sourceBranch);
     const hashes = git(state.cwd, 'log', `--max-count=${(args.limit ?? 50) + 1}`, '--format=%H', sourceSha).split('\n');
     const commits = hashes.slice(0, args.limit ?? 50).map((sha) => ({ sha, message: git(state.cwd, 'show', '--no-patch', '--format=%B', sha), truncated: false }));
     return { sourceBranch, sourceSha, commits, truncated: hashes.length > (args.limit ?? 50) };
   });
+  register('takt_list_goal_questions', schemas.listGoalQuestionsInputSchema, async (args) => ({ questions: (await state.store.get(args.goalId)).questions }));
   register('takt_list_standalone_inquiries', schemas.listStandaloneInquiriesInputSchema, () => ({ inquiries: [] }));
   for (const [name, schema] of Object.entries(managerWriteSchemas)) {
     if (name === 'takt_ask_goal_question' || name === 'takt_record_goal_work_log') continue;
     register(name, schema, async (args) => {
+      if (name === 'takt_merge_goal_pr' && state.tasks !== undefined) {
+        const goal = state.goals.find(({ id }) => id === args.goalId);
+        if (goal?.pullRequest?.number !== args.prNumber) throw new Error('Wrong saved PR');
+        if (state.tasks.some(({ goalId, status }) => goalId === args.goalId && ['pending', 'running'].includes(status))) throw new Error('Duplicate active target');
+        const task = { name: 'prepare-export', goalId: args.goalId, prNumber: args.prNumber, until: args.until, status: 'pending', workflow: args.until === 'prepare' ? 'merge-prepare' : 'merge-review-fix-simple' };
+        state.tasks.push(task);
+        return { taskName: task.name, workflow: task.workflow };
+      }
       if (name === 'takt_notify_goal') return { saved: true };
       if (name === 'takt_withdraw_goal_question') {
         const goal = await state.store.update(state.goal.id, (current) => withdrawGoalQuestion(current, args.questionId, args.reason));
@@ -152,6 +189,7 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
   writeFileSync(checksPath, '');
   const configDir = join(root, 'config');
   mkdirSync(configDir);
+  const previousPath = process.env.PATH;
   const previousConfig = process.env.TAKT_CONFIG_DIR;
   const previousTmp = process.env.TMPDIR;
   const previousWebhook = process.env.TAKT_NOTIFY_WEBHOOK;
@@ -203,6 +241,15 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     await store.create(goal);
     const task = { ...seed.tasks[0], goalId: goal.id, filePath: join(cwd, '.takt/tasks.yaml'), completion: { ...seed.tasks[0].completion, branch: 'task/import', sha: resultSha } };
     state = { cwd, goal, store, goalSha, resultSha, task, workLog: trial.workLog, turn: 0 };
+    if (noWaitExecutionCases.has(config.case)) {
+      const fixture = await prepareNoWaitFixture(state, root, checksPath, config);
+      process.env.PATH = `${fixture.bin}:${previousPath}`;
+      writeFileSync(join(projectConfig, 'config.yaml'), stringify({ manager: { main_merge: 'approve', auto_run: false } }));
+      if (config.case === 'two-goal-pr-execution') git(cwd, 'branch', 'goal/export', goalSha);
+      trial.goals = state.goals;
+      trial.initialTasks = structuredClone(state.tasks);
+    }
+    state.descriptions = await toolDescriptions(state);
     connection = await startLocalMcpConnection(() => localServer(state, event));
     const plan = createManagerConversationPlan(cwd, { provider: 'claude-sdk', model: config.model, language: config.lang });
     plan.ctx.mcpServers = { [TAKT_MANAGER_MCP_SERVER_NAME]: connection.config };
@@ -280,7 +327,8 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     trial.before = { git: gitState(cwd), questions: (await store.get(goal.id)).questions ?? [] };
     await turn('verification', loadManagerCase(config.case, config.lang).user);
     trial.after = { git: gitState(cwd), questions: (await store.get(goal.id)).questions ?? [] };
-    if (config.case === 'stopped-background-execution') await turn('followup', config.lang === 'ja' ? '報告を受領しました。追加作業は不要です。短く応答してください。' : 'Report received. No additional work is needed. Reply briefly.');
+    if (config.case === 'stopped-background-execution' || noWaitExecutionCases.has(config.case)) await turn('followup', config.lang === 'ja' ? '報告を受領しました。追加作業は不要です。短く応答してください。' : 'Report received. No additional work is needed. Reply briefly.');
+    if (state.tasks !== undefined) trial.finalTasks = state.tasks;
     trial.complete = true;
   } catch (error) {
     trial.error = error.message;
@@ -313,6 +361,8 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     else process.env.TMPDIR = previousTmp;
     if (previousWebhook === undefined) delete process.env.TAKT_NOTIFY_WEBHOOK;
     else process.env.TAKT_NOTIFY_WEBHOOK = previousWebhook;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     invalidateGlobalConfigCache();
     save();
   }
