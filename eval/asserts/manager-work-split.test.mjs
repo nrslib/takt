@@ -778,7 +778,7 @@ for (const lang of ['ja', 'en']) {
       const blocked = score(output, caseId, lang);
       assert.equal(blocked.pass, false);
       assert.equal(blocked.reason, key === 'payment-check'
-        ? 'Do not enqueue existing work without changing its state' : 'Unexpected or repeated work key');
+        ? 'Do not enqueue existing work without changing its state' : 'Unexpected work key');
       output.calls.pop();
     }
     delete output.calls[0].arguments.body;

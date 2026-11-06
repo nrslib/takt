@@ -146,7 +146,7 @@ export default function assertManagerWorkSplit(output, context) {
   const enqueues = parsed.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');
   const keys = enqueues.map(({ arguments: args }) => args.workKey);
   const workKeys = keys.filter((key) => key !== undefined);
-  if (new Set(workKeys).size !== workKeys.length) return result(false, 'Unexpected or repeated work key');
+  if (new Set(workKeys).size !== workKeys.length) return result(false, 'Repeated work key');
   const retries = parsed.calls.filter(({ tool }) => tool === 'takt_requeue_goal_task' || tool === 'takt_retry_goal_task');
   const completes = parsed.calls.filter(({ tool }) => ['takt_complete_goal', 'takt_check_goal_completion'].includes(tool));
   const tells = parsed.calls.filter(({ tool }) => tool === 'takt_tell_run');
@@ -282,7 +282,7 @@ export default function assertManagerWorkSplit(output, context) {
     return result(keys.length === 1 && typeof keys[0] === 'string' && keys[0].trim().length > 0,
       'Submit one permissions task, either ordered or combined; instruction semantics are graded separately');
   }
-  if (keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected or repeated work key');
+  if (keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected work key');
   const minimum = ['parallel-cli', 'parallel-docs-migration'].includes(caseId) ? readyKeys[caseId].length
     : caseId === 'constraint-once' ? 2 : 1;
   const maximum = ['shared-resource', 'shared-definition', 'human-order', 'constraint-carryover', 'constraint-carryover-data', 'escalate-not-on-first-failure'].includes(caseId) ? 1 : fixture.concurrency;
