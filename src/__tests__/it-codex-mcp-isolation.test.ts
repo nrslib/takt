@@ -93,7 +93,8 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
 
   it.each([undefined, 'review'])('uses the selected profile for exclusions and real execution (profile=%s)', async (configProfile) => {
     const result = await probeMcpHeaders('codex', resolveCodexSdkCli(undefined).executablePath, async (url, environment, probeCwd) => {
-      const profileConfig = `[mcp_servers.datadog]\nurl=${JSON.stringify(`${url}/excluded`)}\n[mcp_servers.github]\nurl=${JSON.stringify(url)}\n`;
+      const profileConfig = `[features]\nplugins=true\n[mcp_servers.datadog]\nurl=${JSON.stringify(`${url}/excluded`)}\n[mcp_servers.github]\nurl=${JSON.stringify(url)}\n`;
+      writeFileSync(join(probeCwd, 'config.toml'), '[features]\nplugins=true\n');
       const profilePath = join(probeCwd, 'review.config.toml');
       writeFileSync(profilePath, profileConfig);
       const server = interpolateMcpEnv({ type: 'http', url: `${url}/excluded`, headers: {
@@ -112,6 +113,8 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     expect(result.excludedRequests).toBe(0);
     expect(result.mcpRequests === 0).toBe(configProfile === undefined);
     expect(result.argv.includes('--profile')).toBe(configProfile !== undefined);
+    expect(beforeArtifactRead.mock.calls.map(([path]) => basename(String(path)))).not.toContain('plugins.sync.lock');
+    expect(result.argv).toContain('features.plugins=false');
     expect(result.shellOutput).toContain('header-secret=unset key-secret=unset');
     expect(result.secretInArtifacts).toBe(false);
   }, 30_000);

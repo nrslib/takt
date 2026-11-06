@@ -131,6 +131,8 @@ export async function probeMcpHeaders(
         config: config as import('@openai/codex-sdk').CodexOptions['config'],
         configOverrides: [...(prepared.configOverrides ?? []),
           'model_provider="probe"', `model_providers.probe={name="probe",base_url="${baseUrl}",wire_api="responses"}`,
+          // Curated plugin sync can leave Git descendants writing into CODEX_HOME after Codex exits.
+          'features.plugins=false',
           'features.shell_snapshot=false', 'allow_login_shell=false', 'sandbox_mode="danger-full-access"'],
       });
       const controller = new AbortController();
