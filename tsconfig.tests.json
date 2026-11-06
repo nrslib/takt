@@ -727,6 +727,7 @@
     "src/__tests__/web-ui-launcher.test.ts",
     "src/__tests__/web-ui-markdown-view.test.ts",
     "src/__tests__/web-ui-native-directory-picker.test.ts",
+    "src/__tests__/web-ui-project-registry.test.ts",
     "src/__tests__/web-ui-public-api.test.ts",
     "src/__tests__/web-ui-task-action-ui.test.ts",
     "src/__tests__/web-ui-task-actions.test.ts",

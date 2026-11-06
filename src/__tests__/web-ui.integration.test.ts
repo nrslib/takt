@@ -1,4 +1,5 @@
 import { appendFile, lstat, mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -58,6 +59,11 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createSharedClone } from '../infra/task/index.js';
 import { buildExecutionTrace } from '../../web-ui/public/execution-model.js';
+
+// ESM の組み込み名前空間を直接変更せずに、列挙処理だけをテストで差し替える。
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+}));
 
 const servers: Server[] = [];
 const temporaryDirectories = new Set<string>();
@@ -159,7 +165,6 @@ async function createGitProjectFixture() {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, projectDirectory, project, repository };
 }
@@ -2066,14 +2071,10 @@ describe('Web UI run artifacts', () => {
     await expect(readRunCollection(statePaths)).rejects.toThrow(/symbolic link|runs directory/i);
   });
 
-  it('rejects an ordinary runs-root replacement with the expected inode', async () => {
+  it('reads an ordinary runs-root replacement made before the read starts', async () => {
     const statePaths = await createArtifactState();
     await mkdir(statePaths.runsDirectory, { recursive: true });
     const original = await lstat(statePaths.runsDirectory);
-    const pinned = {
-      ...statePaths,
-      runsRootFingerprint: { dev: original.dev, ino: original.ino },
-    };
     // Create the replacement while the original is still present. This makes
     // the differing inode deterministic on filesystems that eagerly reuse
     // deleted directory inodes.
@@ -2084,7 +2085,28 @@ describe('Web UI run artifacts', () => {
     const replacement = await lstat(statePaths.runsDirectory);
     expect(replacement.ino).not.toBe(original.ino);
 
-    await expect(readRunCollection(pinned)).rejects.toThrow(/fingerprint|identity/i);
+    await writeRun(statePaths, 'after-replacement');
+    expect((await readRunCollection(statePaths)).runs.map((run) => run.slug)).toEqual(['after-replacement']);
+  });
+
+  it('rejects a runs-root replacement during the same collection read', async () => {
+    const statePaths = await createArtifactState();
+    await writeRun(statePaths, 'before-replacement');
+    expect((await readRunCollection(statePaths)).runs.map((run) => run.slug)).toEqual(['before-replacement']);
+    const original = await lstat(statePaths.runsDirectory);
+    const displacedPath = join(statePaths.stateDirectory, 'displaced-runs');
+    const enumeration = vi.spyOn(fsPromises, 'readdir').mockImplementationOnce(async () => {
+      await rename(statePaths.runsDirectory, displacedPath);
+      await mkdir(statePaths.runsDirectory);
+      return [];
+    });
+    try {
+      await expect(readRunCollection(statePaths)).rejects.toThrow();
+      expect(enumeration).toHaveBeenCalledOnce();
+      expect((await lstat(statePaths.runsDirectory)).ino).not.toBe(original.ino);
+    } finally {
+      enumeration.mockRestore();
+    }
   });
 
   it('rejects a symlinked report root before reading outside the run', async () => {
@@ -2109,7 +2131,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const slug = 'occurrence-api';
     const runRoot = await writeRun(repository.paths, slug);
@@ -2232,7 +2253,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const execution = await repository.enqueueAndClaim({
       task: 'keep running across UI restart',
@@ -2435,7 +2455,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const centralTask = await central.enqueueAndClaim({
       task: 'Task for 20260824-example',
@@ -2568,7 +2587,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const reserved = await repository.enqueueAndClaim({
       task: 'action task',
@@ -2776,7 +2794,6 @@ describe('Web UI HTTP boundary', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     });
     const acquired = await central.enqueueAndClaim({ task: 'watch', workflow: 'default', worktree: false });
     await central.setStartingPid({

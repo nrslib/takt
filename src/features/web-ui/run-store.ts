@@ -282,9 +282,9 @@ interface RunsRootSnapshot {
 /**
  * Resolve and fingerprint the runs directory for a read operation.
  *
- * @param location - Run store filesystem locations and optional expected fingerprint
+ * @param location - Run store filesystem locations
  * @returns The validated runs directory and its device/inode fingerprint
- * @throws Error if the runs directory is invalid or its fingerprint does not match the expected one
+ * @throws Error if the runs directory is invalid
  */
 async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnapshot> {
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
@@ -294,10 +294,6 @@ async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnap
     throw new Error('Runs directory must be a regular directory');
   }
   const fingerprint = { dev: stats.dev, ino: stats.ino };
-  const expected = location.runsRootFingerprint;
-  if (expected !== undefined && (expected.dev !== fingerprint.dev || expected.ino !== fingerprint.ino)) {
-    throw new Error('Runs directory fingerprint changed');
-  }
   return { directory, fingerprint };
 }
 
@@ -405,15 +401,15 @@ function summarize(meta: RunMeta) {
  * Read and summarize the runs in the configured runs directory.
  *
  * @param location - Run store filesystem locations
- * @returns Run summaries and warnings for entries that fail to load for non-`ENOENT` reasons. An initially missing runs directory without an expected fingerprint returns `{ runs: [], warnings: [] }`; an individual `ENOENT` entry is omitted without a warning
- * @throws Error if the runs directory cannot be validated or read, its expected fingerprint does not match, or its identity changes during the read. An initial missing runs directory is tolerated only when no expected fingerprint is supplied
+ * @returns Run summaries and warnings for entries that fail to load for non-`ENOENT` reasons. An initially missing runs directory returns `{ runs: [], warnings: [] }`; an individual `ENOENT` entry is omitted without a warning
+ * @throws Error if the runs directory cannot be validated or read, or its identity changes during the read
  */
 export async function readRunCollection(location: RunStoreLocation) {
   let root: RunsRootSnapshot;
   try {
     root = await captureRunsRoot(location);
   } catch (error) {
-    if (isMissing(error) && location.runsRootFingerprint === undefined) return { runs: [], warnings: [] };
+    if (isMissing(error)) return { runs: [], warnings: [] };
     throw error;
   }
   const entries = await readDirectory(root.directory);

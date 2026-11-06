@@ -780,7 +780,6 @@ describe('Web UI Retry 本番 DOM 経路', () => {
           locationId: project.locationId,
           canonicalDirectory: project.canonicalDirectory,
           displayName: project.displayName,
-          fingerprint: project.fingerprint,
         });
         const handle = await repository.enqueueAndClaim({
           task: 'original order',
