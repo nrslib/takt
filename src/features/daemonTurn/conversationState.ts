@@ -16,6 +16,7 @@ export class TurnConversationState {
       ...(fields.session === undefined ? {} : { session: fields.session }),
       ...(fields.proposal === undefined ? {} : { revision: fields.proposal.revision, pending: fields.proposal.pending }),
       ...(fields.approval === undefined ? {} : { approval: fields.approval }),
+      ...(fields.interruptedMessage === undefined ? {} : { interruptedMessage: fields.interruptedMessage }),
     };
   }
 

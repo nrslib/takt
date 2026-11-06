@@ -55,7 +55,8 @@ export class ConversationStateStore {
     return { version: stored.metadata.version, assignment: record.assignment,
       session: { provider: record.provider, model: record.model, sessionId: record.sessionId,
         ...(record.agentOverrides === undefined ? {} : { agentOverrides: record.agentOverrides }) },
-      revision: record.revision, pending: record.pending, approval: record.approval };
+      revision: record.revision, pending: record.pending, approval: record.approval,
+      ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }) };
   }
 
   async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
@@ -129,6 +130,7 @@ export class ConversationStateStore {
             agentOverrides: change.session.agentOverrides }),
           ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
           ...(change.approval === undefined ? {} : { approval: change.approval }),
+          ...(change.interruptedMessage === undefined ? {} : { interruptedMessage: change.interruptedMessage }),
         });
         if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
         const nextVersion = stored.metadata.version + 1;

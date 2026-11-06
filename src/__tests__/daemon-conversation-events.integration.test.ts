@@ -7,7 +7,7 @@ import type { ChildProcess } from 'node:child_process';
 import * as spawnModule from '../shared/utils/spawn.js';
 import { createTurnProcessHost } from '../features/daemon/turnProcessHost.js';
 import type { DaemonProcessMessage } from '../core/daemon/processProtocol.js';
-import type { RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
+import type { ConversationChange, RuntimeMessage, TurnStart } from '../core/daemon/messages.js';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -45,6 +45,7 @@ import { createConversationTurnService } from '../features/manager/conversationS
 import { WatchChecks } from '../features/daemon/watchers/checks.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
+import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
@@ -77,6 +78,234 @@ async function fixture(seed?: (directory: string, repository: string) => Promise
   const post = (name: string, lane: 'human' | 'other' = 'human') => daemon.dispatcher.accept(input(name, id, lane));
   return { ...daemon, directory, repository, runner, id, opened, post, outputs };
 }
+
+async function conversationProcess(f: Awaited<ReturnType<typeof fixture>>, execute: PreparedConversationRuntime['executor']['execute']) {
+  const envelope = { protocolVersion: 1 as const, launchId: randomUUID() };
+  const completed = new Map<string, ReturnType<typeof deferred<TurnOutcome>>>();
+  const completion = (operationId: string) => {
+    let value = completed.get(operationId);
+    if (value === undefined) { value = deferred<TurnOutcome>(); completed.set(operationId, value); }
+    return value;
+  };
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'fixture', executor: { execute } };
+  }, async close() {} });
+  const runtime = createTurnProcessRuntime({
+    createBusiness: () => ({ ...service, async close() {} }),
+    onFatal(error) { for (const pending of completed.values()) pending.reject(error); },
+    transport: { async send(message) {
+      if (message.kind === 'daemon_request') {
+        const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
+        await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
+      } else if (message.kind === 'turn_finished') {
+        const call = f.runner.calls.find((call) => call.turn.operationId === message.turn.operationId);
+        if (call === undefined) throw new Error('Unknown conversation turn');
+        await f.runner.finish(call, message.outcome);
+        completion(call.turn.operationId).resolve(message.outcome);
+      }
+    } },
+  });
+  await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id,
+    assignment: { kind: 'repository', repositoryDirectory: f.repository }, configDirectory: f.directory });
+  vi.spyOn(f.runner, 'resultCommitted').mockImplementation(async (turn) => {
+    await runtime.receive({ ...envelope, kind: 'result_committed', turn });
+  });
+  f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
+  cleanups.push(() => runtime.disconnect());
+  return {
+    async start(call: Awaited<ReturnType<typeof f.runner.started>>) {
+      completion(call.turn.operationId);
+      await runtime.receive({ ...envelope, kind: 'start_turn', input: call.input });
+    },
+    interrupt: (turn: TurnStart['turn']) => runtime.receive({ ...envelope, kind: 'interrupt', turn }),
+    finished: (turn: TurnStart['turn']) => completion(turn.operationId).promise,
+  };
+}
+
+it.each(['interrupt', 'shutdown'] as const)('persists interrupted manager context through %s and supplies it to the next executor turn', async (stop) => {
+  const f = await fixture(async (directory, repository) => {
+    await mkdir(join(directory, 'conversations'), { recursive: true });
+    await writeFile(join(directory, 'conversations', `${conversationId({ kind: 'repository', repositoryDirectory: repository })}.json`),
+      JSON.stringify(conversationRecord(repository)));
+  });
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const entered = deferred<void>();
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
+    message: 'continued', summary: null, sessionId: 'provider-session', assignment: undefined,
+  }));
+  execute.mockImplementationOnce(async (turn) => {
+    expect(turn.sessionId).toBe('provider-session');
+    entered.resolve();
+    await new Promise<void>((_resolve, reject) => {
+      turn.abortSignal.addEventListener('abort', () => reject(turn.abortSignal.reason), { once: true });
+      turn.abortSignal.throwIfAborted();
+    });
+    throw new Error('Expected interruption');
+  });
+  const child = await conversationProcess(f, execute);
+  accepted(await f.post('interrupted human request'));
+  const active = await f.runner.started(1);
+  await child.start(active);
+  await entered.promise;
+  if (stop === 'shutdown') await f.close();
+  else {
+    expect(await f.dispatcher.control({ kind: 'interrupt', ...active.turn })).toEqual({ kind: 'interrupted' });
+    await child.interrupt(active.turn);
+  }
+  expect(await child.finished(active.turn)).toMatchObject({ kind: 'interrupted' });
+  const saved = await new ConversationStateStore(f.directory).read(f.id);
+  expect(saved?.state).toMatchObject({ session: { sessionId: 'provider-session' }, interruptedMessage: 'interrupted human request' });
+  expect(f.runner.calls).toHaveLength(1);
+  expect(execute).toHaveBeenCalledOnce();
+  const nextDaemon = stop === 'shutdown' ? await fixture() : f;
+  const nextChild = stop === 'shutdown' ? await conversationProcess(nextDaemon, execute) : child;
+  accepted(await nextDaemon.post('continuation'));
+  const next = await nextDaemon.runner.started(stop === 'shutdown' ? 1 : 2);
+  expect(next.input.event.eventId).toBe('continuation');
+  await nextChild.start(next);
+  expect(await nextChild.finished(next.turn)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  const turn = execute.mock.calls[1]![0];
+  expect(turn.sessionId).toBe('provider-session');
+  expect(turn.prompt).toContain('interrupted human request');
+  expect(turn.prompt.slice(0, turn.prompt.indexOf('interrupted human request'))).toMatch(/interrupt/i);
+  expect(turn.prompt.indexOf('interrupted human request')).toBeLessThan(turn.prompt.indexOf('continuation'));
+  expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({ interruptedMessage: null });
+});
+
+it.each([
+  { source: 'human' as const, invalidated: false },
+  { source: 'human' as const, invalidated: true },
+  { source: 'event' as const, invalidated: false },
+])('preserves human context and the latest session on shutdown without a child change ($source, invalidated: $invalidated)', async ({ source, invalidated }) => {
+  const interruptedMessage = source === 'human' ? 'human request without child result' : 'previous interrupted human request';
+  const f = await fixture(async (directory, repository) => {
+    await mkdir(join(directory, 'conversations'), { recursive: true });
+    await writeFile(join(directory, 'conversations', `${conversationId({ kind: 'repository', repositoryDirectory: repository })}.json`),
+      JSON.stringify({ ...conversationRecord(repository), ...(source === 'event' ? { interruptedMessage } : {}) }));
+  });
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  accepted(await f.post('human request without child result', source === 'human' ? 'human' : 'other'));
+  const active = await f.runner.started(1);
+  if (invalidated) {
+    expect(await f.dispatcher.request(active.turn, { kind: 'save_conversation', change: {
+      operationId: randomUUID(), expectedVersion: active.input.state.version,
+      session: { ...active.input.state.session, sessionId: null },
+    } }, active.signal)).toMatchObject({ kind: 'state_saved' });
+  }
+  accepted(await f.post('waiting continuation'));
+  await f.close();
+  const store = new ConversationStateStore(f.directory);
+  const saved = await store.read(f.id);
+  expect(saved?.state).toMatchObject({ session: { sessionId: invalidated ? null : 'provider-session' }, interruptedMessage });
+  const records = await Promise.all((await readdir(join(f.directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))
+    .map(async (name) => EventRecordSchema.parse(JSON.parse(await readFile(join(f.directory, 'daemon-events', name), 'utf8')) as unknown)));
+  const settled = records.find((record) => record.event.eventId === active.input.event.eventId);
+  if (settled?.state !== 'settled') throw new Error('Expected a saved interrupted result');
+  expect(settled.result.outcome.kind).toBe('interrupted');
+  if (source === 'human') expect(settled.result.outcome).toMatchObject({ change: { interruptedMessage } });
+  await store.apply(settled.result);
+  expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toEqual(saved?.state);
+  const restarted = await fixture();
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
+    message: 'continued', summary: null, sessionId: 'next-session', assignment: undefined,
+  }));
+  const child = await conversationProcess(restarted, execute);
+  const waiting = await restarted.runner.started(1);
+  expect(waiting.input.event.eventId).toBe('waiting continuation');
+  await child.start(waiting);
+  await child.finished(waiting.turn);
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0].sessionId).toBe(invalidated ? undefined : 'provider-session');
+  expect(execute.mock.calls[0]![0].prompt).toContain(interruptedMessage);
+  expect(restarted.runner.calls).toHaveLength(1);
+});
+
+it('roundtrips message-only changes and clearing through IPC and conversation storage', async () => {
+  const f = await fixture();
+  accepted(await f.post('state-update'));
+  const call = await f.runner.started(1);
+  const state = new TurnConversationState(call.input.state, { signal: call.signal, progress() {}, async request(change) {
+    const message = parseTurnProcessMessage({ protocolVersion: 1, launchId: 'message-state', kind: 'daemon_request',
+      turn: call.turn, requestId: randomUUID(), request: change }, 'message-state');
+    if (message.kind !== 'daemon_request') throw new Error('Expected state request');
+    return f.dispatcher.request(call.turn, message.request, call.signal);
+  } });
+  for (const interruptedMessage of ['original interrupted text', null]) {
+    const fields: Omit<ConversationChange, 'operationId' | 'expectedVersion'> & { interruptedMessage: string | null } = { interruptedMessage };
+    await state.save(fields);
+    expect(state.current).toMatchObject({ interruptedMessage });
+    expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({ interruptedMessage });
+  }
+  await f.runner.finish(call);
+});
+
+it('keeps a committed session invalidation when shutdown interrupts its reply to the manager', async () => {
+  const f = await fixture(async (directory, repository) => {
+    await mkdir(join(directory, 'conversations'), { recursive: true });
+    const record = conversationRecord(repository);
+    await writeFile(join(directory, 'conversations', `${record.id}.json`), JSON.stringify(record));
+  });
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  accepted(await f.post('interrupted during invalidation'));
+  const active = await f.runner.started(1);
+  accepted(await f.post('waiting after invalidation'));
+  const committed = deferred<void>();
+  const releaseReply = deferred<void>();
+  const replied = deferred<void>();
+  const envelope = { protocolVersion: 1 as const, launchId: 'manager-invalidation-race' };
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
+    message: 'continued', summary: null, sessionId: 'next-session', assignment: undefined,
+  }));
+  execute.mockImplementationOnce(async (turn) => {
+    expect(turn.sessionId).toBe('provider-session');
+    await turn.recovery!.invalidateSession();
+    throw new Error('Expected shutdown before invalidation reply');
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'fixture', executor: { execute } };
+  }, async close() {} });
+  const runtime = createTurnProcessRuntime({
+    createBusiness: () => ({ ...service, async close() {} }),
+    onFatal(error) { throw error; },
+    transport: { async send(message) {
+      if (message.kind === 'daemon_request') {
+        const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
+        const invalidation = message.request.kind === 'save_conversation' && message.request.change.session?.sessionId === null;
+        if (invalidation) {
+          expect(reply).toMatchObject({ kind: 'state_saved', version: 2 });
+          committed.resolve();
+          await releaseReply.promise;
+        }
+        await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
+        if (invalidation) replied.resolve();
+      } else if (message.kind === 'turn_finished') {
+        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 1,
+          interruptedMessage: 'interrupted during invalidation' } });
+        await f.runner.finish(active, message.outcome);
+      }
+    } },
+  });
+  await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id,
+    assignment: active.input.state.assignment, configDirectory: f.directory });
+  f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
+  await runtime.receive({ ...envelope, kind: 'start_turn', input: active.input });
+  try {
+    await committed.promise;
+    await f.close();
+  } finally { releaseReply.resolve(); }
+  await replied.promise;
+  expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({
+    version: 3, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',
+  });
+  const restarted = await fixture();
+  const child = await conversationProcess(restarted, execute);
+  const waiting = await restarted.runner.started(1);
+  expect(waiting.input.event.eventId).toBe('waiting after invalidation');
+  await child.start(waiting);
+  await child.finished(waiting.turn);
+  expect(execute.mock.calls[1]![0].sessionId).toBeUndefined();
+  expect(execute.mock.calls[1]![0].prompt).toContain('interrupted during invalidation');
+});
 
 it('persists H1 and H2 during a stopped turn and schedules both human messages before queued events', async () => {
   const f = await fixture();
