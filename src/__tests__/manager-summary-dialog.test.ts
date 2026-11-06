@@ -91,6 +91,31 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     });
   });
 
+  it('restores the confirmation with the default choice after a pending registration response fails', async () => {
+    const context = mount(lang);
+    await showProposal(context);
+    let respond!: (response: Submission) => void;
+    context.client.submit.mockImplementationOnce(() => new Promise((resolve) => { respond = resolve; }));
+    context.app.stdin.write(UP);
+    context.app.stdin.write(ENTER);
+    try {
+      await waitFor(() => {
+        expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]);
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', lang));
+      });
+    } finally {
+      respond({ kind: 'error', code: 'queue_full', message: 'Registration rejected' });
+    }
+    await waitFor(() => {
+      expect(context.app.lastFrame()).toContain(getLabel('manager.summary.confirmation', lang));
+      expect(context.app.lastFrame()).toContain('Registration rejected');
+    });
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toEqual([
+      { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
+    ]));
+  });
+
   it.each(['rejected', 'disconnected', 'result'] as const)('restores the confirmation with the default choice after registration fails via %s', async (failure) => {
     const context = mount(lang);
     await showProposal(context);
