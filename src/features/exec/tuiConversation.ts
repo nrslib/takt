@@ -120,6 +120,7 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
             // Ink owns the terminal, so the answer is streamed into the view
             // instead of being written to stdout underneath it.
             outputMode: 'silent',
+            confirmManagedProvider: async () => false,
             onStream: (event) => {
               if (turnEnded) return;
               input.onStreamEvent?.(event);

@@ -144,7 +144,6 @@ function createCommandAvailability(
 }
 
 export interface TuiSubmitInput {
-  confirmManagedProvider?: import('../../infra/managed-providers/preflight.js').ConfirmManagedProvider;
   text: string;
   abortSignal: AbortSignal;
   onAssistantChunk: (chunk: string) => void;
@@ -403,7 +402,8 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         result = await session.handleUserMessage({
           text: input.text,
           abortSignal: input.abortSignal,
-          confirmManagedProvider: input.confirmManagedProvider,
+          // Installation prompts belong to the bare-terminal mount preparation.
+          confirmManagedProvider: async () => false,
           onStream: (event) => {
             if (turnEnded) return;
             input.onStreamEvent?.(event);
@@ -444,7 +444,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         result = await session.createTaskInstruction({
           userNote: input.text.trim(),
           abortSignal: input.abortSignal,
-          confirmManagedProvider: input.confirmManagedProvider,
+          confirmManagedProvider: async () => false,
           onStream: (event) => {
             if (turnEnded) return;
             input.onStreamEvent?.(event);

@@ -23,6 +23,7 @@ import { selectMultipleOptions, selectOption, type SelectOptionItem } from '../s
 import { stripAnsi } from '../shared/utils/text.js';
 import { makeProvider } from './test-helpers.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import { inspectProviderInstallation } from '../infra/managed-providers/loader.js';
 
 const {
   execAttachmentStores,
@@ -45,6 +46,11 @@ vi.mock('ink', () => ({
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
+}));
+
+vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/managed-providers/loader.js')>()),
+  inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed' })),
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -335,6 +341,7 @@ describe('exec command setup', () => {
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
     mockInkRender.mockReset();
+    vi.mocked(inspectProviderInstallation).mockClear();
     setWorkflowConfigValues({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -496,6 +503,9 @@ describe('exec command setup', () => {
       await waitForExecMount(tree, 1);
       const props = tree.conversationProps();
       try {
+        expect(inspectProviderInstallation).toHaveBeenCalledWith('claude-sdk');
+        expect(vi.mocked(inspectProviderInstallation).mock.invocationCallOrder[0])
+          .toBeLessThan(mockInkRender.mock.invocationCallOrder[0]!);
         expect(props.initialEntries).toEqual([
           { role: 'system', content: expect.stringContaining('claude/opus') },
           { role: 'system', content: '/setup to edit configuration, /go to execute, /cancel to exit' },
