@@ -278,7 +278,7 @@ it.each(['ja', 'en'] as const)('shows a short summary status without displaying 
       expect(screen).not.toContain(line.replace(/\s+/gu, '').toLowerCase());
     }
     const status = frame.split('\n').filter((line) => !/Enter|↑|↓/u.test(line)).join('\n');
-    expect(status).toMatch(language === 'ja' ? /要約.*(?:作成|作って)/u : /(?:creat|prepar|generat|summariz).*summar|summarizing/iu);
+    expect(status).toContain(getLabel('manager.summaryWorking', language));
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await tui.exit();
