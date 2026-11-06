@@ -44,6 +44,8 @@ const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const caseWriteTools = {
   'migration-method-event': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
   'migration-method-conversation': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
+  'csv-export-scope-conversation': new Set(),
+  'search-index-scope-conversation': new Set(),
   'settled-operation-merge': new Set(['takt_merge_goal_task']),
   'single-operation-request': new Set(['takt_ask_goal_question']),
   'migration-no-downtime': new Set(['takt_enqueue_goal_task']),
@@ -75,6 +77,8 @@ const pauseRecordCases = new Set(['task-stopped-not-resumed', 'resumed-already-r
 const caseCommonTools = Object.fromEntries([...pauseRequeueCases, ...pauseRecordCases]
   .map((caseId) => [caseId, new Set(['takt_record_goal_work_log'])]));
 caseCommonTools['unidentified-goal'] = new Set();
+caseCommonTools['csv-export-scope-conversation'] = new Set();
+caseCommonTools['search-index-scope-conversation'] = new Set();
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseEnvelope(output) {
@@ -182,7 +186,8 @@ export default function assertManagerWorkSplit(output, context) {
       && !Object.hasOwn(args, 'options') && !Object.hasOwn(args, 'recommendation'),
     'Save one human information question without options or recommendation; body content is graded by llm-rubric');
   }
-  if (['migration-method-event', 'migration-method-conversation', 'unidentified-goal'].includes(caseId)) {
+  if (['migration-method-event', 'migration-method-conversation', 'unidentified-goal',
+    'csv-export-scope-conversation', 'search-index-scope-conversation'].includes(caseId)) {
     return result(true, 'Question content and withholding answer-dependent work are graded by llm-rubric');
   }
   if (caseId === 'single-operation-request') {
