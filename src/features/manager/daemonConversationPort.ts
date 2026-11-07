@@ -41,6 +41,29 @@ export function createDaemonConversationInput(options: {
     return { ...projected, generation: snapshot.generation, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
       cancel() { projected.cancel(); screen.cancel(); } };
   };
+  const replayActivityAfterRead = (attachmentId: string, snapshot: SnapshotRead & Pick<ConversationSnapshot, 'generation'>): SnapshotRead => {
+    const attachment = attached(attachmentId);
+    const request = attachment.input;
+    let completed = false;
+    let exhausted = false;
+    let cancelled = false;
+    return { ...snapshot, items: (async function* () {
+      yield* snapshot.items;
+      exhausted = true;
+    })(), complete() {
+      if (completed || cancelled || !exhausted) return;
+      completed = true;
+      snapshot.complete();
+      const activity = activities.get(request.conversationId);
+      if (request.binding.port !== 'tui' || attachments.get(attachmentId) !== attachment
+        || activity === undefined || activity.output.operationId !== snapshot.operationId
+        || activity.output.generation !== snapshot.generation || attachment.activitySequence === activity.version.stateSequence) return;
+      // 状態の配送完了後、初回読込や再取得で未配送の現在値を一度だけ配送する。
+      attachment.activitySequence = activity.version.stateSequence;
+      void attachment.delivery.deliver(request.conversationId, activity.output, activity.version)
+        .catch(() => { attachments.delete(attachmentId); });
+    }, cancel() { cancelled = true; snapshot.cancel(); } };
+  };
   const input: ConversationInput = {
     async open(request, delivery) {
       if (!accepting) throw new ConversationError('shutting_down');
@@ -54,25 +77,7 @@ export function createDaemonConversationInput(options: {
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
       attachments.set(attachmentId, attachment);
-      let completed = false;
-      let exhausted = false;
-      let cancelled = false;
-      return { attachmentId, read: { ...snapshot, items: (async function* () {
-        yield* snapshot.items;
-        exhausted = true;
-      })(), complete() {
-        if (completed || cancelled || !exhausted) return;
-        completed = true;
-        snapshot.complete();
-        const activity = activities.get(request.conversationId);
-        if (request.binding.port !== 'tui' || attachments.get(attachmentId) !== attachment
-          || activity === undefined || activity.output.operationId !== snapshot.operationId
-          || activity.output.generation !== snapshot.generation || attachment.activitySequence === activity.version.stateSequence) return;
-        // 初期スナップショットの状態を受信した後に、現在値を一度だけ配送する。
-        attachment.activitySequence = activity.version.stateSequence;
-        void delivery.deliver(request.conversationId, activity.output, activity.version)
-          .catch(() => { attachments.delete(attachmentId); });
-      }, cancel() { cancelled = true; snapshot.cancel(); } } };
+      return { attachmentId, read: replayActivityAfterRead(attachmentId, snapshot) };
     },
     async submit(request) {
       if (!accepting) return { kind: 'error', code: 'shutting_down', message: 'Daemon is stopping' };
@@ -131,7 +136,7 @@ export function createDaemonConversationInput(options: {
     async snapshot(attachmentId) {
       const attachment = attached(attachmentId);
       if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== attachment.input.conversationId) throw new ConversationError('invalid_assignment');
-      return read(attachment.input.conversationId, attachment);
+      return replayActivityAfterRead(attachmentId, await read(attachment.input.conversationId, attachment));
     },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };

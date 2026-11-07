@@ -50,6 +50,8 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
         expect(app.lastFrame()).not.toContain('WrongGeneration');
       });
       client.output({ kind: 'activity', operationId, generation: 3, activity: { kind: 'tool', tool: 'LateTool' } });
+      app.stdin.write('After late activity');
+      await waitFor(() => expect(app.lastFrame()).toContain('After late activity'));
       expect(app.lastFrame()).not.toContain('LateTool');
       expect(JSON.stringify(entries())).not.toContain('Tool');
     },

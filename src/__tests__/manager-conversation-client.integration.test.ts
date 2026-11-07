@@ -291,6 +291,55 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
   } finally { releaseThinking.resolve(); finish.resolve(); await fixture.settled(); }
 });
 
+it('restores cached activity after an initial transfer fails and a snapshot retry succeeds', async () => {
+  const finish = deferred<void>();
+  execute.mockImplementationOnce(async (input) => {
+    input.onActivity!({ kind: 'tool', tool: 'RetriedTool' });
+    await finish.promise;
+    return { message: 'Retried turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const originalOutputs = vi.fn();
+  client.onOutput(originalOutputs);
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Start before failed attachment' });
+  try {
+    await waitFor(() => expect(originalOutputs).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'activity', activity: { kind: 'tool', tool: 'RetriedTool' },
+    })));
+    client.close();
+    const write = frames.writeConversationFrame;
+    let failed = false;
+    vi.spyOn(frames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+      const envelope = value as { output?: { kind: string } };
+      if (!failed && envelope.output?.kind === 'transfer_end') {
+        failed = true;
+        throw new Error('Initial snapshot write failed');
+      }
+      return write(socket, value);
+    });
+    client = new ConversationIpcClient(assignment, { provider: 'mock' });
+    const outputs = vi.fn();
+    client.onOutput(outputs);
+    await client.connect();
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'incomplete' }));
+    expect(outputs).not.toHaveBeenCalled();
+    await client.refresh(); await complete();
+    await waitFor(() => expect(outputs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: 'activity', activity: { kind: 'tool', tool: 'RetriedTool' },
+    })));
+    const app = await snapshotView();
+    await waitFor(() => expect(app.lastFrame()).toContain('RetriedTool'));
+    await client.refresh(); await complete();
+    expect(outputs).toHaveBeenCalledOnce();
+    finish.resolve();
+    await fixture.settled();
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain('Retried turn completed');
+      expect(app.lastFrame()).not.toContain('RetriedTool');
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
 it('shows a goal event reply once while connected and does not copy it to workLog', async () => {
   const goal = goalRecord();
   saveGoal(goal);

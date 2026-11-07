@@ -143,6 +143,32 @@ it('does not replay an activity that was already delivered while the initial sna
   expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
   f.port.close();
 });
+
+it('replays cached activity after a cancelled initial read succeeds on retry, without repeating it on refresh', async () => {
+  const f = await fixture();
+  f.port.detach(f.opened.attachmentId);
+  f.opened.read.cancel();
+  const output = { kind: 'activity' as const, operationId: '11111111-1111-4111-8111-111111111111', generation: 7,
+    activity: { kind: 'tool' as const, tool: 'RetriedTool' } };
+  const version = { revision: 3, stateSequence: 6, operationId: output.operationId };
+  await f.port.deliver(f.selected.conversationId, output, version);
+  const delivery = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
+  const opened = await f.port.open(f.selected, delivery);
+  for await (const _item of opened.read.items) { /* 最後のフレームの配送失敗を再現する。 */ }
+  opened.read.cancel();
+  opened.read.complete();
+  expect(delivery.deliver).not.toHaveBeenCalled();
+  const retry = await f.port.snapshot(opened.attachmentId);
+  for await (const _item of retry.items) { /* 再取得した状態の配送完了を再現する。 */ }
+  retry.complete();
+  retry.complete();
+  expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
+  const refresh = await f.port.snapshot(opened.attachmentId);
+  for await (const _item of refresh.items) { /* 定期更新では再送しない。 */ }
+  refresh.complete();
+  expect(delivery.deliver).toHaveBeenCalledOnce();
+  f.port.close();
+});
 it.each(['capacity', 'storage', 'stopping'] as const)('never reports a rejected %s save as accepted', async (reason) => {
   const f = await fixture();
   vi.mocked(f.ingress.accept).mockResolvedValue({ kind: 'rejected', reason });
