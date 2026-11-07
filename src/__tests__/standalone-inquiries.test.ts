@@ -21,7 +21,7 @@ vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
   readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access,
 }));
-vi.mock('../infra/config/project/sessionStore.js', () => ({ writeFileAtomic: io.write }));
+vi.mock('../shared/utils/atomic-file.js', () => ({ writeFileAtomic: io.write }));
 vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('node:crypto', async (original) => {

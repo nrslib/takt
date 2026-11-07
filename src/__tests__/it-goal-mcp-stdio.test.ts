@@ -187,10 +187,31 @@ describe('standalone inquiries through manager MCP tools', () => {
     expect(await new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside }).list()).toEqual([]);
   });
 
-  it.each(['approval', 'operation_request'] as const)('does not create standalone %s inquiries through the question tool', async (kind) => {
+  it('creates and lists a standalone operation request', async () => {
+    await connect('manager');
+    const questionId = await askStandalone({ cwd, body: 'この操作を実行してください', kind: 'operation_request' });
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    expect(await store.get(questionId)).toMatchObject({
+      id: questionId,
+      kind: 'operation_request',
+      status: 'pending',
+      body: 'この操作を実行してください',
+      operation: { cwd, toolName: 'takt_ask_standalone_question' },
+    });
+    expect(await list()).toMatchObject({
+      inquiries: expect.arrayContaining([expect.objectContaining({
+        id: questionId,
+        kind: 'operation_request',
+        body: 'この操作を実行してください',
+      })]),
+      totalCount: 1,
+    });
+  });
+
+  it('does not create standalone approval inquiries through the question tool', async () => {
     await connect('manager');
     expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
-    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd, body: '確認', kind } });
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd, body: '確認', kind: 'approval' } });
     expect(result.isError).toBe(true);
     expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([]);
   });

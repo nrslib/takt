@@ -48,6 +48,7 @@ import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
 import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
 
+const directorSpeaker = `Speaker: ${JSON.stringify({ namespace: 'agent', id: 'director' })}`;
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
   get initializingCount() { return ipc.initializingCount; }, stopAccepting() {}, async close() {},
@@ -135,7 +136,7 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
   if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
   expect(await perform(turn, message.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Answer received' } });
   expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe(expected.text);
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
   expect(await readdir(inbox)).toEqual([]);
   const after = await f.conversations.snapshot(f.id);
   const remaining = [];
@@ -211,7 +212,7 @@ it.each([
   const ipc = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'workspace', kind: 'start_turn', input: next.input })), 'workspace');
   if (ipc.kind !== 'start_turn') throw new Error('Expected next turn');
   expect(await perform(next, ipc.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
-  expect(execute.mock.calls[0]![0].prompt).toBe(expected.text);
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
   expect(f.runner.calls).toHaveLength(2);
 });
 
@@ -261,7 +262,7 @@ it('publishes distinct saved workspace answers once and preserves their events o
     await f.runner.finish(next, outcome);
   }
   expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual(questions.map((question) =>
-    inquiryAnswerMessage(question.id, question.answer!, question.body)));
+    [inquiryAnswerMessage(question.id, question.answer!, question.body), directorSpeaker].join('\n\n')));
   accepted(await f.dispatcher.accept(input('publish-settled-answer', id)));
   const repeat = await f.runner.started(4);
   expect(await f.dispatcher.request(repeat.turn, { kind: 'publish_workspace_inquiry_answer', questionId: questions[0]!.id }, repeat.signal)).toEqual(receipts[0]);

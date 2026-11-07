@@ -217,7 +217,7 @@ export function createTaktMcpServer(
   if (options.toolSet !== 'read-only') {
     server.registerTool('takt_ask_standalone_question', {
       title: 'Ask a standalone question',
-      description: 'Save a pending question without a goal in the current manager assignment. cwd must be an absolute path in an assigned repository. Supports the same options and recommendation as goal questions. People answer through TUI or Slack. Returns questionId within 64 KiB.',
+      description: 'Save a pending inquiry without a goal in the current manager assignment. cwd must be an absolute path in an assigned repository. Supports kind question (default) or operation_request, with the same options and recommendation as goal questions. People answer through TUI or Slack. Returns questionId within 64 KiB.',
       inputSchema: askStandaloneQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Standalone question failed', async (deps, assignment) => {
       const current = assignment ?? await currentAssignment();

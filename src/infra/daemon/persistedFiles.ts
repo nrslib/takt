@@ -1,9 +1,11 @@
-import { createHash } from 'node:crypto';
-import { readFile, realpath } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
+import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
+import type { ConversationAssignment } from '../conversations/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
 import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
@@ -22,6 +24,9 @@ const inboxEvent = z.discriminatedUnion('kind', [
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.enum(['registered', 'resumed', 'patrol']) }).strict(),
 ]);
+const inquiryId = z.uuid();
+
+export type DaemonInquiryOwner = Extract<ConversationAssignment, { kind: 'workspace' | 'repository' }>;
 
 /** 既存形式を小さい読取に限定。大きい goals/tasks の全件解析には使わない。 */
 export class DaemonPersistedFiles {
@@ -32,6 +37,32 @@ export class DaemonPersistedFiles {
     const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
     if (question.id !== questionId) throw new Error('Saved question ID differs from its filename');
     return question;
+  }
+
+  async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner) {
+    const directory = await this.inquiryDirectory(owner);
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); }
+    catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+      throw error;
+    }
+    const questions: GoalQuestion[] = [];
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const id = inquiryId.parse(entry.name.slice(0, -'.json'.length));
+      const question = await this.readInquiry(owner, id);
+      if (question.answerPublicationPending === true) questions.push(question);
+    }
+    return questions;
+  }
+
+  async markInquiryAnswerPublished(owner: DaemonInquiryOwner, questionId: string) {
+    const { path, question } = await this.readInquiryWithPath(owner, questionId);
+    if (question.answerPublicationPending !== true) return question;
+    const result = GoalQuestionSchema.parse({ ...question, answerPublicationPending: undefined });
+    await writePrivateFile(path, `${JSON.stringify(result, null, 2)}\n`);
+    return result;
   }
 
   async readGoal(repositoryDirectory: string, goalId: string) {
@@ -74,9 +105,36 @@ export class DaemonPersistedFiles {
     return join(this.configDirectory, 'manager-inbox', createHash('sha256').update(canonical).digest('hex'));
   }
 
+  async saveStandaloneInquiryAnswer(repositoryDirectory: string, questionId: string, questionBody: string,
+    answer: z.infer<typeof GoalAnswerSchema>): Promise<void> {
+    const event = inboxEvent.parse({ kind: 'answer', goalId: null, questionId, questionBody, answer,
+      createdAt: new Date().toISOString() });
+    const name = `${event.createdAt.replaceAll(':', '-')}-${process.hrtime.bigint().toString().padStart(20, '0')}-${randomUUID()}.json`;
+    await writePrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), JSON.stringify(event));
+  }
+
   async readInboxEvent(repositoryDirectory: string, name: string) {
     if (!/^[a-zA-Z0-9._-]+\.json$/.test(name)) throw new Error('Invalid inbox event filename');
     const content = await readPrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), MAX_PROJECTION_BYTES);
     return content === undefined ? undefined : inboxEvent.parse(JSON.parse(content.toString('utf8')) as unknown);
+  }
+
+  private async inquiryDirectory(owner: DaemonInquiryOwner): Promise<string> {
+    const base = owner.kind === 'workspace'
+      ? join(this.configDirectory, 'workspaces', inquiryId.parse(owner.workspaceId))
+      : join(this.configDirectory, 'projects', projectIdForCanonicalDirectory(await realpath(owner.repositoryDirectory)));
+    return join(base, 'inquiries');
+  }
+
+  private async readInquiry(owner: DaemonInquiryOwner, questionId: string) {
+    return (await this.readInquiryWithPath(owner, questionId)).question;
+  }
+
+  private async readInquiryWithPath(owner: DaemonInquiryOwner, questionId: string) {
+    const id = inquiryId.parse(questionId);
+    const path = join(await this.inquiryDirectory(owner), `${id}.json`);
+    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
+    if (question.id !== id) throw new Error('Saved question ID differs from its filename');
+    return { path, question };
   }
 }

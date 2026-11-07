@@ -4,34 +4,14 @@
  * Manages persona sessions and input history persistence.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveProviderAlias } from '../../../shared/types/provider.js';
+import { writeFileAtomic } from '../../../shared/utils/atomic-file.js';
 import { getProjectConfigDir, ensureDir } from '../paths.js';
 
-/**
- * Write file atomically using temp file + rename.
- * This prevents corruption when multiple processes write simultaneously.
- */
-export function writeFileAtomic(filePath: string, content: string, mode = 0o644): void {
-  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tempPath, content, { encoding: 'utf-8', mode, flag: 'wx' });
-    chmodSync(tempPath, mode);
-    renameSync(tempPath, filePath);
-  } catch (error) {
-    try {
-      if (existsSync(tempPath)) {
-        unlinkSync(tempPath);
-      }
-    } catch {
-      // Ignore cleanup errors
-    }
-    throw error;
-  }
-}
+export { writeFileAtomic };
 
 function sessionFileMode(storageDirectory?: string): number {
   return storageDirectory === undefined ? 0o644 : 0o600;

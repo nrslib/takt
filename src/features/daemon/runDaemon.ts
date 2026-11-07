@@ -31,7 +31,6 @@ import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
-import { saveManagerEvent } from '../../infra/goals/events.js';
 import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
 
 /** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
@@ -154,8 +153,7 @@ export async function startDaemon(options: {
         }
         const repository = question.operation?.cwd ?? owner.repositoryDirectory;
         if (!(await routing.display(owner)).repositoryDirectories.includes(repository)) throw new Error('Standalone answer repository is outside its assignment');
-        saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: question.id,
-          questionBody: question.body, answer: question.answer });
+        await files.saveStandaloneInquiryAnswer(repository, question.id, question.body, question.answer);
       });
     watchers = startDaemonWatchers({ source: watchSource,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
