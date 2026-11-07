@@ -4,7 +4,9 @@
 
 ## manager の見回り
 
-動いているゴール（一時停止・中止・完成以外）があるリポジトリでは、manager が定期的に全ゴールをまとめて点検します。`.takt/config.yaml` または `~/.takt/config.yaml` の `manager.patrol_interval` に正の整数で秒数を指定します。リポジトリの設定を優先し、既定は 1800 秒（30 分）です。
+動いているゴール（一時停止・中止・完成・マージ待ち以外）があるリポジトリでは、manager が定期的に対象のゴールをまとめて点検します。対象がなければ見回りは動きません。`.takt/config.yaml` または `~/.takt/config.yaml` の `manager.patrol_interval` に正の整数で秒数を指定します。リポジトリの設定を優先し、既定は 1800 秒（30 分）です。
+
+マージ待ち（`awaiting_merge`）のゴールは、PR の見張りで監視します。マージ・クローズに加え、取り込み先との衝突（`mergeable: CONFLICTING`）をイベントで manager に届けます。同じ衝突が続く間は繰り返さず、衝突が解消した後に再発すると、再び届けます。`mergeable: UNKNOWN` は変化に数えません。時間や回数で異常を判断しません。manager は現在状態と既存タスクを確認し、必要なら `takt_merge_goal_pr` で仕上げタスクを積みます。既定の `approve` では `until: prepare` で仕上げ、人のマージを待ちます。
 
 ```yaml
 manager:

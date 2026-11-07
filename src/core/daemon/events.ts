@@ -23,7 +23,7 @@ export type WatchObservation = {
 } & (
   | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
-
+  | { kind: 'pr_conflicting'; repositoryDirectory: string; goalId: string; url: string }
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
   | { kind: 'run_launch_stalled'; repositoryDirectory: string }
   | { kind: 'watch_failed'; reason: string }

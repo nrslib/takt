@@ -1246,7 +1246,7 @@ it('continues monitoring later repositories after an unreadable tasks file', asy
   expect(errors).toHaveBeenCalledTimes(2);
 });
 
-it('selects active patrol goals per repository and resolves project, global and default intervals', async () => {
+it('excludes awaiting-merge goals from patrol and resolves project, global and default intervals', async () => {
   const f = await fixture();
   const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
   const active = goalRecord();
@@ -1262,8 +1262,10 @@ it('selects active patrol goals per repository and resolves project, global and 
   }
   expect(await source.patrols()).toEqual([{ conversationId: f.id, repositoryDirectory: f.repository,
     intervalSeconds: 1800 }]);
-  expect(await source.patrolGoalIds(f.repository)).toEqual(expect.arrayContaining([active.id, awaiting.id]));
-  expect(await source.patrolGoalIds(f.repository)).toHaveLength(2);
+  expect(await source.patrolGoalIds(f.repository)).toEqual([active.id]);
+  expect(await source.pullRequests()).toMatchObject([{ goalId: awaiting.id }]);
+  await writeFile(join(f.repository, '.takt', 'goals', active.id, 'goal.json'), JSON.stringify({ ...active, executionStatus: 'paused' }));
+  expect(await source.patrolGoalIds(f.repository)).toEqual([]);
   await writeFile(join(f.directory, 'config.yaml'), 'manager:\n  patrol_interval: 900\n');
   expect((await source.patrols())[0]!.intervalSeconds).toBe(900);
   await writeFile(join(f.repository, '.takt', 'config.yaml'), 'manager:\n  patrol_interval: 60\n');

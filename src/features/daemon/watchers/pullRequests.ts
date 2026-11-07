@@ -16,6 +16,7 @@ export interface PullRequestWatchTarget extends WatchTarget {
 const ResponseSchema = z.object({
   number: z.number().int().positive(), url: z.url(), state: z.enum(['OPEN', 'MERGED', 'CLOSED']),
   headRefName: z.string(), baseRefName: z.string(),
+  mergeable: z.enum(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']),
 });
 
 export async function observePullRequest(target: PullRequestWatchTarget, command: CommandPort,
@@ -24,6 +25,7 @@ export async function observePullRequest(target: PullRequestWatchTarget, command
   if (!target.awaitingMerge) {
     await observations.normal(target, 'pr_changed');
     await observations.normal(target, 'pr_mismatch');
+    await observations.normal(target, 'pr_conflicting');
     return;
   }
   const published = parseGitHubPullRequestTarget(target.url);
@@ -31,7 +33,7 @@ export async function observePullRequest(target: PullRequestWatchTarget, command
   if (published.number !== target.number) mismatch = 'Saved PR number differs from its URL';
   else {
     const result = await command.run({ executable: 'gh',
-      args: ['pr', 'view', published.url, '--json', 'number,url,state,headRefName,baseRefName'],
+      args: ['pr', 'view', published.url, '--json', 'number,url,state,headRefName,baseRefName,mergeable'],
       cwd: target.repositoryDirectory, env: process.env, maxOutputBytes: 16 * 1024,
     }, options);
     options.signal.throwIfAborted();
@@ -44,7 +46,17 @@ export async function observePullRequest(target: PullRequestWatchTarget, command
     }
     if (mismatch === undefined) {
       await observations.normal(target, 'pr_mismatch');
-      if (response.state === 'OPEN') return observations.normal(target, 'pr_changed');
+      if (response.state === 'OPEN') {
+        await observations.normal(target, 'pr_changed');
+        if (response.mergeable === 'CONFLICTING') {
+          await observations.abnormal(target, { ...observations.evidence(target), kind: 'pr_conflicting',
+            repositoryDirectory: target.repositoryDirectory, goalId: target.goalId, url: target.url });
+        } else if (response.mergeable === 'MERGEABLE') {
+          await observations.normal(target, 'pr_conflicting');
+        }
+        return;
+      }
+      await observations.normal(target, 'pr_conflicting');
       await observations.abnormal(target, { ...observations.evidence(target), kind: 'pr_changed',
         repositoryDirectory: target.repositoryDirectory, goalId: target.goalId, url: target.url, state: response.state });
       return;
