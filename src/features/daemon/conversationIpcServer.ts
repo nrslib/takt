@@ -68,8 +68,10 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   const wakeControls = (): void => { for (const wake of controlWaiters) wake(); controlWaiters.clear(); };
   let wakeWriter: (() => void) | undefined;
   let snapshot: ActiveRead | undefined;
+  let initialReadComplete = false;
   let control: { value: unknown; resolve(): void; reject(error: unknown): void } | undefined;
   let state: { conversationId: string; output: PortOutput; version: OutputVersion } | undefined;
+  let activity: { conversationId: string; output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion } | undefined;
   const outputs: Array<{ iterator: ReturnType<typeof conversationTransferFrames>; started: boolean;
     resolve(result: { kind: 'delivered' } | { kind: 'unavailable'; reason: string }): void }> = [];
   const cancelRead = (): void => {
@@ -84,6 +86,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     control?.reject(new Error('IPC receiver unavailable')); control = undefined;
     for (const queued of outputs.splice(0)) queued.resolve({ kind: 'unavailable', reason: 'disconnected' });
     state = undefined;
+    activity = undefined;
     for (const id of owned) service.detach(id);
     owned.clear();
     socket.destroy();
@@ -126,6 +129,15 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           else { await writeConversationFrame(socket, next.value.frame); current.started = true; }
           continue;
         }
+        // 初期 state が届く前の activity はクライアントが破棄するため、読込完了まで保持する。
+        if (activity !== undefined && initialReadComplete && (current === undefined || current.boundary)) {
+          const latest = activity; activity = undefined;
+          for await (const fragment of conversationTransferFrames(latest.conversationId,
+            { ...latest.version, transferId: randomUUID() }, 'output', (async function* () { yield latest.output; })())) {
+            await writeConversationFrame(socket, fragment.frame);
+          }
+          continue;
+        }
         if (current === undefined) break;
         try {
           current.next ??= current.iterator.next();
@@ -139,7 +151,10 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           await writeConversationFrame(socket, next.value.frame);
           current.started = true;
           current.boundary = next.value.boundary;
-          if (next.value.terminal && !current.cancelled && snapshot === current) current.read.complete();
+          if (next.value.terminal && !current.cancelled && snapshot === current) {
+            initialReadComplete = true;
+            current.read.complete();
+          }
         } catch {
           current.read.cancel();
           await current.iterator.return(undefined);
@@ -174,6 +189,12 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       if (value.kind === 'snapshot') { beginRead(value.read); return { kind: 'delivered' }; }
       if (value.kind === 'pending' || value.kind === 'running') {
         state = { conversationId, output: value, version };
+        wakeWriter?.();
+        void pump();
+        return { kind: 'delivered' };
+      }
+      if (value.kind === 'activity') {
+        activity = { conversationId, output: value, version };
         wakeWriter?.();
         void pump();
         return { kind: 'delivered' };

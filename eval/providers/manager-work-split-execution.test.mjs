@@ -24,7 +24,9 @@ function runPassingCheck(options) {
   const run = (command, args, cwd) => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: 'pipe' });
   options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'check', input: { command: 'npm test' } } });
   run('git', ['worktree', 'add', '--detach', workspace, 'goal/inventory'], options.cwd);
-  assert.match(run('npm', ['test'], workspace), /PASS inventory import/);
+  const output = run('npm', ['test'], workspace);
+  assert.match(output, /PASS inventory import/);
+  options.onStream({ type: 'tool_result', data: { id: 'check', content: output, isError: false } });
 }
 
 function fakeProvider(action) {
@@ -468,3 +470,107 @@ test('worker startup failure is not returned as a completed evaluation', async (
     assert.equal(typeof readFileSync(join(root, 'worker-stderr.log'), 'utf8'), 'string');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution']) {
+  test(`${caseId}: records actual tool calls, external queries and a returned followup turn`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'manager-no-wait-test-'));
+    const priorPath = process.env.PATH;
+    try {
+      const provider = fakeProvider(async ({ options, calls, client, context }) => {
+        if (calls !== 1) return;
+        const tools = (await client.listTools()).tools;
+        assert.ok(tools.some(({ name }) => name === 'takt_get_workflow'));
+        if (caseId === 'two-goal-pr-execution') {
+          assert.ok(!options.allowedTools || options.allowedTools.some((name) => name.endsWith('__takt_get_workflow')));
+          const goals = JSON.parse((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: options.cwd } })).content[0].text).goals;
+          assert.equal(goals.length, 2);
+          const detail = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: options.cwd, workflow: 'merge-prepare' } });
+          assert.notEqual(detail.isError, true, detail.content[0].text);
+          const steps = JSON.parse(detail.content[0].text).steps;
+          assert.ok(steps.some(({ name, wait }) => name === 'wait_ci' && wait));
+          const target = goals.find(({ id }) => id !== context.goal.id);
+          const submitted = await client.callTool({ name: 'takt_merge_goal_pr', arguments: {
+            cwd: options.cwd, goalId: target.id, prNumber: target.pullRequest.number, until: 'prepare',
+          } });
+          assert.notEqual(submitted.isError, true, submitted.content[0].text);
+          const command = `gh pr view ${target.pullRequest.number} --json statusCheckRollup`;
+          options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'status', input: { command } } });
+          execFileSync('gh', ['pr', 'view', String(target.pullRequest.number), '--json', 'statusCheckRollup'], { cwd: options.cwd });
+        } else {
+          const missing = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: options.cwd, workflow: 'missing-fixture-workflow' } });
+          assert.equal(missing.isError, true);
+          runPassingCheck(options);
+          const observer = join(dirname(options.cwd), 'external-status.mjs');
+          const command = `node ${observer}`;
+          options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'status', input: { command } } });
+          execFileSync(process.execPath, [observer], { cwd: options.cwd });
+        }
+      });
+      const trial = await runManagerExecution(config(caseId), root, new AbortController().signal, provider);
+      assert.equal(trial.error, undefined);
+      const evidence = readExecutionEvidence(root);
+      const verdict = gradeExecution(trial, evidence.events, evidence.checks);
+      assert.equal(verdict.pass, true, verdict.reason);
+      const output = buildExecutionOutput(root, evidence);
+      assert.equal(output.workflowDetailsRead, caseId === 'two-goal-pr-execution');
+      assert.ok(output.commands.length > 0);
+      assert.equal(output.externalObservations.length, 1);
+      assert.equal(trial.turns.length, 2);
+      assert.equal(process.env.PATH, priorPath);
+      assert.equal(assertExecution(JSON.stringify(output), { vars: { case: caseId, lang: 'ja' } }).pass, true);
+      const forged = { ...output, workflowDetailsRead: !output.workflowDetailsRead };
+      assert.equal(assertExecution(JSON.stringify(forged), { vars: { case: caseId, lang: 'ja' } }).pass, false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('two-goal fixture withdraws the specified goal question without changing the other goal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-question-target-'));
+  try {
+    const provider = fakeProvider(async ({ options, calls, client, context }) => {
+      if (calls !== 1) return;
+      const store = new GoalStore(options.cwd);
+      const before = await store.get(context.goal.id);
+      const goals = JSON.parse((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: options.cwd } })).content[0].text).goals;
+      const target = goals.find(({ id }) => id !== context.goal.id);
+      const args = { cwd: options.cwd, goalId: target.id };
+      const asked = await client.callTool({ name: 'takt_ask_goal_question', arguments: { ...args, body: '確認記録の保存先を教えてください。' } });
+      assert.notEqual(asked.isError, true);
+      const { questionId } = JSON.parse(asked.content[0].text);
+      const withdrawn = await client.callTool({ name: 'takt_withdraw_goal_question', arguments: {
+        ...args, questionId, reason: '保存先を確認できたため。',
+      } });
+      assert.notEqual(withdrawn.isError, true, withdrawn.content[0].text);
+      assert.deepEqual(JSON.parse(withdrawn.content[0].text), { goalId: target.id, questionId, questionStatus: 'withdrawn' });
+      assert.equal((await store.get(target.id)).questions.find(({ id }) => id === questionId).status, 'withdrawn');
+      assert.deepEqual(await store.get(context.goal.id), before);
+    });
+    const trial = await runManagerExecution(config('two-goal-pr-execution'), root, new AbortController().signal, provider);
+    assert.equal(trial.error, undefined);
+    assert.equal(trial.complete, true);
+    assert.equal(trial.cleaned, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const repeated of [false, true]) {
+  test(`execution observations ${repeated ? 'reject repeated queries' : 'accept different fields queried once'} inside a separately invoked script`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'manager-hidden-wait-'));
+    try {
+      const provider = fakeProvider(async ({ options, calls }) => {
+        if (calls !== 1) return;
+        runPassingCheck(options);
+        // The script name contains no waiting keywords; observation is at the external query boundary.
+        const script = join(dirname(options.cwd), 'check-status.sh');
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(script, `gh run view 9001 --json status\ngh run view 9001 --json ${repeated ? 'status' : 'conclusion'}\n`);
+        options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'script', input: { command: `bash ${script}` } } });
+        execFileSync('bash', [script], { cwd: options.cwd });
+      });
+      const trial = await runManagerExecution(config('finite-check-external-execution'), root, new AbortController().signal, provider);
+      assert.equal(trial.error, undefined);
+      const evidence = readExecutionEvidence(root);
+      assert.equal(evidence.checks.filter(({ kind }) => kind === 'external').length, 2);
+      assert.equal(gradeExecution(trial, evidence.events, evidence.checks).pass, !repeated);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}

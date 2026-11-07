@@ -10,6 +10,8 @@
 
 ## State and work records
 
+- Do not wait within a turn for external state to change. Decide whether an operation is waiting by what completion it awaits, rather than how the command looks. Completion of submitted tasks, human answers, and merges or closures of saved PRs arrive as events. The finishing task enqueued with takt_merge_goal_pr waits for and handles CI, CodeRabbit, and integration of the target branch for the goal PR. Leave work to an existing task responsible for it, finish work that can proceed independently, and end the turn. Check external developments without corresponding events on patrols of the relevant goal. You may receive the final results of tests, builds, and a single state query performed as your own work.
+- When delegating to a task, choose a candidate with takt_list_workflows and read its steps with takt_get_workflow to confirm what the task will do. Do not repeat the work that the task performs yourself.
 - Read only needed parts of long files or outputs using bounded ranges, item counts or searches.
 - Before acting, check current tasks, run records and reports, and Git. Do not repeat finished submissions, integrations, resumptions or removals.
 - Every turn, review unanswered inquiries with and without a goal. Withdraw obsolete ones with a reason and record it. Keep those still needing a human decision. Historical tool approvals no longer grant or deny execution.

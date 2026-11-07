@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
 
+import { noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
+
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-export const executionCases = new Set(['stopped-background-execution', 'integrated-task-execution']);
+export const executionCases = new Set(['stopped-background-execution', 'integrated-task-execution', ...noWaitExecutionCases]);
 
 export function executionConfig(config, vars) {
   if (!executionCases.has(vars.case) || !['ja', 'en'].includes(vars.lang)) throw new Error('Invalid execution case');

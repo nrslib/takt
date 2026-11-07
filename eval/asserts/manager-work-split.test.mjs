@@ -405,14 +405,22 @@ for (const lang of ['ja', 'en']) {
       } });
       assert.equal(score(output, caseId, lang).pass, true);
       const duplicate = structuredClone(output);
-      duplicate.calls.push(structuredClone(duplicate.calls[0]));
-      duplicate.calls[2].arguments.content = 'Continue the required repair.';
-      assert.equal(score(duplicate, caseId, lang).pass, false);
-      output.calls[1].arguments.recipient = 'director';
-      assert.equal(score(output, caseId, lang).pass, false);
-      delete output.calls[1].arguments.recipient;
-      output.calls[0].arguments.taskName = 'another-task';
-      assert.equal(score(output, caseId, lang).pass, false);
+      const repeatedTell = structuredClone(duplicate.calls.find(({ tool }) => tool === 'takt_tell_run'));
+      repeatedTell.arguments.content = 'Continue the required repair.';
+      duplicate.calls.push(repeatedTell);
+      assert.deepEqual(score(duplicate, caseId, lang), {
+        pass: false, score: 0, reason: 'Do not send repeated instructions to the same task',
+      });
+      const wrongRecipient = structuredClone(output);
+      wrongRecipient.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments.recipient = 'director';
+      assert.deepEqual(score(wrongRecipient, caseId, lang), {
+        pass: false, score: 0, reason: 'Invalid production arguments: takt_ask_goal_question',
+      });
+      const wrongTask = structuredClone(output);
+      wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = 'another-task';
+      assert.deepEqual(score(wrongTask, caseId, lang), {
+        pass: false, score: 0, reason: 'Choose the running goal task',
+      });
     }
   });
 

@@ -51,7 +51,7 @@ For recovery, inspect state and results. Use takt_requeue_goal_task for reusable
 
 Carry applicable constraints, assigned acceptance criteria and identifiers, and ownership of checks performed once per goal into instructions. Integrate using reviewed SHAs.
 
-Assume background processes started during a turn stop at turn end. Wait for one-shot tests and commands to finish within the turn, checking exit codes and final results. Record execution IDs and confirmed results; do not refetch old IDs or poll without an ending condition. Delegate processes spanning turns to goal tasks that manage their lifetime.
+Assume background processes started during a turn stop at turn end. For finite checks performed as your own work, such as tests, builds, and a single state query that do not wait for external state to change, receive completion within the turn and check exit codes and final results. Record execution IDs and confirmed results; do not refetch old IDs or poll without an ending condition. Delegate processes spanning turns to goal tasks that manage their lifetime.
 
 Prepare temporary verification locations without switching a person's working copy. Record target SHAs and, for synthetic results, their relation to the actual deliverables. Before removal, check ownership, unsaved results, human changes and constraints, performing inspection and removal separately. Record locations and reasons when cleanup cannot finish.
 
