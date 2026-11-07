@@ -22,6 +22,41 @@ vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
 const entries = () => vi.mocked(TranscriptView).mock.calls.at(-1)![0].entries;
 
 describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
+  it.each(['completed', 'failed', 'interrupted', 'disconnected', 'next-turn'] as const)(
+    'clears transient activity after %s and ignores other turns and generations', async (end) => {
+      const { app, client } = mount(lang);
+      const operationId = randomUUID();
+      const state = { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 4 } };
+      client.output({ kind: 'running', state });
+      await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(operationId));
+      client.output({ kind: 'activity', operationId, generation: 4, activity: { kind: 'tool', tool: 'TransientTool' } });
+      await waitFor(() => expect(app.lastFrame()).toContain('TransientTool'));
+      expect(entries()).toEqual([]);
+      client.output({ kind: 'activity', operationId: randomUUID(), generation: 4, activity: { kind: 'tool', tool: 'WrongOperation' } });
+      client.output({ kind: 'activity', operationId, generation: 3, activity: { kind: 'tool', tool: 'WrongGeneration' } });
+      expect(app.lastFrame()).toContain('TransientTool');
+      if (end === 'disconnected') client.change({ connection: 'disconnected' });
+      else if (end === 'next-turn') client.output({ kind: 'running', state: {
+        ...state, running: { operationId: randomUUID(), kind: 'turn', generation: 5 },
+      } });
+      else {
+        client.output({ kind: 'pending', state: { ...state, running: null, interrupted: end === 'interrupted' } });
+        client.output({ kind: 'result', operationId, result: end === 'completed'
+          ? { kind: 'reply', message: 'Finished' } : { kind: 'error', code: end, message: 'Stopped' } });
+      }
+      await waitFor(() => {
+        expect(app.lastFrame()).not.toContain('TransientTool');
+        expect(app.lastFrame()).not.toContain('WrongOperation');
+        expect(app.lastFrame()).not.toContain('WrongGeneration');
+      });
+      client.output({ kind: 'activity', operationId, generation: 3, activity: { kind: 'tool', tool: 'LateTool' } });
+      app.stdin.write('After late activity');
+      await waitFor(() => expect(app.lastFrame()).toContain('After late activity'));
+      expect(app.lastFrame()).not.toContain('LateTool');
+      expect(JSON.stringify(entries())).not.toContain('Tool');
+    },
+  );
+
   it('shows queued acceptance as a system notice without an assistant marker', async () => {
     const { app, client } = mount(lang);
     client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });

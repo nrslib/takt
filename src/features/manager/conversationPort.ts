@@ -4,6 +4,7 @@ import type { ConversationActor, ConversationAssignment, ConversationRecord, Por
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
+import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -53,6 +54,7 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
   | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }

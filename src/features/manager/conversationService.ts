@@ -135,6 +135,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
+              onActivity: (activity) => io.progress(activity),
               patrol: event.kind === 'patrol',
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });

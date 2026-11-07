@@ -20,6 +20,50 @@ function fixture() {
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
 
+it('reports only activity changes and tool names without stream bodies or tool inputs', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  const events: StreamEvent[] = [
+    { type: 'thinking', data: { thinking: 'private reasoning' } },
+    { type: 'thinking', data: { thinking: 'more private reasoning' } },
+    { type: 'tool_use', data: { id: 'first', tool: 'Bash', input: { command: 'private command' } } },
+    { type: 'tool_use', data: { id: 'second', tool: 'Bash', input: { command: 'another private command' } } },
+    { type: 'tool_output', data: { tool: 'Bash', output: 'private output' } },
+    { type: 'tool_use', data: { id: 'third', tool: 'Read', input: { file: 'private path' } } },
+    { type: 'tool_result', data: { id: 'third', content: 'private file', isError: false } },
+    { type: 'tool_result', data: { completedToolIds: ['first', 'second'], content: 'private result', isError: false } },
+    { type: 'text', data: { text: 'partial reply' } },
+    { type: 'text', data: { text: 'more partial reply' } },
+  ];
+  call.mockImplementation(async (_prompt, options) => {
+    for (const event of events) options.onStream!(event);
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  const expected = [{ kind: 'thinking' }, { kind: 'tool', tool: 'Bash' }, { kind: 'tool', tool: 'Read' },
+    { kind: 'tool', tool: 'Bash' }, { kind: 'waiting' }, { kind: 'responding' }];
+  expect(onActivity.mock.calls.map(([value]) => value)).toEqual(expected);
+  onActivity.mockClear();
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity.mock.calls.map(([value]) => value)).toEqual(expected);
+});
+
+it('does not forward invalid tool labels or activity after cancellation', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  const controller = new AbortController();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    for (const tool of ['Bash\nprivate command', '\x1b[2J', 'B'.repeat(129)]) {
+      options.onStream!({ type: 'tool_use', data: { id: 'invalid', tool, input: {} } });
+    }
+    controller.abort();
+    options.onStream!({ type: 'thinking', data: { thinking: 'late' } });
+    return success;
+  });
+  await expect(executor.execute({ ...input, onActivity, abortSignal: controller.signal })).rejects.toThrow();
+  expect(onActivity).not.toHaveBeenCalled();
+});
+
 it('reports each provider stream event including tool results that cannot be parsed', async () => {
   const { call, executor, input } = fixture();
   const onProviderOutput = vi.fn();

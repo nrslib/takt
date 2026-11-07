@@ -3,6 +3,7 @@ import type { OperationResult, SnapshotRead, SnapshotItem, QuestionTarget } from
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 import type { AcceptedEvent } from './events.js';
 import type { AssistantCliOverrides } from '../config/provider-resolution.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 export interface TurnIdentity {
   conversationId: string;
@@ -58,7 +59,7 @@ export interface TurnResult extends TurnIdentity {
 }
 
 export type RuntimeMessage =
-  | { kind: 'turn_progress'; turn: TurnIdentity; message: string }
+  | { kind: 'turn_progress'; turn: TurnIdentity; message: ConversationProgress }
   | { kind: 'turn_finished'; turn: TurnIdentity; outcome: TurnOutcome };
 
 export interface InquiryNotice {

@@ -6,11 +6,12 @@ import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_BYTES, MAX_PROCESS_PENDING_R
   type DaemonStateRequest, type DaemonStateReply, type TurnProcessMessage } from '../../core/daemon/processProtocol.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { MAX_PROCESS_PROGRESS_BYTES } from '../../core/daemon/processProtocol.js';
+import type { ConversationActivity, ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 export interface TurnIo {
   signal: AbortSignal;
   request(request: DaemonStateRequest): Promise<DaemonStateReply>;
-  progress(message: string): void;
+  progress(message: ConversationProgress): void;
 }
 export interface TurnBusiness {
   execute(input: TurnStart, io: TurnIo): Promise<TurnOutcome>;
@@ -36,6 +37,9 @@ export function createTurnProcessRuntime(input: {
   let requestBytes = 0;
   let sendCount = 0;
   let sendBytes = 0;
+  let pendingActivity: { turn: TurnIdentity; activity: ConversationActivity } | undefined;
+  let sendingActivity = false;
+  let activityUnavailable = false;
   const envelope = () => {
     if (initialized === undefined) throw new Error('Turn process is not initialized');
     return { protocolVersion: TURN_PROTOCOL_VERSION, launchId: initialized.launchId } as const;
@@ -48,6 +52,25 @@ export function createTurnProcessRuntime(input: {
     sendBytes += bytes;
     try { await input.transport.send(message); }
     finally { sendCount--; sendBytes -= bytes; }
+  };
+  const flushActivity = async (): Promise<void> => {
+    sendingActivity = true;
+    try {
+      while (pendingActivity !== undefined) {
+        const { turn, activity } = pendingActivity;
+        pendingActivity = undefined;
+        if (active === undefined || !sameTurn(active.turn, turn) || active.controller.signal.aborted || active.outcome !== undefined) continue;
+        // 表示用の送信は常に1件に制限し、業務用の送信枠を消費しない。
+        await input.transport.send(parseTurnProcessMessage({ ...envelope(), kind: 'turn_progress', turn,
+          message: activity }, envelope().launchId));
+      }
+    } catch {
+      // 表示の配送が使えなくても、ターンの結果は通常の経路で確定する。
+      activityUnavailable = true;
+    } finally {
+      pendingActivity = undefined;
+      sendingActivity = false;
+    }
   };
   const rejectRequests = (error: unknown): void => {
     for (const pending of requests.values()) pending.reject(error);
@@ -106,13 +129,20 @@ export function createTurnProcessRuntime(input: {
           const controller = new AbortController();
           const current = { turn: message.input.turn, controller, completion: Promise.resolve(), outcome: undefined as TurnOutcome | undefined };
           active = current;
+          activityUnavailable = false;
           current.completion = Promise.resolve().then(async () => {
             let outcome: TurnOutcome;
             try {
               outcome = await business!.execute(message.input, { signal: controller.signal,
                 request: (value) => request(current.turn, value),
                 progress: (value) => {
-                  if (controller.signal.aborted) return;
+                  if (controller.signal.aborted || current.outcome !== undefined) return;
+                  if (typeof value !== 'string') {
+                    if (activityUnavailable) return;
+                    pendingActivity = { turn: current.turn, activity: value };
+                    if (!sendingActivity) void flushActivity();
+                    return;
+                  }
                   void send({ ...envelope(), kind: 'turn_progress', turn: current.turn,
                     message: truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value }).catch(input.onFatal);
                 } });
@@ -121,6 +151,7 @@ export function createTurnProcessRuntime(input: {
             }
             if (controller.signal.aborted && outcome.kind !== 'interrupted') outcome = { kind: 'interrupted' };
             current.outcome = outcome;
+            pendingActivity = undefined;
             await send({ ...envelope(), kind: 'turn_finished', turn: current.turn, outcome });
           });
           void current.completion.catch(input.onFatal);
