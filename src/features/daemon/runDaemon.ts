@@ -31,6 +31,8 @@ import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
+import { saveManagerEvent } from '../../infra/goals/events.js';
+import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
 
 /** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
 export async function startDaemon(options: {
@@ -140,7 +142,21 @@ export async function startDaemon(options: {
     const files = new DaemonPersistedFiles(directory);
     const records = new FileWatchRecords(directory);
     const watchSource = source = new FileDaemonWatchSource(conversations, (notice) => dispatcher.inquiry(notice), reportDaemonError,
-      new WatchObservations(records, dispatcher, Date.now));
+      new WatchObservations(records, dispatcher, Date.now), async (owner, question) => {
+        if (question.answer === undefined) throw new Error('Pending inquiry publication has no saved answer');
+        if (owner.kind === 'workspace') {
+          const eventId = `workspace-answer-${owner.workspaceId}-${question.id}`;
+          const admission = await dispatcher.accept({ eventId, requestId: eventId, conversationId: conversationId(owner),
+            occurredAt: question.answer.answeredAt, source: 'director', event: { kind: 'director_message',
+              directorConversationId: conversationId({ kind: 'daemon' }), text: inquiryAnswerMessage(question.id, question.answer, question.body) } });
+          if (admission.kind !== 'accepted') throw new Error(`Standalone answer was not accepted: ${admission.reason}`);
+          return;
+        }
+        const repository = question.operation?.cwd ?? owner.repositoryDirectory;
+        if (!(await routing.display(owner)).repositoryDirectories.includes(repository)) throw new Error('Standalone answer repository is outside its assignment');
+        saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: question.id,
+          questionBody: question.body, answer: question.answer });
+      });
     watchers = startDaemonWatchers({ source: watchSource,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {

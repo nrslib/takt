@@ -5,6 +5,7 @@ import { ConversationCommandSchema } from '../../features/manager/conversationCo
 import { MAX_PROCESS_MESSAGE_BYTES } from '../../core/daemon/processProtocol.js';
 import type { AcceptedEvent, EventInput } from '../../core/daemon/events.js';
 import type { ConversationChange, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
+import { conversationId } from '../conversations/identity.js';
 
 const id = z.string().min(1).max(128);
 const sequence = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -29,8 +30,7 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
 ]);
 const event = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('workspace_inquiry_answered'), questionId: id, answer: GoalAnswerSchema }).strict(),
-  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id.nullable(), questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
@@ -51,8 +51,21 @@ const retiredAcceptedEvent = EventInputSchema.omit({ event: true }).extend({
   operationId: id, acceptedSequence: sequence, lane: z.literal('other'),
   event: retiredWatchEvent.shape.event.extend({ observation: retiredWatchEvent.shape.event.shape.observation.extend(observed).passthrough() }).strict(),
 }).strict();
+const legacyStandaloneAnswerEvent = z.union([
+  z.object({ kind: z.literal('workspace_inquiry_answered'), questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: z.null(), questionId: id, answer: GoalAnswerSchema }).strict(),
+]);
+const legacyStandaloneAnswer = z.object({
+  eventId: id, requestId: id, conversationId: id,
+  source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']), occurredAt: z.iso.datetime(),
+  event: legacyStandaloneAnswerEvent, operationId: id, acceptedSequence: sequence, lane: z.literal('other'),
+}).strict().transform(({ eventId, requestId, conversationId: target, source, occurredAt, event: saved, operationId, acceptedSequence }) => ({
+  eventId, requestId, conversationId: target, source, occurredAt, operationId, acceptedSequence, lane: 'other' as const,
+  event: { kind: 'director_message' as const, directorConversationId: conversationId({ kind: 'daemon' }),
+    text: `A person answered a standalone inquiry. ${JSON.stringify({ questionId: saved.questionId, answer: saved.answer })}` },
+}));
 // 旧イベントは不透明な保存値として扱い、索引と結果の確定にだけ渡す。新規受付・ターン実行には使わない。
-const storedAcceptedEvent = z.union([AcceptedEventSchema, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;
+const storedAcceptedEvent = z.union([AcceptedEventSchema, legacyStandaloneAnswer, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;
 // 保存済みの許可回答だけを正規化し、新しいコマンドの受付スキーマには許可文を戻さない。
 const storedAnswer = z.object({
   kind: z.literal('inquiry_answer'),

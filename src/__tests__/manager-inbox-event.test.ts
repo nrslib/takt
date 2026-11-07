@@ -2,17 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
 import type { ManagerEvent } from '../infra/goals/events.js';
 import { ManagerEventSchema } from '../infra/goals/events.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
 
 const common = { goalId: '650e8400-e29b-41d4-a716-446655440000', createdAt: '2026-11-01T00:00:00.000Z' };
 const directory = '/workspace/project';
 
 describe('managerInboxTurnEvent', () => {
-  it('maps a standalone saved answer without inventing a goal ID', () => {
+  it('maps a standalone saved answer to a legacy-compatible director message', () => {
     const answer = { text: 'CSV', answeredAt: common.createdAt, source: 'slack' };
     const saved = ManagerEventSchema.parse({ ...common, kind: 'answer', goalId: null,
-      questionId: '650e8400-e29b-41d4-a716-446655440002', answer });
-    expect(managerInboxTurnEvent(directory, saved)).toEqual({ kind: 'inquiry_answered', repositoryDirectory: directory,
-      goalId: null, questionId: '650e8400-e29b-41d4-a716-446655440002', answer });
+      questionId: '650e8400-e29b-41d4-a716-446655440002', questionBody: 'Which format?', answer }) as Extract<ManagerEvent, { kind: 'answer' }>;
+    expect(managerInboxTurnEvent(directory, saved)).toEqual({ kind: 'director_message',
+      directorConversationId: conversationId({ kind: 'daemon' }),
+      text: inquiryAnswerMessage('650e8400-e29b-41d4-a716-446655440002', saved.answer, 'Which format?') });
   });
   it('rejects legacy patrol events that the inbox retires without delivery', () => {
     expect(() => managerInboxTurnEvent(directory, { ...common, kind: 'patrol' })).toThrow();

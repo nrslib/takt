@@ -30,7 +30,7 @@ export async function answerConversationInquiry(
     if (question === undefined || question.kind === 'approval') throw new ConversationError('invalid_input');
     signal.throwIfAborted();
     if (target.goalId === null) {
-      const saved = await standalone!.answer(command.questionId, command.answer, command.source);
+      const saved = await standalone!.answerForPublication(command.questionId, command.answer, command.source);
       answerSaved = true;
       if (assignment.kind === 'workspace') {
         const reply = await io.request({ kind: 'publish_workspace_inquiry_answer', questionId: command.questionId });
@@ -38,8 +38,10 @@ export async function answerConversationInquiry(
       } else {
         const repository = question.operation?.cwd ?? assignment.repositoryDirectory;
         if (!assignment.repositoryDirectories.includes(repository)) throw new ConversationError('invalid_assignment');
-        saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: command.questionId, answer: saved.answer! });
+        saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: command.questionId,
+          questionBody: saved.body, answer: saved.answer! });
       }
+      await standalone!.markAnswerPublished(command.questionId);
     } else {
       const saved = await new GoalStore(target.repositoryDirectory).update(target.goalId,
         (goal) => answerGoalQuestion(goal, command.questionId, command.answer, command.source), () => { answerSaved = true; });

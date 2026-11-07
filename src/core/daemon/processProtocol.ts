@@ -44,8 +44,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('workspace_inquiry_answered'), questionId: id, answer: GoalAnswerSchema }).strict(),
-  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id.nullable(), questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),

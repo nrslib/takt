@@ -127,6 +127,29 @@ export class StandaloneInquiryStore {
     return answered;
   }
 
+  async answerForPublication(id: string, answer: string | GoalAnswerInput,
+    source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Promise<GoalQuestion> {
+    const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
+    const answered = answerInquiry(await this.read(path, id), answer, source);
+    const pending = GoalQuestionSchema.parse({ ...answered, answerPublicationPending: true });
+    this.write(path, pending);
+    return pending;
+  }
+
+  async listPendingPublications(): Promise<GoalQuestion[]> {
+    return (await this.list()).filter((question) => question.answerPublicationPending === true);
+  }
+
+  async markAnswerPublished(id: string): Promise<GoalQuestion> {
+    const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
+    const question = await this.read(path, id);
+    if (question.answerPublicationPending !== true) return question;
+    const { answerPublicationPending: _pending, ...published } = question;
+    const result = GoalQuestionSchema.parse(published);
+    this.write(path, result);
+    return result;
+  }
+
   async withdraw(id: string, reason?: string): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
     const question = await this.read(path, id);

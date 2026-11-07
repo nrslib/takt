@@ -18,6 +18,9 @@ import { globalDaemonConfiguration, readDaemonConfiguration } from './configurat
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
+import { StandaloneInquiryStore, type InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
+import type { GoalQuestion } from '../../infra/goals/schema.js';
+import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -30,7 +33,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
-    private readonly stateChanges?: WatchObservations) {}
+    private readonly stateChanges?: WatchObservations,
+    private readonly publishAnswer?: (owner: InquiryOwner, question: GoalQuestion) => Promise<void>) {}
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -55,6 +59,13 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       try {
         if ((await readWatchTasks(project.repositoryDirectory)).some((task) => task.status === 'pending' || task.status === 'running')) return true;
       } catch (error) { this.onError(error); }
+    }
+    for (const assignment of await this.conversations.routing.assignments()) {
+      if (assignment.kind === 'daemon') continue;
+      const owner: InquiryOwner = assignment.kind === 'workspace'
+        ? { kind: 'workspace', workspaceId: assignment.workspaceId }
+        : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
+      if ((await new StandaloneInquiryStore(this.conversations.routing.directory, owner).listPendingPublications()).length > 0) return true;
     }
     return false;
   }
@@ -129,6 +140,15 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
     this.inquiriesInitialized = true;
     for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
+    await this.publishPendingAnswers();
+  }
+
+  private async publishPendingAnswers(): Promise<void> {
+    if (this.publishAnswer === undefined) return;
+    const owners = (await this.conversations.routing.assignments()).flatMap((assignment): InquiryOwner[] => assignment.kind === 'daemon'
+      ? [] : [assignment.kind === 'workspace' ? { kind: 'workspace', workspaceId: assignment.workspaceId }
+        : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory }]);
+    await publishPendingInquiryAnswers(this.conversations.routing.directory, owners, this.publishAnswer, this.onError);
   }
 
   private async *inquiryNotices(): AsyncGenerator<InquiryNotice> {

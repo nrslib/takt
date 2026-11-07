@@ -100,6 +100,7 @@ it('answers a standalone question with Slack provenance and removes it from pend
   expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id, source: 'slack' }))
     .toMatchObject({ kind: 'answer_saved' });
   expect((await store.get(inquiry.id)).answer).toMatchObject({ text: 'CSV', source: 'slack' });
+  expect((await store.get(inquiry.id)).answerPublicationPending).toBeUndefined();
   expect((await pendingInquiries()).some(({ question }) => question.id === inquiry.id)).toBe(false);
 });
 
@@ -118,6 +119,7 @@ it.each(['tui', 'slack'] as const)('publishes the saved workspace %s answer thro
     .toMatchObject({ kind: 'answer_saved', answerSaved: true });
   const saved = await store.get(inquiry.id);
   expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source } });
+  expect(saved.answerPublicationPending).toBeUndefined();
   expect(request).toHaveBeenCalledExactlyOnceWith({ kind: 'publish_workspace_inquiry_answer', questionId: inquiry.id });
   expect(doubles.event).not.toHaveBeenCalled();
   expect((await pendingInquiries()).some(({ question }) => question.id === inquiry.id)).toBe(false);
@@ -132,7 +134,8 @@ it('publishes an answer for an existing standalone question without adding opera
   const saved = await store.get(inquiry.id);
   expect(saved.operation).toBeUndefined();
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(repository,
-    { kind: 'answer', goalId: null, questionId: inquiry.id, answer: saved.answer });
+    { kind: 'answer', goalId: null, questionId: inquiry.id, questionBody: inquiry.body, answer: saved.answer });
+  expect(saved.answerPublicationPending).toBeUndefined();
 });
 
 it('retains the saved standalone answer when publishing its manager event fails', async () => {
@@ -144,6 +147,7 @@ it('retains the saved standalone answer when publishing its manager event fails'
   expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id }))
     .toMatchObject({ kind: 'error', answerSaved: true });
   expect(await store.get(inquiry.id)).toMatchObject({ status: 'answered', answer: { text: 'CSV', source: 'tui' } });
+  expect((await store.get(inquiry.id)).answerPublicationPending).toBe(true);
 });
 
 it.each([false, true])('answers a legacy workspace question without operation metadata when empty=%s', async (empty) => {
@@ -156,6 +160,7 @@ it.each([false, true])('answers a legacy workspace question without operation me
   expect(result).toMatchObject({ kind: 'answer_saved', answerSaved: true });
   const saved = await store.get(inquiry.id);
   expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source: 'tui' } });
+  expect(saved.answerPublicationPending).toBeUndefined();
   expect(saved.operation).toBeUndefined();
   expect(request).toHaveBeenCalledExactlyOnceWith({ kind: 'publish_workspace_inquiry_answer', questionId: inquiry.id });
   expect(doubles.event).not.toHaveBeenCalled();
@@ -172,6 +177,7 @@ it.each(['storage', 'forbidden', 'exception'] as const)('keeps the workspace ans
   expect(await answer({ ...command, target: { goalId: null, owner }, questionId: inquiry.id }))
     .toMatchObject({ kind: 'error', answerSaved: true });
   expect(await store.get(inquiry.id)).toMatchObject({ status: 'answered', answer: { text: 'CSV' } });
+  expect((await store.get(inquiry.id)).answerPublicationPending).toBe(true);
   expect(doubles.event).not.toHaveBeenCalled();
 });
 

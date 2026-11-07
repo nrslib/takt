@@ -3,6 +3,7 @@ import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
+import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
 
 export function createDaemonStateRequests(options: {
   conversations: DaemonConversations;
@@ -24,8 +25,9 @@ export function createDaemonStateRequests(options: {
       signal.throwIfAborted();
       const id = `workspace-answer-${owner.workspaceId}-${question.id}`;
       const admission = await options.ingress.accept({ eventId: id, requestId: id, conversationId: turn.conversationId,
-        occurredAt: question.answer.answeredAt, source: 'daemon',
-        event: { kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer } });
+        occurredAt: question.answer.answeredAt, source: 'director',
+        event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+          text: inquiryAnswerMessage(question.id, question.answer, question.body) } });
       return { kind: 'event_accepted', admission };
     }
     if (source?.state.assignment.kind !== 'daemon' || turn.conversationId !== conversationId({ kind: 'daemon' })) return forbidden();

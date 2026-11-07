@@ -46,6 +46,7 @@ import { saveManagerEvent } from '../infra/goals/events.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
+import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
 
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
@@ -117,13 +118,13 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
   const names = await readdir(inbox);
   expect(names).toHaveLength(1);
   expect(await files.readInboxEvent(f.repository, names[0]!)).toMatchObject({
-    kind: 'answer', goalId: null, questionId: question.id, answer: saved.answer,
+    kind: 'answer', goalId: null, questionId: question.id, questionBody: question.body, answer: saved.answer,
   });
   await receiveInboxChange({ target: { targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' },
     path: join(inbox, names[0]!), removed: false, generation: 'answer', value: {} }, files, f.conversations, f.dispatcher);
   const turn = await f.runner.started(2);
-  const expected = { kind: 'inquiry_answered', repositoryDirectory: f.repository, goalId: null,
-    questionId: question.id, answer: saved.answer };
+  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
   expect(turn.input.event.event).toEqual(expected);
   const restored = await new FileEventStore(f.directory).restore();
   const storedEvents = [];
@@ -134,7 +135,7 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
   if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
   expect(await perform(turn, message.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Answer received' } });
   expect(execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(execute.mock.calls[0]![0].prompt)).toMatchObject({ event: expected });
+  expect(execute.mock.calls[0]![0].prompt).toBe(expected.text);
   expect(await readdir(inbox)).toEqual([]);
   const after = await f.conversations.snapshot(f.id);
   const remaining = [];
@@ -201,7 +202,8 @@ it.each([
   const saved = await store.get(question.id);
   expect(saved.operation).toEqual(question.operation);
   const next = await f.runner.started(2);
-  const expected = { kind: 'workspace_inquiry_answered', questionId: question.id, answer: saved.answer };
+  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
   expect(next.input.event).toMatchObject({ conversationId: id, event: expected });
   const restored = [];
   for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event.event);
@@ -209,7 +211,7 @@ it.each([
   const ipc = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'workspace', kind: 'start_turn', input: next.input })), 'workspace');
   if (ipc.kind !== 'start_turn') throw new Error('Expected next turn');
   expect(await perform(next, ipc.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
-  expect(JSON.parse(execute.mock.calls[0]![0].prompt)).toMatchObject({ event: expected });
+  expect(execute.mock.calls[0]![0].prompt).toBe(expected.text);
   expect(f.runner.calls).toHaveLength(2);
 });
 
@@ -235,10 +237,11 @@ it('publishes distinct saved workspace answers once and preserves their events o
   expect(await publish(questions[0]!.id)).toEqual(receipts[0]);
   const restored = [];
   for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event);
-  const answers = restored.filter(({ event }) => event.kind === 'workspace_inquiry_answered');
+  const answers = restored.filter(({ event }) => event.kind === 'director_message' && event.text.includes('standalone inquiry'));
   expect(answers).toHaveLength(2);
   for (const question of questions) expect(answers).toContainEqual(expect.objectContaining({ conversationId: id,
-    event: { kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer } }));
+    event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+      text: inquiryAnswerMessage(question.id, question.answer!, question.body) } }));
   expect(new Set(answers.map(({ eventId }) => eventId)).size).toBe(2);
   for (const event of answers) {
     expect(event.eventId).toContain(workspace.id);
@@ -257,9 +260,8 @@ it('publishes distinct saved workspace answers once and preserves their events o
       request: (request) => f.dispatcher.request(next.turn, request, next.signal) });
     await f.runner.finish(next, outcome);
   }
-  expect(execute.mock.calls.map(([value]) => JSON.parse(value.prompt).event)).toEqual(questions.map((question) => ({
-    kind: 'workspace_inquiry_answered', questionId: question.id, answer: question.answer,
-  })));
+  expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual(questions.map((question) =>
+    inquiryAnswerMessage(question.id, question.answer!, question.body)));
   accepted(await f.dispatcher.accept(input('publish-settled-answer', id)));
   const repeat = await f.runner.started(4);
   expect(await f.dispatcher.request(repeat.turn, { kind: 'publish_workspace_inquiry_answer', questionId: questions[0]!.id }, repeat.signal)).toEqual(receipts[0]);
