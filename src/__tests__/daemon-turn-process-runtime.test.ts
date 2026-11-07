@@ -209,6 +209,25 @@ it('interrupts only the matching turn and preserves its interrupted change', asy
   expect(await done).toMatchObject({ outcome: { kind: 'interrupted', change: { session: { sessionId: null } } } });
   await f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
 });
+it('sends an interrupted legacy message larger than one MiB back to the daemon', async () => {
+  const interruptedMessage = 'legacy'.repeat(256 * 1024);
+  const execute = vi.fn(async (input: TurnStart): Promise<TurnOutcome> => ({ kind: 'interrupted', change: {
+    operationId: 'cleanup', expectedVersion: input.state.version, interruptedMessage,
+  } }));
+  const f = fixture(execute);
+  await f.initialize();
+  const input = turnStart();
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
+  const finished = await done;
+  expect(finished.kind).toBe('turn_finished');
+  if (finished.kind !== 'turn_finished') throw new Error('Expected turn_finished');
+  expect(Buffer.byteLength(JSON.stringify(finished))).toBeGreaterThan(1024 * 1024);
+  expect(finished.outcome).toEqual({ kind: 'interrupted', change: {
+    operationId: 'cleanup', expectedVersion: input.state.version, interruptedMessage,
+  } });
+  await f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
+});
 it('bounds pending requests and releases every waiter on disconnect', async () => {
   const execute = vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
     io.progress({ kind: 'thinking' });

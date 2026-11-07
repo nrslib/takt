@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
-import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_BYTES, MAX_PROCESS_PENDING_REQUESTS,
+import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_REQUESTS, MAX_PROCESS_SEND_BYTES,
   parseDaemonProcessMessage, parseTurnProcessMessage, processRequestBytes,
   type DaemonStateRequest, type DaemonStateReply, type TurnProcessMessage } from '../../core/daemon/processProtocol.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
@@ -47,7 +47,7 @@ export function createTurnProcessRuntime(input: {
   const send = async (value: unknown): Promise<void> => {
     const message = parseTurnProcessMessage(value, envelope().launchId);
     const bytes = Buffer.byteLength(JSON.stringify(message));
-    if (sendCount >= MAX_PROCESS_PENDING_REQUESTS || sendBytes + bytes > MAX_PROCESS_PENDING_BYTES) throw new Error('Process send capacity exceeded');
+    if (sendCount >= MAX_PROCESS_PENDING_REQUESTS || sendBytes + bytes > MAX_PROCESS_SEND_BYTES) throw new Error('Process send capacity exceeded');
     sendCount++;
     sendBytes += bytes;
     try { await input.transport.send(message); }

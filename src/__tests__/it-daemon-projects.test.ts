@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -46,14 +46,39 @@ it('combines marked projects and workspace assignments once, skipping unavailabl
     id, name: 'test', repositoryDirectories: [assigned, cwd, join(root, 'missing')],
   }));
   expect(await projects(globalConfigDirectory)).toEqual([assigned, cwd].sort());
-  // Keep the old inode allocated so replacement identity does not depend on inode reuse.
   renameSync(cwd, join(root, 'original-project'));
   mkdirSync(cwd);
   expect((await readProjectRegistry(globalConfigDirectory)).projects).toEqual([
-    expect.objectContaining({ canonicalDirectory: cwd, available: false }),
+    expect.objectContaining({ canonicalDirectory: cwd, available: true }),
   ]);
+  expect(await projects(globalConfigDirectory)).toEqual([assigned, cwd].sort());
+  rmSync(cwd, { recursive: true });
   expect(await projects(globalConfigDirectory)).toEqual([assigned]);
 });
+
+it.each(['dev', 'ino', 'absent', 'malformed'] as const)(
+  'routes a manager project with an ignored %s fingerprint', async (variant) => {
+    const globalConfigDirectory = getGlobalConfigDir();
+    const registered = await registerProject({
+      globalConfigDirectory, projectDirectory: cwd, command: 'manager', managerUsed: true,
+    });
+    const path = join(globalConfigDirectory, 'projects', `${registered.locationId}.json`);
+    const stored = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    const current = await stat(cwd);
+    if (variant === 'absent') delete stored.fingerprint;
+    else if (variant === 'malformed') stored.fingerprint = { dev: current.dev };
+    else stored.fingerprint = { dev: current.dev, ino: current.ino, [variant]: current[variant] + 1 };
+    await writeFile(path, JSON.stringify(stored));
+    const errors: unknown[] = [];
+
+    expect(await readDaemonProjectRoutes(globalConfigDirectory, (error) => errors.push(error)))
+      .toEqual([{ repositoryDirectory: cwd, workspaceId: null }]);
+    expect(errors).toEqual([]);
+
+    await writeFile(path, JSON.stringify({ ...stored, managerUsed: false }));
+    expect(await projects(globalConfigDirectory)).toEqual([]);
+  },
+);
 
 it('routes workspace repositories together without importing a synchronous business store', async () => {
   const configDirectory = join(root, 'config');

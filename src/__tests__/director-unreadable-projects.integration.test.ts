@@ -11,7 +11,7 @@ import type { ManagerAssignment } from '../features/manager/startupResolution.js
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { readProjectRegistry, registerProject } from '../infra/config/global/projectRegistry.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -168,15 +168,28 @@ it.each(['registered', 'workspace'] as const)('reports a permission failure in a
   expectListing(result, managers, broken, /EACCES|permission denied|unavailable/i);
 });
 
-it('does not attach a replacement Git directory to its unavailable registration', async () => {
+it('keeps a replacement Git directory available and listed alongside the healthy manager', async () => {
   const healthy = repository('a-good');
   const replaced = repository('b-replaced');
   await register(healthy);
   await register(replaced);
+  const managers = [assignment(healthy), assignment(replaced)];
+  const before = await readProjectRegistry(directory);
+  expect(before.projects.find((project) => project.canonicalDirectory === replaced)).toMatchObject({ available: true });
+  const initialListing = await listDirectorManagers(directory);
+  expect(initialListing.managers).toEqual(expect.arrayContaining(managers));
+  expect(initialListing.managers).toHaveLength(2);
+  expect(initialListing.errors).toEqual([]);
+
   renameSync(replaced, join(directory, 'original-project'));
   repository('b-replaced');
 
-  expectListing(await listDirectorManagers(directory), [assignment(healthy)], replaced, /\S/);
+  const after = await readProjectRegistry(directory);
+  expect(after.projects.find((project) => project.canonicalDirectory === replaced)).toMatchObject({ available: true });
+  const result = await listDirectorManagers(directory);
+  expect(result.managers).toEqual(expect.arrayContaining(managers));
+  expect(result.managers).toHaveLength(2);
+  expect(result.errors).toEqual([]);
 });
 
 it('keeps a workspace assignment once and reports its non-Git member alongside a healthy repository manager', async () => {

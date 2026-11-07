@@ -7,9 +7,11 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
-export const MAX_PROCESS_MESSAGE_BYTES = 1024 * 1024;
+// 旧形式の中断文と次のイベントを同じ start_turn で転送できるようにする。
+export const MAX_PROCESS_MESSAGE_BYTES = 12 * 1024 * 1024;
 export const MAX_PROCESS_PENDING_REQUESTS = 32;
 export const MAX_PROCESS_PENDING_BYTES = 1024 * 1024;
+export const MAX_PROCESS_SEND_BYTES = MAX_PROCESS_MESSAGE_BYTES;
 export const MAX_PROCESS_PROGRESS_BYTES = 16 * 1024;
 export const MAX_PROCESS_DELIVERY_PORTS = 32;
 
@@ -20,11 +22,14 @@ const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, gener
 const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
   revision: version, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
+  interruptedMessage: text.nullable().optional(),
 }).strict() satisfies z.ZodType<ConversationTurnState>;
 const change = z.object({ operationId: id, expectedVersion: version, session: session.optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
-}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined) satisfies z.ZodType<ConversationChange>;
+  interruptedMessage: text.nullable().optional(),
+}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
+  || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const task = z.object({ repositoryDirectory: text, goalId: id, taskName: text, runSlug: id.optional(), executionId: id.optional() }).strict();
 const observed = { targetId: id, generation: id, observedAt: z.iso.datetime() };
 const repositoryGoal = { repositoryDirectory: text, goalId: id };
