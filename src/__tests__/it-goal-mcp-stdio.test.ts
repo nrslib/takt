@@ -117,6 +117,106 @@ describe('standalone inquiries through manager MCP tools', () => {
     return firstTextContent(result.content);
   }
 
+  async function askStandalone(input: Record<string, unknown>) {
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: input });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    return z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content))).questionId;
+  }
+
+  it('creates a distinct pending question without changing an existing standalone inquiry', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const collision = '650e8400-e29b-41d4-a716-446655440001';
+    const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto');
+    let existing: Awaited<ReturnType<StandaloneInquiryStore['create']>>;
+    try {
+      vi.mocked(crypto.randomUUID).mockReturnValue(collision);
+      existing = await store.create({ body: '既存の相談' });
+    } finally { vi.mocked(crypto.randomUUID).mockImplementation(actual.randomUUID); }
+    await connect('manager');
+
+    const questionId = await askStandalone({ cwd, body: '対象のゴールを教えてください',
+      options: ['A', 'B'], recommendation: 'A' });
+
+    expect(questionId).not.toBe(existing.id);
+    expect(await store.get(questionId)).toMatchObject({ id: questionId, kind: 'question', status: 'pending',
+      recipient: 'human', body: '対象のゴールを教えてください', options: ['A', 'B'], recommendation: 'A',
+      operation: { cwd, toolName: 'takt_ask_standalone_question' } });
+    expect((await list()).inquiries.map(({ id }) => id).sort()).toEqual([existing.id, questionId].sort());
+    expect(await store.get(existing.id)).toEqual(existing);
+    expect(await store.list()).toHaveLength(2);
+  });
+
+  it('rejects a generated standalone question ID collision without overwriting the existing inquiry', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const collision = '650e8400-e29b-41d4-a716-446655440001';
+    const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto');
+    try {
+      vi.mocked(crypto.randomUUID).mockReturnValue(collision);
+      const existing = await store.create({ body: '既存の相談' });
+      await connect('manager');
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+      const result = await client.callTool({ name: 'takt_ask_standalone_question',
+        arguments: { cwd, body: '対象のゴールを教えてください' } });
+      expect(result.isError).toBe(true);
+      expect(await store.list()).toEqual([existing]);
+    } finally { vi.mocked(crypto.randomUUID).mockImplementation(actual.randomUUID); }
+  });
+
+  it('uses the current workspace owner and canonical repository root for a nested cwd', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '担当', repositoryDirectories: [cwd, outside] });
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+    const nested = join(outside, 'nested');
+    mkdirSync(nested);
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    expect(TAKT_MCP_MANAGER_TOOL_NAMES).toContain('takt_ask_standalone_question');
+    const questionId = await askStandalone({ cwd: nested, body: 'どのゴールですか' });
+    expect(await new StandaloneInquiryStore(configDirectory, owner).get(questionId))
+      .toMatchObject({ operation: { cwd: outside }, status: 'pending' });
+    expect((await list({ cwd: outside })).inquiries.map(({ id }) => id)).toEqual([questionId]);
+    expect(await new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside }).list()).toEqual([]);
+  });
+
+  it.each(['outside', 'relative', 'missing'] as const)('rejects a %s cwd without saving a standalone question', async (condition) => {
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: {
+      ...(condition === 'missing' ? {} : { cwd: condition === 'outside' ? outside : 'relative/path' }), body: '担当先の確認',
+    } });
+    expect(result.isError).toBe(true);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([]);
+    expect(await new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside }).list()).toEqual([]);
+  });
+
+  it('creates and lists a standalone operation request', async () => {
+    await connect('manager');
+    const questionId = await askStandalone({ cwd, body: 'この操作を実行してください', kind: 'operation_request' });
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    expect(await store.get(questionId)).toMatchObject({
+      id: questionId,
+      kind: 'operation_request',
+      status: 'pending',
+      body: 'この操作を実行してください',
+      operation: { cwd, toolName: 'takt_ask_standalone_question' },
+    });
+    expect(await list()).toMatchObject({
+      inquiries: expect.arrayContaining([expect.objectContaining({
+        id: questionId,
+        kind: 'operation_request',
+        body: 'この操作を実行してください',
+      })]),
+      totalCount: 1,
+    });
+  });
+
+  it('does not create standalone approval inquiries through the question tool', async () => {
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd, body: '確認', kind: 'approval' } });
+    expect(result.isError).toBe(true);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([]);
+  });
+
   it('reads only pending standalone inquiries with approval identity, kind, body and creation time without saving', async () => {
     const store = new StandaloneInquiryStore(configDirectory, owner);
     const approval = await store.create({ kind: 'approval', body: '終了した操作の承認を確認してください',
@@ -741,6 +841,61 @@ describe('manager questions, answers and notifications through production bounda
     const questionId = z.string().min(1).parse(result.questionId);
     return questionSchema.parse((await invoke('takt_get_goal_question', { questionId })).question);
   }
+
+  async function askStandaloneQuestion(directory: string) {
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd: directory, ...askedQuestion } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+    return new StandaloneInquiryStore(process.env.TAKT_CONFIG_DIR!, { kind: 'repository', repositoryDirectory: cwd }).get(questionId);
+  }
+
+  it.each(['ja', 'en'] as const)('sends a standalone question using the selected repository notification policy and %s language', async (language) => {
+    configure('question');
+    const selected = join(cwd, 'second-repository');
+    mkdirSync(join(selected, '.takt'), { recursive: true });
+    initializeGitFixture(selected, []);
+    writeFileSync(join(selected, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${language}\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n`);
+    const workspace = await createWorkspace({ globalConfigDirectory: process.env.TAKT_CONFIG_DIR!, name: '通知の担当', repositoryDirectories: [cwd, selected] });
+    const nested = join(selected, 'nested');
+    mkdirSync(nested);
+    try {
+      const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd: nested, ...askedQuestion } });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+      const question = await new StandaloneInquiryStore(process.env.TAKT_CONFIG_DIR!, { kind: 'workspace', workspaceId: workspace.id }).get(questionId);
+      expect(question).toMatchObject({ ...askedQuestion, status: 'pending', operation: { cwd: selected } });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
+      const text = requests[0]!.text;
+      expect(text.split('\n')[0]).toBe(getLabel('manager.notificationHeadings.question', language, { project: basename(selected) }));
+      expect(text.split('\n')).toEqual(expect.arrayContaining([askedQuestion.body,
+        getLabel('manager.notificationOptions', language, { options: 'CSV, JSON' }),
+        getLabel('manager.notificationRecommendation', language, { recommendation: 'CSV' })]));
+      expect(text).toContain(getLabel('manager.notificationAnswer', language, { project: basename(selected), id: questionId }));
+      expect(text).not.toContain(goalId);
+    } finally { invalidateResolvedConfigCache(selected); }
+  });
+
+  it.each(['disabled', 'no URL'] as const)('saves a standalone question without a webhook POST when notifications are %s', async (condition) => {
+    if (condition === 'disabled') configure('question');
+    else vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
+    const question = await askStandaloneQuestion(cwd);
+    expect(question).toMatchObject({ ...askedQuestion, status: 'pending' });
+    expect(requests).toEqual([]);
+    expect((await readManagerTestDisplay(cwd)).questions).toEqual([expect.objectContaining({ goalId: null, question: expect.objectContaining({ id: question.id }) })]);
+  });
+
+  it.each(['HTTP error', 'connection error'] as const)('returns a saved standalone question and logs a webhook %s', async (failure) => {
+    responseStatus = failure === 'HTTP error' ? 503 : 0;
+    const stderr = vi.spyOn(process.stderr, 'write');
+    const question = await askStandaloneQuestion(cwd);
+    expect(question.status).toBe('pending');
+    expect(requests).toHaveLength(1);
+    expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
+      ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
+    expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
+    expect((await readManagerTestDisplay(cwd)).questions).toEqual([expect.objectContaining({ goalId: null, question: expect.objectContaining({ id: question.id }) })]);
+  });
 
   async function enqueue(workKey?: string) {
     return client.callTool({ name: 'takt_enqueue_goal_task', arguments: {

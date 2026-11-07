@@ -99,6 +99,13 @@ export function formatIntegratedWorkNotification(purpose: string, language: Lang
   return getLabel('manager.notificationIntegratedBody', language, { purpose: singleLine(purpose) });
 }
 
+export function formatStandaloneQuestionNotification(question: GoalQuestion, language: Language, project: string): string {
+  const lines = [getLabel('manager.notificationHeadings.question', language, { project }),
+    formatQuestionDetails(question, language, true, true)];
+  if (question.status === 'pending') lines.push(getLabel('manager.notificationAnswer', language, { project, id: question.id }));
+  return lines.join('\n');
+}
+
 export function formatGoalNotification(
   goal: Goal, notification: GoalNotificationInput, language: Language, project: string,
   destination: 'slack' | 'tui' = 'slack',

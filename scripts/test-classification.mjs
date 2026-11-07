@@ -152,6 +152,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/opencode-stream-handler.test.ts',
   'src/__tests__/otelFoundation.test.ts',
   'src/__tests__/parallel-runner-terminal-status.test.ts',
+  'src/__tests__/pending-inquiry-answers.test.ts',
   'src/__tests__/phase-runner-report-history.test.ts',
   'src/__tests__/private-file-lock-acquisition.test.ts',
   'src/__tests__/private-file.test.ts',
