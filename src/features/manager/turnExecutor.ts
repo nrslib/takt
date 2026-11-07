@@ -10,6 +10,8 @@ import { createAgentFailureError, isAgentFailureError } from '../../shared/types
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
+import { verifyManagerConversation } from './formalSpecVerification.js';
+import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstructionFormat.js';
 import { createTurnActivityReporter } from './turnActivity.js';
 
 const managerToolNames = [
@@ -29,6 +31,7 @@ export interface ManagerTurnInput {
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
   patrol?: boolean;
+  verify?: ResolvedFormalSpecConfiguration & { repositoryDirectory: string };
   onProviderOutput?: () => void;
   onActivity?: (activity: ConversationActivity) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
@@ -41,6 +44,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
       const run = async () => {
         const signal = input.abortSignal;
         signal.throwIfAborted();
+        if (input.verify !== undefined) return verifyManagerConversation(input.verify.repositoryDirectory, plan, input, input.verify);
         let assignment = input.assignment;
         let sessionId = input.sessionId;
         const reportActivity = createTurnActivityReporter((activity) => input.onActivity?.(activity));

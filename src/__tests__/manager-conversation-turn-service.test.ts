@@ -12,8 +12,18 @@ import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
 import * as labels from '../shared/i18n/index.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { makeProvider } from './test-helpers.js';
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
+}));
+
+vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
+
+const doubles = vi.hoisted(() => ({ assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
@@ -91,6 +101,7 @@ function conversationFixture() {
 afterEach(() => { vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
 });
@@ -156,6 +167,64 @@ it('clears interrupted context after one completed message turn', async () => {
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('second continuation'));
   expect(f.execute.mock.calls[2]![0].prompt).toBe('second continuation');
+});
+
+it.each([true, false])('retains undelivered interrupted context through /verify with mode=%s and delivers it on the next message', async (mode) => {
+  const f = conversationFixture();
+  const controller = new AbortController(); f.interruptNext(controller);
+  await f.run(humanMessage('undelivered requirements'), controller);
+  doubles.formalSpec.mockReturnValue({ mode, comments: false, modelCheckTimeoutSeconds: 42 });
+  vi.mocked(runFormalSpecVerification).mockResolvedValue({ verdict: 'passed', verificationStarted: true,
+    quint: { status: 'passed' }, alloy: { status: 'passed' } });
+  const call = vi.fn<ProviderAgent['call']>();
+  const success = { persona: 'manager', status: 'done' as const, timestamp: new Date(), sessionId: 'verified' };
+  if (mode) {
+    call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```' });
+    call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: 'verified', summary: null } });
+  }
+  const executor = createManagerTurnExecutor('/repository', { ctx: {
+    provider: makeProvider({ setup: () => ({ call }) }), providerType: 'mock', model: undefined, lang: 'en',
+  }, strategy: { systemPrompt: 'manager' } });
+  f.execute.mockImplementation(executor.execute);
+  expect(await f.run(humanMessage('/verify'))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.state().interruptedMessage).toBe('undelivered requirements');
+  expect(call).toHaveBeenCalledTimes(mode ? 2 : 0);
+  expect(runFormalSpecVerification).toHaveBeenCalledTimes(mode ? 1 : 0);
+  for (const [prompt] of call.mock.calls) expect(prompt).not.toContain('undelivered requirements');
+  f.restore();
+  call.mockResolvedValue({ ...success, content: '', structuredOutput: { message: 'continued', summary: null } });
+  await f.run(humanMessage('continue'));
+  expect(call.mock.calls.at(-1)![0]).toContain('undelivered requirements');
+  expect(f.state().interruptedMessage).toBeNull();
+  await f.run(humanMessage('next request'));
+  expect(call.mock.calls.at(-1)![0]).toBe('next request');
+});
+
+it.each(['failed', 'error'] as const)('returns the completed %s verification with interruption and keeps undelivered context', async (verdict) => {
+  const f = conversationFixture();
+  const first = new AbortController(); f.interruptNext(first);
+  await f.run(humanMessage('undelivered requirements'), first);
+  const result = { verdict, verificationStarted: true, quint: { status: verdict }, alloy: { status: 'passed' as const },
+    artifacts: { runDirectory: '/repository/.takt/runs/verify-test', specifications: {}, logs: {} },
+    artifactRetention: { status: 'passed' as const } };
+  vi.mocked(runFormalSpecVerification).mockResolvedValue(result);
+  const controller = new AbortController();
+  const call = vi.fn<ProviderAgent['call']>();
+  call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '```quint\nmodule csv {}\n```' });
+  call.mockImplementationOnce(async () => {
+    controller.abort(); throw new Error('cancelled');
+  });
+  f.execute.mockImplementation(createManagerTurnExecutor('/repository', { ctx: {
+    provider: makeProvider({ setup: () => ({ call }) }), providerType: 'mock', model: undefined, lang: 'en',
+  }, strategy: { systemPrompt: 'manager' } }).execute);
+  const outcome = await f.run(humanMessage('/verify'), controller);
+  expect(outcome.kind).toBe('interrupted');
+  if (outcome.kind !== 'interrupted') throw new Error('Expected interruption');
+  expect(outcome.message).toContain(result.artifacts.runDirectory);
+  expect(JSON.parse(outcome.message!.match(/```json\n([\s\S]*?)\n```/)![1]!)).toEqual(result);
+  expect(f.io.progress).not.toHaveBeenCalled();
+  expect(f.state().interruptedMessage).toBe('undelivered requirements');
+  expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(result);
 });
 
 it('keeps prompts unchanged across completed turns with no interruption', async () => {
@@ -536,4 +605,90 @@ it.each(['human', 'event'] as const)('executes the saved goal PR merge during a 
   });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'merged' } });
   expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith('/repository', goal, 'merge', f.io.signal);
+});
+
+
+it('routes only a human /verify to verification and preserves the current registration proposal', async () => {
+  const f = fixture();
+  const pending = { revision: f.input.state.revision, repositoryDirectory: '/repository', summary: {
+    objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [], specifications: { quint: 'module csv {}' },
+  } };
+  f.input.state.pending = pending;
+  f.input.event.event = humanMessage('/verify');
+  const outcome = await f.service.execute(f.input, f.io);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: { repositoryDirectory: '/repository', mode: true, comments: false, modelCheckTimeoutSeconds: 42 } }));
+  expect(outcome.change?.proposal).toBeUndefined();
+  for (const [request] of f.request.mock.calls) if (request.kind === 'save_conversation') expect(request.change.proposal).toBeUndefined();
+
+  f.execute.mockClear();
+  const other = fixture();
+  other.input.event.event = { kind: 'director_message', directorConversationId: 'director', text: '/verify' };
+  await other.service.execute(other.input, other.io);
+  expect(other.execute.mock.calls[0]?.[0]).not.toHaveProperty('verify');
+});
+
+
+async function workspaceVerificationFixture(repositoryDirectories: string[]) {
+  const f = fixture();
+  const assignment = { kind: 'workspace' as const, workspaceId: randomUUID() };
+  const { conversationId } = await import('../infra/conversations/identity.js');
+  f.input.state.assignment = assignment;
+  f.input.turn.conversationId = conversationId(assignment);
+  f.input.event.conversationId = conversationId(assignment);
+  f.input.event.event = humanMessage('/verify');
+  doubles.assignment.mockResolvedValue({ ...assignment, name: 'Workspace', repositoryDirectories });
+  return f;
+}
+
+it.each([true, false])('uses the proposed repository settings rather than the workspace first repository when enabled=%s', async (mode) => {
+  const f = await workspaceVerificationFixture(['/A', '/B']);
+  doubles.formalSpec.mockImplementation((directory: string) => ({ mode: directory === '/B' ? mode : !mode, comments: false, modelCheckTimeoutSeconds: 42 }));
+  f.input.state.pending = { revision: f.input.state.revision, repositoryDirectory: '/B', summary: {
+    objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [],
+  } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(doubles.formalSpec).toHaveBeenCalledExactlyOnceWith('/B');
+  expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
+    repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
+  } }));
+  expect(f.input.state.pending.repositoryDirectory).toBe('/B');
+});
+
+it.each([true, false])('uses the sole workspace repository without a proposal when enabled=%s', async (mode) => {
+  const f = await workspaceVerificationFixture(['/B']);
+  doubles.formalSpec.mockReturnValue({ mode, comments: false, modelCheckTimeoutSeconds: 42 });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(doubles.formalSpec).toHaveBeenCalledExactlyOnceWith('/B');
+  expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
+    repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
+  } }));
+});
+
+it.each([true, false])('asks for the repository without starting verification for an ambiguous workspace when B enabled=%s', async (mode) => {
+  const f = await workspaceVerificationFixture(['/A', '/B']);
+  doubles.formalSpec.mockImplementation((directory: string) => ({ mode: directory === '/B' ? mode : !mode, comments: true, modelCheckTimeoutSeconds: 42 }));
+  f.input.state.interruptedMessage = 'Discuss requirements for /B';
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'reply', message: getLabel('manager.verifyRepositoryRequired', 'en'),
+  } });
+  expect(f.resolve).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+  expect(doubles.formalSpec).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+});
+
+it('asks for a repository when the workspace has no repositories', async () => {
+  const f = await workspaceVerificationFixture([]);
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
+    kind: 'reply', message: getLabel('manager.verifyRepositoryRequired', 'en'),
+  } });
+  expect(f.resolve).not.toHaveBeenCalled(); expect(doubles.formalSpec).not.toHaveBeenCalled();
+});
+
+it('rejects a verification proposal whose repository has left the workspace', async () => {
+  const f = await workspaceVerificationFixture(['/A']);
+  f.input.state.pending = { revision: f.input.state.revision, repositoryDirectory: '/B', summary: {
+    objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [],
+  } };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
+  expect(f.resolve).not.toHaveBeenCalled(); expect(doubles.formalSpec).not.toHaveBeenCalled();
 });

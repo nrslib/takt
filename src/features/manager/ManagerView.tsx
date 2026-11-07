@@ -30,7 +30,8 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 
-const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' }];
+const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
+  { command: '/verify', labelKey: 'interactive.commands.verify' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
@@ -82,7 +83,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const questionAnswer = useManagerQuestionAnswer(bodyWidth);
   const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
   const selection = useManagerSelection();
-  const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
+  const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, { formalSpec: true }, MANAGER_COMMANDS));
   const state = snapshot.state;
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   const running = state?.running;

@@ -77,7 +77,7 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('deferred') }).strict(),
   z.object({ kind: z.literal('completed'), result: operationResult, change: change.optional() }).strict(),
   z.object({ kind: z.literal('failed'), message: text, change: change.optional() }).strict(),
-  z.object({ kind: z.literal('interrupted'), change: change.optional() }).strict(),
+  z.object({ kind: z.literal('interrupted'), message: text.optional(), change: change.optional() }).strict(),
 ]) satisfies z.ZodType<TurnOutcome>;
 const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }).strict().refine((value) =>
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;

@@ -75,6 +75,8 @@ export class TaskLifecycleService {
         `Goal: ${goal.objective}`,
         `Constraints:\n${goal.constraints.map((constraint) => `- ${constraint}`).join('\n')}`,
         `Acceptance criteria:\n${goal.acceptanceCriteria.map((criterion) => `- ${criterion}`).join('\n')}`,
+        ...Object.entries(goal.specifications ?? {}).map(([notation, text]) =>
+          `\`\`\`${notation}\n${text}\n\`\`\``),
       ]),
     ].join('\n\n');
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;

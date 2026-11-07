@@ -140,3 +140,15 @@ describe('Goal registration service', () => {
     expect(doubles.removeBranch).not.toHaveBeenCalled();
   });
 });
+
+
+it('saves the approved specifications and rejects recovery against different specifications', async () => {
+  vi.resetAllMocks();
+  const specifications = { gherkin: 'Feature: Export', quint: 'module export {}', alloy: 'sig Export {}' };
+  doubles.prepare.mockResolvedValue({ branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40) });
+  doubles.create.mockImplementation(async (goal: unknown) => goal);
+  const input = { cwd: '/project', ...goalInput(), id: goalRecord().id, specifications };
+  expect(await createGoal(input)).toMatchObject({ specifications });
+  doubles.find.mockReturnValue({ ...goalRecord(), specifications });
+  await expect(registerReservedGoal({ ...input, specifications: { gherkin: 'Feature: Different' } })).rejects.toThrow('conflicts');
+});

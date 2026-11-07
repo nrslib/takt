@@ -1,3 +1,4 @@
+import type { GoalSpecifications } from '../../infra/goals/schema.js';
 import type { PendingSummary } from '../../infra/conversations/schema.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { toDisplayText } from '../tui/displayText.js';
@@ -8,6 +9,11 @@ function toDisplayBullet(item: string): string {
 
 export function formatSummaryList(items: readonly string[], lang: 'ja' | 'en'): string {
   return (items.length === 0 ? [getLabel('manager.summary.none', lang)] : items).map(toDisplayBullet).join('\n');
+}
+
+export function formatGoalSpecifications(specifications: GoalSpecifications | undefined): string[] {
+  return Object.entries(specifications ?? {}).map(([notation, text]) =>
+    `${notation === 'gherkin' ? 'Gherkin' : notation === 'quint' ? 'Quint' : 'Alloy'}:\n\`\`\`${notation}\n${toDisplayText(text)}\n\`\`\``);
 }
 
 export function formatPendingSummary(pending: PendingSummary, lang: 'ja' | 'en'): string {
@@ -23,6 +29,7 @@ export function formatPendingSummary(pending: PendingSummary, lang: 'ja' | 'en')
     `${getLabel('manager.summary.constraints', lang)}:`,
     formatSummaryList(summary.constraints, lang),
   ];
+  lines.push(...formatGoalSpecifications(summary.specifications));
   if (summary.startBranch !== undefined) lines.push(`${getLabel('manager.summary.startBranch', lang)}: ${toDisplayText(summary.startBranch)}`);
   if (summary.integrationBranch !== undefined) lines.push(`${getLabel('manager.summary.integrationBranch', lang)}: ${toDisplayText(summary.integrationBranch)}`);
   return lines.join('\n');

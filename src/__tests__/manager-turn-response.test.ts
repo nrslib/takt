@@ -70,7 +70,7 @@ describe.each(['mock', 'codex'] as const)('manager response normalization with %
 it('uses a strict Codex schema requiring both nullable branches and repository', () => {
   const schema = getManagerOutputSchema('codex');
   expect(() => assertStrictStructuredOutputSchema(schema)).not.toThrow();
-  const wire = { ...summary, repositoryDirectory: null, startBranch: null, integrationBranch: null };
+  const wire = { ...summary, repositoryDirectory: null, startBranch: null, integrationBranch: null, specifications: null };
   expect(() => validateStructuredOutputAgainstSchema({ message: '確認', summary: wire }, schema)).not.toThrow();
   expect(() => validateStructuredOutputAgainstSchema({ message: '相談', summary: null }, schema)).not.toThrow();
   for (const branch of ['repositoryDirectory', 'startBranch', 'integrationBranch'] as const) {
@@ -114,4 +114,18 @@ it.each(['claude', 'claude-sdk'] as const)('preserves optional branches and vali
     { message: '確認', summary: { ...summary, repositoryDirectory: null, startBranch: null, integrationBranch: null } },
     { message: '確認', summary: { ...summary, objective: 'a'.repeat(128 * 1024 + 1) } },
   ]) expect(() => validateStructuredOutputAgainstSchema(value, schema)).toThrow();
+});
+
+
+it.each(['mock', 'codex'] as const)('preserves goal specification bodies with %s', (provider) => {
+  const specifications = { gherkin: 'Feature: Export\n  Scenario: CSV', quint: 'module export {}', alloy: 'sig Export {}' };
+  expect(parse({ message: 'proposal', summary: { ...summary, specifications } }, provider).summary?.specifications).toEqual(specifications);
+  expect(() => parse({ message: 'proposal', summary: { ...summary, specifications: { quint: '\x1b[31munsafe' } } }, provider)).toThrow();
+});
+it('normalizes nullable Codex specification fields and validates the strict output schema', () => {
+  const value = { message: 'proposal', summary: { ...summary, repositoryDirectory: null, startBranch: null, integrationBranch: null,
+    specifications: { gherkin: 'Feature: Export', quint: null, alloy: null } } };
+  expect(() => validateStructuredOutputAgainstSchema(value, getManagerOutputSchema('codex'))).not.toThrow();
+  expect(parse(value, 'codex').summary?.specifications).toEqual({ gherkin: 'Feature: Export' });
+  expect(parse({ ...value, summary: { ...value.summary, specifications: null } }, 'codex').summary).not.toHaveProperty('specifications');
 });

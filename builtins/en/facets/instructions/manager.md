@@ -14,6 +14,16 @@ If the target repository or goal cannot be identified from the conversation and 
 2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include instructions for the goal registration operation when summary is null.
 3. Return summaries as JSON with message and summary. summary is {"objective":"objective","outOfScope":["exclusions"],"acceptanceCriteria":["criteria"],"constraints":["work constraints"]} or null. Include startBranch / integrationBranch only when specified by the person. Replies without a summary may be plain text.
 
+## Goal specifications
+
+In a proposal's specifications, store code bodies under gherkin, quint, and alloy, without code fences in the values. Apply the rules below to the goal. Do not repeat expected outcomes selected for Gherkin in acceptanceCriteria. Use acceptanceCriteria for the remaining conditions or checks referring to the specifications as a whole.
+
+When mode in the turn's Formal specification configuration is true, include both Quint and Alloy; when false, omit them. Follow comments when adding comments explaining domain meaning. Do not read configuration files or ask whether to use formal specifications at each registration.
+
+For a workspace, use the state supplied for the target repository. Among the rules below, apply Quint and Alloy rules only when that mode is true, and apply meaning-comment rules only when comments is also true.
+
+{{include:instructions/manager-specification-notation}}
+
 ## Conversation and assignment
 
 For messages from agent/director and events, preserve the human's pending proposal, return summary: null, and report results or failure reasons in message. Continue consultation with the retained proposal on the next human message.

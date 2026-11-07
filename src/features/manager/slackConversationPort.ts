@@ -14,7 +14,7 @@ import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiry
 import type { PendingQuestion } from './inquiryAnswer.js';
 import { buildSlackInquiry, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
 import { formatGoalName } from './goalDisplay.js';
-import { formatSummaryList } from './summaryDisplay.js';
+import { formatSummaryList, formatGoalSpecifications } from './summaryDisplay.js';
 import type { KnownBlock } from '@slack/types';
 
 export const SLACK_GOAL_APPROVE = 'takt_goal_approve';
@@ -122,6 +122,7 @@ export function createSlackConversationPort(options: {
             `${getLabel('manager.summary.acceptanceCriteria', options.language)}:\n${formatSummaryList(summary.acceptanceCriteria, options.language)}`,
             `${getLabel('manager.summary.constraints', options.language)}:\n${formatSummaryList(summary.constraints, options.language)}`,
           ];
+          sections.push(...formatGoalSpecifications(summary.specifications));
           if (summary.startBranch !== undefined) sections.push(`${getLabel('manager.summary.startBranch', options.language)}: ${summary.startBranch}`);
           if (summary.integrationBranch !== undefined) sections.push(`${getLabel('manager.summary.integrationBranch', options.language)}: ${summary.integrationBranch}`);
           let fragments: string[] = [];

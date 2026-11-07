@@ -87,7 +87,7 @@ export class DaemonConversations implements ConversationOwner {
       interrupted: outcome.kind === 'interrupted' } }, version);
     if (outcome.kind === 'deferred') return;
     this.send(result.conversationId, { kind: 'result', operationId: result.operationId, result: outcome.kind === 'completed' ? outcome.result
-      : { kind: 'error', code: outcome.kind, message: outcome.kind === 'failed' ? outcome.message : 'Turn interrupted' } }, version);
+      : { kind: 'error', code: outcome.kind, message: outcome.message ?? 'Turn interrupted' } }, version);
     if (result.event.event.kind === 'director_message') await this.notifyResult(result);
   }
 

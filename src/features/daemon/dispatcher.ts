@@ -8,6 +8,7 @@ import type {
 import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply } from './dispatcherMailbox.js';
 import { createTurnQueues } from './turnQueues.js';
+import { conversationId } from '../../infra/conversations/identity.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -450,7 +451,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   private finish(active: ActiveTurn, outcome: TurnOutcome, effects: DispatcherEffect[], preserveOutcome = false): void {
     const event = active.event.event;
     if (!preserveOutcome && outcome.kind === 'interrupted' && outcome.change?.interruptedMessage === undefined
-      && event.kind === 'human_command' && event.command.kind === 'message') {
+      && event.kind === 'human_command' && event.command.kind === 'message'
+      && (event.command.text.trim() !== '/verify' || active.turn.conversationId === conversationId({ kind: 'daemon' }))) {
       outcome = { ...outcome, change: {
         // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
         operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,

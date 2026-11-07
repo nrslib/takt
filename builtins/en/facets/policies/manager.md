@@ -66,3 +66,8 @@
 
 - Do not switch a person's working copy for verification. Temporary locations may use commit, merge or cherry-pick when needed, but a synthetic result alone does not verify the actual completion target. Record the verified SHAs.
 - Before cleaning up your own temporary worktree, confirm ownership, absence of unsaved results or human changes, and absence of a removal prohibition. Check state and remove in separate operations; do not remove when these facts cannot be confirmed.
+
+## Handling goal specifications
+
+- Use goal specifications together with acceptance criteria as the basis for implementation and review. When submitting or correcting a task, read the saved specifications and include the complete specifications relevant to the assigned work in its instructions.
+- TAKT verifies formal specifications only when a person enters /verify in the conversation. Do not automatically verify before registration or use tools to run or rerun checkers. When results arrive, explain them using diagnostics and counterexamples, and propose specification corrections when needed. Do not describe unverified specifications as verified.
