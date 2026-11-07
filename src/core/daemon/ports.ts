@@ -10,7 +10,7 @@ export interface DaemonIngress {
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
 }
 
-/** A が B に保存させ、再起動時に A が未終了分だけ復元する。running は再実行せず中断にする。 */
+/** A が B に保存させ、再起動時に A が未終了分だけ復元する。running は人の入力を中断し、other を再配信する。 */
 export type StoredEvent =
   | { state: 'queued'; event: AcceptedEvent }
   | { state: 'running'; event: AcceptedEvent; turn: TurnIdentity }

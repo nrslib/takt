@@ -199,10 +199,11 @@ it.each([
   const records = await Promise.all((await readdir(join(f.directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))
     .map(async (name) => EventRecordSchema.parse(JSON.parse(await readFile(join(f.directory, 'daemon-events', name), 'utf8')) as unknown)));
   const settled = records.find((record) => record.event.eventId === active.input.event.eventId);
-  if (settled?.state !== 'settled') throw new Error('Expected a saved interrupted result');
-  expect(settled.result.outcome.kind).toBe('interrupted');
-  if (source === 'human') expect(settled.result.outcome).toMatchObject({ change: { interruptedMessage } });
-  await store.apply(settled.result);
+  if (source === 'human') {
+    if (settled?.state !== 'settled') throw new Error('Expected a saved interrupted result');
+    expect(settled.result.outcome).toMatchObject({ kind: 'interrupted', change: { interruptedMessage } });
+    await store.apply(settled.result);
+  } else expect(settled).toEqual({ state: 'queued', event: active.input.event });
   expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toEqual(saved?.state);
   const restarted = await fixture();
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
@@ -216,7 +217,12 @@ it.each([
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].sessionId).toBe(invalidated ? undefined : 'provider-session');
   expect(execute.mock.calls[0]![0].prompt).toContain(interruptedMessage);
-  expect(restarted.runner.calls).toHaveLength(1);
+  if (source === 'event') {
+    const redelivered = await restarted.runner.started(2);
+    expect(redelivered.input.event).toEqual(active.input.event);
+    await restarted.runner.finish(redelivered);
+  }
+  expect(restarted.runner.calls).toHaveLength(source === 'event' ? 2 : 1);
 });
 
 it('roundtrips message-only changes and clearing through IPC and conversation storage', async () => {

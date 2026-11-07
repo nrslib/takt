@@ -572,7 +572,7 @@ The daemon stays running regardless of pending work or Slack connectivity, until
 
 ### Conversations and inquiries
 
-Waiting input survives restart. Current Slack ports do not guarantee restoration of reply destinations after a daemon restart.
+Waiting input survives restart. Non-human events interrupted by daemon shutdown or restart are redelivered in their original acceptance order. Explicitly interrupted turns are not redelivered; interrupted human messages retain their existing carry-forward behavior. Current Slack ports do not guarantee restoration of reply destinations after a daemon restart.
 
 The Slack ACK acknowledges transport receipt. Business acceptance is reported only after the daemon durably saves the input. Results arrive later in the originating thread.
 
