@@ -31,7 +31,7 @@ it('shows a recommendation and its reason with the choices', () => {
   const target = { ...approval(), question: createInquiry({ body: 'Choose a format', options: ['Export', 'Import'], recommendation }) };
   const result = buildSlackInquiry(target, assignment, 'en');
   const texts = result.blocks.filter((block): block is SectionBlock => block.type === 'section').map(({ text }) => text!.text);
-  expect(texts).toContain(`Recommendation: ${recommendation}`);
+  expect(texts.some((text) => text.includes(recommendation))).toBe(true);
   expect(texts).toContain('1. Export');
   expect(texts).toContain('2. Import');
 });

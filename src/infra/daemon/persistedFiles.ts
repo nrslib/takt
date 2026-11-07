@@ -33,10 +33,7 @@ export class DaemonPersistedFiles {
   constructor(private readonly configDirectory: string) {}
 
   async readWorkspaceInquiry(workspaceId: string, questionId: string) {
-    const path = join(this.configDirectory, 'workspaces', z.uuid().parse(workspaceId), 'inquiries', `${z.uuid().parse(questionId)}.json`);
-    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
-    if (question.id !== questionId) throw new Error('Saved question ID differs from its filename');
-    return question;
+    return this.readInquiry({ kind: 'workspace', workspaceId }, questionId);
   }
 
   async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner) {

@@ -5,7 +5,10 @@ export async function publishPendingInquiryAnswers(configDirectory: string, owne
   publish: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>, onError: (error: unknown) => void): Promise<void> {
   const files = new DaemonPersistedFiles(configDirectory);
   for (const owner of owners) {
-    for (const question of await files.listPendingInquiryAnswerPublications(owner)) {
+    let questions: GoalQuestion[];
+    try { questions = await files.listPendingInquiryAnswerPublications(owner); }
+    catch (error) { onError(error); continue; }
+    for (const question of questions) {
       try {
         await publish(owner, question);
         await files.markInquiryAnswerPublished(owner, question.id);
