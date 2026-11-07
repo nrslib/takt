@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
+import type { MarkdownBlock } from '@slack/types';
 
 const sdk = vi.hoisted(() => ({ start: vi.fn(), disconnect: vi.fn(), post: vi.fn(), on: vi.fn(), socket: vi.fn(), web: vi.fn(), error: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
@@ -23,6 +24,18 @@ it('posts a channel parent with blocks and preserves the returned timestamp as a
   expect(await client.postMessage('C0123', 'Question', blocks)).toEqual({ kind: 'delivered', parentTs: '1700000000.000001' });
   expect(sdk.post).toHaveBeenCalledExactlyOnceWith({ channel: 'C0123', text: 'Question', blocks, unfurl_links: false, unfurl_media: false });
   await client.close();
+});
+
+it('passes the original Markdown block and fallback text to chat.postMessage in the reply thread', async () => {
+  const client = createSlackClient({ appToken: 'app', botToken: 'bot' });
+  const thread = { channelId: 'C0123', parentTs: '1700000000.000001' };
+  const text = '## 結果\n**説明** [手順 > 詳細](https://example.test)\n`**/*.ts`';
+  const block: MarkdownBlock = { type: 'markdown', text };
+  try {
+    expect(await client.postThreadMessage(thread, text, [block])).toEqual({ kind: 'delivered' });
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith({ channel: thread.channelId, thread_ts: thread.parentTs,
+      text, blocks: [block], unfurl_links: false, unfurl_media: false });
+  } finally { await client.close(); }
 });
 
 it.each([{ ok: true }, { ok: false }, { ok: true, ts: 123 }])('does not claim a parent binding for an invalid post response %j', async (response) => {

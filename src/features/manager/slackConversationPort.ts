@@ -15,12 +15,14 @@ import type { PendingQuestion } from './inquiryAnswer.js';
 import { buildSlackInquiry, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
 import { formatGoalName } from './goalDisplay.js';
 import { formatSummaryList, formatGoalSpecifications } from './summaryDisplay.js';
-import type { KnownBlock } from '@slack/types';
+import type { KnownBlock, MarkdownBlock } from '@slack/types';
 
 export const SLACK_GOAL_APPROVE = 'takt_goal_approve';
 export const SLACK_GOAL_DISMISS = 'takt_goal_dismiss';
 
 export interface SlackEndpoint extends SlackThread { teamId: string; userId: string }
+
+const MARKDOWN_MESSAGE_LIMIT = 12_000;
 
 export function createSlackConversationPort(options: {
   repositoryDirectory: string; configDirectory: string; resolveAssignment(): Promise<ManagerAssignment>; channelId: string; input: ConversationInput; client: SlackClient; language: 'ja' | 'en';
@@ -169,7 +171,9 @@ export function createSlackConversationPort(options: {
               { name: formatGoalName(goal.objective), id: goal.id, branch: goal.branch }));
           }
           if (output.result.kind !== 'reply' && output.result.kind !== 'notice' && output.result.kind !== 'error') return { kind: 'delivered' };
-          return await options.client.postThreadMessage(target.endpoint, output.result.message);
+          const text = output.result.message;
+          const blocks: MarkdownBlock[] | undefined = text.length <= MARKDOWN_MESSAGE_LIMIT ? [{ type: 'markdown', text }] : undefined;
+          return await options.client.postThreadMessage(target.endpoint, text, blocks);
         } finally { detach(target.attachmentId); }
       },
     },

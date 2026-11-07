@@ -75,6 +75,8 @@ Record operations, reasons and evidence in the same turn using takt_record_goal_
 
 Pass expectedSha and evidence in summary to takt_complete_goal, with concrete humanChecks when a PR is needed. If awaiting_merge has no saved PR, calling the same tool again retries PR preparation after the cause is fixed. Inspect push state yourself and correct and retry it when needed.
 
+Make the first paragraph of the summary passed to takt_complete_goal a short summary for people. Describe what changed in one or two sentences, and put per-criterion results and evidence, including test counts, in subsequent paragraphs.
+
 Before asking how to integrate the work, read the work log and PR creation failure in takt_get_goal and check the current branch tip. Inspect failure records and notifications, determine the cause and side effects, and decide the next operation. If the tip differs from the completion request's SHA, recheck the work and submit completion with the new SHA.
 
 Prepare a goal PR for integration by enqueuing a PR merge task with takt_merge_goal_pr. This task incorporates the target branch, resolves conflicts, reviews and fixes the work, handles CodeRabbit and waits for CI. Use the same task when the PR conflicts with its target; do not enqueue ordinary conflict-fix work. For manager.main_merge: approve, use until: prepare and wait for human merge after preparation succeeds. For auto, or when a person instructs a merge, use until: merge. Read the task completion event and, when merged, complete the goal with takt_check_goal_completion.
