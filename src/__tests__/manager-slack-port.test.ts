@@ -39,7 +39,7 @@ it.each(['ja', 'en'] as const)('posts labeled repository and optional branches w
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   await port.receive(endpoint, '/make-goal');
   const record = conversationRecord('/canonical');
-  const specifications = { gherkin: 'Feature: CSV\n  Scenario: Export', quint: 'module csv {}', alloy: 'sig CSV {}' };
+  const specifications = { gherkin: 'Feature: CSV\n  Scenario: Export', quint: 'module csv {}\n```\nRemaining specification', alloy: 'sig CSV {}\n`````\nRemaining specification' };
   const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository',
     summary: { ...record.pending!.summary, specifications } };
   try {
@@ -59,7 +59,10 @@ it.each(['ja', 'en'] as const)('posts labeled repository and optional branches w
         if (branches[field] === undefined) expect(text).not.toContain(label);
         else expect(text).toContain(`${label}: ${branches[field]}`);
       }
-      for (const [notation, code] of Object.entries(specifications)) expect(text).toContain(`\`\`\`${notation}\n${code}\n\`\`\``);
+      for (const [notation, code] of Object.entries(specifications)) {
+        const fence = '`'.repeat(notation === 'gherkin' ? 3 : notation === 'quint' ? 4 : 6);
+        expect(text).toContain(`${fence}${notation}\n${code}\n${fence}`);
+      }
       expect(text).not.toContain(getLabel('manager.summary.dismissHint', lang));
       expect(blocks).toContainEqual(expect.objectContaining({ type: 'actions', elements: [
         expect.objectContaining({ action_id: SLACK_GOAL_APPROVE, text: { type: 'plain_text', text: lang === 'ja' ? '登録する' : 'Register goal' } }),

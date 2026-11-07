@@ -38,8 +38,9 @@ it('reads complete specifications through the manager MCP paths and advertises o
     gherkin: { totalBytes: Buffer.byteLength(specifications.gherkin), returnedBytes: 0 },
   } } } });
 });
-it('includes every saved specification in final goal PR review instructions', async () => {
-  const goal = { ...goalRecord(), specifications, status: 'awaiting_merge' as const,
+it.each([undefined, '```', '`````', 'prefix ```` suffix'])('includes specifications with safe fences in final goal PR review instructions: %s', async (ticks) => {
+  const specs = ticks === undefined ? specifications : Object.fromEntries(Object.entries(specifications).map(([notation, text]) => [notation, `${text}\n${ticks}\nRemaining specification`]));
+  const goal = { ...goalRecord(), specifications: specs, status: 'awaiting_merge' as const,
     pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
     completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Evidence',
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false }, instructions: [] } };
@@ -51,5 +52,8 @@ it('includes every saved specification in final goal PR review instructions', as
     headRepositoryUrl: 'https://github.com/example/repo.git', headRepositoryPushUrls: ['https://github.com/example/repo.git'],
     workflow: 'merge-prepare', method: 'squash', worktreePath: join(cwd, 'clone'), threatCheckMaxDiffBytes: 1024 });
   expect(task.content).toContain(goal.acceptanceCriteria[0]);
-  for (const [notation, text] of Object.entries(specifications)) expect(task.content).toContain(`\`\`\`${notation}\n${text}\n\`\`\``);
+  for (const [notation, text] of Object.entries(specs)) {
+    const fence = '`'.repeat(ticks === undefined ? 3 : ticks.match(/`+/)![0].length + 1);
+    expect(task.content).toContain(`${fence}${notation}\n${text}\n${fence}`);
+  }
 });

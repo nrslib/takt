@@ -644,14 +644,21 @@ async function workspaceVerificationFixture(repositoryDirectories: string[]) {
 it.each([true, false])('uses the proposed repository settings rather than the workspace first repository when enabled=%s', async (mode) => {
   const f = await workspaceVerificationFixture(['/A', '/B']);
   doubles.formalSpec.mockImplementation((directory: string) => ({ mode: directory === '/B' ? mode : !mode, comments: false, modelCheckTimeoutSeconds: 42 }));
+  if (!mode) f.resolve.mockRejectedValue(new Error('runtime initialization failed'));
   f.input.state.pending = { revision: f.input.state.revision, repositoryDirectory: '/B', summary: {
     objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [],
   } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(doubles.formalSpec).toHaveBeenCalledExactlyOnceWith('/B');
-  expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
-    repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
-  } }));
+  if (mode) {
+    expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
+      repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
+    } }));
+  } else {
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+  }
   expect(f.input.state.pending.repositoryDirectory).toBe('/B');
 });
 
@@ -660,9 +667,15 @@ it.each([true, false])('uses the sole workspace repository without a proposal wh
   doubles.formalSpec.mockReturnValue({ mode, comments: false, modelCheckTimeoutSeconds: 42 });
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(doubles.formalSpec).toHaveBeenCalledExactlyOnceWith('/B');
-  expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
-    repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
-  } }));
+  if (mode) {
+    expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ verify: {
+      repositoryDirectory: '/B', mode, comments: false, modelCheckTimeoutSeconds: 42,
+    } }));
+  } else {
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+  }
 });
 
 it.each([true, false])('asks for the repository without starting verification for an ambiguous workspace when B enabled=%s', async (mode) => {

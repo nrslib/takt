@@ -14,6 +14,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { AgentResponse } from '../../core/models/response.js';
 import { createTurnActivityReporter } from './turnActivity.js';
+import { callWithManagerSessionRecovery } from './sessionRecovery.js';
 
 function assertSuccess(response: AgentResponse): void {
   if (response.status === 'done') return;
@@ -22,7 +23,7 @@ function assertSuccess(response: AgentResponse): void {
 }
 
 export async function verifyManagerConversation(
-  cwd: string, plan: ManagerConversationPlan, input: ManagerTurnInput, configuration: ResolvedFormalSpecConfiguration,
+  cwd: string, plan: ManagerConversationPlan, input: ManagerTurnInput, configuration: ResolvedFormalSpecConfiguration & { repositoryDirectory: string },
 ) {
   const { ctx } = plan;
   const unchanged = { summary: null, sessionId: input.sessionId, assignment: input.assignment };
@@ -41,13 +42,13 @@ export async function verifyManagerConversation(
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: [
     buildFormalSpecGenerationSystemPrompt(ctx.lang),
     loadTemplate('manager_formal_spec_instructions', ctx.lang, {
-      formalSpecComments: configuration.comments, formalSpecVerifierConstraints: '', verificationRepository: JSON.stringify(cwd),
+      formalSpecComments: configuration.comments, formalSpecVerifierConstraints: '', verificationRepository: JSON.stringify(configuration.repositoryDirectory),
     }),
   ].join('\n\n') });
-  const generated = await generator.call(buildFormalSpecGenerationPrompt(ctx.lang, input.recovery?.context), options);
-  assertSuccess(generated);
+  const prompt = buildFormalSpecGenerationPrompt(ctx.lang, input.recovery?.context);
+  const generated = await callWithManagerSessionRecovery(generator, { resume: prompt, fresh: prompt }, options, input.recovery?.invalidateSession);
   input.abortSignal.throwIfAborted();
-  const verification = await runFormalSpecVerification(generated.content, cwd, {
+  const verification = await runFormalSpecVerification(generated.content, configuration.repositoryDirectory, {
     abortSignal: input.abortSignal, modelCheckTimeoutSeconds: configuration.modelCheckTimeoutSeconds,
   });
   const retained = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
@@ -55,14 +56,14 @@ export async function verifyManagerConversation(
   let interpreted: AgentResponse | undefined;
   try {
     input.abortSignal.throwIfAborted();
-    if (!verification.verificationStarted) return { ...unchanged, sessionId: generated.sessionId ?? input.sessionId,
+    if (!verification.verificationStarted) return { ...unchanged, sessionId: generated.sessionId,
       message: [generated.content, verification.message, retained].filter(Boolean).join('\n\n') };
     const interpreter = ctx.provider.setup({ name: 'manager', systemPrompt: [
       plan.strategy.systemPrompt,
       buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
     ].join('\n\n') });
     interpreted = await interpreter.call(buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang), {
-      ...options, sessionId: generated.sessionId ?? input.sessionId,
+      ...options, sessionId: generated.sessionId,
       allowedTools: ['Read'], allowReadonlyFileRead: true,
       readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
       outputSchema: getManagerOutputSchema(ctx.providerType),
@@ -70,10 +71,10 @@ export async function verifyManagerConversation(
     assertSuccess(interpreted);
     input.abortSignal.throwIfAborted();
     const output = parseManagerResponse(interpreted, ctx.providerType);
-    return { ...unchanged, sessionId: interpreted.sessionId ?? generated.sessionId ?? input.sessionId,
+    return { ...unchanged, sessionId: interpreted.sessionId ?? generated.sessionId,
       message: [output.message, retained].filter(Boolean).join('\n\n') };
   } catch (error) {
-    return { ...unchanged, sessionId: interpreted?.sessionId ?? generated.sessionId ?? input.sessionId,
+    return { ...unchanged, sessionId: interpreted?.sessionId ?? generated.sessionId,
       message: [
         ...(input.abortSignal.aborted ? [] : [getLabel('manager.verifyInterpretationFailed', ctx.lang, { error: getErrorMessage(error) })]),
         verificationResult,

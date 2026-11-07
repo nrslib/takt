@@ -9,6 +9,7 @@ import type { TurnBusiness } from '../daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../daemonTurn/conversationState.js';
 import { buildTurnBusinessContext } from '../daemonTurn/turnContext.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
+import type { ManagerTurnInput } from './turnExecutor.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
@@ -94,14 +95,19 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
-        let verificationRepository: string | undefined;
+        let verification: ManagerTurnInput['verify'];
         if (verify) {
-          verificationRepository = priorPending?.repositoryDirectory
+          const verificationRepository = priorPending?.repositoryDirectory
             ?? (assignment.repositoryDirectories.length === 1 ? assignment.repositoryDirectories[0] : undefined);
           if (verificationRepository === undefined) return { kind: 'completed', result: {
             kind: 'reply', message: getLabel('manager.verifyRepositoryRequired', language),
           } };
           if (!assignment.repositoryDirectories.includes(verificationRepository)) throw new ConversationError('invalid_assignment');
+          verification = { repositoryDirectory: verificationRepository,
+            ...resolveFormalSpecConfigurationWithoutPrompt(verificationRepository) };
+          if (!verification.mode) return { kind: 'completed', result: {
+            kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
+          } };
         }
         if (human && command.kind !== 'approve_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
@@ -151,8 +157,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             ].join('\n\n');
             const output = await resolved.executor.execute({
               prompt,
-              ...(verificationRepository === undefined ? {} : { verify: { repositoryDirectory: verificationRepository,
-                ...resolveFormalSpecConfigurationWithoutPrompt(verificationRepository) } }),
+              ...(verification === undefined ? {} : { verify: verification }),
               sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,

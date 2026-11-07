@@ -1,3 +1,4 @@
+import { formatCodeBlock } from '../../shared/utils/markdown.js';
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
@@ -76,7 +77,7 @@ export class TaskLifecycleService {
         `Constraints:\n${goal.constraints.map((constraint) => `- ${constraint}`).join('\n')}`,
         `Acceptance criteria:\n${goal.acceptanceCriteria.map((criterion) => `- ${criterion}`).join('\n')}`,
         ...Object.entries(goal.specifications ?? {}).map(([notation, text]) =>
-          `\`\`\`${notation}\n${text}\n\`\`\``),
+          formatCodeBlock(text, notation)),
       ]),
     ].join('\n\n');
     const ownerStartTime = getSelfTaskProcessIdentity()?.startTime ?? null;

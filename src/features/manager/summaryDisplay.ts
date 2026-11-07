@@ -1,3 +1,4 @@
+import { formatCodeBlock } from '../../shared/utils/markdown.js';
 import type { GoalSpecifications } from '../../infra/goals/schema.js';
 import type { PendingSummary } from '../../infra/conversations/schema.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -13,7 +14,7 @@ export function formatSummaryList(items: readonly string[], lang: 'ja' | 'en'): 
 
 export function formatGoalSpecifications(specifications: GoalSpecifications | undefined): string[] {
   return Object.entries(specifications ?? {}).map(([notation, text]) =>
-    `${notation === 'gherkin' ? 'Gherkin' : notation === 'quint' ? 'Quint' : 'Alloy'}:\n\`\`\`${notation}\n${toDisplayText(text)}\n\`\`\``);
+    `${notation === 'gherkin' ? 'Gherkin' : notation === 'quint' ? 'Quint' : 'Alloy'}:\n${formatCodeBlock(toDisplayText(text), notation)}`);
 }
 
 export function formatPendingSummary(pending: PendingSummary, lang: 'ja' | 'en'): string {

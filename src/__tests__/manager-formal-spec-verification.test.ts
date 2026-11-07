@@ -94,7 +94,7 @@ it.each([true, false])('uses manager-only generation guidance with comments=%s',
 });
 
 
-it('uses the verification target for generation context, provider calls, and checkers', async () => {
+it('keeps provider calls in the conversation directory while verifying another repository', async () => {
   const f = fixture();
   vi.mocked(runFormalSpecVerification).mockResolvedValue({ ...verification, artifacts: {
     runDirectory: '/other/.takt/runs/verify-test', specifications: { quint: '/other/spec.qnt' }, logs: {},
@@ -103,7 +103,7 @@ it('uses the verification target for generation context, provider calls, and che
   f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null } });
   await f.executor.execute({ ...f.input, verify: { ...f.input.verify, repositoryDirectory: '/other' } });
   expect(f.setup.mock.calls[1]![0].systemPrompt).toContain('"/other"');
-  for (const [, options] of f.call.mock.calls) expect(options.cwd).toBe('/other');
+  for (const [, options] of f.call.mock.calls) expect(options).toMatchObject({ cwd: '/repo', callerManagedSession: true });
   expect(f.call.mock.calls[1]![1].readonlyFileReadPaths).toEqual(['/other/spec.qnt']);
   expect(runFormalSpecVerification).toHaveBeenCalledWith(expect.any(String), '/other', expect.objectContaining({ modelCheckTimeoutSeconds: 42 }));
 });
@@ -145,4 +145,45 @@ it.each(['passed', 'failed', 'error'] as const)('returns the completed %s checke
   expect(JSON.parse(output.message.match(/```json\n([\s\S]*?)\n```/)![1]!)).toEqual(result);
   if (verdict !== 'passed') expect(output.message).toContain(result.artifacts!.runDirectory);
   expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(result);
+});
+
+it('recovers a rejected generation session before verifying and interpreting in the fresh session', async () => {
+  const f = fixture();
+  f.call.mockResolvedValueOnce({ ...success, status: 'error', content: '', error: 'cannot resume', failureCategory: 'session_continuation_unsupported' });
+  f.call.mockImplementationOnce(async (prompt, options) => {
+    expect(f.input.recovery.invalidateSession).toHaveBeenCalledOnce();
+    expect(prompt).toContain(f.input.recovery.context);
+    expect(options).toMatchObject({ cwd: '/repo', sessionId: undefined, callerManagedSession: true });
+    return { ...success, content: '```quint\nmodule csv {}\n```', sessionId: 'fresh' };
+  });
+  f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null }, sessionId: 'interpreted' });
+  expect(await f.executor.execute(f.input)).toMatchObject({ sessionId: 'interpreted' });
+  expect(f.call.mock.calls[0]![1].sessionId).toBe('same-conversation');
+  expect(f.call.mock.calls[2]![1].sessionId).toBe('fresh');
+  expect(runFormalSpecVerification).toHaveBeenCalledOnce();
+  expect(f.call).toHaveBeenCalledTimes(3);
+});
+
+it('does not reuse a rejected generation session when the fresh response has no session ID', async () => {
+  const f = fixture();
+  f.call.mockResolvedValueOnce({ ...success, status: 'error', content: '', failureCategory: 'session_continuation_unsupported' });
+  f.call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```' });
+  f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null } });
+  expect((await f.executor.execute(f.input)).sessionId).toBeUndefined();
+  expect(f.call.mock.calls[2]![1].sessionId).toBeUndefined();
+});
+
+it.each(['generic', 'second-rejection', 'tool-use', 'cancelled'] as const)('does not replay specification generation after %s', async (failure) => {
+  const f = fixture();
+  const controller = new AbortController();
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    if (failure === 'cancelled') controller.abort();
+    if (failure === 'tool-use') options.onStream?.({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
+    return { ...success, status: 'error', content: '',
+      ...(failure === 'generic' ? {} : { failureCategory: 'session_continuation_unsupported' as const }) };
+  });
+  f.call.mockResolvedValueOnce({ ...success, status: 'error', content: '', failureCategory: 'session_continuation_unsupported' });
+  await expect(f.executor.execute({ ...f.input, abortSignal: controller.signal })).rejects.toThrow();
+  expect(f.call).toHaveBeenCalledTimes(failure === 'second-rejection' ? 2 : 1);
+  expect(runFormalSpecVerification).not.toHaveBeenCalled();
 });
