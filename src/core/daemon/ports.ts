@@ -1,6 +1,7 @@
 import type { AcceptedEvent, Admission, ControlEvent, ControlReceipt, EventInput } from './events.js';
 import type { DaemonStateRequest, DaemonStateReply } from './processProtocol.js';
 import type { ConversationSnapshot, RuntimeMessage, TurnIdentity, TurnResult, TurnStart } from './messages.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 /** A′ が提供し、D/C/E が受付・制御に使う。invalid な入力の検証は adapter が担う。 */
 export interface DaemonIngress {
@@ -46,7 +47,7 @@ export interface TurnQueues {
 export interface ConversationOwner {
   inquiry(notice: import('./messages.js').InquiryNotice): Promise<void>;
   apply(result: TurnResult): Promise<void>;
-  progress(turn: TurnIdentity, message: string): Promise<void>;
+  progress(turn: TurnIdentity, message: ConversationProgress): Promise<void>;
   // 実行中ターンの識別情報は、それを所有する dispatcher が付ける。
   snapshot(conversationId: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>>;
 }

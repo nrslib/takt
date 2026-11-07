@@ -53,7 +53,7 @@ export interface ManagerTuiProcess {
   exit(): Promise<void>;
 }
 
-export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[]) {
+export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[], activity = false) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'team-a', 'takt3');
   const home = join(directory, 'home');
@@ -71,6 +71,8 @@ export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly s
   writeFileSync(observations, '');
   const gate = join(directory, 'provider-release');
   const release = (): void => { writeFileSync(gate, 'release'); };
+  const toolGate = join(directory, 'provider-use-tool');
+  const useTool = (): void => { writeFileSync(toolGate, 'tool'); };
   const scenario = join(directory, 'scenario.json');
   const summary = { objective: 'Export CSV from the daemon', outOfScope: ['Remote upload'],
     acceptanceCriteria: ['CSV is available'], constraints: ['Keep the existing format'] };
@@ -195,9 +197,16 @@ MockProvider.prototype.setup = function(config) {
     record({ event: 'provider_start', agent: config.name, model: options.model,
       summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
     const deadline = Date.now() + 60000;
+    const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';
+    if (showActivity) options.onStream?.({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
+    let toolShown = false;
     while (!existsSync(${JSON.stringify(gate)})) {
       if (options.abortSignal?.aborted) throw options.abortSignal.reason;
       if (Date.now() >= deadline) throw new Error('Test provider was not released');
+      if (showActivity && !toolShown && existsSync(${JSON.stringify(toolGate)})) {
+        toolShown = true;
+        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+      }
       await delay(20);
     }
     const result = await agent.call(prompt, options);
@@ -335,7 +344,7 @@ finally { process.disconnect(); }
     const owner = await readDaemonOwner(directory);
     if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
   };
-  return { directory, repository, summary, start, release, state, readObservations, cleanup, createRepository };
+  return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository };
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {

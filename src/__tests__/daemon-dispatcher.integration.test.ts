@@ -455,6 +455,24 @@ describe('event driven daemon dispatcher', () => {
     expect(await h.dispatcher.snapshot('conversation')).toMatchObject({ operationId: t2.turn.operationId, generation: t2.turn.generation });
   });
 
+  it('delivers ephemeral patrol activity while suppressing patrol messages and stale generations', async () => {
+    const h = await harness();
+    const event = input('patrol', 'conversation', 'other');
+    await h.dispatcher.accept({ ...event, source: 'watcher', event: {
+      kind: 'patrol', repositoryDirectory: '/repo', goalIds: ['goal'],
+    } });
+    const active = await h.runner.started(1);
+    await h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: { kind: 'thinking' } });
+    expect(h.owner.progress).toHaveBeenCalledExactlyOnceWith(active.turn, { kind: 'thinking' });
+    await h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: 'patrol message' });
+    await h.dispatcher.post({ kind: 'turn_progress', turn: { ...active.turn, generation: active.turn.generation + 1 },
+      message: { kind: 'tool', tool: 'StaleTool' } });
+    await h.dispatcher.control(interrupt(active.turn));
+    await h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: { kind: 'tool', tool: 'InterruptedTool' } });
+    expect(h.owner.progress).toHaveBeenCalledOnce();
+    await h.runner.finish(active, { kind: 'interrupted' });
+  });
+
   it.each(['delivered', 'failed'] as const)('waits for %s progress before saving the result and starting the next turn', async (delivery) => {
     const h = await harness();
     await h.dispatcher.accept(input('T1'));

@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { ConversationActivitySchema } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
@@ -109,7 +110,7 @@ const daemonMessage = z.discriminatedUnion('kind', [
 const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('ready') }).strict(),
   z.object({ ...common, kind: z.literal('turn_progress'), turn: TurnIdentitySchema,
-    message: z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES) }).strict(),
+    message: z.union([z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES), ConversationActivitySchema]) }).strict(),
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
   z.object({ ...common, kind: z.literal('daemon_request'), turn: TurnIdentitySchema, requestId: id, request: stateRequest }).strict(),

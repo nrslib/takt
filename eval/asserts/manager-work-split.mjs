@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { GoalSummarySchema } from '../../dist/infra/goals/schema.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
+import { noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
 import assertExecution from './manager-work-split-execution.mjs';
 
 const responseSchema = z.object({
@@ -105,7 +106,7 @@ function normalizeEnvelope(envelope, turn) {
 
 export default function assertManagerWorkSplit(output, context) {
   const { case: caseId, lang } = context.vars;
-  if (['stopped-background-execution', 'integrated-task-execution'].includes(caseId)) return assertExecution(output, context);
+  if (['stopped-background-execution', 'integrated-task-execution', ...noWaitExecutionCases].includes(caseId)) return assertExecution(output, context);
   if (!Object.hasOwn(caseWriteTools, caseId)) throw new Error(`Unknown case: ${caseId}`);
   const fixture = loadManagerCase(caseId, lang);
   let parsed;

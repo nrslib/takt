@@ -94,6 +94,8 @@ describe('daemon turn process protocol', () => {
   it.each<TurnProcessMessage>([
     { ...common, kind: 'ready' },
     { ...common, kind: 'turn_progress', turn, message: 'progress' },
+    { ...common, kind: 'turn_progress', turn, message: { kind: 'thinking' } },
+    { ...common, kind: 'turn_progress', turn, message: { kind: 'tool', tool: 'mcp__takt__read' } },
     { ...common, kind: 'turn_finished', turn, outcome: { kind: 'completed', result: { kind: 'reply', message: 'done' }, change } },
     { ...common, kind: 'turn_finished', turn, outcome: { kind: 'failed', message: 'failed' } },
     { ...common, kind: 'turn_finished', turn, outcome: { kind: 'interrupted' } },
@@ -187,6 +189,16 @@ describe('daemon turn process protocol', () => {
     expect(() => parseTurnProcessMessage({ ...progress, message: 'あ'.repeat(MAX_PROCESS_PROGRESS_BYTES) }, common.launchId)).toThrow();
     expect(() => parseTurnProcessMessage({ ...request, request: { kind: 'notify_director', notificationId: 'n', message: 'a'.repeat(MAX_PROCESS_MESSAGE_BYTES) } }, common.launchId)).toThrow();
     expect(() => parseTurnProcessMessage({ ...request, request: { kind: 'notify_director', notificationId: 'n', message: '\u0000'.repeat(MAX_PROCESS_MESSAGE_BYTES / 4) } }, common.launchId)).toThrow();
+  });
+
+  it.each([
+    { kind: 'tool', tool: 'Bash', input: { command: 'private' } },
+    { kind: 'thinking', thinking: 'private' },
+    { kind: 'tool', tool: 'Bash\nprivate' },
+    { kind: 'tool', tool: 'B'.repeat(129) },
+    { kind: 'unknown' },
+  ])('rejects activity containing extra data or invalid labels: %#', (message) => {
+    expect(() => parseTurnProcessMessage({ ...common, kind: 'turn_progress', turn, message }, common.launchId)).toThrow();
   });
 
   it('bounds pending request counts and aggregate bytes before reservation', () => {

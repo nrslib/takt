@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { packageVersion } from '../../shared/package-info.js';
 import {
   listGoalsInputSchema,
+  getWorkflowInputSchema,
   getGoalInputSchema,
   enqueueTaskInputSchema,
   getRunInputSchema,
@@ -38,6 +39,7 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { getTaktWorkflow } from './workflowOperations.js';
 import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
@@ -84,7 +86,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace',
-  'takt_enqueue_goal_task', 'takt_list_workflows',
+  'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
   'takt_remove_goal_task',
   'takt_stop_goal_task',
@@ -214,6 +216,11 @@ export function createTaktMcpServer(
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
   }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps)));
+  if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
+    title: 'Read a workflow',
+    description: 'Choose a candidate with takt_list_workflows, then read its steps here to confirm what the task will do. Accepts a workflow name, scope reference or path. Returns description, step names, descriptions, kinds, wait, system_inputs, effects, rules and resolved workflow_call targets. Follow a target with its getInput to preserve parent context and arguments. Responses fit 64 KiB, with explicit truncation; use offset/limit for steps.',
+    inputSchema: getWorkflowInputSchema,
+  }, (input) => operation(input.cwd, 'Workflow read failed', (deps) => getTaktWorkflow(projectInput(input, deps), deps), false));
   if (options.toolSet !== 'read-only') {
     server.registerTool('takt_ask_standalone_question', {
       title: 'Ask a standalone question',
@@ -295,7 +302,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Prepare or merge a goal PR',
-      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. All arguments are required. Use until: prepare for preparation through review, CodeRabbit and CI without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
+      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for preparation through review, CodeRabbit and CI without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
       inputSchema: mergeGoalPrInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {

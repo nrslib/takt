@@ -301,6 +301,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_list_workflows',
+        'takt_get_workflow',
         'takt_enqueue_goal_task',
         'takt_merge_goal_task',
         'takt_requeue_goal_task',

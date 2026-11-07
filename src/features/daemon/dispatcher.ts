@@ -420,7 +420,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       const outcome = active.interrupted && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
       active.finishReply = response;
       this.finish(active, outcome, effects);
-    } else if (active.interrupted || active.event.event.kind === 'patrol') {
+    } else if (active.interrupted || active.event.event.kind === 'patrol' && typeof message.message === 'string') {
       // 見回りは完了結果だけを表示し、後から中断したターンの途中結果を残さない。
       response.resolve();
     } else {

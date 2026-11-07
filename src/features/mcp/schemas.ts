@@ -84,6 +84,14 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   offset: readOffsetSchema,
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
 });
+export const getWorkflowInputSchema = goalIdentityInputSchema.extend({
+  workflow: z.string().trim().min(1).describe('Workflow name, scope reference or file path from takt_list_workflows.'),
+  callPath: z.array(z.number().int().safe().nonnegative()).optional()
+    .describe('Workflow-call step indices returned in getInput; preserves parent resolution and callable arguments.'),
+  limit: goalReadLimitSchema,
+  offset: readOffsetSchema,
+});
+export type GetWorkflowInput = z.infer<typeof getWorkflowInputSchema>;
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
 export const abortGoalInputSchema = goalWriteInputSchema.extend({
   reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. This tool does not save the reason; use takt_record_goal_work_log to record it.'),
