@@ -104,9 +104,9 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
   it('leaves Slack multiline text and its existing character limit unchanged', () => {
     const body = ['one', 'two', 'three', 'four', 'five'].join('\n');
     for (const destination of [undefined, 'slack'] as const) {
-      expect(formatGoalNotification(goalRecord(), { kind: 'completed', body }, lang, 'fixture', destination).split('\n').slice(2).join('\n')).toBe(body);
+      expect(formatGoalNotification(goalRecord(), { kind: 'completed', body }, lang, 'fixture', destination).split('\n').slice(1).join('\n')).toBe(body);
       const lines = formatGoalNotification(goalRecord(), { kind: 'custom', body: 'x'.repeat(601) }, lang, 'fixture', destination).split('\n');
-      expect(lines.slice(2)).toEqual(['x'.repeat(599) + '…', getLabel('manager.notificationFullMessage', lang, { project: 'fixture' })]);
+      expect(lines.slice(1)).toEqual(['x'.repeat(599) + '…', getLabel('manager.notificationFullMessage', lang, { project: 'fixture' })]);
     }
   });
 

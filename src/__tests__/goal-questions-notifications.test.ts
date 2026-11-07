@@ -64,440 +64,314 @@ describe('saved goal notifications', () => {
 });
 
 describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', (language) => {
-  const headings = language === 'ja' ? {
-    progress: /進捗|取り込み/u, awaiting_merge: /マージを待|マージ待ち/u, completed: /ゴールが完成|ゴールが完了/u,
-    blocked: /進められません|進行できません/u, question: /質問があります/u, custom: /お知らせ|通知/u,
-  } : {
-    progress: /progress update|work integrated/iu, awaiting_merge: /awaiting merge|waiting for.*merge/iu, completed: /goal completed|goal is complete/iu,
-    blocked: /cannot proceed|unable to proceed/iu, question: /question|input needed/iu, custom: /notification|update/iu,
+  const firstSentence = language === 'ja' ? 'CSV の書き出しを足す。' : 'Add CSV export.';
+  const objective = firstSentence + (language === 'ja' ? '詳しい条件は次の通りです。' : ' The details follow.');
+  const goal: Goal = { ...goalRecord(), objective };
+  const completion = {
+    goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: 'release',
+    summary: language === 'ja' ? 'CSV の書き出しを足しました。\n一覧から使えます。\n\n受け入れ条件: 完了。テスト: 10 件。'
+      : 'Added CSV export.\nIt is available from the list.\n\nAcceptance criteria: passed. Tests: 10.',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    instructions: ['takt_complete_goal expectedSha=' + 'a'.repeat(40), 'takt_merge_goal_pr until=prepare'],
   };
 
-  it.each(MANAGER_NOTIFICATION_KINDS)('shows the event and project before a short goal reference for %s', (kind) => {
-    const goal = goalRecord();
-    const body = language === 'ja' ? '確認した内容をお知らせします' : 'Here is the result of the checks';
-    const text = formatGoalNotification(goal, { kind, body, severity: 'warning' }, language, 'customer-export');
+  it.each(MANAGER_NOTIFICATION_KINDS)('shows a localized %s heading with project and a complete first objective sentence', (kind) => {
+    const text = formatGoalNotification(goal, { kind, body: 'Result' }, language, 'customer-export');
     const lines = text.split('\n');
-
-    expect(lines[0]).toMatch(headings[kind]);
-    expect(lines[0]).toContain('customer-export');
-    expect(lines[1]).toContain(goal.objective);
-    expect(lines[1]).toContain(goal.id.slice(0, 8));
-    expect(lines[1]).toMatch(language === 'ja' ? /ゴール/u : /goal/iu);
-    expect(lines).toContain(body);
-    for (const line of lines) {
-      expect(line).not.toMatch(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/iu);
-      expect(line.trim()).not.toMatch(/^(progress|awaiting_merge|completed|blocked|question|custom)(?:\s*\([^)]*\))?$/iu);
-      expect(line).not.toContain('(warning)');
-    }
+    expect(lines[0]).toMatch(/^\[customer-export\] /u);
+    expect(lines[kind === 'awaiting_merge' ? 1 : 0]).toContain(firstSentence);
+    expect(text).not.toContain(objective);
+    expect(text).not.toContain(goal.id.slice(0, 8));
+    expect(text).not.toContain('{');
+    expect(lines[0]).toContain(getLabel(`manager.notificationHumanHeadings.${kind}`, language, { project: 'customer-export', context: '' }));
   });
 
-  it.each(['slack', 'tui'] as const)('shows only explicitly specified severity in %s notifications', (destination) => {
-    const labels = language === 'ja'
-      ? { info: '情報', warning: '警告', error: 'エラー' }
-      : { info: 'Information', warning: 'Warning', error: 'Error' };
-    const prefix = language === 'ja' ? '重要度: ' : 'Severity: ';
-    for (const kind of ['blocked', 'custom'] as const) {
-      const body = 'warning';
-      const withoutSeverity = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export', destination).split('\n');
-      expect(withoutSeverity).toContain(body);
-      expect(withoutSeverity.filter((line) => line.startsWith(prefix))).toEqual([]);
-      for (const severity of ['info', 'warning', 'error'] as const) {
-        const lines = formatGoalNotification(goalRecord(), { kind, body, severity }, language, 'customer-export', destination).split('\n');
-        expect(lines[2]).toBe(prefix + labels[severity]);
-        expect(lines.slice(0, 2)).toEqual(withoutSeverity.slice(0, 2));
-        expect(lines.slice(3)).toEqual(withoutSeverity.slice(2));
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('extracts the first objective sentence after removing list markers (%s)', (marker) => {
+    const secondSentence = language === 'ja' ? 'テストを足す。' : 'Add tests.';
+    const objective = `${marker} ${firstSentence}\n2. ${secondSentence}`;
+    const current = { ...goal, objective };
+    const before = structuredClone(current);
+    for (const kind of ['custom', 'awaiting_merge'] as const) {
+      const lines = formatGoalNotification(current, { kind, body: 'Result' }, language, 'takt').split('\n');
+      const goalLine = lines[kind === 'awaiting_merge' ? 1 : 0]!;
+      expect(goalLine).toContain(firstSentence);
+      expect(goalLine).not.toContain(marker);
+      expect(goalLine).not.toContain(secondSentence);
+    }
+    expect(current).toEqual(before);
+  });
+
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('preserves a trimmed marker-only objective (%s)', (marker) => {
+    const current = { ...goal, objective: ` \t${marker} \t ` };
+    for (const kind of ['custom', 'awaiting_merge'] as const) {
+      const lines = formatGoalNotification(current, { kind, body: 'Result' }, language, 'takt').split('\n');
+      if (kind === 'awaiting_merge') {
+        expect(lines[1]).toBe(getLabel('manager.notificationHumanGoal', language, { objective: marker }));
+      } else {
+        expect(lines[0]).toContain(getLabel('manager.notificationGoalContext', language, { objective: marker }));
       }
     }
   });
 
-  it.each(['progress', 'awaiting_merge', 'completed', 'blocked', 'custom'] as const)('shortens a multiline objective and long %s body', (kind) => {
-    const objective = language === 'ja'
-      ? `顧客の出力を改善する\n${'長い目的の説明'.repeat(500)}`
-      : `Improve customer exports\n${'A detailed goal description '.repeat(500)}`;
-    const body = language === 'ja' ? '長い結果の説明'.repeat(1000) : 'A detailed result description '.repeat(1000);
-    const goal = { ...goalRecord(), objective };
-    const before = structuredClone(goal);
-    const text = formatGoalNotification(goal, { kind, body }, language, 'customer-export');
-    const goalLine = text.split('\n')[1]!;
-
-    expect(goalLine.includes(objective.split('\n')[0]!)).toBe(true);
-    expect(goalLine).toContain(goal.id.slice(0, 8));
-    expect(goalLine.length).toBeLessThan(objective.length);
-    expect(text).toContain(body.slice(0, 20));
-    expect(text.length).toBeLessThan(2000);
-    expect(text).not.toContain(goal.id);
-    expect(goal).toEqual(before);
-  });
-
-  it('preserves manager-provided words in a custom notification', () => {
-    const body = 'progress / awaiting_merge / completed / blocked / question / custom';
-    const text = formatGoalNotification(goalRecord(), { kind: 'custom', body }, language, 'customer-export');
-    expect(text.split('\n')).toContain(body);
-  });
-
-  it('keeps combining characters intact when shortening an objective', () => {
-    const objective = 'e\u0301'.repeat(100);
-    const text = formatGoalNotification({ ...goalRecord(), objective }, { kind: 'custom', body: 'Notice' }, language, 'customer-export');
-    const line = text.split('\n')[1]!;
-    expect(line).toContain('e\u0301'.repeat(59) + '…');
-    expect(line).not.toContain('e…');
-  });
-
-  it.each([60, 61])('keeps the objective boundary at %s graphemes for both destinations', (length) => {
-    const objective = 'e\u0301'.repeat(length);
-    const goal = { ...goalRecord(), objective };
-    for (const destination of ['slack', 'tui'] as const) {
-      const line = formatGoalNotification(goal, { kind: 'custom', body: 'Notice' }, language, 'customer-export', destination).split('\n')[1]!;
-      const expected = length === 60 ? objective : 'e\u0301'.repeat(59) + '…';
-      expect(line).toContain(expected);
-      expect(line).toContain(goal.id.slice(0, 8));
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('preserves a trimmed marker-only completion summary (%s)', (marker) => {
+    const summary = ` \t${marker} \t `;
+    for (const current of [goal, { ...goal, completion: { ...completion, summary } }]) {
+      const text = formatGoalNotification(current, { kind: 'awaiting_merge', body: summary }, language, 'takt');
+      expect(text.split('\n').at(-1)).toBe(getLabel('manager.notificationChanges', language, { summary: marker }));
     }
+  });
+
+  it.each([false, true])('shows the PR link only when saved and hides completion instructions (PR=%s)', (hasPr) => {
+    const current: Goal = { ...goal, completion,
+      ...(hasPr ? { pullRequest: { number: 1987, url: 'https://github.com/nrslib/takt/pull/1987' } } : {}),
+    };
+    const before = structuredClone(current);
+    const text = formatGoalNotification(current, { kind: 'awaiting_merge', body: completion.summary + '\n' + completion.instructions.join('\n') }, language, 'takt');
+    const lines = text.split('\n');
+    expect(lines[0]!.includes('PR #1987')).toBe(hasPr);
+    expect(lines.includes('https://github.com/nrslib/takt/pull/1987')).toBe(hasPr);
+    expect(lines[1]).toContain(firstSentence);
+    expect(lines[2]).toBe(language === 'ja'
+      ? '仕上げ（release の取り込み、レビュー、CI の通過）が終わってから、PR を確認して release にマージしてください。'
+      : 'Once preparation is complete (incorporating release, code review, and passing CI), review the PR and merge it into release.');
+    expect(lines.at(-2)).toBe('');
+    expect(lines.at(-1)).toBe(getLabel('manager.notificationChanges', language, {
+      summary: completion.summary.split('\n\n')[0]!.replace('\n', ' '),
+    }));
+    expect(text).not.toContain('10');
+    expect(text).not.toContain('takt_complete_goal');
+    expect(text).not.toContain('takt_merge_goal_pr');
+    expect(current).toEqual(before);
+  });
+
+  it.each(['main', 'develop'])('requires preparation with %s without a completion record or a PR', (branch) => {
+    const text = formatGoalNotification({ ...goal, integrationBranch: branch }, { kind: 'awaiting_merge', body: 'Ready.\n\nDetailed results.' }, language, 'takt');
+    expect(text.split('\n')[2]).toBe(language === 'ja'
+      ? `仕上げ（${branch} の取り込み、レビュー、CI の通過）が終わってから、PR を確認して ${branch} にマージしてください。`
+      : `Once preparation is complete (incorporating ${branch}, code review, and passing CI), review the PR and merge it into ${branch}.`);
+    expect(text).not.toContain('PR #');
+    expect(text).not.toContain('Detailed results.');
+    expect(text).toContain('Ready.');
+  });
+
+  it('ends a long summary at a sentence boundary without including the next paragraph', () => {
+    const sentence = language === 'ja' ? '変更を確認しました。' : 'Verified the change. ';
+    const summary = sentence.repeat(100) + '\r\n \r\nTEST RESULTS';
+    const text = formatGoalNotification({ ...goal, completion: { ...completion, summary } }, { kind: 'awaiting_merge', body: 'unused' }, language, 'takt');
+    const digest = text.split('\n').at(-1)!.replace(language === 'ja' ? /^変更: /u : /^Changes: /u, '');
+    expect(digest.length).toBeLessThanOrEqual(600);
+    expect(digest).toBe(sentence.repeat(Math.floor(600 / sentence.length)).trim());
+    expect(text).not.toContain('TEST RESULTS');
+    expect(text).not.toContain('…');
+  });
+
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('uses the same list normalization for a long objective and completion summary (%s)', (marker) => {
+    const sentence = language === 'ja' ? `CSV に${'指定された列と行を'.repeat(80)}書き出せるようにしました。`
+      : `Added CSV export with ${'the selected columns and rows '.repeat(30)}included.`;
+    const remainder = language === 'ja' ? '次の変更は省略します。' : 'Omit this subsequent change.';
+    const paragraph = `${marker} ${sentence}\n2. ${remainder}`;
+    const current = { ...goal, objective: paragraph, completion: { ...completion, summary: `${paragraph}\n\nTEST RESULTS` } };
+    const before = structuredClone(current);
+    expect(sentence.length).toBeGreaterThan(600);
+
+    const lines = formatGoalNotification(current, { kind: 'awaiting_merge', body: 'unused' }, language, 'takt').split('\n');
+
+    expect(lines[1]).toBe(getLabel('manager.notificationHumanGoal', language, { objective: sentence }));
+    expect(lines.at(-1)).toBe(getLabel('manager.notificationChanges', language, { summary: sentence }));
+    expect(lines.join('\n')).not.toContain(remainder);
+    expect(lines.join('\n')).not.toContain('TEST RESULTS');
+    expect(current).toEqual(before);
+  });
+
+  it.each([60, 61, 700])('keeps a single %s-grapheme objective and summary sentence complete', (length) => {
+    const sentence = 'e\u0301'.repeat(length) + '。';
+    const text = formatGoalNotification({ ...goal, objective: sentence, completion: { ...completion, summary: sentence + '\n\nDetails' } },
+      { kind: 'awaiting_merge', body: 'unused' }, language, 'takt');
+    expect(text.split('\n')[1]).toContain(sentence);
+    expect(text.split('\n').at(-1)).toContain(sentence);
+    expect(text).not.toContain('…');
+    expect(text).not.toContain('Details');
+  });
+
+  it.each([60, 61])('preserves the TUI objective boundary at %s graphemes', (length) => {
+    const objective = 'e\u0301'.repeat(length);
+    const lines = formatGoalNotification({ ...goal, objective }, { kind: 'custom', body: 'Notice' }, language, 'takt', 'tui').split('\n');
+    expect(lines[1]).toContain(length === 60 ? objective : 'e\u0301'.repeat(59) + '…');
+    expect(lines[1]).toContain(goal.id.slice(0, 8));
+  });
+
+  it.each(['blocked', 'custom'] as const)('keeps explicitly supplied severity in Slack and TUI %s notifications', (kind) => {
+    for (const severity of [undefined, 'info', 'warning', 'error'] as const) {
+      for (const destination of ['slack', 'tui'] as const) {
+        const text = formatGoalNotification(goal, { kind, body: 'Result', ...(severity === undefined ? {} : { severity }) }, language, 'takt', destination);
+        const lines = text.split('\n');
+        expect(lines).toContain('Result');
+        const severityLines = lines.filter((line) => line.startsWith(language === 'ja' ? '重要度:' : 'Severity:'));
+        if (severity === undefined) {
+          expect(severityLines).toEqual([]);
+        } else {
+          const expected = getLabel('manager.notificationSeverity', language, {
+            severity: getLabel(`manager.notificationSeverities.${severity}`, language),
+          });
+          expect(severityLines).toEqual([expected]);
+          expect(lines[destination === 'slack' ? 1 : 2]).toBe(expected);
+        }
+      }
+    }
+  });
+
+  it.each(['progress', 'completed', 'blocked', 'custom'] as const)('preserves short multiline %s bodies and bounds long ones without changing saved data', (kind) => {
+    for (const length of [599, 600, 601]) {
+      const body = 'e\u0301'.repeat(length);
+      const current = appendGoalNotification(goal, { kind, body }, policy);
+      const before = structuredClone(current);
+      const text = formatGoalNotification(current, current.notifications![0]!, language, 'takt');
+      expect(text.split('\n')[1]).toBe(length > 600 ? 'e\u0301'.repeat(599) + '…' : body);
+      expect(current).toEqual(before);
+      const hint = getLabel('manager.notificationFullMessage', language, { project: 'takt' });
+      expect(text.includes(hint)).toBe(kind === 'custom' && length > 600);
+      if (kind === 'blocked') expect(text.split('\n').at(-1)).toBe(getLabel('manager.notificationHumanBlockedAction', language));
+    }
+    const body = '理由: 認証に失敗しました。\n必要な操作: 認証情報を更新してください。  ';
+    expect(formatGoalNotification(goal, { kind, body }, language, 'takt')).toContain(body);
+  });
+
+  it('removes trailing whitespace only from a shortened body prefix', () => {
+    const prefix = 'e\u0301'.repeat(597) + '  ';
+    expect(formatGoalNotification(goal, { kind: 'custom', body: prefix + 'XY' }, language, 'takt').split('\n')[1]).toBe('e\u0301'.repeat(597) + '…');
   });
 
   it.each([119, 120, 121])('preserves the full integrated purpose at %s graphemes', (length) => {
     const purpose = 'e\u0301'.repeat(length);
-    const text = formatIntegratedWorkNotification(purpose, language);
-    expect(text).toBe(language === 'ja' ? `「${purpose}」の作業を取り込みました。`
-      : `Integrated the work on “${purpose}”.`);
-  });
-
-  it.each([600, 601])('shortens a saved %s-grapheme progress body only for Slack display', (length) => {
-    const body = 'e\u0301'.repeat(length);
-    const goal = appendGoalNotification(goalRecord(), { kind: 'progress', body }, policy);
-    const saved = structuredClone(goal);
-    const notification = goal.notifications![0]!;
-    for (const destination of ['slack', 'tui'] as const) {
-      const lines = formatGoalNotification(goal, notification, language, 'customer-export', destination).split('\n');
-      expect(lines[2]).toBe(destination === 'tui' || length === 600 ? body : 'e\u0301'.repeat(599) + '…');
-    }
-    expect(goal).toEqual(saved);
-    expect(goal.notifications![0]!.body).toBe(body);
-  });
-
-  it('removes trailing whitespace only from a shortened prefix', () => {
-    const prefix = 'e\u0301'.repeat(597) + '  ';
-    const text = formatGoalNotification(goalRecord(), { kind: 'custom', body: prefix + 'XY' }, language, 'customer-export');
-    expect(text.split('\n')[2]).toBe('e\u0301'.repeat(597) + '…');
-  });
-
-  it.each([
-    { kind: 'blocked' as const, length: 599 }, { kind: 'blocked' as const, length: 600 },
-    { kind: 'custom' as const, length: 599 }, { kind: 'custom' as const, length: 600 },
-  ])('preserves the complete $length-grapheme $kind body with its reason and unlabeled action', ({ kind, length }) => {
-    const reason = language === 'ja' ? '検証環境の認証に失敗しました。' : 'Authentication to the test environment failed.';
-    const action = language === 'ja' ? '検証用の認証情報を更新してください。' : 'Update the test credentials.';
-    const body = `${reason}\n${'e\u0301'.repeat(length - reason.length - action.length - 4)}\n${action}  `;
-    const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
-
-    expect(text.split('\n').slice(2, 5).join('\n')).toBe(body);
-    expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|Ctrl\+N/u : /full message|Ctrl\+N/iu);
-  });
-
-  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and guides readers to the current TUI state', (kind) => {
-    const reason = language === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
-    const action = language === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
-    const body = `${reason}\n${'x'.repeat(620)}\n${action}`;
-    const notification = { kind, body };
-    const goal = goalRecord();
-    const before = structuredClone({ goal, notification });
-    const text = formatGoalNotification(goal, notification, language, 'customer-export');
-    const visibleBody = text.split('\n').slice(2, 4).join('\n');
-    const guidance = text.split('\n').slice(4).join('\n');
-
-    expect(visibleBody).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
-    expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
-    expect(guidance).not.toMatch(/Ctrl\+N|\^N/u);
-    expect(guidance).toContain('TUI');
-    expect(guidance).toContain('takt manager');
-    expect(guidance).toContain('customer-export');
-    const guidanceLines = guidance.split('\n');
-    expect(guidanceLines).toHaveLength(kind === 'blocked' ? 2 : 1);
-    if (kind === 'blocked') {
-      expect(guidanceLines[1]).toBe(getLabel('manager.notificationBlockedAction', language, { project: 'customer-export' }));
-    }
-    expect({ goal, notification }).toEqual(before);
-  });
-
-  it.each(['blocked', 'custom'] as const)('keeps combining characters intact when a %s body exceeds the limit by one grapheme', (kind) => {
-    const body = 'e\u0301'.repeat(599) + 'XY';
-    const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
-
-    expect(text.split('\n')[2]).toBe('e\u0301'.repeat(599) + '…');
-    expect(text.split('\n').slice(3)).toContain(getLabel('manager.notificationFullMessage', language, { project: 'customer-export' }));
-  });
-
-  it.each([
-    { kind: 'blocked' as const, length: 600 }, { kind: 'custom' as const, length: 600 },
-    { kind: 'blocked' as const, length: 601 }, { kind: 'custom' as const, length: 601 },
-  ])('keeps the $length-grapheme $kind body complete only in TUI when it exceeds the Slack bound', ({ kind, length }) => {
-    const body = 'e\u0301'.repeat(599) + (length === 600 ? 'X' : 'XY');
-    const goal = goalRecord();
-    const slack = formatGoalNotification(goal, { kind, body }, language, 'customer-export', 'slack').split('\n');
-    const tui = formatGoalNotification(goal, { kind, body }, language, 'customer-export', 'tui').split('\n');
-    expect(slack[2]).toBe(length === 600 ? body : 'e\u0301'.repeat(599) + '…');
-    expect(tui[2]).toBe(body);
-  });
-
-  it.each(['blocked', 'custom'] as const)('preserves the complete long %s body for TUI events', (kind) => {
-    const body = `認証に失敗しました。\n${'e\u0301'.repeat(620)}\nUpdate test credentials.  `;
-    const notification = { kind, body };
-    const goal = goalRecord();
-    const before = structuredClone({ goal, notification });
-    const text = formatGoalNotification(goal, notification, language, 'customer-export', 'tui');
-
-    expect(text.split('\n').slice(2, 5).join('\n')).toBe(body);
-    expect({ goal, notification }).toEqual(before);
-  });
-
-  it.each([{ worktrees: [] }, { worktrees: ["/human's tree"] }])('retains PR preparation instructions independently of checked-out worktrees $worktrees', ({ worktrees }) => {
-    const goalSha = 'a'.repeat(40);
-    const commands = [
-      `takt_complete_goal goalId=${goalRecord().id} expectedSha=${goalSha}`,
-      'takt_merge_goal_pr until=prepare',
-    ];
-    const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
-      goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary: 'Ready for integration',
-      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-      ...(worktrees.length === 0 ? {} : { worktrees }),
-      instructions: commands,
-    } };
-    const text = formatGoalNotification(goal, { kind: 'awaiting_merge', body: 'Verified result. '.repeat(1000) }, language, 'customer-export');
-
-    expect(text).toContain('release');
-    for (const command of commands) expect(text.split('\n').map((line) => line.trim())).toContain(command);
-    expect(text).not.toContain('git merge');
-    if (language === 'ja') expect(text).not.toContain('Run in a clean worktree');
-    expect(text.length).toBeLessThan(2000);
-  });
-
-  it('retains merge commands longer than the body limit in their saved order', () => {
-    const directory = `/work/${'customer-project/'.repeat(60)}reviewed tree`;
-    const goalSha = 'a'.repeat(40);
-    const commands = [
-      `git -C '${directory}' status --short`,
-      `git -C '${directory}' merge --no-ff --no-edit '${goalSha}'`,
-    ];
-    const summary = 'Acceptance checks passed. '.repeat(100);
-    const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
-      goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary,
-      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-      worktrees: [directory], instructions: commands,
-    } };
-    const before = structuredClone(goal);
-
-    const lines = formatGoalNotification(goal, { kind: 'awaiting_merge', body: summary }, language, 'customer-export').split('\n');
-
-    expect(lines[2]).toContain('Acceptance checks passed.');
-    expect(lines[2]).toMatch(/…$/u);
-    expect(lines[2]!.length).toBeLessThan(summary.length);
-    expect(lines.slice(-commands.length)).toEqual(commands);
-    expect(goal).toEqual(before);
-  });
-
-  it.each([false, true])('renders old and new notice bodies from PR completion instructions without duplicating them (worktree=%s)', (withWorktree) => {
-    const goalSha = 'a'.repeat(40);
-    const directory = '/human/review';
-    const commands = ['takt_complete_goal', 'takt_merge_goal_pr until=prepare'];
-    const summary = 'Acceptance checks passed';
-    const instructions = commands;
-    const completion = { goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary,
-      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-      ...(withWorktree ? { worktrees: [directory] } : {}), instructions };
-    const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion };
-    const oldBody = `${summary}\n${completion.targetBranch}: ${goalSha}\n${instructions.join('\n')}`;
-    expect(oldBody.length).toBeLessThan(600);
-    const before = structuredClone(goal);
-    for (const destination of ['slack', 'tui'] as const) {
-      const current = formatGoalNotification(goal, { kind: 'awaiting_merge', body: summary }, language, 'customer-export', destination);
-      const old = formatGoalNotification(goal, { kind: 'awaiting_merge', body: oldBody }, language, 'customer-export', destination);
-      expect(old).toBe(current);
-      const lines = old.split('\n');
-      expect(lines[2]).toBe(summary);
-      expect(lines.filter((line) => line.startsWith('takt_'))).toEqual(commands);
-      expect(lines.filter((line) => line.includes('release') && !line.startsWith('git'))).toHaveLength(1);
-      expect(lines.slice(-instructions.length)).toEqual(instructions);
-      expect(old).not.toContain('git merge');
-      const custom = formatGoalNotification(goal, { kind: 'custom', body: oldBody }, language, 'customer-export', destination);
-      if (destination === 'slack') expect(custom.split('\n').slice(2).join('\n')).toBe(oldBody);
-      else {
-        expect(custom.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
-        expect(custom.split('\n')[5]).toMatch(language === 'ja' ? /省略/u : /omitted/iu);
-        expect(custom).not.toMatch(/Ctrl\+N|\^N/u);
-      }
-      const withoutCompletion = formatGoalNotification(goalRecord(), { kind: 'awaiting_merge', body: oldBody }, language, 'customer-export', destination);
-      if (destination === 'slack') expect(withoutCompletion.split('\n').slice(2).join('\n')).toBe(oldBody);
-      else {
-        expect(withoutCompletion.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
-        expect(withoutCompletion.split('\n')[5]).toMatch(language === 'ja' ? /省略/u : /omitted/iu);
-        expect(withoutCompletion).not.toMatch(/Ctrl\+N|\^N/u);
-      }
-    }
-    expect(goal).toEqual(before);
+    expect(formatIntegratedWorkNotification(purpose, language)).toContain(purpose);
   });
 
   const question: GoalQuestion = {
     id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
-    body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV',
+    body: '書き出す範囲をどちらにしますか？', options: ['表示中の一覧だけ', '条件に合う全件'],
+    recommendation: '条件に合う全件（一覧の件数に上限があるため）',
   };
+  function questionText(saved: GoalQuestion, destination: 'slack' | 'tui' = 'slack'): string {
+    return formatGoalNotification({ ...goal, questions: [saved] }, { kind: 'question', body: formatGoalQuestionNotification(saved, language === 'ja' ? 'en' : 'ja') }, language, 'takt', destination);
+  }
 
-  it.each([false, true])('preserves question boundaries for both destinations (exceeds=%s)', (exceeds) => {
+  it('numbers options on separate lines and keeps a recommendation with its reason unchanged', () => {
+    const before = structuredClone(question);
+    const lines = questionText(question).split('\n');
+    expect(lines[1]).toBe(question.body);
+    expect(lines[2]).toBe('1. 表示中の一覧だけ');
+    expect(lines[3]).toBe('2. 条件に合う全件');
+    expect(lines[4]).toBe(getLabel('manager.notificationRecommendation', language, { recommendation: question.recommendation! }));
+    expectAnswerSelectionGuidance(lines.join('\n'), question.id);
+    expect(question).toEqual(before);
+  });
+
+  it('retains a separate recommendation when it does not match an option', () => {
+    const recommendation = 'Discuss the output format first';
+    expect(questionText({ ...question, recommendation })).toContain(getLabel('manager.notificationRecommendation', language, { recommendation }));
+  });
+
+  it.each([
+    { options: ['CSV', 'JSON'], recommendation: 'JSON', index: 1 },
+    { options: ['CSV', 'JSON'], recommendation: 'JSON Lines（順次処理できるため）', index: null },
+    { options: ['CSV', 'JSON'], recommendation: 'JSON（順次処理できるため）', index: null },
+    { options: ['CSV', 'JSON'], recommendation: 'YAML', index: null },
+    { options: ['JSON', 'JSON Lines'], recommendation: 'JSON Lines（順次処理できるため）', index: null },
+    { options: ['JSON', 'JSON Lines'], recommendation: 'JSON Lines', index: 1 },
+    { options: ['JSON Lines', 'JSON'], recommendation: 'JSON', index: 1 },
+  ])('marks only an exact recommendation match: $recommendation ($options)', ({ options, recommendation, index }) => {
+    const saved = { ...question, options, recommendation };
+    const before = structuredClone(saved);
+    const lines = questionText(saved).split('\n');
+    const suffix = getLabel('manager.notificationRecommended', language);
+    expect(lines.slice(2, 2 + options.length)).toEqual(options.map((option, optionIndex) =>
+      `${optionIndex + 1}. ${option}${optionIndex === index ? suffix : ''}`));
+    const recommendationLines = lines.filter((line) => /^(推奨:|Recommendation:)/u.test(line));
+    expect(recommendationLines).toEqual(index === null
+      ? [getLabel('manager.notificationRecommendation', language, { recommendation })] : []);
+    expect(saved).toEqual(before);
+  });
+
+  it('marks every option that exactly matches the recommendation', () => {
+    const options = ['JSON', 'JSON Lines', 'JSON Lines'];
+    const recommendation = 'JSON Lines';
+    const lines = questionText({ ...question, options, recommendation }).split('\n');
+    const suffix = getLabel('manager.notificationRecommended', language);
+    expect(lines.slice(2, 5)).toEqual(['1. JSON', `2. JSON Lines${suffix}`, `3. JSON Lines${suffix}`]);
+    expect(lines).not.toContain(getLabel('manager.notificationRecommendation', language, { recommendation }));
+  });
+
+  it.each(['pending', 'answered', 'withdrawn'] as const)('shows answer guidance only for a %s question and keeps all TUI options', (status) => {
+    const options = ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet', 'Avro'];
+    const saved: GoalQuestion = { ...question, status, options, recommendation: 'Avro',
+      ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-12T00:00:00Z' } } : {}),
+    };
+    const slack = questionText(saved);
+    const tui = questionText(saved, 'tui');
+    expect(slack).toContain('5. YAML');
+    expect(slack).not.toContain('6. Parquet');
+    expect(slack).toContain(getLabel('manager.notificationMoreOptions', language, { count: '2' }));
+    expect(slack).toContain(getLabel('manager.notificationRecommendation', language, { recommendation: 'Avro' }));
+    expect(tui).toContain(options.join(', '));
+    for (const text of [slack, tui]) {
+      expect(text.split('\n').filter((line) => answerMenuKey.test(line))).toHaveLength(status === 'pending' ? 1 : 0);
+      expect(text).toContain(saved.body);
+    }
+    expect(formatGoalQuestionNotification(saved, language)).toContain(options.join(', '));
+  });
+
+  it.each([false, true])('preserves grapheme boundaries when shortening question details (exceeds=%s)', (exceeds) => {
     const extra = exceeds ? 1 : 0;
-    const savedQuestion: GoalQuestion = { ...question, body: 'e\u0301'.repeat(300 + extra),
+    const saved = { ...question, body: 'e\u0301'.repeat(300 + extra), options: ['e\u0301'.repeat(60 + extra), 'JSON', 'TSV', 'XML', 'YAML'],
       recommendation: 'e\u0301'.repeat(200 + extra),
-      options: ['e\u0301'.repeat(60 + extra), 'JSON', 'TSV', 'XML', 'YAML'],
     };
-    const body = formatGoalQuestionNotification(savedQuestion, language);
-    const optionPrefix = language === 'ja' ? '選択肢: ' : 'Options: ';
-    const recommendationPrefix = language === 'ja' ? '推奨: ' : 'Recommendation: ';
-    for (const destination of ['slack', 'tui'] as const) {
-      const lines = formatGoalNotification({ ...goalRecord(), questions: [savedQuestion] }, { kind: 'question', body }, language, 'customer-export', destination).split('\n');
-      expect(lines[2]).toBe(exceeds ? 'e\u0301'.repeat(299) + '…' : savedQuestion.body);
-      expect(lines[4]).toBe(recommendationPrefix + (exceeds ? 'e\u0301'.repeat(199) + '…' : savedQuestion.recommendation));
-      const options = destination === 'slack' && exceeds
-        ? ['e\u0301'.repeat(59) + '…', ...savedQuestion.options!.slice(1)] : savedQuestion.options!;
-      expect(lines[3]).toBe(optionPrefix + options.join(', '));
-      expectAnswerSelectionGuidance(lines[5]!, savedQuestion.id);
-    }
-  });
-
-  it.each(['pending', 'answered', 'withdrawn'] as const)('keeps all TUI options and bounds only Slack options for a %s question', (status) => {
-    const options = ['CSV', 'JSON', 'TSV', 'XML', 'YAML', `Parquet ${'e\u0301'.repeat(400)}`];
-    const savedQuestion: GoalQuestion = { ...question, status, options,
-      body: 'e\u0301'.repeat(301), recommendation: 'e\u0301'.repeat(201),
-      ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-12T00:00:00Z' } } : {}),
-    };
-    const goal = { ...goalRecord(), questions: [savedQuestion] };
-    const body = formatGoalQuestionNotification(savedQuestion, language);
-    const notification = { kind: 'question' as const, body };
-    const optionPrefix = language === 'ja' ? '選択肢: ' : 'Options: ';
-    const recommendationPrefix = language === 'ja' ? '推奨: ' : 'Recommendation: ';
-    expect(body).toContain(options.join(', '));
-    expect(body).toContain(savedQuestion.body);
-    expect(body).toContain(recommendationPrefix + savedQuestion.recommendation);
-    for (const destination of ['slack', 'tui'] as const) {
-      const lines = formatGoalNotification(goal, notification, language, 'customer-export', destination).split('\n');
-      expect(lines[2]).toBe('e\u0301'.repeat(299) + '…');
-      expect(lines).toContain(recommendationPrefix + 'e\u0301'.repeat(199) + '…');
-      expect(lines.filter((line) => answerMenuKey.test(line))).toHaveLength(status === 'pending' ? 1 : 0);
-      if (status === 'pending') {
-        expectAnswerSelectionGuidance(lines.at(-1)!, question.id);
-      }
-      if (destination === 'tui') {
-        expect(lines[3]).toBe(optionPrefix + options.join(', '));
-        expect(lines.filter((line) => /ほかに|Additional options/iu.test(line))).toEqual([]);
-      } else {
-        expect(lines[3]).toBe(optionPrefix + options.slice(0, 5).join(', '));
-        expect(lines[4]).toBe(language === 'ja'
-          ? 'ほかに1件の選択肢があります。すべての選択肢はTUIで確認できます。'
-          : 'Additional options: 1. View all options in the TUI.');
-        expect(lines[4]).toContain('TUI');
-      }
-    }
-    const fiveOptions = { ...savedQuestion, options: options.slice(0, 5) };
-    const fiveLines = formatGoalNotification({ ...goal, questions: [fiveOptions] }, notification, language, 'customer-export').split('\n');
-    expect(fiveLines[3]).toBe(optionPrefix + fiveOptions.options.join(', '));
-    expect(fiveLines.filter((line) => /ほかに|Additional options/iu.test(line))).toEqual([]);
-    expect(goal.questions).toEqual([savedQuestion]);
-  });
-
-  it.each([5, 6, 7])('shows the exact Slack remainder for %s options while keeping all saved and TUI options', (count) => {
-    const options = ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet', 'Avro'].slice(0, count);
-    const savedQuestion: GoalQuestion = { ...question, options };
-    const goal = { ...goalRecord(), questions: [savedQuestion] };
-    const body = formatGoalQuestionNotification(savedQuestion, language);
-    const notification = { kind: 'question' as const, body };
-    const optionPrefix = language === 'ja' ? '選択肢: ' : 'Options: ';
-    const remainderPattern = /ほかに|Additional options/iu;
-    const slackLines = formatGoalNotification(goal, notification, language, 'customer-export', 'slack').split('\n');
-    const tuiLines = formatGoalNotification(goal, notification, language, 'customer-export', 'tui').split('\n');
-
-    expect(slackLines[3]).toBe(optionPrefix + options.slice(0, 5).join(', '));
-    expect(slackLines.filter((line) => remainderPattern.test(line))).toEqual(count === 5 ? [] : [language === 'ja'
-      ? `ほかに${count - 5}件の選択肢があります。すべての選択肢はTUIで確認できます。`
-      : `Additional options: ${count - 5}. View all options in the TUI.`]);
-    expect(tuiLines[3]).toBe(optionPrefix + options.join(', '));
-    expect(tuiLines.filter((line) => remainderPattern.test(line))).toEqual([]);
-    expect(body.split('\n')).toContain(optionPrefix + options.join(', '));
-    expect(body.split('\n').filter((line) => remainderPattern.test(line))).toEqual([]);
-  });
-
-  it('shows saved question details and a usable TUI inquiry menu key', () => {
-    const goal = { ...goalRecord(), questions: [question] };
-    const body = formatGoalQuestionNotification(question, language);
-    const text = formatGoalNotification(goal, { kind: 'question', body }, language, 'customer-export');
-
-    expect(body.startsWith(`${question.id}: `)).toBe(true);
-    expect(text).toContain(question.body);
-    expect(text).toMatch(language === 'ja' ? /選択肢:\s*CSV.*JSON/u : /Options:\s*CSV.*JSON/u);
-    expect(text).toMatch(language === 'ja' ? /推奨:\s*CSV/u : /Recommendation:\s*CSV/u);
-    expectAnswerSelectionGuidance(text, question.id);
-    expect(text).toContain('takt manager');
-    expect(text).toContain('TUI');
-    expect(text).toContain('customer-export');
-    if (language === 'ja') expect(text).not.toMatch(/TAKT Goal|Options:|Recommendation:/u);
-  });
-
-  it.each(['pending', 'answered', 'withdrawn'] as const)('preserves saved question details and shows answer guidance only while pending (status=%s)', (status) => {
-    const savedQuestion: GoalQuestion = { ...question, status,
-      ...(status === 'answered' ? { answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-12T00:00:00Z' } } : {}),
-    };
-    const goal = { ...goalRecord(), questions: [savedQuestion] };
-    const notification = { kind: 'question' as const, body: formatGoalQuestionNotification(question, language === 'ja' ? 'en' : 'ja') };
-    const text = formatGoalNotification(goal, notification, language, 'customer-export');
+    const text = questionText(saved);
     const lines = text.split('\n');
+    expect(lines[1]).toBe(exceeds ? 'e\u0301'.repeat(299) + '…' : saved.body);
+    expect(lines[2]).toBe('1. ' + (exceeds ? 'e\u0301'.repeat(59) + '…' : saved.options[0]));
+    expect(text).toContain(getLabel('manager.notificationRecommendation', language, { recommendation: saved.recommendation }));
+    const tui = questionText(saved, 'tui').split('\n');
+    expect(tui[2]).toBe(lines[1]);
+    expect(tui[3]).toBe(getLabel('manager.notificationOptions', language, { options: saved.options.join(', ') }));
+    expect(tui[4]).toBe(getLabel('manager.notificationRecommendation', language, { recommendation: exceeds ? 'e\u0301'.repeat(199) + '…' : saved.recommendation }));
+  });
 
-    expect(lines).toContain(question.body);
-    expect(lines).toContain(language === 'ja' ? '選択肢: CSV, JSON' : 'Options: CSV, JSON');
-    expect(lines).toContain(language === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
-    const guidance = lines.filter((line) => answerMenuKey.test(line));
-    if (status === 'pending') {
-      expect(guidance).toHaveLength(1);
-      expectAnswerSelectionGuidance(text, question.id);
-    } else {
-      expect(guidance).toEqual([]);
-    }
-    expect(lines.some((line) => line.startsWith(`${question.id}: `))).toBe(false);
-    expect(goal.questions).toEqual([savedQuestion]);
+  it.each([5, 6, 7])('shows exactly the remaining count for %s options', (count) => {
+    const saved = { ...question, options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet', 'Avro'].slice(0, count) };
+    const text = questionText(saved);
+    expect(text).toContain('5. YAML');
+    const remainder = text.split('\n').filter((line) => /ほかに|Additional options/iu.test(line));
+    expect(remainder).toEqual(count === 5 ? [] : [getLabel('manager.notificationMoreOptions', language, { count: String(count - 5) })]);
+  });
+
+  it('bounds a large options list and retains the full saved details', () => {
+    const saved = { ...question, options: Array.from({ length: 100 }, (_, index) => `Format ${index} `.repeat(100)) };
+    const text = questionText(saved);
+    expect(text).toContain('Format 0');
+    expect(text).toContain('Format 4');
+    expect(text).toContain('95');
+    expect(text.length).toBeLessThan(2000);
+    expect(formatGoalQuestionNotification(saved, language)).toContain('Format 99');
   });
 
   it.each([
     { kind: 'question' as const, body: `関連質問 ${question.id}: 本文中のID` },
     { kind: 'question' as const, body: `> ${question.id}: 引用` },
     { kind: 'custom' as const, body: `${question.id}: 一般通知` },
-  ])('does not infer saved question details from an ID in $kind text', (notification) => {
-    const text = formatGoalNotification({ ...goalRecord(), questions: [question] }, notification, language, 'customer-export');
-    const lines = text.split('\n');
-    expect(lines).toContain(notification.body);
-    expect(lines.filter((line) => answerMenuKey.test(line))).toEqual([]);
-    expect(lines.filter((line) => /選択肢:|Options:|推奨:|Recommendation:/u.test(line))).toEqual([]);
+  ])('does not infer question details from an ID in $kind text', (notification) => {
+    const text = formatGoalNotification({ ...goal, questions: [question] }, notification, language, 'takt');
+    expect(text).toContain(notification.body);
+    expect(text).not.toContain('1. ' + question.options![0]);
+    expect(text.split('\n').filter((line) => answerMenuKey.test(line))).toEqual([]);
   });
 
-  it('shortens question details while retaining the complete inquiry menu key', () => {
-    const savedQuestion: GoalQuestion = { ...question, body: 'Which output format? '.repeat(1000),
-      options: ['CSV '.repeat(1000), 'JSON '.repeat(1000)], recommendation: 'CSV is preferred. '.repeat(1000) };
-    const body = formatGoalQuestionNotification(savedQuestion, language);
-    const text = formatGoalNotification({ ...goalRecord(), questions: [savedQuestion] }, { kind: 'question', body }, language, 'customer-export');
-
-    expect(text).toContain('Which output format?');
-    expect(text).toContain('CSV');
-    expect(text).toContain('JSON');
-    expect(text).toContain('CSV is preferred.');
-    expectAnswerSelectionGuidance(text, savedQuestion.id);
-    expect(text.length).toBeLessThan(2000);
-    expect(savedQuestion.body).toHaveLength('Which output format? '.length * 1000);
-  });
-
-  it('bounds a large options list and directs readers to all options in the TUI', () => {
-    const savedQuestion = { ...question, options: Array.from({ length: 100 }, (_, index) => `Format ${index} `.repeat(100)) };
-    const body = formatGoalQuestionNotification(savedQuestion, language);
-    const text = formatGoalNotification({ ...goalRecord(), questions: [savedQuestion] }, { kind: 'question', body }, language, 'customer-export');
-    expect(text).toContain('Format 0');
-    expect(text).toContain('Format 4');
-    expect(text).toContain('95');
-    expect(text).toContain('TUI');
-    expectAnswerSelectionGuidance(text, savedQuestion.id);
-    expect(text.length).toBeLessThan(2000);
-    expect(savedQuestion.options).toHaveLength(100);
-    expect(body).toContain('Format 99');
+  it('keeps TUI goal IDs, body digest, merge instructions and unnumbered question options', () => {
+    const current = { ...goal, completion };
+    const before = structuredClone(current);
+    const lines = formatGoalNotification(current, { kind: 'awaiting_merge', body: 'unused' }, language, 'takt', 'tui').split('\n');
+    expect(lines[1]).toContain(goal.id.slice(0, 8));
+    expect(lines.slice(-completion.instructions.length)).toEqual(completion.instructions);
+    expect(questionText(question, 'tui')).toContain(getLabel('manager.notificationOptions', language, { options: question.options!.join(', ') }));
+    expect(current).toEqual(before);
   });
 });

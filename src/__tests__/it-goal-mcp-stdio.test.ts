@@ -26,6 +26,7 @@ import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValu
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../infra/goals/standalone-inquiries.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { formatGoalNotification } from '../infra/goals/notifications.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
@@ -604,7 +605,7 @@ const askedQuestion = {
 function expectAnswerSelectionGuidance(text: string, questionId: string): void {
   const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
-  expect(guidance[0]).toMatch(/list|select|choose/iu);
+  expect(guidance[0]).toContain('takt manager');
   expect(guidance[0]).not.toContain(questionId);
 }
 
@@ -830,10 +831,11 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
-    for (const value of [goalId.slice(0, 8), askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
+    for (const value of [goalRecord().objective, askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(requests[0]!.text).not.toContain(goalId);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const displayed = await readManagerTestDisplay(cwd);
     expect(displayed.events).toEqual([]);
     expect(displayed.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
@@ -867,7 +869,8 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests).toHaveLength(1);
     const severity = language === 'ja' ? '重要度: 警告' : 'Severity: Warning';
     expect(requests[0]!.text.split('\n')).toContain(body);
-    expect(requests[0]!.text.split('\n')[2]).toBe(severity);
+    expect(requests[0]!.text.split('\n')[1]).toBe(severity);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toEqual([expect.objectContaining({ kind, body, severity: 'warning' })]);
     const display = await readManagerTestDisplay(cwd, language);
@@ -956,15 +959,17 @@ describe('manager questions, answers and notifications through production bounda
     configure(undefined, kind === 'completed' ? 'auto' : 'approve', kind === 'completed');
     await produce(kind);
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.text).toContain(goalId.slice(0, 8));
+    expect(requests[0]!.text).toContain(goalRecord().objective);
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expect(requests[0]!.text).not.toContain(goalId);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
     const display = await readManagerTestDisplay(cwd);
     expect(display.events).toHaveLength(1);
     expect(display.events).toContainEqual({
-      id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
+      id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]),
+      message: formatGoalNotification(saved, saved.notifications![0]!, 'en', basename(cwd), 'tui'),
     });
     if (kind === 'progress') {
       expect(saved.workLog).toHaveLength(1);

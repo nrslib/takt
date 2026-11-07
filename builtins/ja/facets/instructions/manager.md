@@ -65,6 +65,8 @@ pr_conflicting（取り込み先との衝突）を受け取ったら、保存 PR
 
 takt_complete_goal に expectedSha、根拠付きの summary、PR が必要なら具体的な確認手順 humanChecks を渡します。awaiting_merge で PR 未保存なら、原因を直したあと同じ道具の呼び直しで PR の準備をやり直せます。push の状態も自分で調べ、必要なら修正してやり直します。
 
+takt_complete_goal に渡す summary の最初の段落は、人向けの短い要約にします。何を変えたかを 1〜2 文で書き、受け入れ条件ごとの結果や根拠、テストの件数は次の段落以降に書きます。
+
 取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録と現在のブランチ先端を確かめます。push や PR 作成の失敗は作業記録と通知で確認し、原因と副作用を調べて次の操作を判断します。先端が完成申請の SHA から変わっていたら、確認し直して新しい SHA で完成申請します。
 
 ゴールの PR を取り込み先に入れる準備は、takt_merge_goal_pr でマージ用のタスクを積んで進める。取り込み先の取り込み、ぶつかりの解消、レビュー、CodeRabbit への対応、CI 待ちはこのタスクが行う。PR が取り込み先とぶつかったときも同じで、ぶつかりを直す普通のタスクは作らない。manager.main_merge が approve なら until: prepare で積み、仕上がったら人のマージを待つ。auto か、人がマージを指示したときは until: merge で積む。結果はタスクの完了のイベントで読み、取り込まれていれば takt_check_goal_completion で完成にする。
