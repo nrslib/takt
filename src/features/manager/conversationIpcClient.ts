@@ -39,6 +39,8 @@ export class ConversationIpcClient {
   private requests = new Map<string, Request>();
   private listeners = new Set<() => void>();
   private outputs = new Set<(output: Output) => void>();
+  private activity: Extract<Output, { kind: 'activity' }> | undefined;
+  private pendingActivity: Extract<Output, { kind: 'activity' }> | undefined;
   private receiver: ConversationTransferReceiver | undefined;
   private resolved: ConversationOpen | undefined;
   private attachmentId: string | undefined;
@@ -57,7 +59,11 @@ export class ConversationIpcClient {
 
   getSnapshot = (): ConversationClientSnapshot => this.view;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  onOutput(listener: (output: Output) => void): () => void { this.outputs.add(listener); return () => { this.outputs.delete(listener); }; }
+  onOutput(listener: (output: Output) => void): () => void {
+    this.outputs.add(listener);
+    if (this.view.connection === 'connected' && this.activity !== undefined) listener(this.activity);
+    return () => { this.outputs.delete(listener); };
+  }
 
   connect(): Promise<void> {
     if (this.closed) return Promise.reject(new Error('Conversation client is closed'));
@@ -115,8 +121,24 @@ export class ConversationIpcClient {
   }
 
   private update(change: Partial<ConversationClientSnapshot>): void {
+    const previousConnection = this.view.connection;
     this.view = { ...this.view, ...change };
+    const running = this.view.state?.running;
+    if (this.view.connection === 'disconnected' || running?.operationId !== this.activity?.operationId
+      || running?.generation !== this.activity?.generation) this.activity = undefined;
+    let activityResumed = false;
+    if (this.view.connection === 'disconnected' || change.state === null || change.state?.running === null) {
+      this.pendingActivity = undefined;
+    } else if (this.pendingActivity !== undefined && running?.operationId === this.pendingActivity.operationId
+      && running.generation === this.pendingActivity.generation) {
+      this.activity = this.pendingActivity;
+      this.pendingActivity = undefined;
+      activityResumed = true;
+    }
     for (const listener of this.listeners) listener();
+    if ((previousConnection !== 'connected' || activityResumed) && this.view.connection === 'connected' && this.activity !== undefined) {
+      for (const listener of this.outputs) listener(this.activity);
+    }
   }
 
   private async open(): Promise<void> {
@@ -147,7 +169,21 @@ export class ConversationIpcClient {
           this.items.set(key, item);
         },
         remove: (key) => { this.removed.add(key); },
-        output: (output) => { for (const listener of this.outputs) listener(output); },
+        output: (output) => {
+          if (output.kind === 'activity') {
+            const running = this.view.state?.running;
+            if (running?.operationId !== output.operationId || running.generation !== output.generation) {
+              this.pendingActivity = output;
+              return;
+            }
+            this.activity = output;
+            if (this.view.connection !== 'connected') return;
+          } else if (output.kind === 'result') {
+            if (output.operationId === this.activity?.operationId) this.activity = undefined;
+            if (output.operationId === this.pendingActivity?.operationId) this.pendingActivity = undefined;
+          }
+          for (const listener of this.outputs) listener(output);
+        },
         read: (readStatus, transferId, mode) => {
           if (readStatus === 'reading') {
             this.readItems.clear();

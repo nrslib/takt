@@ -16,6 +16,7 @@ import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { PromptInput } from '../tui/PromptInput.js';
 import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
@@ -48,6 +49,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
+  const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
@@ -83,6 +85,17 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
   const state = snapshot.state;
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
+  const running = state?.running;
+  const currentActivity = snapshot.connection === 'connected' && running?.operationId === activity?.operationId
+    && running?.generation === activity?.generation ? activity?.value : undefined;
+  const activityLabel = currentActivity?.kind === 'tool' ? toSingleLineText(currentActivity.tool)
+    : currentActivity === undefined ? undefined
+    : getLabel(currentActivity.kind === 'thinking' ? 'tui.ui.extendedThinking'
+      : currentActivity.kind === 'responding' ? 'tui.ui.responding' : 'tui.ui.thinking', lang);
+  useEffect(() => {
+    setActivity((current) => snapshot.connection === 'connected' && current?.operationId === running?.operationId
+      && current?.generation === running?.generation ? current : null);
+  }, [running?.operationId, running?.generation, snapshot.connection]);
   active.current = busy;
   const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete';
   const append = (content: string, role: TranscriptEntry['role'] = 'system'): void => {
@@ -194,8 +207,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
           displayedMessages.current.add(output.operationId);
           append(output.message, 'user');
         }
-      } else if (output.kind === 'result') showResult(output.result, output.operationId);
-      else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') {
+      } else if (output.kind === 'result') {
+        setActivity((current) => current?.operationId === output.operationId ? null : current);
+        showResult(output.result, output.operationId);
+      } else if (output.kind === 'activity') {
+        const current = client.getSnapshot();
+        const running = current.state?.running;
+        if (current.connection === 'connected' && running?.operationId === output.operationId && running.generation === output.generation) {
+          setActivity({ operationId: output.operationId, generation: output.generation, value: output.activity });
+        }
+      } else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') {
         append(output.message, output.kind === 'reply' ? 'assistant' : 'system');
       }
     });
@@ -309,7 +330,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
-    <StatusLine busy={busy} label={state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
+    <StatusLine busy={busy} label={activityLabel ?? (state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working')} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}

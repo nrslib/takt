@@ -9,6 +9,8 @@ import { getManagerOutputSchema, parseManagerResponse } from './turnResponse.js'
 import { createAgentFailureError, isAgentFailureError } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
+import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
+import { createTurnActivityReporter } from './turnActivity.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -28,6 +30,7 @@ export interface ManagerTurnInput {
   assignment: ManagerAssignmentIdentity | undefined;
   patrol?: boolean;
   onProviderOutput?: () => void;
+  onActivity?: (activity: ConversationActivity) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
@@ -40,6 +43,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
         signal.throwIfAborted();
         let assignment = input.assignment;
         let sessionId = input.sessionId;
+        const reportActivity = createTurnActivityReporter((activity) => input.onActivity?.(activity));
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
           Object.entries(plan.ctx.mcpServers).map(([name, config]) => [name,
             assignment === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignment)]),
@@ -73,6 +77,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
               mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
               onStream: (event) => {
                 input.onProviderOutput?.();
+                if (!signal.aborted) reportActivity(event);
                 if (event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
                 if (event.type === 'tool_use') {
                   usedTools = true;

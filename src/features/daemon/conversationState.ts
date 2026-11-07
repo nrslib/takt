@@ -13,6 +13,7 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import type { ConversationState, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
 import { conversationProjection } from './conversationProjection.js';
 import { DaemonRouting } from './routing.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 export class DaemonConversations implements ConversationOwner {
   private readonly displayFiles = new DaemonDisplayFiles();
@@ -101,10 +102,14 @@ export class DaemonConversations implements ConversationOwner {
     }
   }
 
-  async progress(turn: TurnIdentity, message: string): Promise<void> {
+  async progress(turn: TurnIdentity, message: ConversationProgress): Promise<void> {
+    const version = this.version(turn.conversationId, 0, turn.operationId);
     const current = await this.store.read(turn.conversationId);
     if (current === undefined) throw new Error('Missing progress conversation');
-    this.send(turn.conversationId, { kind: 'progress', operationId: turn.operationId, message }, this.version(turn.conversationId, current.state.revision, turn.operationId));
+    version.revision = current.state.revision;
+    const output: PortOutput = typeof message === 'string' ? { kind: 'progress', operationId: turn.operationId, message }
+      : { kind: 'activity', operationId: turn.operationId, generation: turn.generation, activity: message };
+    this.send(turn.conversationId, output, version);
   }
 
   async inquiry(notice: import('../../core/daemon/messages.js').InquiryNotice): Promise<void> {

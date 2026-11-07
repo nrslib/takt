@@ -10,6 +10,7 @@ import { conversationDaemon } from './helpers/conversation-daemon.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../features/daemon/conversationFrames.js';
+import * as conversationFrames from '../features/daemon/conversationFrames.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
@@ -139,6 +140,116 @@ it('finishes each output transfer before newer state on both attachments', async
       expect(observer.output.mock.calls.filter(([output]) => output.kind === 'notice').map(([output]) => output)).toEqual([notice]);
     }
   } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
+});
+
+it.each(['notice', 'activity'] as const)('coalesces activity per connection while a slow TUI %s write is blocked without disconnecting it', async (kind) => {
+  const first = await authenticated(); const second = await authenticated();
+  const firstOpen = await opened(first); const secondOpen = await opened(second);
+  await first.items(firstOpen.read.transferId); await second.items(secondOpen.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let blockedSocket: Socket | undefined;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string } };
+    if (blockedSocket === undefined && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      blockedSocket = socket;
+      await gate;
+    }
+    await write(socket, value);
+  });
+  const version = { revision: first.latestState()!.revision, stateSequence: 10, operationId: '11111111-1111-4111-8111-111111111111' };
+  const latest = { kind: 'activity' as const, operationId: version.operationId, generation: 1,
+    activity: { kind: 'tool' as const, tool: 'Tool99' } };
+  const initialOutput = kind === 'notice' ? { kind, id: 'before-activity', message: 'Keep this output' }
+    : { ...latest, activity: { kind: 'thinking' as const } };
+  const sending = service.deliver(selected.conversationId, initialOutput,
+    { ...version, operationId: kind === 'notice' ? null : version.operationId });
+  const observer = () => ({ state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() });
+  try {
+    await vi.waitFor(() => expect(blockedSocket).toBeDefined());
+    await Promise.all(Array.from({ length: 100 }, (_, index) => service.deliver(selected.conversationId,
+      { ...latest, activity: { kind: 'tool', tool: `Tool${index}` } }, { ...version, stateSequence: 11 + index })));
+    const fast = observer();
+    await vi.waitFor(() => {
+      fast.output.mockClear();
+      const receiver = new ConversationTransferReceiver(selected.conversationId, fast);
+      for (const frame of second.frames) if (frame.type === 'event') receiver.receive(frame);
+      expect(fast.output).toHaveBeenCalledWith(latest, expect.objectContaining({ ...version, stateSequence: 110 }));
+    });
+    expect(first.socket.destroyed).toBe(false);
+    expect(service.attachmentCount).toBe(2);
+    expect(first.frames.filter(({ output }) => output?.purpose === 'output')).toHaveLength(0);
+    resume(); await sending;
+    await vi.waitFor(() => expect(first.frames.filter(({ output }) => output?.kind === 'transfer_end')).toHaveLength(3));
+    const slow = observer();
+    const receiver = new ConversationTransferReceiver(selected.conversationId, slow);
+    for (const frame of first.frames) if (frame.type === 'event') receiver.receive(frame);
+    expect(slow.output.mock.calls.map(([output]) => output)).toEqual([initialOutput, latest]);
+    expect(first.socket.destroyed).toBe(false);
+    expect(service.attachmentCount).toBe(2);
+  } finally { resume(); await sending; writing.mockRestore(); }
+});
+
+it('sends the initial state before activity that arrives while that state is still being read', async () => {
+  execute.mockImplementationOnce(async (input) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    return { message: 'finished', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const first = await authenticated(); const firstOpen = await opened(first);
+  await first.items(firstOpen.read.transferId);
+  await first.request('submit', { attachmentId: firstOpen.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: 'Start turn' } });
+  await fixture.executing(1);
+  await fixture.dispatcher.drain();
+  const snapshot = await fixture.dispatcher.snapshot(selected.conversationId);
+  snapshot.cancel();
+  expect(snapshot.operationId).not.toBeNull(); expect(snapshot.generation).not.toBeNull();
+  let resume!: () => void; let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const reading = new Promise<void>((resolve) => { entered = resolve; });
+  const open = service.open.bind(service);
+  vi.spyOn(service, 'open').mockImplementationOnce(async (...args) => {
+    const result = await open(...args);
+    const source = result.read.items;
+    return { ...result, read: { ...result.read, items: (async function* () {
+      entered(); await gate; yield* source;
+    })() } };
+  });
+  const second = await authenticated();
+  try {
+    const secondOpen = await opened(second);
+    await reading;
+    const activity = { kind: 'activity' as const, operationId: snapshot.operationId!, generation: snapshot.generation!,
+      activity: { kind: 'tool' as const, tool: 'InitialTool' } };
+    const version = { revision: snapshot.revision, stateSequence: snapshot.stateSequence + 1, operationId: snapshot.operationId };
+    await service.deliver(selected.conversationId, activity, version);
+    expect(second.latestState()).toBeUndefined();
+    // 別のリクエストを往復させ、writer が動いても activity を先行送信しないことを確かめる。
+    await second.request('submit', { attachmentId: secondOpen.attachmentId, speaker: { namespace: 'agent', id: 'director' },
+      command: { kind: 'message', text: 'Reject forged speaker' } });
+    expect(second.frames.filter(({ output }) => output?.purpose === 'output')).toHaveLength(0);
+    resume();
+    await second.items(secondOpen.read.transferId);
+    const order: string[] = [];
+    const observer = { state: vi.fn(() => { order.push('state'); }), item: vi.fn(), remove: vi.fn(), read: vi.fn(),
+      output: vi.fn((output: PortOutput) => { if (output.kind === 'activity') order.push('activity'); }) };
+    await vi.waitFor(() => {
+      order.length = 0; observer.output.mockClear();
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      for (const frame of second.frames) if (frame.type === 'event') receiver.receive(frame);
+      expect(observer.output).toHaveBeenCalledWith(activity, expect.objectContaining(version));
+    });
+    expect(order[0]).toBe('state');
+    expect(observer.state).toHaveBeenCalledWith(expect.objectContaining({ running: expect.objectContaining({
+      operationId: activity.operationId, generation: activity.generation,
+    }) }), expect.anything());
+    expect(order.filter((kind) => kind === 'activity')).toEqual(['activity']);
+    const endIndex = second.frames.findIndex(({ output }) => output?.kind === 'transfer_end' && output.transferId === secondOpen.read.transferId);
+    const activityIndex = second.frames.findIndex(({ output }) => output?.purpose === 'output' && output.stateSequence === version.stateSequence);
+    expect(activityIndex).toBeGreaterThan(endIndex);
+    expect(second.socket.destroyed).toBe(false);
+  } finally { resume(); release!(); await fixture.settled(); }
 });
 
 it('bounds admitted requests across input batches while responses are pending', async () => {
