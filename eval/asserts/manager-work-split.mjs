@@ -26,11 +26,12 @@ const readyKeys = {
 const completionCases = new Set(['no-check-docs', 'no-check-same-module', 'integration-already-checked']);
 const summaryCases = new Set(['summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint']);
 const patrolTellCases = new Set([
-  'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+  'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
 ]);
 const patrolRequiredCases = new Set([
   'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
   'inventory-retry-idempotency',
+  'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
@@ -125,7 +126,9 @@ export default function assertManagerWorkSplit(output, context) {
     if (!validated.success) return result(false, `Invalid production arguments: ${call.tool}`);
     call.arguments = validated.data;
     const args = call.arguments;
-    if (args.cwd !== fixture.cwd || args.goalId !== fixture.goal?.id) return result(false, 'Wrong repository or goal');
+    const goalIds = [fixture.goal?.id, ...(fixture.additionalGoals ?? []).map(({ id }) => id)];
+    const allowedGoalIds = commonTools.has(call.tool) ? goalIds : [fixture.goal?.id];
+    if (args.cwd !== fixture.cwd || !allowedGoalIds.includes(args.goalId)) return result(false, 'Wrong repository or goal');
     if (call.tool === 'takt_enqueue_goal_task') {
       if (args.workKey !== undefined && fixture.tasks.some((task) => task.goalWorkKey === args.workKey)) {
         return result(false, 'Do not enqueue existing work without changing its state');
@@ -146,7 +149,7 @@ export default function assertManagerWorkSplit(output, context) {
     }
     if (call.tool === 'takt_tell_run') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (task === undefined || task.status !== 'running') return result(false, 'Choose the running goal task');
+      if (task === undefined || task.goalId !== args.goalId || task.status !== 'running') return result(false, 'Choose the running goal task');
     }
   }
   const enqueues = parsed.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');

@@ -30,7 +30,7 @@ export default class ManagerWorkSplitOfflineProvider {
       assert.equal(user.instruction, JSON.parse(buildManagerEventPrompt(user.event)).instruction);
       if (user.event.kind === 'patrol') {
         assert.equal(user.event.repositoryDirectory, fixture.cwd);
-        assert.deepEqual(user.event.goalIds, [fixture.goal.id]);
+        assert.deepEqual(user.event.goalIds, [fixture.goal, ...(fixture.additionalGoals ?? [])].map(({ id }) => id));
       } else {
         const reference = user.event.task ?? user.event.observation?.task ?? user.event;
         assert.equal(reference.goalId, fixture.goal.id);
