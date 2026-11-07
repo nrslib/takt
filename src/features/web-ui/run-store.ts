@@ -279,16 +279,19 @@ interface RunsRootSnapshot {
   readonly fingerprint: { readonly dev: number; readonly ino: number };
 }
 
+async function resolveRunsRootDirectory(location: RunStoreLocation): Promise<string> {
+  const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
+  return resolveContainedDirectory(stateDirectory, runsDirectory, 'Runs directory');
+}
+
 /**
- * Resolve and fingerprint the runs directory for a read operation.
+ * Fingerprint a resolved runs directory for a read operation.
  *
- * @param location - Run store filesystem locations
+ * @param directory - Validated runs directory path
  * @returns The validated runs directory and its device/inode fingerprint
  * @throws Error if the runs directory is invalid
  */
-async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnapshot> {
-  const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
-  const directory = await resolveContainedDirectory(stateDirectory, runsDirectory, 'Runs directory');
+async function captureRunsRoot(directory: string): Promise<RunsRootSnapshot> {
   const stats = await lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error('Runs directory must be a regular directory');
@@ -308,7 +311,7 @@ async function verifyRunsRootSnapshot(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
 ): Promise<void> {
-  const current = await captureRunsRoot(location);
+  const current = await captureRunsRoot(await resolveRunsRootDirectory(location));
   if (
     current.directory !== snapshot.directory
     || current.fingerprint.dev !== snapshot.fingerprint.dev
@@ -405,13 +408,14 @@ function summarize(meta: RunMeta) {
  * @throws Error if the runs directory cannot be validated or read, or its identity changes during the read
  */
 export async function readRunCollection(location: RunStoreLocation) {
-  let root: RunsRootSnapshot;
+  let directory: string;
   try {
-    root = await captureRunsRoot(location);
+    directory = await resolveRunsRootDirectory(location);
   } catch (error) {
     if (isMissing(error)) return { runs: [], warnings: [] };
     throw error;
   }
+  const root = await captureRunsRoot(directory);
   const entries = await readDirectory(root.directory);
   await verifyRunsRootSnapshot(location, root);
   const warningsFromEntries = entries
@@ -1115,7 +1119,7 @@ export interface RunOccurrenceArtifacts {
 
 export async function readRunDetail(location: RunStoreLocation, slug: string) {
   assertRunSlug(slug);
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const [reports, logArtifacts] = await Promise.all([
     loadReports(location, snapshot, meta),
@@ -1132,7 +1136,7 @@ export async function readRunOccurrenceArtifacts(
 ): Promise<RunOccurrenceArtifacts> {
   assertRunSlug(slug);
   if (occurrenceId.length === 0) throw new Error('Occurrence id is required');
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const logArtifacts = await loadLogArtifacts(location, snapshot, meta);
   const selectedOccurrence = logArtifacts.graphSummary.occurrences.find(
@@ -1181,7 +1185,7 @@ export async function resolveRunWatchDirectories(
   slug: string,
 ): Promise<readonly string[]> {
   assertRunSlug(slug);
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
   const runRoot = await resolveRegularPath(resolve(snapshot.directory, slug), 'Run root');

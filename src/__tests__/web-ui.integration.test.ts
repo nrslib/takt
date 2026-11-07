@@ -60,7 +60,7 @@ import { CentralTaskRepository } from '../infra/task/centralStateRepository.js';
 import { createSharedClone } from '../infra/task/index.js';
 import { buildExecutionTrace } from '../../web-ui/public/execution-model.js';
 
-// ESM の組み込み名前空間を直接変更せずに、列挙処理だけをテストで差し替える。
+// ESM の組み込み名前空間を直接変更せずに、filesystem 操作をテストで差し替える。
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
 }));
@@ -263,6 +263,43 @@ async function writeRun(
 }
 
 describe('Web UI run artifacts', () => {
+  it('returns an empty collection for an unchanged empty runs directory', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.runsDirectory, { recursive: true });
+
+    await expect(readRunCollection(statePaths)).resolves.toEqual({ runs: [], warnings: [] });
+  });
+
+  it('returns an empty collection when the runs directory is initially missing', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.stateDirectory, { recursive: true });
+    await expect(lstat(statePaths.runsDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(readRunCollection(statePaths)).resolves.toEqual({ runs: [], warnings: [] });
+  });
+
+  it('propagates ENOENT when the runs directory disappears after path resolution', async () => {
+    const statePaths = await createArtifactState();
+    await mkdir(statePaths.runsDirectory, { recursive: true });
+    const originalRealpath = fsPromises.realpath;
+    const pathResolution = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (path, options) => {
+      const resolvedPath = await originalRealpath(path, options);
+      if (path === statePaths.runsDirectory) {
+        await rm(statePaths.runsDirectory, { recursive: true });
+      }
+      return resolvedPath;
+    });
+    try {
+      await expect(readRunCollection(statePaths)).rejects.toMatchObject({
+        code: 'ENOENT',
+        syscall: 'lstat',
+        path: statePaths.runsDirectory,
+      });
+    } finally {
+      pathResolution.mockRestore();
+    }
+  });
+
   it('lists runs newest first and ignores directories without meta', async () => {
     const statePaths = await createArtifactState();
     await writeRun(statePaths, 'older', { startTime: '2026-08-23T00:00:00.000Z' });
@@ -2101,7 +2138,7 @@ describe('Web UI run artifacts', () => {
       return [];
     });
     try {
-      await expect(readRunCollection(statePaths)).rejects.toThrow();
+      await expect(readRunCollection(statePaths)).rejects.toThrow('Runs directory identity changed during read');
       expect(enumeration).toHaveBeenCalledOnce();
       expect((await lstat(statePaths.runsDirectory)).ino).not.toBe(original.ino);
     } finally {
