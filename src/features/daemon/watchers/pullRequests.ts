@@ -56,6 +56,7 @@ export async function observePullRequest(target: PullRequestWatchTarget, command
         }
         return;
       }
+      await observations.normal(target, 'pr_conflicting');
       await observations.abnormal(target, { ...observations.evidence(target), kind: 'pr_changed',
         repositoryDirectory: target.repositoryDirectory, goalId: target.goalId, url: target.url, state: response.state });
       return;

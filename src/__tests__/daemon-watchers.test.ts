@@ -286,6 +286,24 @@ describe('保存済みPRの照会', () => {
     expect(h.accept).toHaveBeenCalledTimes(2);
   });
 
+  it('CLOSEDで衝突の記録を解除し、再起動後に再オープンして衝突したら一度だけ通知する', async () => {
+    const h = harness();
+    const conflicting = commandWith({ ...prResponse('OPEN'), mergeable: 'CONFLICTING' });
+    const closed = commandWith({ ...prResponse('CLOSED'), mergeable: 'UNKNOWN' });
+    await observePullRequest(pr, conflicting, h.observations, options());
+    await observePullRequest(pr, closed, h.observations, options());
+    await observePullRequest(pr, closed, h.observations, options());
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, conflicting, restarted, options());
+    await observePullRequest(pr, conflicting, restarted, options());
+    expect([...h.accepted.values()].map((input) => input.event)).toMatchObject([
+      { kind: 'watch_observation', observation: { kind: 'pr_conflicting' } },
+      { kind: 'watch_observation', observation: { kind: 'pr_changed', state: 'CLOSED' } },
+      { kind: 'watch_observation', observation: { kind: 'pr_conflicting' } },
+    ]);
+    expect(h.accept).toHaveBeenCalledTimes(3);
+  });
+
   it('UNKNOWNを衝突の発生にも解消にも扱わず、再起動後も異常の記録を保持する', async () => {
     const h = harness();
     await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable: 'UNKNOWN' }), h.observations, options());
