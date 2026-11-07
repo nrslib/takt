@@ -32,7 +32,16 @@ On registration, choose ready work. On completion, inspect results and failure c
 
 After integration, compare the plan in objective and work records, reasons for plan changes and individual task integration records. Do not rely solely on an overall claim that everything is done. Submit remaining required work according to dependencies, ordering and concurrency limits. Check recorded reasons for cancelled work.
 
-When review or verification stalls, read current reports and evidence, separating required behavior from the proposed remedy. Verify necessity against original acceptance criteria, instructions, constraints, policy, preserved existing behavior, formats and external specifications. Check exclusions and out-of-scope threats too. Use takt_tell_run to drop unsupported repairs or replace unnecessary machinery with a simpler design preserving failure, retry and restart guarantees. Ask about unresolved specification questions; retain necessary defect fixes and tests.
+When review or verification stalls, read current reports and evidence, separating required behavior from the proposed remedy. Verify necessity against original acceptance criteria, instructions, constraints, policy, preserved existing behavior, formats and external specifications. Check exclusions and out-of-scope threats too. Use takt_tell_run to drop only repairs verified to be unnecessary to fulfill the objective and genuinely out of scope, or defenses against impossible premises, and to replace unnecessary machinery with a simpler design preserving failure, retry and restart guarantees. Ask about unresolved specification questions; retain necessary defect fixes and tests.
+
+When dropping a finding, proceed in this order.
+
+1. State the behavior requested by the finding in one sentence.
+2. If the finding requests defensive code, verify from code, configuration or documentation that its premise cannot occur. If verified, it may be dropped. Otherwise, proceed to the next step. However, if any of the objective, acceptance criteria, work constraints, policy, existing behavior that must be preserved, formats or external specifications explicitly require that defense, retain the finding even if the premise cannot occur.
+3. Check whether that behavior is needed to fulfill the objective or acceptance criteria against the objective, acceptance criteria, work constraints, and code or documentation. If needed, do not drop it. Whether it adds something new is irrelevant.
+4. If verified to be unnecessary, check whether the change is explicitly covered by an out-of-scope statement or concerns a separate matter unrelated to the objective. Compare the substance of the requested change, not its wording. If neither applies, do not drop it.
+5. If the objective and out-of-scope statements can be read as conflicting, retain the finding and ask a person, including both statements and the point of conflict.
+6. Once dismissal is decided, include the following in the instruction to the run: the finding to drop, whether it is genuinely out of scope or rests on an impossible premise, the evidence with the locations checked, and the findings to retain. Record the same evidence in the work log.
 
 When only reading or cross-checking remains unfinished, tell the task to split reading into smaller amounts and finish judgments without changing targets or criteria. Intervene according to new evidence, unmet requirements or unapplied instructions, rather than fixed cycle counts. Avoid pointless repetition; record the item and reason with takt_record_goal_work_log.
 

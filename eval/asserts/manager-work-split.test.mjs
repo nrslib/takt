@@ -32,15 +32,17 @@ const selectedKeys = {
   'archive-test-coverage': [],
   'quoted-csv-fields': [],
   'inventory-retry-idempotency': [],
+  'existing-invoice-format': [],
   'conflicting-calendar-visibility': [],
   'unchanged-adjudication': [],
 };
 const patrolTellCases = new Set([
-  'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+  'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
 ]);
 const patrolRequiredCases = new Set([
   'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
   'inventory-retry-idempotency',
+  'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
@@ -115,6 +117,14 @@ function goodOutput(caseId, lang) {
       cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Recorded the repair item and the source supporting the instruction.',
     } });
   }
+  if (caseId === 'existing-invoice-format') {
+    output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id,
+      summary: lang === 'ja'
+        ? 'INV-1 は残す。目的が参照する exportAccountInvoices の入力契約は json を許可しているが、invoice-export は csv に制限しており、目的を満たしていない。'
+        : 'Retain INV-1. The exportAccountInvoices input contract referenced by the objective permits json, but invoice-export restricts it to csv and fails to fulfill the objective.',
+    } });
+  }
   if (patrolQuestionCases.has(caseId)) {
     output.calls.push({ tool: 'takt_ask_goal_question', arguments: {
       cwd: fixture.cwd,
@@ -184,7 +194,7 @@ function writingCalls(fixture, _keys) {
     takt_requeue_goal_task: { ...base, taskName: task.name },
     takt_retry_goal_task: { ...base, taskName: task.name, task: 'Corrected instructions.' },
     takt_remove_goal_task: { ...base, taskName: task.name, reason: 'No longer needed.' },
-    takt_merge_goal_task: { ...base, taskName: completedTask.name, expectedSha: completedTask.completion.sha },
+    takt_merge_goal_task: { ...base, taskName: completedTask.name, expectedSha: 'c'.repeat(40) },
     takt_complete_goal: { ...base, expectedSha: 'c'.repeat(40), summary: 'Reviewed acceptance evidence.' },
     takt_check_goal_completion: base,
     takt_ask_goal_question: { ...base, body: 'Approve these work units?' },
@@ -305,6 +315,66 @@ for (const lang of ['ja', 'en']) {
   }
 }
 for (const lang of ['ja', 'en']) {
+  test(`${lang}: existing invoice format uses structural checks and delegates dismissal meaning to the rubric`, () => {
+    const caseId = 'existing-invoice-format';
+    const fixture = loadManagerCase(caseId, lang);
+    const retained = goodOutput(caseId, lang);
+    retained.response.message = lang === 'ja'
+      ? '既存の JSON 出力を使うことは目的に含まれるため、指摘を残します。'
+      : 'Retain the finding: using the existing JSON exporter is part of the objective.';
+    assert.equal(score(retained, caseId, lang).pass, true);
+    assertSemanticGrader(caseId, lang);
+    for (const content of [
+      'Accept the existing JSON format as required by the objective.',
+      'Drop the JSON finding as outside the requested scope.',
+      'Purpose and exclusions conflict; retain the finding pending the human answer.',
+    ]) {
+      const output = structuredClone(retained);
+      output.calls.push(tellRun(fixture, content));
+      // The rubric must judge meaning even when all production arguments are valid.
+      assert.equal(score(output, caseId, lang).pass, true);
+    }
+    const output = structuredClone(retained);
+    output.calls.push(tellRun(fixture));
+    for (const [key, value] of [
+      ['cwd', '/workspace/other'], ['goalId', '650e8400-e29b-41d4-a716-446655440001'],
+      ['taskName', 'another-task'], ['content', 42],
+    ]) {
+      const invalid = structuredClone(output);
+      invalid.calls.find(({ tool }) => tool === 'takt_tell_run').arguments[key] = value;
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+    const secondGoal = fixture.additionalGoals[0];
+    const withPatrolLog = structuredClone(retained);
+    withPatrolLog.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: secondGoal.id, kind: 'patrol', summary: 'invoice-search implementation has no new issue.',
+    } });
+    assert.equal(score(withPatrolLog, caseId, lang).pass, true);
+    withPatrolLog.calls[1].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099';
+    assert.equal(score(withPatrolLog, caseId, lang).pass, false);
+    const wrongTask = structuredClone(output);
+    wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = fixture.tasks[1].name;
+    assert.equal(score(wrongTask, caseId, lang).pass, false);
+  });
+
+  test(`${lang}: existing invoice format requires the finding decision log under invoice-export`, () => {
+    const caseId = 'existing-invoice-format';
+    const fixture = loadManagerCase(caseId, lang);
+    const output = goodOutput(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+
+    const wrongGoal = structuredClone(output);
+    wrongGoal.calls[0].arguments.goalId = fixture.additionalGoals[0].id;
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+    wrongGoal.calls.push(tellRun(fixture));
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+
+    const bothGoals = structuredClone(output);
+    bothGoals.calls.push(...wrongGoal.calls);
+    assert.equal(score(bothGoals, caseId, lang).pass, true);
+  });
+
   test(`${lang}: sends one instruction only for unsupported or unnecessarily complex repair items`, () => {
     for (const caseId of patrolTellCases) {
       const output = goodOutput(caseId, lang);
@@ -335,14 +405,22 @@ for (const lang of ['ja', 'en']) {
       } });
       assert.equal(score(output, caseId, lang).pass, true);
       const duplicate = structuredClone(output);
-      duplicate.calls.push(structuredClone(duplicate.calls[0]));
-      duplicate.calls[2].arguments.content = 'Continue the required repair.';
-      assert.equal(score(duplicate, caseId, lang).pass, false);
-      output.calls[1].arguments.recipient = 'director';
-      assert.equal(score(output, caseId, lang).pass, false);
-      delete output.calls[1].arguments.recipient;
-      output.calls[0].arguments.taskName = 'another-task';
-      assert.equal(score(output, caseId, lang).pass, false);
+      const repeatedTell = structuredClone(duplicate.calls.find(({ tool }) => tool === 'takt_tell_run'));
+      repeatedTell.arguments.content = 'Continue the required repair.';
+      duplicate.calls.push(repeatedTell);
+      assert.deepEqual(score(duplicate, caseId, lang), {
+        pass: false, score: 0, reason: 'Do not send repeated instructions to the same task',
+      });
+      const wrongRecipient = structuredClone(output);
+      wrongRecipient.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments.recipient = 'director';
+      assert.deepEqual(score(wrongRecipient, caseId, lang), {
+        pass: false, score: 0, reason: 'Invalid production arguments: takt_ask_goal_question',
+      });
+      const wrongTask = structuredClone(output);
+      wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = 'another-task';
+      assert.deepEqual(score(wrongTask, caseId, lang), {
+        pass: false, score: 0, reason: 'Choose the running goal task',
+      });
     }
   });
 

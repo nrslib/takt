@@ -393,10 +393,10 @@ function cloneWorkingLocations(cwd, fixture, source) {
 
 test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
-  const required = new Set(['mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
+  const required = new Set(['local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'verification-once', 'verification-mixed']);
   const optional = new Set(['reservation-validation', 'legacy-date-format', 'archive-test-coverage',
-    'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility']);
+    'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'existing-invoice-format', 'mail-dispatch-state']);
   try {
     const source = join(root, 'source.git');
     git(['init', '--bare', '--quiet', '--initial-branch=main', source]);
@@ -414,7 +414,7 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
       assert.equal(record.worktree, true);
       assert.equal(record.worktree_path, fixturePath(cwd, fixture, task.worktreePath));
       for (const artifact of fixture.runArtifacts) {
-        assert.equal(artifact.directory, task.worktreePath);
+        assert.equal(artifact.directory, fixture.tasks.find(({ runSlug }) => runSlug === artifact.meta.runSlug).worktreePath);
         saveRun(cwd, fixture, artifact);
       }
       const response = getTaktRun({ cwd, runSlug: task.runSlug }, { allowedProjectRoot: cwd });
@@ -435,9 +435,9 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
         else optionallyInstructed++;
       }
     }
-    assert.equal(inspected, 30);
-    assert.equal(instructed, 12);
-    assert.equal(optionallyInstructed, 12);
+    assert.equal(inspected, 32);
+    assert.equal(instructed, 10);
+    assert.equal(optionallyInstructed, 16);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

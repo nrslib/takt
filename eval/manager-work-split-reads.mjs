@@ -7,8 +7,7 @@ import { pagedResult } from '../dist/features/mcp/response.js';
 const payload = (result) => JSON.parse(result.content[0].text);
 
 export function managerStateReads(fixture) {
-  const goal = GoalSchema.parse(fixture.goal);
-  const identity = { cwd: fixture.cwd, goalId: goal.id };
+  const goals = [fixture.goal, ...(fixture.additionalGoals ?? [])].map((goal) => GoalSchema.parse(goal));
   const reads = fixture.readResults.filter(({ tool }) => !['takt_get_goal', 'takt_list_tasks'].includes(tool)).map((read) => {
     if (read.tool === 'takt_list_standalone_inquiries') {
       const inquiries = read.result.inquiries.map((inquiry) => ({
@@ -24,12 +23,15 @@ export function managerStateReads(fixture) {
     return { ...read, result: payload(pagedResult('workflows',
       workflows.slice(offset, offset + (read.arguments.limit ?? 50)), workflows.length, offset)) };
   });
-  reads.push({ tool: 'takt_get_goal', arguments: identity, result: { goal: goalSummary(goal) } });
-  for (const path of ['objective', 'outOfScope', 'acceptanceCriteria', 'constraints', 'workLog', 'questions']) {
-    const value = goal[path];
-    reads.push({ tool: 'takt_get_goal', arguments: { ...identity, path }, result: Array.isArray(value)
-      ? payload(pagedResult('items', value, value.length, 0, undefined, { goalId: goal.id, path }))
-      : { goalId: goal.id, path, ...goalValuePage(value, {}) } });
+  for (const goal of goals) {
+    const identity = { cwd: fixture.cwd, goalId: goal.id };
+    reads.push({ tool: 'takt_get_goal', arguments: identity, result: { goal: goalSummary(goal) } });
+    for (const path of ['objective', 'outOfScope', 'acceptanceCriteria', 'constraints', 'workLog', 'questions']) {
+      const value = goal[path];
+      reads.push({ tool: 'takt_get_goal', arguments: { ...identity, path }, result: Array.isArray(value)
+        ? payload(pagedResult('items', value, value.length, 0, undefined, { goalId: goal.id, path }))
+        : { goalId: goal.id, path, ...goalValuePage(value, {}) } });
+    }
   }
   const records = fixture.tasks.map((task) => {
     const terminal = !['pending', 'running'].includes(task.status);
