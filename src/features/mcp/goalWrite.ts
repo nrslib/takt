@@ -40,6 +40,6 @@ export async function goalWrite(
     const options = resolveManagerNotificationOptions(input.cwd);
     const result = await action(options);
     await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), options.webhookUrl);
-    return jsonResult(result);
+    return jsonResult(result, tool === 'complete' && typeof result.pullRequestBodyError === 'string');
   } catch (error) { return errorResult(errorContext, error); }
 }
