@@ -12,6 +12,8 @@ import { runFormalSpecVerification } from '../features/interactive/formalSpecVer
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -81,6 +83,41 @@ it('uses the same session for a director message and preserves the human proposa
   await fixture.dispatcher.drain();
   expect(execute.mock.calls[0]![0].sessionId).toBe('provider-session');
   expect((await fixture.store.read(id))!.state).toMatchObject({ revision: 4, pending: { revision: 4 } });
+});
+
+it('starts each patrol with business context in a disposable session and then resumes the human conversation', async () => {
+  const goal = await new GoalStore(repository).create(goalRecord());
+  const before = (await fixture.store.read(id))!.state;
+  const call = vi.fn<ProviderAgent['call']>().mockImplementation(async () => ({
+    persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+    structuredOutput: { message: 'Patrol complete', summary: null }, sessionId: `session-${call.mock.calls.length}`,
+  }));
+  const executor = createManagerTurnExecutor(repository, { ctx: {
+    provider: makeProvider({ setup: () => ({ call }) }), providerType: 'mock', model: undefined, lang: 'en',
+  }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const port = await open();
+  for (let index = 0; index < 2; index++) {
+    accepted(await fixture.dispatcher.accept({ ...input(`patrol-${index}`, id, 'other'), event: {
+      kind: 'patrol', repositoryDirectory: repository, goalIds: [goal.id],
+    } }));
+    await fixture.settled();
+    expect(call).toHaveBeenCalledTimes(index + 1);
+    const [prompt, options] = call.mock.calls[index]!;
+    expect(options.sessionId).toBeUndefined();
+    expect(options.callerManagedSession).toBe(true);
+    expect(prompt).toContain(before.pending!.summary.objective);
+    expect(prompt).toContain(goal.objective);
+    expect(prompt).toContain(repository);
+    expect((await fixture.store.read(id))!.state).toMatchObject({ session: before.session, pending: before.pending });
+  }
+  expect(port.outputs.filter((output) => output.kind === 'result').map((output) => output.result))
+    .toEqual([{ kind: 'reply', message: 'Patrol complete' }, { kind: 'reply', message: 'Patrol complete' }]);
+  await port.submit('continue the conversation');
+  await fixture.settled();
+  expect(call).toHaveBeenCalledTimes(3);
+  expect(call.mock.calls[2]![0]).toBe('continue the conversation');
+  expect(call.mock.calls[2]![1].sessionId).toBe(before.session.sessionId);
 });
 
 it('keeps an accepted message alive after its last attachment detaches', async () => {
