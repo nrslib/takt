@@ -83,7 +83,7 @@ function firstParagraphSentences(text: string, language: Language): Intl.Segment
 
 function notificationObjective(objective: string, language: Language): string {
   const sentences = firstParagraphSentences(objective, language);
-  return sentences[Symbol.iterator]().next().value!.segment.trim();
+  return sentences[Symbol.iterator]().next().value?.segment.trim() ?? objective.trim();
 }
 
 function completionDigest(summary: string, language: Language): string {
@@ -92,7 +92,7 @@ function completionDigest(summary: string, language: Language): string {
     if (digest !== '' && (digest + segment).length > BODY_LIMIT) break;
     digest += segment;
   }
-  return digest.trim();
+  return digest.trim() || summary.trim();
 }
 
 export function formatIntegratedWorkNotification(purpose: string, language: Language): string {

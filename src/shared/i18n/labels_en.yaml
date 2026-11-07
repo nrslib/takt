@@ -575,7 +575,7 @@ manager:
   notificationGoalContext: " (Goal: {objective})"
   notificationPullRequest: " (PR #{number})"
   notificationHumanGoal: "Goal: {objective}"
-  notificationHumanMerge: "Review the PR and merge it into {branch}."
+  notificationHumanMerge: "Once preparation is complete (incorporating {branch}, code review, and passing CI), review the PR and merge it into {branch}."
   notificationChanges: "Changes: {summary}"
   notificationRecommended: " (recommended)"
   notificationHumanBlockedAction: "Open takt manager for details."

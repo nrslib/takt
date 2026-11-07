@@ -101,6 +101,26 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(current).toEqual(before);
   });
 
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('preserves a trimmed marker-only objective (%s)', (marker) => {
+    const current = { ...goal, objective: ` \t${marker} \t ` };
+    for (const kind of ['custom', 'awaiting_merge'] as const) {
+      const lines = formatGoalNotification(current, { kind, body: 'Result' }, language, 'takt').split('\n');
+      if (kind === 'awaiting_merge') {
+        expect(lines[1]).toBe(getLabel('manager.notificationHumanGoal', language, { objective: marker }));
+      } else {
+        expect(lines[0]).toContain(getLabel('manager.notificationGoalContext', language, { objective: marker }));
+      }
+    }
+  });
+
+  it.each(['1.', '1)', '-', '*', '+', '•', '・'])('preserves a trimmed marker-only completion summary (%s)', (marker) => {
+    const summary = ` \t${marker} \t `;
+    for (const current of [goal, { ...goal, completion: { ...completion, summary } }]) {
+      const text = formatGoalNotification(current, { kind: 'awaiting_merge', body: summary }, language, 'takt');
+      expect(text.split('\n').at(-1)).toBe(getLabel('manager.notificationChanges', language, { summary: marker }));
+    }
+  });
+
   it.each([false, true])('shows the PR link only when saved and hides completion instructions (PR=%s)', (hasPr) => {
     const current: Goal = { ...goal, completion,
       ...(hasPr ? { pullRequest: { number: 1987, url: 'https://github.com/nrslib/takt/pull/1987' } } : {}),
@@ -111,7 +131,9 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(lines[0]!.includes('PR #1987')).toBe(hasPr);
     expect(lines.includes('https://github.com/nrslib/takt/pull/1987')).toBe(hasPr);
     expect(lines[1]).toContain(firstSentence);
-    expect(lines[2]).toContain('release');
+    expect(lines[2]).toBe(language === 'ja'
+      ? '仕上げ（release の取り込み、レビュー、CI の通過）が終わってから、PR を確認して release にマージしてください。'
+      : 'Once preparation is complete (incorporating release, code review, and passing CI), review the PR and merge it into release.');
     expect(lines.at(-2)).toBe('');
     expect(lines.at(-1)).toBe(getLabel('manager.notificationChanges', language, {
       summary: completion.summary.split('\n\n')[0]!.replace('\n', ' '),
@@ -122,9 +144,11 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(current).toEqual(before);
   });
 
-  it('uses the integration branch without a completion record or a PR', () => {
-    const text = formatGoalNotification({ ...goal, integrationBranch: 'develop' }, { kind: 'awaiting_merge', body: 'Ready.\n\nDetailed results.' }, language, 'takt');
-    expect(text).toContain('develop');
+  it.each(['main', 'develop'])('requires preparation with %s without a completion record or a PR', (branch) => {
+    const text = formatGoalNotification({ ...goal, integrationBranch: branch }, { kind: 'awaiting_merge', body: 'Ready.\n\nDetailed results.' }, language, 'takt');
+    expect(text.split('\n')[2]).toBe(language === 'ja'
+      ? `仕上げ（${branch} の取り込み、レビュー、CI の通過）が終わってから、PR を確認して ${branch} にマージしてください。`
+      : `Once preparation is complete (incorporating ${branch}, code review, and passing CI), review the PR and merge it into ${branch}.`);
     expect(text).not.toContain('PR #');
     expect(text).not.toContain('Detailed results.');
     expect(text).toContain('Ready.');

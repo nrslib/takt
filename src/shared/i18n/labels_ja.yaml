@@ -575,7 +575,7 @@ manager:
   notificationGoalContext: "（ゴール: {objective}）"
   notificationPullRequest: "（PR #{number}）"
   notificationHumanGoal: "ゴール: {objective}"
-  notificationHumanMerge: "PR を確認して、{branch} にマージしてください。"
+  notificationHumanMerge: "仕上げ（{branch} の取り込み、レビュー、CI の通過）が終わってから、PR を確認して {branch} にマージしてください。"
   notificationChanges: "変更: {summary}"
   notificationRecommended: "（推奨）"
   notificationHumanBlockedAction: "詳しくは takt manager で確かめられます。"
