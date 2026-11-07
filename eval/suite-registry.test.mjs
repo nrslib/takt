@@ -260,8 +260,8 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     ['gpt-6.1-terra', 'medium'],
     ['claude-opus-5', undefined],
   ]);
-  assert.equal(config.tests.length, 118);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 59);
+  assert.equal(config.tests.length, 122);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 61);
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',

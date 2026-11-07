@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
 import {
-  askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
+  getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
@@ -209,5 +209,19 @@ describe('MCP inquiry inputs', () => {
   it('accepts the withdrawal reason text selector', () => {
     expect(getGoalQuestionInputSchema.parse({ ...identity, path: 'withdrawalReason', maxBytes: 12 }))
       .toMatchObject({ path: 'withdrawalReason', maxBytes: 12 });
+  });
+});
+
+
+describe('workflow detail input', () => {
+  it.each(['merge-prepare', '@example/workflows/merge-prepare', './workflows/prepare.yaml', '/tmp/prepare.yaml'])('accepts workflow identifier %s', (workflow) => {
+    expect(getWorkflowInputSchema.parse({ cwd: '/repo', workflow })).toEqual({ cwd: '/repo', workflow });
+  });
+
+  it('preserves the child call path and rejects invalid paging and repository inputs', () => {
+    expect(getWorkflowInputSchema.parse({ cwd: '/repo', workflow: 'parent', callPath: [0], limit: 1, offset: 2 }).callPath).toEqual([0]);
+    for (const patch of [{ cwd: '.' }, { workflow: ' ' }, { limit: 51 }, { offset: -1 }, { callPath: [-1] }, { callPath: ['review'] }]) {
+      expect(getWorkflowInputSchema.safeParse({ cwd: '/repo', workflow: 'parent', ...patch }).success).toBe(false);
+    }
   });
 });

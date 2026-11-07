@@ -25,10 +25,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 118 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 122 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 118);
+  assert.equal(suite.tests.length, 122);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -390,7 +390,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
-    'stopped-background-execution', 'integrated-task-execution',
+    'stopped-background-execution', 'integrated-task-execution', 'two-goal-pr-execution', 'finite-check-external-execution',
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
     'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit']);
