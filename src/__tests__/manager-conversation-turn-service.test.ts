@@ -473,13 +473,28 @@ it('inspects active patrol goals together using the saved conversation and no re
   expect(doubles.notify).not.toHaveBeenCalled();
 });
 
-it.each(['paused', 'aborted', 'completed'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
+it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
   const f = fixture();
   const goal = goalRecord();
-  doubles.getGoal.mockResolvedValue(status === 'completed' ? { ...goal, status } : { ...goal, executionStatus: status });
+  doubles.getGoal.mockResolvedValue(status === 'completed' || status === 'awaiting_merge' ? { ...goal, status } : { ...goal, executionStatus: status });
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
   expect(f.resolve).not.toHaveBeenCalled();
+});
+
+it('delivers pr_conflicting for an awaiting-merge goal to the manager', async () => {
+  const f = fixture();
+  const goal = { ...goalRecord(), status: 'awaiting_merge' };
+  doubles.getGoal.mockResolvedValue(goal);
+  const evidence = { targetId: 'pr-1', generation: 'pr-1', observedAt: '2026-11-07T00:00:00Z',
+    repositoryDirectory: '/repository', goalId: goal.id, url: 'https://github.com/owner/repo/pull/9' };
+  const observation = { ...evidence, kind: 'pr_conflicting' as const };
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'watch_observation', observation };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
+  expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
 });
 
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {

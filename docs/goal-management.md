@@ -4,7 +4,9 @@
 
 ## Manager patrols
 
-For each repository with active goals (excluding paused, aborted and completed goals), the manager periodically inspects all active goals together. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+For each repository with active goals (excluding paused, aborted, completed and awaiting-merge goals), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+
+Goals awaiting merge (`awaiting_merge`) are monitored by the PR watcher. In addition to merges and closures, it delivers conflicts with the integration target (`mergeable: CONFLICTING`) as events to the manager. It does not repeat a conflict while it persists; after it resolves, a recurrence is reported again. `mergeable: UNKNOWN` is not counted as a change. Time and counts do not determine anomalies. The manager checks current state and existing tasks, then enqueues preparation with `takt_merge_goal_pr` when needed. The default `approve` mode uses `until: prepare` and waits for human merge.
 
 ```yaml
 manager:

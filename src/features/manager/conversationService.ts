@@ -70,7 +70,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
           const patrolEvent = { ...event,
-            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id),
+            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge').map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
           if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
           command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };

@@ -41,3 +41,5 @@ takt_merge_goal_pr は必須の cwd、goalId、保存 PR に一致する prNumbe
 manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。質問の回答画面は通知無効でも残ります。通常画面の通知は冒頭だけ表示し、起動前の通知は再表示しません。全文や過去の通知はゴール記録から読みます。通知失敗はログに残して作業を続けます。
 
 見張りはプロセス消失、PR 状態変化などの変化・異常だけを配送し、時計だけで AI を呼びません。生存や開始時刻が不明なら死亡と決めません。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返します。対応する保存ログがなければ開始時刻は不明です。
+
+マージ待ち（awaiting_merge）のゴールは見回りの対象外で、PR の見張りが監視します。取り込み先との衝突は pr_conflicting のイベントで届きます。同じ衝突が続く間は繰り返し通知されず、衝突が解消した後に再発すると、再び通知されます。mergeable が UNKNOWN の間は、衝突の発生とも解消とも扱いません。
