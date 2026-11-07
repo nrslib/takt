@@ -184,6 +184,10 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (caseId === 'existing-invoice-format'
+    && !workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
+    return result(false, 'Record the finding decision in the invoice-export goal work log');
+  }
   if (questionType === 'information') {
     if (questions.length !== 1) return result(false, 'Save exactly one human information question');
     const args = questions[0].arguments;

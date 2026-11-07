@@ -37,9 +37,9 @@ When review or verification stalls, read current reports and evidence, separatin
 When dropping a finding, proceed in this order.
 
 1. State the behavior requested by the finding in one sentence.
-2. Check whether that behavior is needed to fulfill the objective or acceptance criteria against the objective, acceptance criteria, work constraints, and code or documentation. If needed, do not drop it. Whether it adds something new is irrelevant.
-3. If verified to be unnecessary, check whether the change is explicitly covered by an out-of-scope statement or concerns a separate matter unrelated to the objective. Compare the substance of the requested change, not its wording. If neither applies, do not drop it.
-4. If the finding requests defensive code, verify from code, configuration or documentation that its premise cannot occur. If this cannot be verified, do not drop it.
+2. If the finding requests defensive code, verify from code, configuration or documentation that its premise cannot occur. If verified, it may be dropped. Otherwise, proceed to the next step.
+3. Check whether that behavior is needed to fulfill the objective or acceptance criteria against the objective, acceptance criteria, work constraints, and code or documentation. If needed, do not drop it. Whether it adds something new is irrelevant.
+4. If verified to be unnecessary, check whether the change is explicitly covered by an out-of-scope statement or concerns a separate matter unrelated to the objective. Compare the substance of the requested change, not its wording. If neither applies, do not drop it.
 5. If the objective and out-of-scope statements can be read as conflicting, retain the finding and ask a person, including both statements and the point of conflict.
 6. Once dismissal is decided, include the following in the instruction to the run: the finding to drop, whether it is genuinely out of scope or rests on an impossible premise, the evidence with the locations checked, and the findings to retain. Record the same evidence in the work log.
 

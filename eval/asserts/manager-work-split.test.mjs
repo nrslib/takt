@@ -117,6 +117,14 @@ function goodOutput(caseId, lang) {
       cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Recorded the repair item and the source supporting the instruction.',
     } });
   }
+  if (caseId === 'existing-invoice-format') {
+    output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id,
+      summary: lang === 'ja'
+        ? 'INV-1 は残す。目的が参照する exportAccountInvoices の入力契約は json を許可しているが、invoice-export は csv に制限しており、目的を満たしていない。'
+        : 'Retain INV-1. The exportAccountInvoices input contract referenced by the objective permits json, but invoice-export restricts it to csv and fails to fulfill the objective.',
+    } });
+  }
   if (patrolQuestionCases.has(caseId)) {
     output.calls.push({ tool: 'takt_ask_goal_question', arguments: {
       cwd: fixture.cwd,
@@ -333,7 +341,7 @@ for (const lang of ['ja', 'en']) {
       ['taskName', 'another-task'], ['content', 42],
     ]) {
       const invalid = structuredClone(output);
-      invalid.calls[0].arguments[key] = value;
+      invalid.calls.find(({ tool }) => tool === 'takt_tell_run').arguments[key] = value;
       assert.equal(score(invalid, caseId, lang).pass, false);
     }
     const secondGoal = fixture.additionalGoals[0];
@@ -342,11 +350,29 @@ for (const lang of ['ja', 'en']) {
       cwd: fixture.cwd, goalId: secondGoal.id, kind: 'patrol', summary: 'invoice-search implementation has no new issue.',
     } });
     assert.equal(score(withPatrolLog, caseId, lang).pass, true);
-    withPatrolLog.calls[0].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099';
+    withPatrolLog.calls[1].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099';
     assert.equal(score(withPatrolLog, caseId, lang).pass, false);
     const wrongTask = structuredClone(output);
-    wrongTask.calls[0].arguments.taskName = fixture.tasks[1].name;
+    wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = fixture.tasks[1].name;
     assert.equal(score(wrongTask, caseId, lang).pass, false);
+  });
+
+  test(`${lang}: existing invoice format requires the finding decision log under invoice-export`, () => {
+    const caseId = 'existing-invoice-format';
+    const fixture = loadManagerCase(caseId, lang);
+    const output = goodOutput(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+
+    const wrongGoal = structuredClone(output);
+    wrongGoal.calls[0].arguments.goalId = fixture.additionalGoals[0].id;
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+    wrongGoal.calls.push(tellRun(fixture));
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+
+    const bothGoals = structuredClone(output);
+    bothGoals.calls.push(...wrongGoal.calls);
+    assert.equal(score(bothGoals, caseId, lang).pass, true);
   });
 
   test(`${lang}: sends one instruction only for unsupported or unnecessarily complex repair items`, () => {
