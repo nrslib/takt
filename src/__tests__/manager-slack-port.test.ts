@@ -255,7 +255,7 @@ it.each(['failed', 'error'] as const)('posts the retained %s verification as the
   await port.delivery.deliver(id, { ...output, operationId: 'other-operation' }, { ...version, operationId: 'other-operation' });
   expect(client.postThreadMessage).not.toHaveBeenCalled();
   await port.delivery.deliver(id, output, version);
-  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message);
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message, [{ type: 'markdown', text: message }]);
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
   await port.delivery.deliver(id, output, version);
   expect(client.postThreadMessage).toHaveBeenCalledOnce();
@@ -277,7 +277,7 @@ it('delivers the interrupted verification result once to its originating Slack t
   await Promise.all(deliveries.map((delivery) => delivery.deliver(id,
     { kind: 'result', operationId: 'first', result: { kind: 'error', code: 'interrupted', message: 'retained verification result' } },
     { revision: 0, stateSequence: 1, operationId: 'first' })));
-  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'retained verification result');
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'retained verification result', [{ type: 'markdown', text: 'retained verification result' }]);
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment-1');
   await port.close();
   expect(input.detach).toHaveBeenCalledTimes(2);
