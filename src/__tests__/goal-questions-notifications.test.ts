@@ -200,11 +200,24 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(lines[1]).toContain(goal.id.slice(0, 8));
   });
 
-  it.each([undefined, 'warning'] as const)('shows only explicitly supplied severity (%s)', (severity) => {
-    const text = formatGoalNotification(goal, { kind: 'custom', body: 'Result', ...(severity === undefined ? {} : { severity }) }, language, 'takt');
-    const lines = text.split('\n');
-    expect(lines).toContain('Result');
-    expect(lines.some((line) => line.startsWith(language === 'ja' ? '重要度:' : 'Severity:'))).toBe(severity !== undefined);
+  it.each(['blocked', 'custom'] as const)('keeps explicitly supplied severity in Slack and TUI %s notifications', (kind) => {
+    for (const severity of [undefined, 'info', 'warning', 'error'] as const) {
+      for (const destination of ['slack', 'tui'] as const) {
+        const text = formatGoalNotification(goal, { kind, body: 'Result', ...(severity === undefined ? {} : { severity }) }, language, 'takt', destination);
+        const lines = text.split('\n');
+        expect(lines).toContain('Result');
+        const severityLines = lines.filter((line) => line.startsWith(language === 'ja' ? '重要度:' : 'Severity:'));
+        if (severity === undefined) {
+          expect(severityLines).toEqual([]);
+        } else {
+          const expected = getLabel('manager.notificationSeverity', language, {
+            severity: getLabel(`manager.notificationSeverities.${severity}`, language),
+          });
+          expect(severityLines).toEqual([expected]);
+          expect(lines[destination === 'slack' ? 1 : 2]).toBe(expected);
+        }
+      }
+    }
   });
 
   it.each(['progress', 'completed', 'blocked', 'custom'] as const)('preserves short multiline %s bodies and bounds long ones without changing saved data', (kind) => {
