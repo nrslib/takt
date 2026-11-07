@@ -209,6 +209,21 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
     }
   });
 
+  test(`${caseId}: treats --json without fields as an external state query`, () => {
+    for (const jsonArgs of [['--json'], ['--json', ''], ['--json=']]) {
+      const value = noWaitEvidence(caseId);
+      value.checks = value.checks.filter(({ kind }) => kind !== 'external');
+      const observation = { kind: 'external', args: ['pr', 'view', '1951', ...jsonArgs], watch: false, at: 40 };
+      value.checks.push(observation);
+      const single = grade(value);
+      assert.equal(single.pass, true, single.reason);
+
+      value.checks.push({ ...observation, at: 50 });
+      const repeated = grade(value);
+      assert.equal(repeated.pass, false, JSON.stringify(jsonArgs));
+    }
+  });
+
   test(`${caseId}: accepts the same external state query once per returned turn`, () => {
     const value = noWaitEvidence(caseId);
     value.trial.turns[0].startedAt = -100;

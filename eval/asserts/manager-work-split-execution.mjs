@@ -7,6 +7,7 @@ function observesExternalCondition(args) {
   const jsonFlag = args.findIndex((arg) => arg === '--json' || arg.startsWith('--json='));
   if (jsonFlag === -1) return true;
   const fields = args[jsonFlag] === '--json' ? args[jsonFlag + 1] : args[jsonFlag].slice('--json='.length);
+  if (!fields) return true;
   return fields.split(',').some((field) => /status|state|conclusion|ready|reviewDecision|mergeable|mergedAt|closedAt/iu.test(field));
 }
 
