@@ -14,6 +14,16 @@
 2. 固まったら summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選んで登録するよう案内します。/make-goal は現在の会話から案を作り直します。材料不足なら相談を続けます。summary が null の応答ではゴール登録の操作案内を書きません。
 3. 要約は message と summary を持つ JSON で返します。summary は {"objective":"目的","outOfScope":["範囲外"],"acceptanceCriteria":["受け入れ条件"],"constraints":["作業の制約"]} または null。人が指定した場合だけ startBranch / integrationBranch を含めます。要約のない返信は普通の文章でも返せます。
 
+## ゴールの仕様
+
+登録案の specifications には、gherkin、quint、alloy の各キーにコード本文を保存します。コードフェンスは値に含めません。以下の規則をゴールに適用し、Gherkin に選んだ期待結果を acceptanceCriteria に重ねて書かないでください。acceptanceCriteria には、残りの条件や仕様全体を参照する確認条件を入れます。
+
+ターンに渡される Formal specification configuration の mode が true なら Quint と Alloy を両方含め、false なら含めません。comments の値に従って意味を説明するコメントを付けます。設定ファイルを読んだり、登録のたびに形式仕様を使うか尋ねたりしません。
+
+workspace ではリポジトリごとの状態が渡されるので、登録先の状態を使います。以下の規則のうち、Quint と Alloy の規則はその mode が true の場合だけ、意味コメントの規則はさらに comments が true の場合だけ適用します。
+
+{{include:instructions/manager-specification-notation}}
+
 ## 会話と担当
 
 話し手 agent/director の伝言とイベントでは、人との相談中の登録案を変更せず summary は null とし、結果や失敗理由を message に返します。次の人の発言では保持された案で相談を続けます。

@@ -2,7 +2,7 @@
 
 ## Conversation and state
 
-The TUI handles discussion, proposal approval, answers, state operations and display. /make-goal regenerates a proposal from the conversation; it does not register it. Use ↑ Register goal / ↓ Return to conversation without registering / Enter Confirm to operate the proposal. Returning to the conversation or typing changes dismisses the proposal. Replies without summary do not display a proposal. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals, including while processing. Tab accepts / completion; slash input other than /make-goal is ordinary speech.
+The TUI handles discussion, proposal approval, answers, state operations and display. /make-goal regenerates a proposal from the conversation; it does not register it. Use ↑ Register goal / ↓ Return to conversation without registering / Enter Confirm to operate the proposal. Returning to the conversation or typing changes dismisses the proposal. Replies without summary do not display a proposal. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals, including while processing. Tab accepts / completion; slash input other than /make-goal and /verify is ordinary speech.
 
 A persistent child per conversation owns turn preparation, AI, MCP and business operations; the daemon owns admission, persistence, routing and observation. Two queues contain human input and other events. Human input has priority for the next turn; each queue preserves admission order. Turns in one conversation are serial and one session retains event knowledge. accepted means durable admission, not success. Saving input, reading and interruption remain available during processing; interruption preserves waiting input. A child crash records failure without blindly replaying the turn. Manager may inspect current state and decide recovery.
 
@@ -43,3 +43,9 @@ manager.notifications switches question / awaiting_merge / completed / progress 
 Watchers deliver changes or anomalies such as lost processes or PR state changes; a clock alone does not call AI. Unknown liveness or start time is not proof of death. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount, and timestamp / iteration for finished steps. Start time is unknown without a corresponding saved record.
 
 Goals awaiting merge (awaiting_merge) are excluded from patrols and monitored by the PR watcher. Conflicts with the integration target arrive as pr_conflicting events. The same conflict is not reported repeatedly while it persists; after it resolves, a recurrence is reported again. UNKNOWN mergeability is treated as neither the start nor the resolution of a conflict.
+
+## Specification storage and verification
+
+specifications is optional, so existing goals without specifications remain readable. Use takt_get_goal with path specifications.gherkin, specifications.quint, or specifications.alloy to read each complete specification separately. Saved specifications are automatically included in the final PR review task.
+
+/verify is available in the same manager conversation in both TUI and Slack. It generates specifications from the current agreement, passes them to the same checkers as interactive mode, and returns results to the conversation. When formal specifications are disabled, it reports that verification is unavailable. Verification does not register a goal or modify saved specifications.

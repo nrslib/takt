@@ -9,6 +9,7 @@ import type { TurnBusiness } from '../daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../daemonTurn/conversationState.js';
 import { buildTurnBusinessContext } from '../daemonTurn/turnContext.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
+import type { ManagerTurnInput } from './turnExecutor.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
@@ -23,6 +24,7 @@ import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
 
 function nextRevision(revision: number): number {
@@ -55,9 +57,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const human = event.kind === 'human_command';
       let command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
+      const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
+      let verificationMessage: string | undefined;
       try {
         io.signal.throwIfAborted();
         const candidate = eventGoalReference(event);
@@ -91,7 +95,21 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
-        if (human && command.kind !== 'approve_summary') {
+        let verification: ManagerTurnInput['verify'];
+        if (verify) {
+          const verificationRepository = priorPending?.repositoryDirectory
+            ?? (assignment.repositoryDirectories.length === 1 ? assignment.repositoryDirectories[0] : undefined);
+          if (verificationRepository === undefined) return { kind: 'completed', result: {
+            kind: 'reply', message: getLabel('manager.verifyRepositoryRequired', language),
+          } };
+          if (!assignment.repositoryDirectories.includes(verificationRepository)) throw new ConversationError('invalid_assignment');
+          verification = { repositoryDirectory: verificationRepository,
+            ...resolveFormalSpecConfigurationWithoutPrompt(verificationRepository) };
+          if (!verification.mode) return { kind: 'completed', result: {
+            kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
+          } };
+        }
+        if (human && command.kind !== 'approve_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
         }
@@ -133,12 +151,13 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
             const interruptedMessage = state.current.interruptedMessage;
             const prompt = [
-              ...(interruptedMessage == null ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
+              ...(interruptedMessage == null || verify ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
               command.text,
               ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
             ].join('\n\n');
             const output = await resolved.executor.execute({
               prompt,
+              ...(verification === undefined ? {} : { verify: verification }),
               sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
@@ -146,7 +165,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               patrol: event.kind === 'patrol',
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
-            interruptedMessageDelivered = interruptedMessage != null;
+            if (verify) verificationMessage = output.message;
+            interruptedMessageDelivered = interruptedMessage != null && !verify;
             io.signal.throwIfAborted();
             const latest = assignment.kind === 'daemon' ? assignment
               : await resolveCurrentManagerAssignment(identityOf(assignment), configDirectory);
@@ -167,7 +187,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
               ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
-              ...(human && assignment.kind !== 'daemon' ? { proposal: { revision: state.current.revision, pending } } : {}),
+              ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) };
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
@@ -189,7 +209,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       } catch (error) {
         if (io.signal.aborted) {
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
-          return { kind: 'interrupted', ...(human && command.kind === 'message'
+          return { kind: 'interrupted', ...(verificationMessage === undefined ? {} : { message: verificationMessage }), ...(human && command.kind === 'message' && !verify
             ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
               ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
         }

@@ -20,6 +20,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   const goal = GoalSchema.parse({
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
+    ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
@@ -45,6 +46,7 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     if (existing.objective !== input.objective
       || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
       || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
+      || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)
       || JSON.stringify(existing.constraints) !== JSON.stringify(input.constraints)
       || (input.startBranch !== undefined && existing.startBranch !== input.startBranch)
       || (input.integrationBranch !== undefined && existing.integrationBranch !== input.integrationBranch)) {

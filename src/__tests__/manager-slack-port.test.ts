@@ -86,20 +86,29 @@ it.each(['ja', 'en'] as const)('posts labeled repository and optional branches w
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   await port.receive(endpoint, '/make-goal');
   const record = conversationRecord('/canonical');
-  const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository' };
+  const specifications = { gherkin: 'Feature: CSV\n  Scenario: Export', quint: 'module csv {}\n```\nRemaining specification', alloy: 'sig CSV {}\n`````\nRemaining specification' };
+  const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository',
+    summary: { ...record.pending!.summary, specifications } };
   try {
     for (const branches of [{}, { startBranch: 'release' }, { integrationBranch: 'main' }, { startBranch: 'release', integrationBranch: 'main' }]) {
+      const firstMessage = vi.mocked(client.postThreadMessage).mock.calls.length;
       await port.delivery.deliver(record.id, { kind: 'pending', state: { conversationId: record.id, assignment: record.assignment,
         revision: record.revision, pending: { ...pending, summary: { ...pending.summary, ...branches } },
         approval: null, running: null, interrupted: false } },
       { revision: record.revision, stateSequence: 1, operationId: 'operation' });
-      const [, text, blocks] = vi.mocked(client.postThreadMessage).mock.calls.at(-1)!;
+      const messages = vi.mocked(client.postThreadMessage).mock.calls.slice(firstMessage);
+      const text = messages.map(([, text]) => text).join('\n');
+      const blocks = messages.flatMap(([, , blocks]) => blocks ?? []);
       expect(text).toContain(lang === 'ja' ? 'リポジトリ: /workspace/selected-repository' : 'Repository: /workspace/selected-repository');
       expect(text).toContain(`${getLabel('manager.summary.objective', lang)}:\n${pending.summary.objective}`);
       for (const field of ['startBranch', 'integrationBranch'] as const) {
         const label = getLabel(`manager.summary.${field}`, lang);
         if (branches[field] === undefined) expect(text).not.toContain(label);
         else expect(text).toContain(`${label}: ${branches[field]}`);
+      }
+      for (const [notation, code] of Object.entries(specifications)) {
+        const fence = '`'.repeat(notation === 'gherkin' ? 3 : notation === 'quint' ? 4 : 6);
+        expect(text).toContain(`${fence}${notation}\n${code}\n${fence}`);
       }
       expect(text).not.toContain(getLabel('manager.summary.dismissHint', lang));
       expect(blocks).toContainEqual(expect.objectContaining({ type: 'actions', elements: [
@@ -231,6 +240,48 @@ it.each(['reply', 'notice'] as const)('delivers a %s result emitted before admis
   expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply', [{ type: 'markdown', text: 'reply' }]);
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
 });
+it.each(['failed', 'error'] as const)('posts the retained %s verification as the interrupted final result to the same thread', async (verdict) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '/verify');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/canonical' });
+  const message = JSON.stringify({ verdict, runDirectory: '/canonical/.takt/runs/verify-test' });
+  const output = { kind: 'result' as const, operationId: 'operation', result: { kind: 'error' as const, code: 'interrupted', message } };
+  const version = { revision: 0, stateSequence: 1, operationId: 'operation' };
+  await port.delivery.deliver('other-conversation', output, version);
+  await port.delivery.deliver(id, output, { ...version, operationId: 'other-operation' });
+  await port.delivery.deliver(id, { ...output, operationId: 'other-operation' }, { ...version, operationId: 'other-operation' });
+  expect(client.postThreadMessage).not.toHaveBeenCalled();
+  await port.delivery.deliver(id, output, version);
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message, [{ type: 'markdown', text: message }]);
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+  await port.delivery.deliver(id, output, version);
+  expect(client.postThreadMessage).toHaveBeenCalledOnce();
+  await port.close();
+});
+it('delivers the interrupted verification result once to its originating Slack thread when several turns are attached', async () => {
+  const { port, input, client } = fixture();
+  const deliveries: ConversationDelivery[] = [];
+  vi.mocked(input.open).mockImplementation(async (_open, delivery) => {
+    deliveries.push(delivery);
+    return { attachmentId: `attachment-${deliveries.length}`, read: read() };
+  });
+  vi.mocked(input.submit).mockResolvedValueOnce({ kind: 'accepted', operationId: 'first' });
+  vi.mocked(input.submit).mockResolvedValueOnce({ kind: 'accepted', operationId: 'second' });
+  await port.receive(endpoint, '/verify');
+  await port.receive({ ...endpoint, parentTs: 'another-thread' }, '/verify');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/canonical' });
+  await Promise.all(deliveries.map((delivery) => delivery.deliver(id,
+    { kind: 'result', operationId: 'first', result: { kind: 'error', code: 'interrupted', message: 'retained verification result' } },
+    { revision: 0, stateSequence: 1, operationId: 'first' })));
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'retained verification result', [{ type: 'markdown', text: 'retained verification result' }]);
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment-1');
+  await port.close();
+  expect(input.detach).toHaveBeenCalledTimes(2);
+});
 it.each(['open', 'submit'] as const)('reports queue capacity rejection from %s without resubmitting the message', async (stage) => {
   const { port, input, client } = fixture();
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
@@ -287,4 +338,15 @@ it('rejects an unreadable inquiry binding without misrouting its answer as conve
   await expect(port.receive(endpoint, '80')).rejects.toThrow();
   expect(input.submit).not.toHaveBeenCalled();
   await port.close();
+});
+
+
+it('passes a human /verify message from Slack to the manager conversation', async () => {
+  const { port, input } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'verify-operation' });
+  try {
+    await port.receive(endpoint, '/verify');
+    expect(input.submit).toHaveBeenCalledWith(expect.objectContaining({ command: { kind: 'message', text: '/verify' } }));
+  } finally { await port.close(); }
 });

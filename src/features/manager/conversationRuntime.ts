@@ -34,7 +34,9 @@ export function createConversationRuntime(configDirectory: string): Conversation
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
       const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
         : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, configDirectory).cwd;
-      const plan = createManagerConversationPlan(cwd, agentOverrides ?? {});
+      const plan = createManagerConversationPlan(cwd, { ...agentOverrides,
+        ...(assignment.kind === 'workspace' ? { repositoryDirectories: assignment.repositoryDirectories } : {}),
+      });
       const contextKey = createHash('sha256').update(JSON.stringify({
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions,
         mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,

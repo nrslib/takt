@@ -4,10 +4,23 @@ import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
 import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 const interrupt = (turn: TurnIdentity) => ({ kind: 'interrupt' as const, ...turn });
 
 describe('event driven daemon dispatcher', () => {
+  it('keeps /verify as an interrupted ordinary message in the director conversation', async () => {
+    const h = await harness();
+    await h.dispatcher.accept({ ...input('verify', conversationId({ kind: 'daemon' })), event: {
+      kind: 'human_command', command: { kind: 'message', text: '/verify' }, speaker: { namespace: 'test', id: 'operator' },
+    } });
+    const active = await h.runner.started(1);
+    await h.dispatcher.control(interrupt(active.turn));
+    await h.runner.finish(active, { kind: 'interrupted' });
+    expect(h.applied.get(active.turn.operationId)?.outcome.change?.interruptedMessage).toBe('/verify');
+    await h.dispatcher.control({ kind: 'stop' });
+  });
+
   it('accepts and persists H1/H2 during T1 without waiting for provider completion', async () => {
     const h = await harness();
     await h.dispatcher.accept(input('T1'));

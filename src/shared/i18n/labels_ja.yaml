@@ -449,6 +449,8 @@ director:
   managerError: "manager {managerId} の伝言処理が失敗しました（操作ID: {operationId}）: {message}"
   managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
+  verifyRepositoryRequired: "どのリポジトリの仕様を検証しますか？対象を伝えて /make-goal で登録案を作成し、もう一度 /verify を実行してください。"
+  verifyInterpretationFailed: "検証結果の説明に失敗しました。検査器の結果を表示します。原因: {error}"
   goalPr:
     preparationFailed: "PR の準備に失敗しました。原因を確認し、次の操作を判断してください。原因: {reason}"
     objective: "目的"

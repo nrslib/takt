@@ -86,7 +86,7 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('deferred') }).strict(),
   z.object({ kind: z.literal('completed'), result: operationResult, change: ConversationChangeSchema.optional() }).strict(),
   z.object({ kind: z.literal('failed'), message: text, change: ConversationChangeSchema.optional() }).strict(),
-  z.object({ kind: z.literal('interrupted'), change: ConversationChangeSchema.optional() }).strict(),
+  z.object({ kind: z.literal('interrupted'), message: text.optional(), change: ConversationChangeSchema.optional() }).strict(),
 ]);
 export const StoredResultSchema: z.ZodType<TurnResult> = z.object({ ...StoredTurnSchema.shape, event: storedEvent, outcome }).strict();
 export const EventRecordSchema = z.discriminatedUnion('state', [

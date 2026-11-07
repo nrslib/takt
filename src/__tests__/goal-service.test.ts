@@ -40,7 +40,7 @@ describe('Goal registration service', () => {
   });
 
   it('saves the approved record after creating its branch', async () => {
-    expect(await createGoal(request())).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(await createGoal(request())).toStrictEqual({ ...goalRecord(), createdAt: expect.any(String) });
     expect(doubles.assertAbsent).toHaveBeenCalledWith(goalRecord().id);
     expect(doubles.createBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);
@@ -139,4 +139,16 @@ describe('Goal registration service', () => {
     expect(saveManagerEvent).toHaveBeenCalledExactlyOnceWith(cwd, { kind: 'registered', goalId: goalRecord().id });
     expect(doubles.removeBranch).not.toHaveBeenCalled();
   });
+});
+
+
+it('saves the approved specifications and rejects recovery against different specifications', async () => {
+  vi.resetAllMocks();
+  const specifications = { gherkin: 'Feature: Export', quint: 'module export {}', alloy: 'sig Export {}' };
+  doubles.prepare.mockResolvedValue({ branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40) });
+  doubles.create.mockImplementation(async (goal: unknown) => goal);
+  const input = { cwd: '/project', ...goalInput(), id: goalRecord().id, specifications };
+  expect(await createGoal(input)).toMatchObject({ specifications });
+  doubles.find.mockReturnValue({ ...goalRecord(), specifications });
+  await expect(registerReservedGoal({ ...input, specifications: { gherkin: 'Feature: Different' } })).rejects.toThrow('conflicts');
 });
