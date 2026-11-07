@@ -15,12 +15,18 @@ function assistantRetryAvailability(enabled: boolean): CommandAvailability {
 }
 
 describe('filterSlashCommands', () => {
-  it('filters caller-supplied definitions without adding interactive commands', () => {
-    const definitions = [{ command: '/make-goal', labelKey: 'manager.makeGoalDescription' }];
-    expect(filterSlashCommands('/', {}, definitions)).toEqual(definitions);
-    expect(filterSlashCommands('/ma', {}, definitions)).toEqual(definitions);
-    expect(filterSlashCommands('/MAKE-GOAL', {}, definitions)).toEqual(definitions);
-    expect(filterSlashCommands('/help', {}, definitions)).toEqual([]);
+  it('filters the supplied /make-goal and /verify definitions without adding other interactive commands', () => {
+    const definitions = [
+      { command: '/make-goal', labelKey: 'manager.makeGoalDescription' },
+      { command: '/verify', labelKey: 'interactive.commands.verify' },
+    ];
+    const availability = { formalSpec: true };
+    expect(filterSlashCommands('/', availability, definitions)).toEqual(definitions);
+    expect(filterSlashCommands('/ma', availability, definitions)).toEqual([definitions[0]]);
+    expect(filterSlashCommands('/MAKE-GOAL', availability, definitions)).toEqual([definitions[0]]);
+    expect(filterSlashCommands('/ver', availability, definitions)).toEqual([definitions[1]]);
+    expect(filterSlashCommands('/verify', availability, definitions)).toEqual([definitions[1]]);
+    expect(filterSlashCommands('/help', availability, definitions)).toEqual([]);
     expect(filterSlashCommands('/ma')).toEqual([]);
   });
   it('should return all commands when prefix is "/"', () => {
