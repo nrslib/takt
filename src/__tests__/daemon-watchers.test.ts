@@ -19,6 +19,7 @@ vi.mock('../features/daemon/watchers/files.js', () => ({
   isMissing: (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT',
   listWatchEntries: filesystem.list, readSmallJson: filesystem.json,
 }));
+vi.mock('../infra/daemon/inboxFiles.js', () => ({ readInboxJson: filesystem.json }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

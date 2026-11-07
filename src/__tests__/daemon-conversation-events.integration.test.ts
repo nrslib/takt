@@ -82,13 +82,19 @@ async function fixture(seed?: (directory: string, repository: string) => Promise
   return { ...daemon, directory, repository, runner, id, opened, post, outputs };
 }
 
-it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer through the inbox, event store and IPC to the manager executor', async (source) => {
+it.each([
+  { source: 'tui' as const, body: 'Which goal should handle this event?', text: 'Use the export goal' },
+  { source: 'tui' as const, body: 'Q'.repeat(128 * 1024), text: 'Use the export goal' },
+  { source: 'tui' as const, body: 'Q'.repeat(128 * 1024), text: 'A'.repeat(128 * 1024) },
+  { source: 'slack' as const, body: '問'.repeat(128 * 1024), text: 'Use the export goal' },
+  { source: 'slack' as const, body: '問'.repeat(128 * 1024), text: '答'.repeat(128 * 1024) },
+])('delivers a saved standalone $source answer through the inbox, event store and IPC to the manager executor ($body.length/$text.length characters)', async ({ source, body, text }) => {
   const f = await fixture();
   vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
   vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
   const owner = { kind: 'repository' as const, repositoryDirectory: f.repository };
   const store = new StandaloneInquiryStore(f.directory, owner);
-  const question = await store.create({ body: 'Which goal should handle this event?',
+  const question = await store.create({ body,
     operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } });
   const before = await f.conversations.snapshot(f.id);
   const pending = [];
@@ -110,20 +116,26 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
 
   accepted(await f.dispatcher.accept({ ...input('standalone-answer', f.id), source,
     event: { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { goalId: null, owner },
-      questionId: question.id, answer: { text: 'Use the export goal' }, source } } }));
+      questionId: question.id, answer: { text }, source } } }));
   expect(await perform(await f.runner.started(1))).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
   expect(execute).not.toHaveBeenCalled();
   const saved = await store.get(question.id);
-  expect(saved).toMatchObject({ status: 'answered', answer: { text: 'Use the export goal', source } });
+  expect(saved).toMatchObject({ status: 'answered', answer: { text, source } });
   const files = new DaemonPersistedFiles(f.directory);
   const inbox = await files.inboxDirectory(f.repository);
   const names = await readdir(inbox);
   expect(names).toHaveLength(1);
-  expect(await files.readInboxEvent(f.repository, names[0]!)).toMatchObject({
-    kind: 'answer', goalId: null, questionId: question.id, questionBody: question.body, answer: saved.answer,
+  const bytes = (await readFile(join(inbox, names[0]!))).byteLength;
+  console.info('inbox bytes', source, body.length, text.length, bytes);
+  const errors = vi.fn();
+  const watcher = startDirectoryWatcher({
+    targets: async () => [{ targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' }],
+    changed: (change) => receiveInboxChange(change, files, f.conversations, f.dispatcher), onError: errors,
   });
-  await receiveInboxChange({ target: { targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' },
-    path: join(inbox, names[0]!), removed: false, generation: 'answer', value: {} }, files, f.conversations, f.dispatcher);
+  cleanups.push(watcher.close);
+  await watcher.drain();
+  expect(errors).not.toHaveBeenCalled();
+  await watcher.close();
   const turn = await f.runner.started(2);
   const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
     text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
@@ -144,6 +156,55 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
   for await (const item of after.items) if (item.kind === 'inquiry') remaining.push(item.inquiry.question.id);
   after.complete();
   expect(remaining).not.toContain(question.id);
+});
+
+it.each([
+  { publication: 'saved' as const, body: 'Q'.repeat(128 * 1024), text: 'Export' },
+  { publication: 'saved' as const, body: 'Q'.repeat(128 * 1024), text: 'A'.repeat(128 * 1024) },
+  { publication: 'pending' as const, body: 'Which goal?', text: 'Export' },
+  { publication: 'pending' as const, body: '問'.repeat(128 * 1024), text: 'Export' },
+])('delivers a $publication repository answer across daemon startup ($body.length/$text.length characters)', async ({ publication, body, text }) => {
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const f = await fixture(async (directory, repository) => {
+    const store = new StandaloneInquiryStore(directory, { kind: 'repository', repositoryDirectory: repository });
+    const question = await store.create({ body });
+    const saved = await store.answerForPublication(question.id, { text }, 'tui');
+    if (publication === 'saved') {
+      saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: question.id, questionBody: body, answer: saved.answer! });
+      await store.markAnswerPublished(question.id);
+    }
+  });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const errors = vi.fn();
+  const watcher = startDirectoryWatcher({
+    targets: async () => [{ targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' }],
+    changed: (change) => receiveInboxChange(change, files, f.conversations, f.dispatcher), onError: errors,
+  });
+  cleanups.push(watcher.close);
+  await watcher.drain();
+  expect(errors).not.toHaveBeenCalled();
+  await watcher.close();
+  const [question] = await new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository }).list();
+  expect(question!.answerPublicationPending).toBeUndefined();
+  const turn = await f.runner.started(1);
+  const expected = inquiryAnswerMessage(question!.id, question!.answer!, body);
+  expect(turn.input.event.event).toEqual({ kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }), text: expected });
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'startup-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'startup-answer', executor: { execute } };
+  }, async close() {} });
+  const message = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'startup-answer',
+    kind: 'start_turn', input: turn.input })), 'startup-answer');
+  if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
+  const outcome = await service.execute(message.input, { signal: turn.signal, progress() {},
+    request: (request) => f.dispatcher.request(turn.turn, request, turn.signal) });
+  await f.runner.finish(turn, outcome);
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected, directorSpeaker].join('\n\n'));
+  expect(await readdir(inbox)).toEqual([]);
 });
 
 it.each([
@@ -252,8 +313,8 @@ it.each([
 it('retains a standalone answer after storage rejection and consumes it after successful admission', async () => {
   const f = await fixture();
   const store = new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository });
-  const question = await store.create({ body: 'Which goal?' });
-  const answered = await store.answer(question.id, { text: 'Export' });
+  const question = await store.create({ body: 'Q'.repeat(128 * 1024) });
+  const answered = await store.answer(question.id, { text: 'A'.repeat(128 * 1024) });
   saveManagerEvent(f.repository, { kind: 'answer', goalId: null, questionId: question.id, questionBody: question.body, answer: answered.answer! });
   const files = new DaemonPersistedFiles(f.directory);
   const inbox = await files.inboxDirectory(f.repository);

@@ -8,7 +8,8 @@ import { DaemonConversations } from './conversationState.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { WatchFileChange } from './watchers/directories.js';
 import { hasCode } from '../../infra/daemon/privateFile.js';
-import { listWatchEntries, readSmallJson } from './watchers/files.js';
+import { listWatchEntries } from './watchers/files.js';
+import { readInboxJson } from '../../infra/daemon/inboxFiles.js';
 import { z } from 'zod/v4';
 import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
@@ -22,7 +23,7 @@ export async function retireLegacyPatrols(directory: string): Promise<void> {
     for (const file of await listWatchEntries(join(root, entry.name))) {
       if (!file.isFile() || !file.name.endsWith('.json')) continue;
       const path = join(root, entry.name, file.name);
-      const value = await readSmallJson(path);
+      const value = await readInboxJson(path);
       if (value === null || typeof value !== 'object' || !('kind' in value) || value.kind !== 'patrol') continue;
       z.object({ kind: z.literal('patrol'), goalId: z.uuid(), createdAt: z.iso.datetime() }).strict().parse(value);
       await unlink(path).catch((error: unknown) => { if (!hasCode(error, 'ENOENT')) throw error; });

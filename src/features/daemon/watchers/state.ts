@@ -4,7 +4,7 @@ import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
 import { GoalQuestionSchema, type GoalQuestion } from '../../../infra/goals/schema.js';
 import type { WatchGoalReader, WatchGoal } from './goalReader.js';
-import { isMissing, listWatchEntries, readSmallJson } from './files.js';
+import { isMissing, listWatchEntries } from './files.js';
 import { watchGoalDirectory } from './goalPaths.js';
 
 export const TASKS_FILE_NAME = 'tasks.yaml';
@@ -53,7 +53,7 @@ export async function* readWatchGoals(cwd: string, onError: (error: unknown) => 
 export async function* readWatchInquiries(directory: string): AsyncGenerator<GoalQuestion> {
   for (const entry of await listWatchEntries(directory)) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const question = GoalQuestionSchema.parse(await readSmallJson(join(directory, entry.name)));
+    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(join(directory, entry.name), 'utf8')) as unknown);
     if (`${question.id}.json` !== entry.name) throw new Error('Question ID differs from its filename');
     yield question;
   }

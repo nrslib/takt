@@ -11,7 +11,8 @@ import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
 import { FileAsyncLock } from './lock.js';
 import { readDisplayFile } from './displayFiles.js';
-import { readPrivateFile, writePrivateFile } from './privateFile.js';
+import { hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { readInboxJson } from './inboxFiles.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -112,8 +113,14 @@ export class DaemonPersistedFiles {
 
   async readInboxEvent(repositoryDirectory: string, name: string) {
     if (!/^[a-zA-Z0-9._-]+\.json$/.test(name)) throw new Error('Invalid inbox event filename');
-    const content = await readPrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), MAX_PROJECTION_BYTES);
-    return content === undefined ? undefined : inboxEvent.parse(JSON.parse(content.toString('utf8')) as unknown);
+    const path = join(await this.inboxDirectory(repositoryDirectory), name);
+    let value;
+    try { value = await readInboxJson(path); }
+    catch (error) {
+      if (hasCode(error, 'ENOENT')) return undefined;
+      throw error;
+    }
+    return inboxEvent.parse(value);
   }
 
   private async inquiryDirectory(owner: DaemonInquiryOwner): Promise<string> {

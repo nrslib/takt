@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
@@ -13,7 +13,7 @@ import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import type { DaemonIngress } from '../core/daemon/ports.js';
 import type { Admission, EventInput } from '../core/daemon/events.js';
-import type { ConversationSnapshot } from '../core/daemon/messages.js';
+import type { ConversationSnapshot, InquiryNotice } from '../core/daemon/messages.js';
 import type { SnapshotItem } from '../features/manager/conversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -27,6 +27,12 @@ import { answerConversationInquiry } from '../features/manager/conversationAnswe
 import { buildSlackInquiry } from '../features/manager/slackInquiryBlocks.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { DaemonConversations } from '../features/daemon/conversationState.js';
+import { DaemonRouting, projectKey } from '../features/daemon/routing.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { createWatchSource } from './helpers/daemon-watch-source.js';
 
 const sdk = vi.hoisted(() => ({ on: vi.fn(), start: vi.fn(), disconnect: vi.fn(), post: vi.fn() }));
 vi.mock('@slack/socket-mode', () => ({ LogLevel: { ERROR: 'error' }, SocketModeClient: class {
@@ -92,6 +98,65 @@ function resultFor(requestId: string) {
   if (admission?.kind !== 'accepted') throw new Error('Event was not admitted');
   return admission.operationId;
 }
+
+it.each([
+  { kind: 'repository' as const, body: 'Which goal?' },
+  { kind: 'repository' as const, body: 'Q'.repeat(128 * 1024) },
+  { kind: 'workspace' as const, body: 'どのゴールですか' },
+  { kind: 'workspace' as const, body: '問'.repeat(128 * 1024) },
+])('delivers an MCP question through the inquiry watcher to Slack ($kind, $body.length characters)', async ({ kind, body }) => {
+  const configDirectory = process.env.TAKT_CONFIG_DIR!;
+  const path = join(configDirectory, 'watched-question');
+  await mkdir(path, { recursive: true });
+  await promisify(execFile)('git', ['init', '--quiet', path]);
+  const repository = await realpath(path);
+  await registerProject({ globalConfigDirectory: configDirectory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  const workspace = kind === 'workspace'
+    ? await createWorkspace({ globalConfigDirectory: configDirectory, name: '担当', repositoryDirectories: [repository] }) : undefined;
+  const owner = workspace === undefined ? { kind: 'repository' as const, repositoryDirectory: repository }
+    : { kind: 'workspace' as const, workspaceId: workspace.id };
+  const errors = vi.fn();
+  const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
+    new DaemonNotifications(configDirectory), async () => {}, errors);
+  const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
+  const port = createSlackConversationPort({ repositoryDirectory: repository, configDirectory,
+    resolveAssignment: async () => workspace === undefined
+      ? { kind: 'repository', repositoryDirectory: repository, repositoryDirectories: [repository] }
+      : { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: [repository] },
+    channelId: 'CW', input, client, language: 'en' });
+  const publish = vi.fn(async (notice: InquiryNotice) => {
+    await port.delivery.deliver(notice.conversationId, { kind: 'inquiry', target: notice.target, question: notice.question }, version);
+  });
+  const source = createWatchSource(conversations, publish, errors);
+  const server = createTaktMcpServer({}, { toolSet: 'manager', managerAssignment: owner, allowedProjectRoot: repository });
+  const mcp = new Client({ name: 'watched-question', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    await source.inquiries();
+    await server.connect(b); await mcp.connect(a);
+    const result = await mcp.callTool({ name: 'takt_ask_standalone_question', arguments: {
+      cwd: repository, body, options: ['Export', 'Import'], recommendation: 'Export',
+    } });
+    expect(result.isError).not.toBe(true);
+    const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+    const directory = workspace === undefined ? join(configDirectory, 'projects', projectKey(repository))
+      : join(configDirectory, 'workspaces', workspace.id);
+    const stored = await readFile(join(directory, 'inquiries', `${questionId}.json`));
+    if (body.length === 128 * 1024) expect(stored.byteLength).toBeGreaterThan(256 * 1024);
+    console.info('inquiry bytes', kind, body.length, stored.byteLength);
+    await source.inquiries();
+    expect(errors).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conversationId: conversationId(owner),
+      target: expect.objectContaining({ goalId: null, owner: expect.objectContaining(owner) }),
+      question: expect.objectContaining({ id: questionId, body, options: ['Export', 'Import'], recommendation: 'Export',
+        operation: expect.objectContaining({ cwd: repository }) }) }));
+    const question = await new StandaloneInquiryStore(configDirectory, owner).get(questionId);
+    const expected = buildSlackInquiry({ goalId: null, owner, question }, 'en', 'expected');
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CW', text: expected.text }));
+  } finally {
+    await mcp.close(); await server.close(); await port.close(); await client.close(); await conversations.close();
+  }
+});
 
 it.each(['unchanged', 'removed', 'empty'] as const)('posts an MCP-created standalone question and preserves its Slack binding owner when %s', async (condition) => {
   vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
