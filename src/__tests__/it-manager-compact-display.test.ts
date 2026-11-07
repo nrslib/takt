@@ -488,7 +488,8 @@ describe('manager polling and answer cancellation', () => {
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
     const iterator = vi.spyOn(DaemonDisplayFiles.prototype, 'goal').mockRejectedValue(new Error('initial display read rejected'));
     const { client, read } = await mount('en');
-    await waitFor(() => expect(app!.lastFrame()).toContain('initial display read rejected'));
+    // The diagnostic starts with the checkout path, so its wrap point moves with that path's length.
+    await waitFor(() => expect(app!.lastFrame()?.replace(/\s+/g, ' ')).toContain('initial display read rejected'));
     expect(client.getSnapshot().readStatus).toBe('incomplete');
     if (!beforeStartup) {
       vi.setSystemTime(new Date('2026-10-21T10:00:01Z'));
