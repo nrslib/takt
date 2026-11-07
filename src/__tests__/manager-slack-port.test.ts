@@ -31,6 +31,53 @@ function read(items: SnapshotItem[] = []): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
     mode: 'initial', items: (async function* () { yield* items; })(), complete: vi.fn(), cancel: vi.fn() };
 }
+it.each(['reply', 'notice', 'error'] as const)('posts the original %s in a MarkdownBlock and fallback text without changing conversation output', async (kind) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '確認してください');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const record = conversationRecord('/canonical');
+  const message = '## 結果\n**競合の中身**: [PR](https://example.test/pr)\n`**保存する文字**`\n**/*.ts\n\n**/*.js\n説明 ```md\n**x**\n```\n<https://example.test|手順 > 詳細>';
+  const result = kind === 'error' ? { kind, code: 'operation_failed', message } : { kind, message };
+  const output = { kind: 'result' as const, operationId: 'operation', result };
+  const before = structuredClone(output);
+  try {
+    expect(await port.delivery.deliver(record.id, output, { revision: record.revision, stateSequence: 1, operationId: 'operation' }))
+      .toEqual({ kind: 'delivered' });
+    expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message, [{ type: 'markdown', text: message }]);
+    expect(output).toEqual(before);
+  } finally { await port.close(); }
+});
+
+it.each([
+  { length: 11_999, markdown: true },
+  { length: 12_000, markdown: true },
+  { length: 12_001, markdown: false },
+  { length: 24_001, markdown: false },
+  { length: 40_001, markdown: false },
+])('posts a $length-character reply exactly once (markdown=$markdown)', async ({ length, markdown }) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '長い返事をください');
+  const post = vi.mocked(client.postThreadMessage);
+  post.mockClear();
+  const record = conversationRecord('/canonical');
+  const opening = '```ts\n';
+  const closing = '\n```';
+  const message = opening + 'あ'.repeat(length - opening.length - closing.length) + closing;
+  const output = { kind: 'result' as const, operationId: 'operation', result: { kind: 'reply' as const, message } };
+  const before = structuredClone(output);
+  try {
+    expect(await port.delivery.deliver(record.id, output, { revision: record.revision, stateSequence: 1, operationId: 'operation' }))
+      .toEqual({ kind: 'delivered' });
+    const blocks = markdown ? [{ type: 'markdown', text: message }] : undefined;
+    expect(post).toHaveBeenCalledExactlyOnceWith(endpoint, message, blocks);
+    expect(output).toEqual(before);
+  } finally { await port.close(); }
+});
+
 it.each(['ja', 'en'] as const)('posts labeled repository and optional branches with registration buttons in %s', async (lang) => {
   const labels = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
   vi.mocked(getLabel).mockImplementation(labels.getLabel);
@@ -181,7 +228,7 @@ it.each(['reply', 'notice'] as const)('delivers a %s result emitted before admis
   await Promise.all(delivered);
   await port.delivery.deliver(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), { kind: 'result', operationId: 'operation', result: { kind: 'reply', message: 'duplicate' } },
     { revision: 1, stateSequence: 1, operationId: 'operation' });
-  expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply');
+  expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply', [{ type: 'markdown', text: 'reply' }]);
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
 });
 it.each(['open', 'submit'] as const)('reports queue capacity rejection from %s without resubmitting the message', async (stage) => {

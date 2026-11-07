@@ -111,7 +111,7 @@ describe('notifyManagerTurnFailure', () => {
 
 it('delivers a conversation failure without creating goal state, including repeated attempts', async () => {
   doubles.label.mockImplementation((key: string, _language: string, vars: { reason?: string }) =>
-    key === 'manager.notificationHeadings.blocked' ? 'blocked' : `Failure: ${vars.reason}`);
+    key === 'manager.notificationHumanHeadings.blocked' ? 'blocked' : `Failure: ${vars.reason}`);
   for (let attempt = 0; attempt < 2; attempt++) {
     const message = await notifyManagerTurnFailure('/project', undefined, new Error('provider failed token=fixture-secret'));
     expect(message).toBe('blocked\nFailure: provider failed token=[REDACTED]');
