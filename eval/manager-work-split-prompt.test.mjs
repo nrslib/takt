@@ -25,10 +25,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 122 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 124 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 122);
+  assert.equal(suite.tests.length, 124);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -385,7 +385,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
     'escalate-repeated-failure', 'escalate-not-on-first-failure',
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
-    'report-publish-replacement', 'conflicting-calendar-visibility',
+    'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
@@ -875,5 +875,48 @@ test('patrol replay uses the production event prompt including unreadable goals'
     assert.notEqual(JSON.parse(replay).instruction, JSON.parse(buildManagerEventInput(fixture.cwd, {
       kind: 'registered', goalId: fixture.goal.id, createdAt: fixture.snapshotAt,
     })).instruction);
+  }
+});
+
+test('invoice patrol covers two active goals with the export contract evidence confined to review and code', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('existing-invoice-format', lang);
+    const goals = [fixture.goal, ...fixture.additionalGoals];
+    assert.equal(fixture.event.kind, 'patrol');
+    assert.equal(goals.length, 2);
+    assert.equal(new Set(goals.map(({ id }) => id)).size, 2);
+    assert.deepEqual(fixture.event.goalIds, goals.map(({ id }) => id));
+    assert.deepEqual(JSON.parse(buildManagerEventInput(fixture.cwd, fixture.event)).event, fixture.event);
+    for (const goal of goals) {
+      assert.equal(goal.executionStatus, 'active');
+      const reads = fixture.readResults.filter(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.goalId === goal.id);
+      assert.deepEqual(reads.find(({ arguments: args }) => args.path === undefined).result.goal, goalSummary(GoalSchema.parse(goal)));
+      for (const path of ['objective', 'outOfScope', 'acceptanceCriteria', 'constraints', 'workLog', 'questions']) {
+        assert.ok(reads.some(({ arguments: args }) => args.path === path));
+      }
+      const task = fixture.tasks.find(({ goalId }) => goalId === goal.id);
+      assert.equal(task.status, 'running');
+      const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === task.runSlug && args.view === undefined).result;
+      assert.equal(run.currentStep, goal === fixture.goal ? 'fix' : 'implement');
+    }
+    assert.match(fixture.goal.objective, /exportAccountInvoices/);
+    assert.doesNotMatch(JSON.stringify([fixture.goal.objective, fixture.goal.acceptanceCriteria, fixture.goal.workLog]), /csv|json|INV-1/i);
+    assert.match(fixture.goal.outOfScope.join('\n'), /JSON/);
+    const fileReads = fixture.readResults.filter(({ tool }) => tool === 'Read');
+    assert.equal(fileReads.some(({ arguments: args }) => args.file_path.includes('/docs/')), false);
+    const exporter = fileReads.find(({ arguments: args }) => args.file_path.endsWith('/src/invoices/export.ts'));
+    const command = fileReads.find(({ arguments: args }) => args.file_path.endsWith('/src/cli/invoice-export.ts'));
+    assert.match(exporter.result, /z\.enum\(\['csv', 'json'\]\)/);
+    assert.match(exporter.result, /JSON\.stringify\(invoices\)/);
+    assert.match(command.result, /omit\(\{ accountId: true \}\)/);
+    assert.match(command.result, /format: z\.literal\('csv'\)/);
+    const review = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === fixture.tasks[0].runSlug && args.view === 'report').result.report;
+    assert.equal(review.truncated, false);
+    assert.match(review.content, /REJECT/);
+    assert.deepEqual(review.content.match(/INV-\d+/g), ['INV-1']);
+    assert.match(review.content, /JSON/);
+    assert.match(review.content, /exportAccountInvoices/);
+    assert.match(review.content, /exportInvoiceFiles/);
+    assert.equal(review.content, runLogContent(fixture, fixture.tasks[0].runSlug, 0));
   }
 });
