@@ -293,10 +293,12 @@ it('opens the same conversation after daemon stop and restart and accepts a new 
     const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, 'Discuss your goal');
     expect((await readDaemonOwner(fixture.directory))!.pid).not.toBe(owner.pid);
-    expect((await fixture.state())).toMatchObject({ id: before.id, running: null });
+    expect((await fixture.state())).toMatchObject({ id: before.id, running: null,
+      interruptedMessage: 'This turn will be interrupted' });
     await submitManagerText(second, 'A new request after restart');
     await waitForManager(second, fixture.summary.objective);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: { summary: fixture.summary },
+      running: null, interruptedMessage: null }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === second.child.pid)
       .filter(({ command }) => command === 'message')).toHaveLength(1);
     expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'message')).toHaveLength(2);
@@ -589,12 +591,14 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
       event: 'request', pid: tui.child.pid, command: 'abort_turn', operationId,
     })), { timeout: 30000 });
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.interruptedMessage).toBe('Interrupt this turn explicitly'), { timeout: 30000 });
     expect(tui.child.exitCode).toBeNull();
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toEqual([]);
     fixture.release();
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'A new turn after Escape');
     await waitForManager(tui, fixture.summary.objective);
+    expect((await fixture.state())?.interruptedMessage).toBeNull();
     await tui.exit();
   } finally { await fixture.cleanup(); }
 });

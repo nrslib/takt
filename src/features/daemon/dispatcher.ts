@@ -300,7 +300,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     this.queues.markStarted(event.eventId);
     const active = this.newTurn(event, turn);
     this.active.set(event.conversationId, active);
-    this.finish(active, stored.state === 'settling' ? stored.result.outcome : { kind: 'interrupted' }, effects);
+    this.finish(active, stored.state === 'settling' ? stored.result.outcome : { kind: 'interrupted' }, effects,
+      stored.state === 'settling');
   }
 
   private admit(notice: Extract<DispatcherNotice, { kind: 'accept' }>, effects: DispatcherEffect[]): void {
@@ -446,7 +447,16 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     effects.push(effect(() => this.dependencies.stateRequests.handle(turn, request, requestSignal), (result) => ({ kind: 'request_completed', turn, id, result })));
   }
 
-  private finish(active: ActiveTurn, outcome: TurnOutcome, effects: DispatcherEffect[]): void {
+  private finish(active: ActiveTurn, outcome: TurnOutcome, effects: DispatcherEffect[], preserveOutcome = false): void {
+    const event = active.event.event;
+    if (!preserveOutcome && outcome.kind === 'interrupted' && outcome.change?.interruptedMessage === undefined
+      && event.kind === 'human_command' && event.command.kind === 'message') {
+      outcome = { ...outcome, change: {
+        // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
+        operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,
+        interruptedMessage: event.command.text,
+      } };
+    }
     active.phase = 'settling';
     active.result = { ...active.turn, event: active.event, outcome };
     const { requestAbort } = active;

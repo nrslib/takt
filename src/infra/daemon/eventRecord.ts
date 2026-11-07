@@ -70,7 +70,9 @@ export const ConversationChangeSchema = z.object({
   session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
-}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined) satisfies z.ZodType<ConversationChange>;
+  interruptedMessage: text.nullable().optional(),
+}).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
+  || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
   z.object({ kind: z.literal('notice'), message: text }).strict(),

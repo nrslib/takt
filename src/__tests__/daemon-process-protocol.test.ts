@@ -126,6 +126,15 @@ describe('daemon turn process protocol', () => {
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(value)), common.launchId)).toEqual(value);
   });
 
+  it('transfers a legacy interrupted message larger than one MiB in start_turn', () => {
+    const interruptedMessage = 'legacy'.repeat(256 * 1024);
+    const value = { ...common, kind: 'start_turn', input: {
+      event: acceptedEvent, turn, state: { ...turnState(), interruptedMessage },
+    } };
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(1024 * 1024);
+    expect(parseDaemonProcessMessage(value, common.launchId)).toEqual(value);
+  });
+
   it.each([
     null, 'codex', { provider: 'unknown' }, { provider: null }, { model: '' }, { model: 123 },
     { provider: 'codex', extra: true },

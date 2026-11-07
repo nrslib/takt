@@ -26,6 +26,7 @@ export interface ConversationTurnState {
   revision: number;
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
+  interruptedMessage?: string | null;
 }
 
 /** 同じ operationId の再反映は、版の検証より先に保存済みの結果を返す。 */
@@ -35,6 +36,7 @@ export interface ConversationChange {
   session?: ConversationSession;
   proposal?: { revision: number; pending: ConversationRecord['pending'] };
   approval?: ConversationRecord['approval'];
+  interruptedMessage?: string | null;
 }
 
 export interface TurnStart {

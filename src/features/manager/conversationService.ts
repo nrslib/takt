@@ -57,6 +57,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
+      let interruptedMessageDelivered = false;
       try {
         io.signal.throwIfAborted();
         const candidate = eventGoalReference(event);
@@ -130,8 +131,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             language = resolved.language;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
             const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
+            const interruptedMessage = state.current.interruptedMessage;
+            const prompt = [
+              ...(interruptedMessage == null ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
+              command.text,
+              ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
+            ].join('\n\n');
             const output = await resolved.executor.execute({
-              prompt: [command.text, ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : [])].join('\n\n'),
+              prompt,
               sessionId: state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
@@ -139,6 +146,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               patrol: event.kind === 'patrol',
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
+            interruptedMessageDelivered = interruptedMessage != null;
             io.signal.throwIfAborted();
             const latest = assignment.kind === 'daemon' ? assignment
               : await resolveCurrentManagerAssignment(identityOf(assignment), configDirectory);
@@ -158,6 +166,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
+              ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
               ...(human && assignment.kind !== 'daemon' ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) };
           } finally { await resolved.release?.(); }
@@ -179,13 +188,17 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         return { kind: 'completed', result };
       } catch (error) {
         if (io.signal.aborted) {
-          return { kind: 'interrupted', change: state.change({ session: { ...state.current.session, sessionId: null } }) };
+          // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
+          return { kind: 'interrupted', ...(human && command.kind === 'message'
+            ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
+              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
           const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);
           if (notice !== undefined) io.progress(notice);
         }
-        return { kind: 'completed', result: conversationErrorResult(error, language) };
+        return { kind: 'completed', result: conversationErrorResult(error, language),
+          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null }) } : {}) };
       } finally {
         if (assignment.kind !== 'daemon' && command.kind === 'message') {
           for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);

@@ -9,7 +9,7 @@ import { AcceptedEventSchema, EventRecordSchema, isRetiredWatchEvent, StoredResu
 import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
 
-const MAX_RECORD_BYTES = 4 * 1024 * 1024;
+const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
