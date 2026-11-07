@@ -279,25 +279,24 @@ interface RunsRootSnapshot {
   readonly fingerprint: { readonly dev: number; readonly ino: number };
 }
 
-/**
- * Resolve and fingerprint the runs directory for a read operation.
- *
- * @param location - Run store filesystem locations and optional expected fingerprint
- * @returns The validated runs directory and its device/inode fingerprint
- * @throws Error if the runs directory is invalid or its fingerprint does not match the expected one
- */
-async function captureRunsRoot(location: RunStoreLocation): Promise<RunsRootSnapshot> {
+async function resolveRunsRootDirectory(location: RunStoreLocation): Promise<string> {
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
-  const directory = await resolveContainedDirectory(stateDirectory, runsDirectory, 'Runs directory');
+  return resolveContainedDirectory(stateDirectory, runsDirectory, 'Runs directory');
+}
+
+/**
+ * Fingerprint a resolved runs directory for a read operation.
+ *
+ * @param directory - Validated runs directory path
+ * @returns The validated runs directory and its device/inode fingerprint
+ * @throws Error if the runs directory is invalid
+ */
+async function captureRunsRoot(directory: string): Promise<RunsRootSnapshot> {
   const stats = await lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error('Runs directory must be a regular directory');
   }
   const fingerprint = { dev: stats.dev, ino: stats.ino };
-  const expected = location.runsRootFingerprint;
-  if (expected !== undefined && (expected.dev !== fingerprint.dev || expected.ino !== fingerprint.ino)) {
-    throw new Error('Runs directory fingerprint changed');
-  }
   return { directory, fingerprint };
 }
 
@@ -312,7 +311,7 @@ async function verifyRunsRootSnapshot(
   location: RunStoreLocation,
   snapshot: RunsRootSnapshot,
 ): Promise<void> {
-  const current = await captureRunsRoot(location);
+  const current = await captureRunsRoot(await resolveRunsRootDirectory(location));
   if (
     current.directory !== snapshot.directory
     || current.fingerprint.dev !== snapshot.fingerprint.dev
@@ -405,17 +404,18 @@ function summarize(meta: RunMeta) {
  * Read and summarize the runs in the configured runs directory.
  *
  * @param location - Run store filesystem locations
- * @returns Run summaries and warnings for entries that fail to load for non-`ENOENT` reasons. An initially missing runs directory without an expected fingerprint returns `{ runs: [], warnings: [] }`; an individual `ENOENT` entry is omitted without a warning
- * @throws Error if the runs directory cannot be validated or read, its expected fingerprint does not match, or its identity changes during the read. An initial missing runs directory is tolerated only when no expected fingerprint is supplied
+ * @returns Run summaries and warnings for entries that fail to load for non-`ENOENT` reasons. An initially missing runs directory returns `{ runs: [], warnings: [] }`; an individual `ENOENT` entry is omitted without a warning
+ * @throws Error if the runs directory cannot be validated or read, or its identity changes during the read
  */
 export async function readRunCollection(location: RunStoreLocation) {
-  let root: RunsRootSnapshot;
+  let directory: string;
   try {
-    root = await captureRunsRoot(location);
+    directory = await resolveRunsRootDirectory(location);
   } catch (error) {
-    if (isMissing(error) && location.runsRootFingerprint === undefined) return { runs: [], warnings: [] };
+    if (isMissing(error)) return { runs: [], warnings: [] };
     throw error;
   }
+  const root = await captureRunsRoot(directory);
   const entries = await readDirectory(root.directory);
   await verifyRunsRootSnapshot(location, root);
   const warningsFromEntries = entries
@@ -1119,7 +1119,7 @@ export interface RunOccurrenceArtifacts {
 
 export async function readRunDetail(location: RunStoreLocation, slug: string) {
   assertRunSlug(slug);
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const [reports, logArtifacts] = await Promise.all([
     loadReports(location, snapshot, meta),
@@ -1136,7 +1136,7 @@ export async function readRunOccurrenceArtifacts(
 ): Promise<RunOccurrenceArtifacts> {
   assertRunSlug(slug);
   if (occurrenceId.length === 0) throw new Error('Occurrence id is required');
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const logArtifacts = await loadLogArtifacts(location, snapshot, meta);
   const selectedOccurrence = logArtifacts.graphSummary.occurrences.find(
@@ -1185,7 +1185,7 @@ export async function resolveRunWatchDirectories(
   slug: string,
 ): Promise<readonly string[]> {
   assertRunSlug(slug);
-  const snapshot = await captureRunsRoot(location);
+  const snapshot = await captureRunsRoot(await resolveRunsRootDirectory(location));
   const meta = await loadRunMeta(location, snapshot, slug);
   const { stateDirectory, runsDirectory } = resolveRunStoreLocation(location);
   const runRoot = await resolveRegularPath(resolve(snapshot.directory, slug), 'Run root');

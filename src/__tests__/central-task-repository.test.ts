@@ -8,6 +8,7 @@ import { CentralTaskCasError, CentralTaskRepository, parseCentralTasks } from '.
 import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import { saveCloneMeta } from '../infra/task/clone.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
+import { readRunCollection, readRunDetail } from '../features/web-ui/run-store.js';
 import {
   executeCentralTaskAction,
   getCentralTaskActions,
@@ -38,7 +39,6 @@ async function setup() {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, projectDirectory, project, repository };
 }
@@ -64,6 +64,20 @@ describe('central task CAS repository', () => {
     expect(stateDirectory.mode & 0o777).toBe(0o700);
     expect(stateFile.mode & 0o777).toBe(0o600);
     expect(tasksFile.mode & 0o777).toBe(0o600);
+  });
+
+  it('creates central state without directory fingerprints', async () => {
+    const { project, repository } = await setup();
+    const stored = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
+
+    expect(stored).toMatchObject({
+      stateId: project.stateId,
+      locationId: project.locationId,
+      canonicalDirectory: project.canonicalDirectory,
+    });
+    expect(stored).not.toHaveProperty('fingerprint');
+    expect(stored).not.toHaveProperty('runsRootFingerprint');
+    await expect(repository.readTasks()).resolves.toEqual([]);
   });
 
   it('recovers legacy terminal worktree context from owned central metadata', async () => {
@@ -456,7 +470,6 @@ describe('central task CAS repository', () => {
       locationId: otherProject.locationId,
       canonicalDirectory: otherProject.canonicalDirectory,
       displayName: otherProject.displayName,
-      fingerprint: otherProject.fingerprint,
     });
     expect(otherProject.stateId).not.toBe(project.stateId);
     await expect(repository.enqueueAndClaim({ task: 'namespace-a', workflow: 'default', worktree: false })).resolves.toBeDefined();
@@ -484,28 +497,29 @@ describe('central task CAS repository', () => {
     })).resolves.toMatchObject({ status: 'completed' });
   });
 
-  it('revalidates the project fingerprint before a worker attaches to state', async () => {
-    const { globalConfigDirectory, projectDirectory, project } = await setup();
-    const replacementPath = join(projectDirectory, '..', 'project-replacement');
-    await mkdir(replacementPath);
+  it('reattaches to the existing state after a directory is recreated at the same path', async () => {
+    const { globalConfigDirectory, projectDirectory, project, repository } = await setup();
+    const reserved = await repository.enqueueAndClaim({ task: 'keep after clone', workflow: 'default', worktree: false });
+    const replacementPath = await createTemporaryDirectory('takt-project-replacement-');
     await rm(projectDirectory, { recursive: true, force: true });
     await rename(replacementPath, projectDirectory);
 
-    await expect(CentralTaskRepository.openByState({
+    const reopened = await CentralTaskRepository.openByState({
       globalConfigDirectory,
       stateId: project.stateId,
-    })).rejects.toThrow(/fingerprint|identity|canonical/i);
+    });
+    expect(reopened.state.stateId).toBe(project.stateId);
+    await expect(reopened.readTask(reserved.task.taskId)).resolves.toMatchObject({ runId: reserved.runId });
   });
 
-  it('linearizes a project swap with adopt under the state lock', async () => {
+  it('adopts the reserved task after a directory is recreated at the same path', async () => {
     const { projectDirectory, repository } = await setup();
     const reserved = await repository.enqueueAndClaim({
       task: 'swap during adopt verification',
       workflow: 'default',
       worktree: false,
     });
-    const replacementPath = join(projectDirectory, '..', 'project-replacement');
-    await mkdir(replacementPath);
+    const replacementPath = await createTemporaryDirectory('takt-project-replacement-');
 
     await expect(repository.adoptVerified({
       taskId: reserved.task.taskId,
@@ -515,8 +529,8 @@ describe('central task CAS repository', () => {
     }, async () => {
       await rm(projectDirectory, { recursive: true, force: true });
       await rename(replacementPath, projectDirectory);
-    })).rejects.toThrow(/identity|fingerprint|registered/i);
-    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
+    })).resolves.toMatchObject({ status: 'running', runId: reserved.runId });
+    await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'running' });
   });
 
   it('rejects an atomic state replacement before adopting the starting task', async () => {
@@ -543,23 +557,84 @@ describe('central task CAS repository', () => {
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'starting' });
   });
 
-  it('compares the persisted state fingerprint with the open options', async () => {
+  it.each([
+    ['fingerprint', 'dev'],
+    ['fingerprint', 'ino'],
+    ['runsRootFingerprint', 'dev'],
+    ['runsRootFingerprint', 'ino'],
+  ] as const)('restores tasks and run history despite a saved %s %s mismatch', async (field, component) => {
     const { globalConfigDirectory, project, repository } = await setup();
+    const reserved = await repository.enqueueAndClaim({ task: 'keep history', workflow: 'default', worktree: false });
+    const runRoot = join(repository.paths.runsDirectory, reserved.runId);
+    await mkdir(join(runRoot, 'reports'), { recursive: true });
+    await mkdir(join(runRoot, 'logs'));
+    await writeFile(join(runRoot, 'meta.json'), JSON.stringify({
+      task: 'keep history', workflow: 'default', runSlug: reserved.runId,
+      runRoot: `runs/${reserved.runId}`, reportDirectory: `runs/${reserved.runId}/reports`,
+      contextDirectory: `runs/${reserved.runId}/context`, logsDirectory: `runs/${reserved.runId}/logs`,
+      status: 'running', startTime: '2026-08-24T00:00:00.000Z',
+    }));
+    await writeFile(join(runRoot, 'reports', 'result.md'), 'preserved report');
     const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
-    const fingerprint = persisted.fingerprint as { dev: number; ino: number };
+    const current = await stat(field === 'fingerprint' ? project.canonicalDirectory : repository.paths.runsDirectory);
     await writeFile(repository.paths.stateFile, JSON.stringify({
       ...persisted,
-      fingerprint: { dev: fingerprint.dev + 1, ino: fingerprint.ino },
+      [field]: { dev: current.dev, ino: current.ino, [component]: current[component] + 1 },
     }));
 
-    await expect(CentralTaskRepository.open({
+    const reopened = await CentralTaskRepository.open({
       globalConfigDirectory,
       stateId: project.stateId,
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
-    })).rejects.toThrow(/identity|fingerprint/i);
+    });
+    const attached = await CentralTaskRepository.openByState({ globalConfigDirectory, stateId: project.stateId });
+    for (const handle of [reopened, attached]) {
+      expect(handle.state.stateId).toBe(project.stateId);
+      await expect(handle.verifyProjectIdentity()).resolves.toBeUndefined();
+      await expect(handle.readTask(reserved.task.taskId)).resolves.toMatchObject({ runIds: [reserved.runId] });
+      expect((await readRunCollection(handle.paths)).runs.map((run) => run.slug)).toEqual([reserved.runId]);
+      await expect(readRunDetail(handle.paths, reserved.runId)).resolves.toMatchObject({
+        reports: [expect.objectContaining({ content: 'preserved report' })],
+      });
+    }
+  });
+
+  it.each(['fingerprint', 'runsRootFingerprint'] as const)(
+    'ignores a persisted %s change while the same repository adopts a task', async (field) => {
+      const { project, repository } = await setup();
+      const reserved = await repository.enqueueAndClaim({ task: 'persisted change', workflow: 'default', worktree: false });
+      await expect(repository.verifyProjectIdentity()).resolves.toBeUndefined();
+      const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
+      const current = await stat(field === 'fingerprint' ? project.canonicalDirectory : repository.paths.runsDirectory);
+
+      await expect(repository.adoptVerified({
+        taskId: reserved.task.taskId,
+        generation: reserved.task.generation,
+        executionId: reserved.executionId,
+        ownerToken: reserved.ownerToken,
+      }, async () => {
+        await writeFile(repository.paths.stateFile, JSON.stringify({
+          ...persisted, [field]: { dev: current.dev + 1, ino: current.ino },
+        }));
+      })).resolves.toMatchObject({ status: 'running', runId: reserved.runId });
+      await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({ status: 'running' });
+    },
+  );
+
+  it.each([undefined, { dev: 1 }, null])('ignores obsolete central fingerprint values %j', async (fingerprint) => {
+    const { globalConfigDirectory, project, repository } = await setup();
+    const persisted = JSON.parse(await readFile(repository.paths.stateFile, 'utf8')) as Record<string, unknown>;
+    await writeFile(repository.paths.stateFile, JSON.stringify({
+      ...persisted, fingerprint, runsRootFingerprint: fingerprint,
+    }));
+
+    const reopened = await CentralTaskRepository.openByState({ globalConfigDirectory, stateId: project.stateId });
+    expect(reopened.state.stateId).toBe(project.stateId);
+    await expect(reopened.verifyProjectIdentity()).resolves.toBeUndefined();
+    await expect(reopened.enqueueAndClaim({ task: 'restored', workflow: 'default', worktree: false }))
+      .resolves.toMatchObject({ task: expect.objectContaining({ task: 'restored', status: 'starting' }) });
   });
 
   it('claims one queued task for the next detached worker after the active one terminates', async () => {
@@ -900,7 +975,6 @@ describe('central task CAS repository', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     })).rejects.toThrow(/unsupported/i);
 
     await writeFile(repository.paths.stateFile, JSON.stringify(repository.state));
@@ -911,7 +985,6 @@ describe('central task CAS repository', () => {
       locationId: project.locationId,
       canonicalDirectory: project.canonicalDirectory,
       displayName: project.displayName,
-      fingerprint: project.fingerprint,
     })).rejects.toThrow(/incomplete/i);
   });
 
