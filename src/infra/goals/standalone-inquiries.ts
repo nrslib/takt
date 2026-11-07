@@ -136,10 +136,6 @@ export class StandaloneInquiryStore {
     return pending;
   }
 
-  async listPendingPublications(): Promise<GoalQuestion[]> {
-    return (await this.list()).filter((question) => question.answerPublicationPending === true);
-  }
-
   async markAnswerPublished(id: string): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
     const question = await this.read(path, id);

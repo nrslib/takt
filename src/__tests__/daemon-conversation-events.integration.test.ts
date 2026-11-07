@@ -146,6 +146,134 @@ it.each(['tui', 'slack'] as const)('delivers a saved standalone %s answer throug
 });
 
 it.each([
+  { source: 'tui' as const, restart: false },
+  { source: 'slack' as const, restart: false },
+  { source: 'tui' as const, restart: true },
+  { source: 'slack' as const, restart: true },
+])('deduplicates a repository $source answer published before its receipt is recorded (restart=$restart)', async ({ source, restart }) => {
+  const watchers = vi.spyOn(watcherModule, 'startDaemonWatchers').mockImplementation(() => ({
+    changed() {}, async drain() {}, async close() {},
+  }));
+  let f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const owner = { kind: 'repository' as const, repositoryDirectory: f.repository };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const questionInput = { body: 'Which goal?',
+    operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } };
+  const question = await store.create(questionInput);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'answer-session', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'answer-retry', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>) => {
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const target = { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' };
+  const receive = async (name: string) => {
+    const receipts = vi.spyOn(f.dispatcher, 'accept');
+    await receiveInboxChange({ target, path: join(inbox, name), removed: false, generation: 'answer', value: {} },
+      files, f.conversations, f.dispatcher);
+    const receipt = await receipts.mock.results.at(-1)!.value;
+    receipts.mockRestore();
+    return receipt;
+  };
+  const finishAnswers = async () => {
+    await f.dispatcher.drain();
+    for (const call of f.runner.calls) if (!call.finished) await perform(call);
+    await f.dispatcher.drain();
+  };
+  const reached = deferred<void>();
+  const release = deferred<void>();
+  const mark = vi.spyOn(StandaloneInquiryStore.prototype, 'markAnswerPublished').mockImplementationOnce(async () => {
+    reached.resolve();
+    await release.promise;
+    if (restart) throw new Error('Publication receipt interrupted');
+    return store.markAnswerPublished(question.id);
+  });
+  accepted(await f.dispatcher.accept({ ...input('answer-before-receipt', f.id), source,
+    event: { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text: 'Export' }, source } } }));
+  const answering = perform(await f.runner.started(1));
+  try {
+    await reached.promise;
+    expect((await store.get(question.id)).answerPublicationPending).toBe(true);
+    const [original] = await readdir(inbox);
+    expect(original).toBeDefined();
+    const firstReceipt = await receive(original!);
+    if (restart) {
+      release.resolve();
+      expect(await answering).toMatchObject({ kind: 'completed', result: { kind: 'error', answerSaved: true } });
+      await finishAnswers();
+      expect(execute).toHaveBeenCalledOnce();
+      await f.close();
+      f = await fixture();
+    }
+    await watchers.mock.calls.at(-1)![0].source.inquiries();
+    const [retry] = await readdir(inbox);
+    expect(retry).toBeDefined();
+    expect(retry).not.toBe(original);
+    const retryReceipt = await receive(retry!);
+    if (!restart) {
+      release.resolve();
+      expect(await answering).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+    }
+    await finishAnswers();
+    const saved = await store.get(question.id);
+    const expected = [inquiryAnswerMessage(question.id, saved.answer!, question.body), directorSpeaker].join('\n\n');
+    expect.soft(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected]);
+    expect.soft(retryReceipt).toEqual(firstReceipt);
+    expect(saved.answerPublicationPending).toBeUndefined();
+    expect(await readdir(inbox)).toEqual([]);
+
+    const other = await store.create(questionInput);
+    expect(other.id).not.toBe(question.id);
+    const answered = await store.answerForPublication(other.id, { text: 'Export' }, source);
+    await watchers.mock.calls.at(-1)![0].source.inquiries();
+    const [next] = await readdir(inbox);
+    expect(await receive(next!)).not.toEqual(firstReceipt);
+    await finishAnswers();
+    expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected,
+      [inquiryAnswerMessage(other.id, answered.answer!, other.body), directorSpeaker].join('\n\n')]);
+  } finally {
+    release.resolve();
+    await answering;
+    mark.mockRestore();
+  }
+});
+
+it('retains a standalone answer after storage rejection and consumes it after successful admission', async () => {
+  const f = await fixture();
+  const store = new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository });
+  const question = await store.create({ body: 'Which goal?' });
+  const answered = await store.answer(question.id, { text: 'Export' });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: null, questionId: question.id, questionBody: question.body, answer: answered.answer! });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const path = join(inbox, (await readdir(inbox))[0]!);
+  const change = { target: { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' },
+    path, removed: false, generation: 'answer', value: {} };
+  const accept = vi.fn<typeof f.dispatcher.accept>().mockResolvedValueOnce({ kind: 'rejected', reason: 'storage' })
+    .mockImplementation((event) => f.dispatcher.accept(event));
+  await expect(receiveInboxChange(change, files, f.conversations, { accept })).rejects.toThrow();
+  expect(await readFile(path, 'utf8')).toContain(question.id);
+  expect(f.runner.calls).toHaveLength(0);
+  await receiveInboxChange(change, files, f.conversations, { accept });
+  expect(accept.mock.calls[1]![0]).toEqual(accept.mock.calls[0]![0]);
+  const turn = await f.runner.started(1);
+  expect(turn.input.event.event).toMatchObject({ kind: 'director_message', text: inquiryAnswerMessage(question.id, answered.answer!, question.body) });
+  await f.runner.finish(turn);
+  expect(f.runner.calls).toHaveLength(1);
+  await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([
   { source: 'tui' as const, empty: false, operation: true },
   { source: 'slack' as const, empty: false, operation: true },
   { source: 'tui' as const, empty: true, operation: true },
