@@ -524,6 +524,34 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
   });
 }
 
+test('two-goal fixture withdraws the specified goal question without changing the other goal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-question-target-'));
+  try {
+    const provider = fakeProvider(async ({ options, calls, client, context }) => {
+      if (calls !== 1) return;
+      const store = new GoalStore(options.cwd);
+      const before = await store.get(context.goal.id);
+      const goals = JSON.parse((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: options.cwd } })).content[0].text).goals;
+      const target = goals.find(({ id }) => id !== context.goal.id);
+      const args = { cwd: options.cwd, goalId: target.id };
+      const asked = await client.callTool({ name: 'takt_ask_goal_question', arguments: { ...args, body: '確認記録の保存先を教えてください。' } });
+      assert.notEqual(asked.isError, true);
+      const { questionId } = JSON.parse(asked.content[0].text);
+      const withdrawn = await client.callTool({ name: 'takt_withdraw_goal_question', arguments: {
+        ...args, questionId, reason: '保存先を確認できたため。',
+      } });
+      assert.notEqual(withdrawn.isError, true, withdrawn.content[0].text);
+      assert.deepEqual(JSON.parse(withdrawn.content[0].text), { goalId: target.id, questionId, questionStatus: 'withdrawn' });
+      assert.equal((await store.get(target.id)).questions.find(({ id }) => id === questionId).status, 'withdrawn');
+      assert.deepEqual(await store.get(context.goal.id), before);
+    });
+    const trial = await runManagerExecution(config('two-goal-pr-execution'), root, new AbortController().signal, provider);
+    assert.equal(trial.error, undefined);
+    assert.equal(trial.complete, true);
+    assert.equal(trial.cleaned, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 for (const repeated of [false, true]) {
   test(`execution observations ${repeated ? 'reject repeated queries' : 'accept different fields queried once'} inside a separately invoked script`, async () => {
     const root = mkdtempSync(join(tmpdir(), 'manager-hidden-wait-'));

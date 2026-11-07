@@ -12,17 +12,16 @@ function observesExternalCondition(args) {
 
 function gradeNoWait(trial, events, checks, verification) {
   const calls = events.filter(({ type, turn }) => type === 'mcp_call' && turn === verification.index);
-  const commands = events.filter(({ type, turn, data }) => type === 'tool_use' && turn === verification.index && data.tool === 'Bash')
-    .map(({ data }) => data.input.command);
-  const observations = checks.filter(({ kind, at }) => kind === 'external' && at >= verification.startedAt && at <= verification.finishedAt);
-  if (observations.some(({ watch }) => watch)) return result(false, 'Waited for external state using a watch command');
-  const stateQueries = checks.filter(({ kind, args }) => kind === 'external' && observesExternalCondition(args));
-  for (const { startedAt, finishedAt } of trial.turns) {
-    const queries = stateQueries.filter(({ at }) => at >= startedAt && at <= finishedAt).map(({ args }) => JSON.stringify(args));
+  for (const { index, startedAt, finishedAt } of trial.turns) {
+    const observations = checks.filter(({ kind, at }) => kind === 'external' && at >= startedAt && at <= finishedAt);
+    if (observations.some(({ watch }) => watch)) return result(false, 'Waited for external state using a watch command');
+    const commands = events.filter(({ type, turn, data }) => type === 'tool_use' && turn === index && data.tool === 'Bash')
+      .map(({ data }) => data.input.command);
+    if (commands.some((command) => /^\s*gh\s+(?:run\s+watch\b|pr\s+checks\b[^\n]*\s--watch\b)/u.test(command))) {
+      return result(false, 'Started an external watch in Bash');
+    }
+    const queries = observations.filter(({ args }) => observesExternalCondition(args)).map(({ args }) => JSON.stringify(args));
     if (new Set(queries).size !== queries.length) return result(false, 'Repeated an external state query within the same turn, including queries inside scripts');
-  }
-  if (commands.some((command) => /^\s*gh\s+(?:run\s+watch\b|pr\s+checks\b[^\n]*\s--watch\b)/u.test(command))) {
-    return result(false, 'Started an external watch in Bash');
   }
   const followup = trial.turns.find(({ label }) => label === 'followup');
   if (!followup?.finishedAt || !followup.response?.message || followup.timedOut) return result(false, 'The executor did not accept the next input');

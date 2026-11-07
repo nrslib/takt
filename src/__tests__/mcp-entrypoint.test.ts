@@ -2164,6 +2164,21 @@ describe('workflow detail MCP', () => {
       expect(builtin.steps.find(({ name }: { name: string }) => name === 'sync').effects).toEqual(expect.any(Array));
       const page = await read({ workflow: 'merge-prepare', limit: 1, offset: 1 });
       expect(page).toMatchObject({ returnedCount: 1, nextOffset: 2, truncated: true });
+      writeFileSync(join(nested, 'missing-call.yaml'), stringifyYaml({ name: 'missing-call', initial_step: 'before', steps: [
+        { name: 'before', mode: 'system', rules: [{ condition: 'when(true)', next: 'missing' }] },
+        { name: 'missing', kind: 'workflow_call', call: './absent.yaml', rules: [{ condition: 'COMPLETE', next: 'after' }] },
+        { name: 'after', mode: 'system', rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ] }));
+      const partial = await read({ workflow: join(nested, 'missing-call.yaml') });
+      expect(partial).toMatchObject({ totalCount: 3, returnedCount: 3, nextOffset: null, steps: [
+        { name: 'before', kind: 'system' },
+        { name: 'missing', kind: 'workflow_call', workflow_call: { call: './absent.yaml', error: expect.any(String) } },
+        { name: 'after', kind: 'system' },
+      ] });
+      const missingTarget = await client.callTool({ name: 'takt_get_workflow', arguments: {
+        cwd, workflow: join(nested, 'missing-call.yaml'), callPath: [1],
+      } });
+      expect(missingTarget.isError).toBe(true);
       const outside = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: configDirectory, workflow: 'selected' } });
       expect(outside.isError).toBe(true);
     } finally {

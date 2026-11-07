@@ -173,7 +173,7 @@ function localServer(state, saveEvent) {
       }
       if (name === 'takt_notify_goal') return { saved: true };
       if (name === 'takt_withdraw_goal_question') {
-        const goal = await state.store.update(state.goal.id, (current) => withdrawGoalQuestion(current, args.questionId, args.reason));
+        const goal = await state.store.update(args.goalId, (current) => withdrawGoalQuestion(current, args.questionId, args.reason));
         return { goalId: goal.id, questionId: args.questionId, questionStatus: 'withdrawn' };
       }
       throw new Error('This isolated fixture supports verification and work records only');

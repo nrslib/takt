@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gradeExecution } from './manager-work-split-execution.mjs';
+import { sdkMessageToStreamEvent } from '../../dist/infra/claude/stream-converter.js';
 
 function evidence(caseId) {
   const turn = (index, label) => ({ index, label, startedAt: 0, finishedAt: 100, response: { message: 'Observed result', summary: null } });
@@ -234,6 +235,22 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
     for (const at of [140, 150]) value.checks.push({ ...observation, at });
     assert.equal(grade(value).pass, false);
   });
+
+  test(`${caseId}: rejects a single watch observation or Bash watch command in every turn`, () => {
+    for (const [turn, at] of [[1, -50], [2, 40], [3, 140]]) {
+      for (const command of [undefined, 'gh run watch 9001', 'gh pr checks 1951 --watch']) {
+        const value = noWaitEvidence(caseId);
+        Object.assign(value.trial.turns[0], { startedAt: -100, finishedAt: -1 });
+        Object.assign(value.trial.turns[2], { startedAt: 101, finishedAt: 200 });
+        if (command === undefined) {
+          value.checks.push({ kind: 'external', args: ['run', 'watch', '9001'], watch: true, at });
+        } else {
+          value.events.push({ type: 'tool_use', turn, at, data: { tool: 'Bash', input: { command } } });
+        }
+        assert.equal(grade(value).pass, false, `turn=${turn}, command=${command}`);
+      }
+    }
+  });
 }
 
 test('two-goal preparation rejects duplicate submissions, wrong until, missing enqueue and missing saved task', () => {
@@ -305,6 +322,20 @@ test('finite checks accept the matching result from TaskOutput including batched
     const result = grade(value);
     assert.equal(result.pass, true, result.reason);
   }
+});
+
+test('finite checks accept successful Bash stdout after production Claude stream conversion', () => {
+  const value = noWaitEvidence('finite-check-external-execution');
+  value.events = value.events.filter(({ type }) => type !== 'tool_result');
+  sdkMessageToStreamEvent({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'test', content: 'Bash completed' }] },
+    tool_use_result: { stdout: 'PASS inventory import\n[TAKT_CHECK_RESULT:1]', stderr: '', is_error: false },
+    session_id: 'session-1', parent_tool_use_id: null,
+  }, (event) => value.events.push({ ...event, turn: 2, at: 95 }), true);
+
+  const result = grade(value);
+  assert.equal(result.pass, true, result.reason);
 });
 
 
