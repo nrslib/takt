@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockForceExitAfterOpenCodeCleanup } = vi.hoisted(() => ({
   mockForceExitAfterOpenCodeCleanup: vi.fn(() => Promise.resolve()),
@@ -16,12 +16,13 @@ import * as config from '../infra/config/index.js';
 import * as githubPr from '../infra/github/pr.js';
 import * as gitDetection from '../infra/git/detect.js';
 import * as taskClone from '../infra/task/clone-exec.js';
-import type { CacciaDependencies, CacciaInput, CacciaReviewThread } from '../features/caccia/index.js';
+import type { CacciaDependencies, CacciaInput, CacciaReviewThread, CacciaWorkflowDecision } from '../features/caccia/index.js';
 import {
   resolveCacciaSettings,
   runCaccia,
 } from '../features/caccia/index.js';
 import { createCacciaAbortScope } from '../features/caccia/abortSignal.js';
+import { CacciaWorkflowError, assertCacciaWorkflowComplete } from '../features/caccia/workflow-report.js';
 import type { CacciaConfig } from '../core/models/config-types.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { TaskPrefixWriter } from '../shared/ui/TaskPrefixWriter.js';
@@ -32,6 +33,10 @@ const thread = (id: string, author = 'coderabbitai'): CacciaReviewThread => ({
   body: `Finding ${id}`,
   replies: [],
 });
+
+function completeWorkflowReport(report: { reportPath: string; decisions: CacciaWorkflowDecision[] }) {
+  return { ...report, outcome: 'complete' as const, reason: '' };
+}
 
 function createHarness(threadPages: CacciaReviewThread[][] = [[]]) {
   const events: string[] = [];
@@ -54,7 +59,7 @@ function createHarness(threadPages: CacciaReviewThread[][] = [[]]) {
       cloneNumber += 1;
       const cwd = `/tmp/caccia-clone-${cloneNumber}`;
       events.push(`clone:${cwd}`);
-      return { cwd };
+      return { cwd, title: 'Review fixes', body: 'Address CodeRabbit findings.' };
     }),
     executeWorkflow: vi.fn<CacciaDependencies['executeWorkflow']>(async ({ cwd, task }) => {
       events.push(`workflow:${cwd}`);
@@ -64,6 +69,8 @@ function createHarness(threadPages: CacciaReviewThread[][] = [[]]) {
       }>;
       return {
         reportPath: '/project/.takt/runs/caccia/report.md',
+        outcome: 'complete' as const,
+        reason: '',
         decisions: threadPayload.map(({ thread_id }) => ({
           threadId: thread_id,
           valid: true,
@@ -150,8 +157,8 @@ describe('linked Caccia pushed head handoff', () => {
 
   it('does not record a head when there is no new commit', async () => {
     const { dependencies } = createHarness([[thread('finding')], []]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({ reportPath: '/report',
-      decisions: [{ threadId: 'finding', valid: false, reason: 'Intentional behavior' }] });
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({ reportPath: '/report',
+      decisions: [{ threadId: 'finding', valid: false, reason: 'Intentional behavior' }] }));
     vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'reviewed-head', pushed: false });
     const onPushedHead = vi.fn();
     expect(await runCaccia({
@@ -193,6 +200,151 @@ describe('linked Caccia pushed head handoff', () => {
     }, dependencies);
     expect(result).toMatchObject({ outcome: 'limit', headSha: 'pushed-head-1', unresolvedCount: 1 });
     expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+  });
+});
+
+describe('Caccia workflow report parsing', () => {
+  it('sanitizes report diagnostics without replacing their explanation with an error category', () => {
+    const failure = new CacciaWorkflowError('ENOENT permission denied; design decision needed for T4, T5; /private/project/file.ts; @reviewer; token=ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+    expect(failure.message).toContain('ENOENT permission denied; design decision needed for T4, T5');
+    expect(failure.message).not.toContain('/private/project/file.ts');
+    expect(failure.message).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+    expect(failure.message).toContain('＠reviewer');
+  });
+
+  it('rejects a complete report when its workflow failed and preserves both reasons', () => {
+    expect(() => assertCacciaWorkflowComplete({ outcome: 'complete', reason: 'Report explanation',
+      decisions: [{ threadId: 'T1', valid: false, reason: 'Intentional' }] }, ['T1'], 'Provider failed'))
+      .toThrow('Report explanation; Provider failed');
+  });
+
+  type ParseReport = (contents: string) => {
+    outcome: 'complete' | 'abort';
+    reason: string;
+    decisions: CacciaWorkflowDecision[];
+  };
+  let parseReport: ParseReport;
+
+  beforeEach(async () => {
+    const module = await vi.importActual<{ parseCacciaWorkflowReport: ParseReport }>(
+      '../features/caccia/workflow-report.js',
+    );
+    parseReport = module.parseCacciaWorkflowReport;
+  });
+
+  it('parses a complete report with mixed valid and invalid decisions', () => {
+    expect(parseReport(JSON.stringify({ outcome: 'complete', reason: '', decisions: [
+      { thread_id: 'T1', valid: true, reason: 'Fixed.' },
+      { thread_id: 'T2', valid: false, reason: 'Contradicts the PR purpose.' },
+    ] }))).toEqual({ outcome: 'complete', reason: '', decisions: [
+      { threadId: 'T1', valid: true, reason: 'Fixed.' },
+      { threadId: 'T2', valid: false, reason: 'Contradicts the PR purpose.' },
+    ] });
+  });
+
+  it('parses the top-level abort reason independently of the decision reasons', () => {
+    expect(parseReport(JSON.stringify({ outcome: 'abort', reason: '設計判断が必要', decisions: [
+      { thread_id: 'T1', valid: true, reason: '修正済み' },
+    ] }))).toEqual({ outcome: 'abort', reason: '設計判断が必要', decisions: [
+      { threadId: 'T1', valid: true, reason: '修正済み' },
+    ] });
+  });
+
+  it('keeps abort when the reason contains a complete JSON example', () => {
+    const reason = '例は {"outcome":"complete"} だが設計判断が必要';
+    expect(parseReport(JSON.stringify({ outcome: 'abort', reason, decisions: [] })))
+      .toEqual({ outcome: 'abort', reason, decisions: [] });
+  });
+
+  it.each([
+    ['empty abort reason', { outcome: 'abort', reason: '', decisions: [{ thread_id: 'T1', valid: true, reason: '設計判断が必要' }] }],
+    ['whitespace abort reason', { outcome: 'abort', reason: ' \n\t ', decisions: [{ thread_id: 'T1', valid: true, reason: '設計判断が必要' }] }],
+    ['missing abort reason', { outcome: 'abort', decisions: [] }],
+    ['unknown outcome', { outcome: 'pending', reason: '', decisions: [] }],
+    ['missing outcome', { reason: '', decisions: [] }],
+    ['non-array decisions', { outcome: 'complete', reason: '', decisions: {} }],
+    ['missing decisions', { outcome: 'complete', reason: '' }],
+    ['legacy decision array', [{ thread_id: 'T1', valid: false, reason: 'Intentional.' }]],
+    ['invalid decision', { outcome: 'complete', reason: '', decisions: [{ thread_id: 'T1', valid: 'false', reason: 'Intentional.' }] }],
+    ['empty decision reason', { outcome: 'complete', reason: '', decisions: [{ thread_id: 'T1', valid: false, reason: ' ' }] }],
+  ])('rejects %s while parsing', (_name, report) => {
+    expect(() => parseReport(JSON.stringify(report))).toThrow();
+  });
+
+  it.each([
+    ['backtick fence', '```json\n%s\n```'],
+    ['tilde fence', '~~~json\n%s\n~~~'],
+    ['nested fences', '````markdown\n```json\n%s\n```\n````'],
+    ['unclosed fence', '```json\n%s'],
+  ])('rejects JSON wrapped in %s', (_name, wrapper) => {
+    const rawReport = JSON.stringify({ outcome: 'complete', reason: '', decisions: [] });
+    expect(() => parseReport(wrapper.replace('%s', rawReport))).toThrow();
+  });
+});
+
+describe('Caccia report outcome gate', () => {
+  it.each([
+    { outcome: 'abort', count: 3 },
+    { outcome: 'abort', count: 5 },
+    { outcome: 'complete', count: 3 },
+  ] as const)('rejects $outcome with $count of five decisions before committing or resolving', async ({ outcome, count }) => {
+    const threads = Array.from({ length: 5 }, (_, index) => thread(`T${index + 1}`));
+    const { dependencies } = createHarness([threads, []]);
+    const reason = 'Three findings were fixed; the remaining changes require a design decision.';
+    const report = {
+      reportPath: '/project/.takt/runs/caccia/caccia-decisions.json', outcome, reason,
+      decisions: threads.slice(0, count).map(({ id }) => ({ threadId: id, valid: true, reason: 'Fixed.' })),
+    };
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(report);
+
+    const result = runCaccia(standaloneInput(), dependencies);
+    await expect(result).rejects.toThrow(reason);
+    if (count < 5) {
+      await expect(result).rejects.toThrow('T4');
+      await expect(result).rejects.toThrow('T5');
+    }
+    expect(dependencies.commitAndPush).not.toHaveBeenCalled();
+    expect(dependencies.fetchCurrentPullRequestHeadSha).not.toHaveBeenCalled();
+    expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledOnce();
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledExactlyOnceWith('/tmp/caccia-clone-1');
+  });
+
+  it('commits and resolves all threads when the report is complete and every decision exists', async () => {
+    const { dependencies } = createHarness([[thread('T1'), thread('T2')], []]);
+    const report = {
+      reportPath: '/report', outcome: 'complete' as const, reason: '',
+      decisions: [
+        { threadId: 'T1', valid: true, reason: 'Fixed the changed code.' },
+        { threadId: 'T2', valid: false, reason: 'The request contradicts the PR purpose.' },
+      ],
+    };
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(report);
+
+    await expect(runCaccia(standaloneInput(), dependencies)).resolves.toMatchObject({ outcome: 'success' });
+
+    expect(dependencies.commitAndPush).toHaveBeenCalledOnce();
+    expect(dependencies.resolveReviewThread).toHaveBeenNthCalledWith(1, 'T1', '/project', expect.any(AbortSignal));
+    expect(dependencies.resolveReviewThread).toHaveBeenNthCalledWith(2, 'T2', '/project', expect.any(AbortSignal));
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledOnce();
+  });
+
+  it('rejects duplicate decisions even when their count equals the target count', async () => {
+    const { dependencies } = createHarness([[thread('T1'), thread('T2')], []]);
+    const report = {
+      reportPath: '/report', outcome: 'complete' as const, reason: '',
+      decisions: [
+        { threadId: 'T1', valid: true, reason: 'Fixed.' },
+        { threadId: 'T1', valid: false, reason: 'Intentional.' },
+      ],
+    };
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(report);
+
+    await expect(runCaccia(standaloneInput(), dependencies)).rejects.toThrow();
+
+    expect(dependencies.commitAndPush).not.toHaveBeenCalled();
+    expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledOnce();
   });
 });
 
@@ -293,10 +445,10 @@ describe('Caccia progress display', () => {
   it('does not announce a pushed commit when invalid findings resolve without a new commit', async () => {
     const screen = captureScreen();
     const { dependencies } = createHarness([[thread('invalid-thread')], []]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({
       reportPath: '/project/.takt/runs/caccia/report.json',
       decisions: [{ threadId: 'invalid-thread', valid: false, reason: 'Intentional behavior.' }],
-    });
+    }));
     vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'reviewed-head', pushed: false });
     vi.mocked(dependencies.fetchCurrentPullRequestHeadSha).mockResolvedValue('reviewed-head');
     try {
@@ -1106,6 +1258,7 @@ describe('Caccia loop', () => {
     }]);
     const detailsSpy = vi.spyOn(githubPr, 'fetchCacciaPullRequestDetails').mockResolvedValue({
       number: 42,
+      title: 'Review fixes', body: '',
       headBranch: 'feature/review',
       headSha: 'newer-head',
       headRepositoryUrl: 'git@github.com:org/repo.git',
@@ -1248,6 +1401,8 @@ describe('Caccia loop', () => {
       controller.abort(new Error('cancelled'));
       return {
         reportPath: '/project/.takt/runs/caccia/report.md',
+        outcome: 'complete' as const,
+        reason: '',
         decisions: [{ threadId: 'finding-1', valid: true, reason: 'Confirmed and fixed.' }],
       };
     });
@@ -1294,13 +1449,13 @@ describe('Caccia loop', () => {
   it('pushes the workflow result before resolving every targeted thread', async () => {
     const findings = [thread('valid-finding'), thread('invalid-finding')];
     const { dependencies, events } = createHarness([findings, []]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({
       reportPath: '/project/.takt/runs/caccia/report.md',
       decisions: [
         { threadId: 'valid-finding', valid: true, reason: 'The changed call site is incorrect.' },
         { threadId: 'invalid-finding', valid: false, reason: 'The behavior is intentional.' },
       ],
-    });
+    }));
 
     const result = await runCaccia(standaloneInput(), dependencies);
 
@@ -1361,10 +1516,10 @@ describe('Caccia loop', () => {
 
   it('still resolves invalid findings when the workflow pushed no new commit', async () => {
     const { dependencies } = createHarness([[thread('finding-1')], []]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({
       reportPath: '/project/.takt/runs/caccia/report.json',
       decisions: [{ threadId: 'finding-1', valid: false, reason: 'The behavior is intentional.' }],
-    });
+    }));
     vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'reviewed-head', pushed: false });
     vi.mocked(dependencies.fetchCurrentPullRequestHeadSha).mockResolvedValue('reviewed-head');
 
@@ -1617,10 +1772,10 @@ describe('Caccia loop', () => {
 
   it('does not push or resolve threads when the workflow omits a decision and still removes the clone', async () => {
     const { dependencies } = createHarness([[thread('finding-1')]]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({
       reportPath: '/project/.takt/runs/caccia/report.json',
       decisions: [],
-    });
+    }));
 
     await expect(runCaccia(standaloneInput(), dependencies))
       .rejects.toThrow('did not report decisions for all review threads');
@@ -1632,10 +1787,10 @@ describe('Caccia loop', () => {
 
   it('rejects a decision for another thread even when its reason names the target', async () => {
     const { dependencies } = createHarness([[thread('finding-1')]]);
-    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue(completeWorkflowReport({
       reportPath: '/project/.takt/runs/caccia/report.json',
       decisions: [{ threadId: 'other', valid: false, reason: 'finding-1について判断した' }],
-    });
+    }));
 
     await expect(runCaccia(standaloneInput(), dependencies)).rejects.toThrow();
 

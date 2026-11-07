@@ -358,6 +358,7 @@ async function executeWorkflowInternal(
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
+  let cacciaFailureReason: string | undefined;
   let runExecution: Pick<WorkflowRunExecutionHandle, 'run'> | undefined;
   let runExecutionControl: WorkflowRunExecutionControl | undefined;
   let abortHandler: AbortHandler | undefined;
@@ -538,14 +539,19 @@ async function executeWorkflowInternal(
             runPaths: bootstrap.runPaths,
             ...gitSafety,
             ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
-              execute: (prNumber) => cacciaEffect({
-                ...serviceOptions, ...gitSafety, prContext,
-                prMergePushRecorder: options.prMergePushRecorder,
-                gitProvider: runContext?.gitProvider,
-                outputMode: options.outputMode, taskPrefix: options.taskPrefix,
-                eventSink: options.eventSink,
-                taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
-              }, prNumber),
+              execute: async (prNumber) => {
+                const result = await cacciaEffect({
+                  ...serviceOptions, ...gitSafety, prContext,
+                  prMergePushRecorder: options.prMergePushRecorder,
+                  gitProvider: runContext?.gitProvider,
+                  outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+                  eventSink: options.eventSink,
+                  taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
+                }, prNumber);
+                cacciaFailureReason = result.failed === true && typeof result.error === 'string'
+                  ? result.error : undefined;
+                return result;
+              },
             } }),
             ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
           });
@@ -576,6 +582,7 @@ async function executeWorkflowInternal(
       });
 
       eventBridge = bindWorkflowExecutionEvents({
+        getCacciaFailureReason: () => cacciaFailureReason,
         runtimeReportDiagnostics,
         engine,
         workflowConfig: bootstrap.effectiveWorkflowConfig,
@@ -612,6 +619,7 @@ async function executeWorkflowInternal(
         success: finalState.status === 'completed',
         workflowHasCaccia: [...startedWorkflows].some((workflow) => hasCacciaEffect(workflow.steps)),
         reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
+        ...(eventBridge.state.abortKind === undefined ? {} : { abortKind: eventBridge.state.abortKind }),
         lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,
         lastMessage: eventBridge.state.lastStepContent,
         runDirectory: bootstrap.runPaths.runRootAbs,

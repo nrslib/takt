@@ -93,6 +93,7 @@ function queueCacciaPullRequestDetails(
   headRepositorySshUrl: string,
   originUrl: string | Error,
   pushUrlOutput: string | Error,
+  metadata = { title: 'Address review findings', body: 'Preserve the purpose of this PR.' },
 ): void {
   queueAsyncGhResponses(
     { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' },
@@ -101,6 +102,7 @@ function queueCacciaPullRequestDetails(
         repository: {
           pullRequest: {
             number: 7,
+            ...metadata,
             headRefName: 'fix/review-thread',
             headRefOid: 'head-7',
             headRepository: { sshUrl: headRepositorySshUrl },
@@ -292,7 +294,7 @@ describe('GitHub PR command boundary', () => {
     const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
     queueAsyncGhResponses({ url: target.url, headRefOid: 'target-head' }, pullHead());
     asyncCommandResponses.push(origin, push);
-    function pullHead() { return { data: { repository: { pullRequest: { number: 123, headRefName: 'feature/target', headRefOid: 'target-head',
+    function pullHead() { return { data: { repository: { pullRequest: { number: 123, title: 'Target PR', body: '', headRefName: 'feature/target', headRefOid: 'target-head',
       headRepository: { sshUrl: `git@${hostname}:acme/target.git` } } } } }; }
     await expect(fetchCacciaPullRequestDetails(123, '/source', undefined, target)).resolves.toMatchObject({
       headRepositoryUrl: fetchUrl, headRepositoryPushUrls: pushUrls,
@@ -1867,6 +1869,8 @@ describe('GitHub PR command boundary', () => {
 
     await expect(fetchCacciaPullRequestDetails(7, '/project', abortController.signal)).resolves.toEqual({
       number: 7,
+      title: 'Address review findings',
+      body: 'Preserve the purpose of this PR.',
       headBranch: 'fix/review-thread',
       headSha: 'head-7',
       headRepositoryUrl: 'https://github.com/contributor/repo.git',
@@ -1928,6 +1932,24 @@ describe('GitHub PR command boundary', () => {
     queueAsyncGhResponses({ baseRefName: 'main' });
     await expect(fetchPrDetails(7, '/project')).rejects.toThrow();
   });
+
+  it.each(['Remove directory fingerprint checks.\nKeep the removed mechanism out.', ''])(
+    'returns the title and body from the same PR head lookup, including body %j', async (body) => {
+      const title = 'Remove directory fingerprint checks';
+      queueCacciaPullRequestDetails('git@github.com:org/repo.git',
+        'https://github.com/org/repo.git', 'git@github.com:org/repo.git', { title, body });
+
+      await expect(fetchCacciaPullRequestDetails(7, '/project')).resolves.toMatchObject({
+        number: 7, headSha: 'head-7', title, body,
+      });
+
+      const graphqlArgs = execFile.mock.calls[1]![1] as string[];
+      const query = graphqlArgs.find((arg) => arg.startsWith('query='))!;
+      expect(query).toMatch(/\btitle\b/u);
+      expect(query).toMatch(/\bbody\b/u);
+      expect(execFile).toHaveBeenCalledTimes(4);
+    },
+  );
 
   it.each([
     ['https://github.com/org/repo.git', 'org/repo', 'https://github.com/org/repo.git'],
