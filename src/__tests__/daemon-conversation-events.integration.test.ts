@@ -125,8 +125,6 @@ it.each([
   const inbox = await files.inboxDirectory(f.repository);
   const names = await readdir(inbox);
   expect(names).toHaveLength(1);
-  const bytes = (await readFile(join(inbox, names[0]!))).byteLength;
-  console.info('inbox bytes', source, body.length, text.length, bytes);
   const errors = vi.fn();
   const watcher = startDirectoryWatcher({
     targets: async () => [{ targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' }],

@@ -143,7 +143,6 @@ it.each([
       : join(configDirectory, 'workspaces', workspace.id);
     const stored = await readFile(join(directory, 'inquiries', `${questionId}.json`));
     if (body.length === 128 * 1024) expect(stored.byteLength).toBeGreaterThan(256 * 1024);
-    console.info('inquiry bytes', kind, body.length, stored.byteLength);
     await source.inquiries();
     expect(errors).not.toHaveBeenCalled();
     expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conversationId: conversationId(owner),
