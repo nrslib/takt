@@ -23,6 +23,7 @@ export function isRetiredWatchEvent(input: unknown): boolean {
 const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('run_process_lost'), task, pid: z.number().int().positive(), startTime: id.nullable() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_changed'), ...repositoryGoal, url: z.string(), state: z.enum(['MERGED', 'CLOSED']) }).strict(),
+  z.object({ ...observed, kind: z.literal('pr_conflicting'), ...repositoryGoal, url: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('pr_mismatch'), ...repositoryGoal, url: z.string(), reason: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('run_launch_stalled'), repositoryDirectory: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
@@ -85,7 +86,7 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('deferred') }).strict(),
   z.object({ kind: z.literal('completed'), result: operationResult, change: ConversationChangeSchema.optional() }).strict(),
   z.object({ kind: z.literal('failed'), message: text, change: ConversationChangeSchema.optional() }).strict(),
-  z.object({ kind: z.literal('interrupted'), change: ConversationChangeSchema.optional() }).strict(),
+  z.object({ kind: z.literal('interrupted'), message: text.optional(), change: ConversationChangeSchema.optional() }).strict(),
 ]);
 export const StoredResultSchema: z.ZodType<TurnResult> = z.object({ ...StoredTurnSchema.shape, event: storedEvent, outcome }).strict();
 export const EventRecordSchema = z.discriminatedUnion('state', [

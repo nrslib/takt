@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { parse } from 'yaml';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
+import { renderTemplate } from '../shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../features/interactive/formalSpecPrompts.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -104,6 +106,32 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 3');
   });
 
+  it.each([true, 'Y/n', false, 'y/N'] as const)('resolves manager formal_spec %s without prompting', (mode) => {
+    const enabled = mode === true || mode === 'Y/n';
+    saveGlobalConfig({ ...loadGlobalConfig(), assistant: { formalSpec: { mode: !enabled, comments: true, modelCheckTimeoutSeconds: 42 } } });
+    invalidateGlobalConfigCache();
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), assistant: { formalSpec: { mode, comments: false } } });
+    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
+    expect(prompt).toContain(`Formal specification configuration: ${JSON.stringify({ mode: enabled, comments: false, modelCheckTimeoutSeconds: 42 })}`);
+    expect(prompt.includes('Use actual valid Quint and Alloy syntax')).toBe(enabled);
+    expect(prompt.includes('Always include both Quint and Alloy for this goal.')).toBe(enabled);
+    expect(prompt).not.toContain('Omit a notation only');
+    expect(prompt).not.toMatch(/\{\{(?:#if|\/if|else)/);
+    expect(prompt).not.toContain('immediately precede every requirement-level formal construct');
+    expect(prompt).toContain('Gherkin');
+  });
+
+  it('passes repository formal specification overrides to workspace manager prompts', () => {
+    const other = join(cwd, 'other'); mkdirSync(other); mkdirSync(join(other, '.takt'));
+    writeFileSync(join(other, '.takt', 'config.yaml'), 'assistant:\n  formal_spec:\n    mode: true\n    comments: false\n');
+    const prompt = createManagerConversationPlan(cwd, { repositoryDirectories: [cwd, other] }).strategy.systemPrompt;
+    const line = prompt.split('\n').find((line) => line.startsWith('Formal specification configuration: '))!;
+    expect(JSON.parse(line.slice('Formal specification configuration: '.length))).toEqual([
+      { repositoryDirectory: cwd, mode: false, comments: true, modelCheckTimeoutSeconds: 900 },
+      { repositoryDirectory: other, mode: true, comments: false, modelCheckTimeoutSeconds: 900 },
+    ]);
+  });
+
   it('passes resolved runtime provider options without manager overrides', () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'language: en\n');
     writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
@@ -148,7 +176,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(persona.trim().length).toBeGreaterThan(0);
       expect(instruction.trim().length).toBeGreaterThan(0);
       expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(persona.trim());
-      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(instruction.trim());
+      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(renderTemplate(instruction.trim(), { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(language) }));
       for (const kind of ['policies', 'knowledge']) {
         const content = readFileSync(join(facetsRoot, kind, 'manager.md'), 'utf8').trim();
         expect(content.length).toBeGreaterThan(0);

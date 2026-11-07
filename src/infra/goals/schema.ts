@@ -106,11 +106,19 @@ export const GoalTaskResultSchema = z.object({
 }).strict();
 export type GoalTaskResult = z.infer<typeof GoalTaskResultSchema>;
 
+export const GoalSpecificationsSchema = z.object({
+  gherkin: goalText.optional(),
+  quint: goalText.optional(),
+  alloy: goalText.optional(),
+}).strict();
+export type GoalSpecifications = z.infer<typeof GoalSpecificationsSchema>;
+
 const summaryShape = {
   objective: goalText,
   outOfScope: z.array(goalText),
   acceptanceCriteria: z.array(goalText).min(1),
   constraints: z.array(goalText),
+  specifications: GoalSpecificationsSchema.optional(),
 };
 
 export const GoalSummarySchema = z.object({

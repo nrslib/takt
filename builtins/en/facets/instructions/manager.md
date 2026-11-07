@@ -14,6 +14,16 @@ If the target repository or goal cannot be identified from the conversation and 
 2. Once settled, put the entire proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal to register. /make-goal regenerates the proposal from the current conversation. Continue discussion if information is insufficient. Do not include instructions for the goal registration operation when summary is null.
 3. Return summaries as JSON with message and summary. summary is {"objective":"objective","outOfScope":["exclusions"],"acceptanceCriteria":["criteria"],"constraints":["work constraints"]} or null. Include startBranch / integrationBranch only when specified by the person. Replies without a summary may be plain text.
 
+## Goal specifications
+
+In a proposal's specifications, store code bodies under gherkin, quint, and alloy, without code fences in the values. Apply the rules below to the goal. Do not repeat expected outcomes selected for Gherkin in acceptanceCriteria. Use acceptanceCriteria for the remaining conditions or checks referring to the specifications as a whole.
+
+When mode in the turn's Formal specification configuration is true, include both Quint and Alloy; when false, omit them. Follow comments when adding comments explaining domain meaning. Do not read configuration files or ask whether to use formal specifications at each registration.
+
+For a workspace, use the state supplied for the target repository. Among the rules below, apply Quint and Alloy rules only when that mode is true, and apply meaning-comment rules only when comments is also true.
+
+{{include:instructions/manager-specification-notation}}
+
 ## Conversation and assignment
 
 For messages from agent/director and events, preserve the human's pending proposal, return summary: null, and report results or failure reasons in message. Continue consultation with the retained proposal on the next human message.
@@ -29,6 +39,8 @@ For pause, resume or abort, identify the target and state with takt_list_goals a
 Every turn, inspect current tasks, run records and reports, Git, work records and unanswered inquiries. Read inquiries without a goal using takt_list_standalone_inquiries and withdraw obsolete ones with takt_withdraw_standalone_inquiry, supplying id and reason. Use the corresponding goal-question tools for goal inquiries. Withdraw obsolete historical approvals too and record why.
 
 On registration, choose ready work. On completion, inspect results and failure causes, then choose integration, resumption, correction, new submissions or completion. Read saved questions and answers for answer events. For watcher and patrol events, compare the latest reports and records against the task instructions and acceptance criteria to check for deviations from the requested work. Do not judge anomalies by execution time or step counts.
+
+On pr_conflicting (a conflict with the integration target), check the saved PR’s current state and existing preparation tasks. Leave the work to a pending or running task already handling it. If correction is needed and no task handles it, enqueue preparation with takt_merge_goal_pr. Use until: prepare for manager.main_merge: approve, or until: merge for auto or a human merge instruction. Do not confuse this event with PR creation or push failures (pr_failed), and do not add ordinary correction tasks alongside preparation.
 
 After integration, compare the plan in objective and work records, reasons for plan changes and individual task integration records. Do not rely solely on an overall claim that everything is done. Submit remaining required work according to dependencies, ordering and concurrency limits. Check recorded reasons for cancelled work.
 
@@ -62,6 +74,8 @@ Record operations, reasons and evidence in the same turn using takt_record_goal_
 ## Completion requests and PRs
 
 Pass expectedSha and evidence in summary to takt_complete_goal, with concrete humanChecks when a PR is needed. If awaiting_merge has no saved PR, calling the same tool again retries PR preparation after the cause is fixed. Inspect push state yourself and correct and retry it when needed.
+
+Make the first paragraph of the summary passed to takt_complete_goal a short summary for people. Describe what changed in one or two sentences, and put per-criterion results and evidence, including test counts, in subsequent paragraphs.
 
 Before asking how to integrate the work, read the work log and PR creation failure in takt_get_goal and check the current branch tip. Inspect failure records and notifications, determine the cause and side effects, and decide the next operation. If the tip differs from the completion request's SHA, recheck the work and submit completion with the new SHA.
 

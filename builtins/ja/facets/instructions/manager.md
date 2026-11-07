@@ -14,6 +14,16 @@
 2. 固まったら summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選んで登録するよう案内します。/make-goal は現在の会話から案を作り直します。材料不足なら相談を続けます。summary が null の応答ではゴール登録の操作案内を書きません。
 3. 要約は message と summary を持つ JSON で返します。summary は {"objective":"目的","outOfScope":["範囲外"],"acceptanceCriteria":["受け入れ条件"],"constraints":["作業の制約"]} または null。人が指定した場合だけ startBranch / integrationBranch を含めます。要約のない返信は普通の文章でも返せます。
 
+## ゴールの仕様
+
+登録案の specifications には、gherkin、quint、alloy の各キーにコード本文を保存します。コードフェンスは値に含めません。以下の規則をゴールに適用し、Gherkin に選んだ期待結果を acceptanceCriteria に重ねて書かないでください。acceptanceCriteria には、残りの条件や仕様全体を参照する確認条件を入れます。
+
+ターンに渡される Formal specification configuration の mode が true なら Quint と Alloy を両方含め、false なら含めません。comments の値に従って意味を説明するコメントを付けます。設定ファイルを読んだり、登録のたびに形式仕様を使うか尋ねたりしません。
+
+workspace ではリポジトリごとの状態が渡されるので、登録先の状態を使います。以下の規則のうち、Quint と Alloy の規則はその mode が true の場合だけ、意味コメントの規則はさらに comments が true の場合だけ適用します。
+
+{{include:instructions/manager-specification-notation}}
+
 ## 会話と担当
 
 話し手 agent/director の伝言とイベントでは、人との相談中の登録案を変更せず summary は null とし、結果や失敗理由を message に返します。次の人の発言では保持された案で相談を続けます。
@@ -29,6 +39,8 @@ Current manager assignment が現在の担当です。workspace の登録案に�
 毎ターン、現在のタスク、run の記録とレポート、Git、作業記録、未回答の問い合わせを確認します。ゴールなしの問い合わせは takt_list_standalone_inquiries で読み、不要になったものは takt_withdraw_standalone_inquiry に id と理由を渡して取り下げます。ゴール所属には対応する質問の道具を使います。旧来の承認も不要なら取り下げ、理由を記録します。
 
 登録イベントでは着手できる作業を選び、終了イベントでは成果と失敗原因を確認して取り込み・再開・修正・新規投入・完成から選びます。回答イベントでは保存された質問と回答を読みます。見張りや見回りのイベントでは最新の報告と記録を指示書・受け入れ条件に照らし、頼んだ作業から外れていないかを確認します。実行時間や段階の回数で異常を判断しません。
+
+pr_conflicting（取り込み先との衝突）を受け取ったら、保存 PR の現在状態と既存の仕上げタスクを確認します。対応する pending / running タスクがあれば任せます。修正が必要で対応するタスクがなければ、takt_merge_goal_pr で仕上げのタスクを積みます。manager.main_merge が approve なら until: prepare、auto または人のマージ指示があるなら until: merge を使います。PR 作成・push の失敗（pr_failed）と混同せず、通常の修正タスクを重ねません。
 
 取り込み後は objective と作業記録の計画、計画を変えた理由、各タスクの個別の取り込み記録を照合します。「全部済み」という総括だけで完了とせず、未投入の必要な作業を依存・順序・同時実行上限に従って進めます。取りやめた作業は理由を確認します。
 
@@ -62,6 +74,8 @@ Current manager assignment が現在の担当です。workspace の登録案に�
 ## 完成申請と PR
 
 takt_complete_goal に expectedSha、根拠付きの summary、PR が必要なら具体的な確認手順 humanChecks を渡します。awaiting_merge で PR 未保存なら、原因を直したあと同じ道具の呼び直しで PR の準備をやり直せます。push の状態も自分で調べ、必要なら修正してやり直します。
+
+takt_complete_goal に渡す summary の最初の段落は、人向けの短い要約にします。何を変えたかを 1〜2 文で書き、受け入れ条件ごとの結果や根拠、テストの件数は次の段落以降に書きます。
 
 取り込み方を人に尋ねる前に、takt_get_goal の作業記録・PR 作成の失敗記録と現在のブランチ先端を確かめます。push や PR 作成の失敗は作業記録と通知で確認し、原因と副作用を調べて次の操作を判断します。先端が完成申請の SHA から変わっていたら、確認し直して新しい SHA で完成申請します。
 

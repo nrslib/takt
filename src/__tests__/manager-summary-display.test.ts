@@ -78,3 +78,19 @@ describe.each(['ja', 'en'] as const)('formatPendingSummary in %s', (lang) => {
     expect(text).toContain(summary.objective);
   });
 });
+
+
+it('shows complete fenced specifications in the TUI proposal', () => {
+  const pending = proposal();
+  const specifications = { gherkin: 'Feature: CSV\n  Scenario: Export', quint: 'module csv {}', alloy: 'sig CSV {}' };
+  const text = formatPendingSummary({ ...pending, summary: { ...pending.summary, specifications } }, 'ja');
+  for (const [notation, code] of Object.entries(specifications)) expect(text).toContain(`\`\`\`${notation}\n${code}\n\`\`\``);
+});
+
+it.each(['```', '`````', 'prefix ```` suffix'])('keeps embedded backticks inside displayed specification fences: %s', (ticks) => {
+  const pending = proposal();
+  const code = `Feature: CSV\n${ticks}\n  Scenario: Export`;
+  const text = formatPendingSummary({ ...pending, summary: { ...pending.summary, specifications: { gherkin: code } } }, 'ja');
+  const fence = '`'.repeat(ticks.match(/`+/)![0].length + 1);
+  expect(text).toContain(`${fence}gherkin\n${code}\n${fence}`);
+});

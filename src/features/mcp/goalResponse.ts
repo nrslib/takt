@@ -58,6 +58,7 @@ export function goalSummary(goal: Goal) {
       questions: { totalCount: questions.length },
       workLog: { totalCount: goal.workLog.length },
       notifications: { totalCount: goal.notifications?.length ?? 0, returnedCount: 0 },
+      specifications: Object.fromEntries(Object.entries(goal.specifications ?? {}).map(([notation, text]) => [notation, { totalBytes: Buffer.byteLength(text), returnedBytes: 0 }])),
       acceptanceCriteria: { totalCount: goal.acceptanceCriteria.length, returnedCount: 0 },
       constraints: { totalCount: goal.constraints.length, returnedCount: 0 }, outOfScope: { totalCount: goal.outOfScope.length, returnedCount: 0 } },
     retrieval: 'Use takt_get_goal with path (saved array indices), recordId, offset/limit or textOffset/maxBytes. Use takt_list_goal_questions and takt_list_goal_work_log for recent pages.',

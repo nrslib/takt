@@ -7,25 +7,35 @@ import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { deferred, input, accepted } from './helpers/controlledDaemon.js';
-import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import { runFormalSpecVerification } from '../features/interactive/formalSpecVerification.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
+import { makeProvider } from './test-helpers.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
+
+vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+  runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
+}));
 
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
   resolveCurrentManagerAssignment: async (assignment: { repositoryDirectory: string }) => ({ ...assignment, repositoryDirectories: [assignment.repositoryDirectory] }),
 }));
 const execute = vi.fn(async (value: ManagerTurnInput) => ({ message: value.prompt, summary: null, sessionId: 'persisted-session', assignment: value.assignment }));
+const resolveRuntime = vi.fn();
 let fixture: Awaited<ReturnType<typeof conversationDaemon>>;
 let repository: string;
 let id: string;
 beforeEach(async () => {
   execute.mockClear();
+  resolveRuntime.mockReset();
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } });
   const directory = getGlobalConfigDir(); repository = join(directory, 'repository');
   await mkdir(join(repository, '.takt'), { recursive: true });
   await writeFile(join(repository, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
   await mkdir(join(directory, 'conversations'), { recursive: true });
   const record = conversationRecord(repository); id = record.id;
   await writeFile(join(directory, 'conversations', `${id}.json`), JSON.stringify(record));
-  fixture = await conversationDaemon(directory, { async resolve() { return { provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }; }, async close() {} });
+  fixture = await conversationDaemon(directory, { resolve: resolveRuntime, async close() {} });
 });
 afterEach(async () => { await fixture.close(); vi.restoreAllMocks(); });
 
@@ -97,4 +107,49 @@ it('does not execute again when result persistence fails and only retries the sa
   expect(save).toHaveBeenCalledOnce(); expect(execute).toHaveBeenCalledOnce();
   await fixture.dispatcher.retryStorage(); await port.completed.promise;
   expect(execute).toHaveBeenCalledOnce();
+});
+
+it('returns unavailable for disabled formal specs before resolving a failing runtime', async () => {
+  resolveRuntime.mockRejectedValue(new Error('runtime initialization failed'));
+  const port = await open();
+  const before = (await fixture.store.read(id))!.state;
+  await port.submit('/verify');
+  expect((await port.completed.promise).result).toMatchObject({ kind: 'reply', message: expect.stringContaining('/verify') });
+  await fixture.dispatcher.drain();
+  expect(resolveRuntime).not.toHaveBeenCalled();
+  expect(execute).not.toHaveBeenCalled();
+  expect((await fixture.store.read(id))!.state).toEqual(before);
+});
+
+it('saves the invalidated generation session before retrying with business context and resumes the recovered session on the next turn', async () => {
+  await writeFile(join(repository, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nassistant:\n  formal_spec: true\nmanager:\n  auto_run: false\n');
+  const before = (await fixture.store.read(id))!.state;
+  vi.mocked(runFormalSpecVerification).mockResolvedValue({ verdict: 'passed', verificationStarted: true,
+    quint: { status: 'passed' }, alloy: { status: 'passed' } });
+  const call = vi.fn<ProviderAgent['call']>();
+  const success = { persona: 'manager', status: 'done' as const, timestamp: new Date() };
+  call.mockResolvedValueOnce({ ...success, status: 'error', content: '', failureCategory: 'session_continuation_unsupported' });
+  call.mockImplementationOnce(async (prompt, options) => {
+    expect((await fixture.store.read(id))!.state.session.sessionId).toBeNull();
+    expect(options).toMatchObject({ cwd: repository, sessionId: undefined, callerManagedSession: true });
+    expect(prompt).toContain(before.pending!.summary.objective);
+    return { ...success, content: '```quint\nmodule csv {}\n```', sessionId: 'recovered' };
+  });
+  call.mockResolvedValue({ ...success, content: '', structuredOutput: { message: 'verified', summary: null }, sessionId: 'recovered' });
+  const executor = createManagerTurnExecutor(repository, { ctx: {
+    provider: makeProvider({ setup: () => ({ call }) }), providerType: 'mock', model: undefined, lang: 'en',
+  }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const port = await open();
+  await port.submit('/verify');
+  expect((await port.completed.promise).result).toMatchObject({ kind: 'reply' });
+  await fixture.settled();
+  expect(call.mock.calls[0]![1].sessionId).toBe(before.session.sessionId);
+  expect(call.mock.calls[2]![1].sessionId).toBe('recovered');
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('recovered');
+  const next = await open();
+  await next.submit('continue');
+  expect((await next.completed.promise).result).toMatchObject({ kind: 'reply' });
+  await fixture.settled();
+  expect(call.mock.calls[3]![1].sessionId).toBe('recovered');
 });

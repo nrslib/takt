@@ -79,6 +79,21 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     if (kind !== 'reply') expect(app.lastFrame()).not.toContain('●');
   });
 
+  it.each(['failed', 'error'] as const)('keeps the completed %s verification notice in the transcript after interpretation is interrupted', async (verdict) => {
+    const { app, client } = mount(lang);
+    const operationId = randomUUID();
+    const state = { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 1 } };
+    client.output({ kind: 'running', state });
+    const content = JSON.stringify({ verdict, runDirectory: '/test/.takt/runs/verify-test' });
+    client.output({ kind: 'pending', state: { ...state, running: null, interrupted: true } });
+    client.output({ kind: 'result', operationId, result: { kind: 'error', code: 'interrupted', message: content } });
+    app.stdin.write('continue');
+    await waitFor(() => {
+      expect(entries()).toContainEqual({ role: 'system', content });
+      expect(app.lastFrame()).toContain(content);
+    });
+  });
+
   it.each<OperationResult>([
     { kind: 'reply', message: 'Shared result' },
     { kind: 'notice', message: 'Shared result' },
@@ -166,6 +181,8 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     expect(client.submit).not.toHaveBeenCalled();
     context.app.stdin.write('/');
     await waitFor(() => expect(context.app.lastFrame()).toContain(`/make-goal  ${getLabel('manager.makeGoalDescription', lang)}`));
+    context.app.stdin.write(DOWN);
+    await waitFor(() => expect(context.app.lastFrame()).toContain(`/verify  ${getLabel('interactive.commands.verify', lang)}`));
   });
 
   it('preserves the multiple repository heading on the bottom status row', async () => {

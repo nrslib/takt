@@ -45,7 +45,7 @@ export function useManagerInput({
     if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
       && next.text !== editorRef.current.text
-      && !(next.text.trim() !== '' && MAKE_GOAL_COMMAND.startsWith(next.text.trim()))) {
+      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify'].some((command) => command.startsWith(next.text.trim())))) {
       summaryApproval.dismiss(pending);
     }
     edit(next);

@@ -56,3 +56,19 @@ it('submits a new human message and opens read menus during a model turn', () =>
   input('r', { ...key, ctrl: true }); input('g', { ...key, ctrl: true });
   expect(vi.mocked(f.options.openMenu).mock.calls).toEqual([['answer'], ['goal']]);
 });
+
+
+it('submits /verify from the TUI without dismissing the pending proposal while typing', () => {
+  const f = fixture();
+  f.options.editorRef.current = createEditorState('/verif');
+  f.options.summaryApproval.pending = { revision: 1, repositoryDirectory: '/repo', summary: {
+    objective: 'Export', outOfScope: [], acceptanceCriteria: ['Check specifications'], constraints: [],
+    specifications: { gherkin: 'Feature: Export' },
+  } };
+  const input = f.bind();
+  input('y', key);
+  expect(f.options.summaryApproval.dismiss).not.toHaveBeenCalled();
+  f.options.editorRef.current = createEditorState('/verify');
+  input('', { ...key, return: true });
+  expect(f.options.submit).toHaveBeenCalledExactlyOnceWith('/verify');
+});

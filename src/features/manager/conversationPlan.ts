@@ -8,6 +8,9 @@ import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent }
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
+import { loadFormalSpecVerifierConstraints } from '../interactive/formalSpecPrompts.js';
+import { renderTemplate } from '../../shared/prompts/index.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 
 export interface ManagerConversationContext {
@@ -28,7 +31,7 @@ export interface ManagerConversationPlan {
 
 export function createManagerConversationPlan(
   cwd: string,
-  input: AssistantCliOverrides & { language?: 'ja' | 'en' },
+  input: AssistantCliOverrides & { language?: 'ja' | 'en'; repositoryDirectories?: readonly string[] },
 ): ManagerConversationPlan {
   const resolved = resolveAssistantProviderModel(cwd, input);
   if (resolved.provider === undefined) throw new Error('Provider is not configured.');
@@ -51,6 +54,12 @@ export function createManagerConversationPlan(
   const persona = resolveFacetByName('manager', 'personas', context);
   const policy = resolveFacetByName('manager', 'policies', context);
   const knowledge = resolveFacetByName('manager', 'knowledge', context);
+  const specificationConfiguration = input.repositoryDirectories === undefined
+    ? resolveFormalSpecConfigurationWithoutPrompt(cwd)
+    : input.repositoryDirectories.map((repositoryDirectory) => ({
+      repositoryDirectory, ...resolveFormalSpecConfigurationWithoutPrompt(repositoryDirectory),
+    }));
+  const specificationSettings = Array.isArray(specificationConfiguration) ? specificationConfiguration : [specificationConfiguration];
   const managerConfig = resolveManagerConfig(cwd);
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
   const instruction = instructionSource === undefined ? undefined
@@ -64,7 +73,12 @@ export function createManagerConversationPlan(
     },
     strategy: {
       systemPrompt: [
-        persona.trim(), policy.trim(), knowledge.trim(), instruction.trim(),
+        persona.trim(), policy.trim(), knowledge.trim(), renderTemplate(instruction.trim(), {
+          formalSpec: specificationSettings.some((setting) => setting.mode),
+          formalSpecCommentsEnabled: specificationSettings.some((setting) => setting.mode && setting.comments),
+          formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang),
+        }),
+        `Formal specification configuration: ${JSON.stringify(specificationConfiguration)}`,
         `Repository: ${JSON.stringify(cwd)}`,
         `Default workflow: ${JSON.stringify(managerConfig.defaultWorkflow ?? null)}`,
         `Repository manager.main_merge: ${JSON.stringify(managerConfig.mainMerge)}`,

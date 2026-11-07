@@ -8,6 +8,7 @@ import type { AgentResponse } from '../../core/models/response.js';
 const summarySchema = GoalSummarySchema.extend({ repositoryDirectory: z.string().min(1).optional() })
   .refine((summary) => [
     summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints,
+    ...Object.values(summary.specifications ?? {}),
     ...(summary.repositoryDirectory === undefined ? [] : [summary.repositoryDirectory]),
     ...(summary.startBranch === undefined ? [] : [summary.startBranch]),
     ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
@@ -26,6 +27,9 @@ const codexOutputSchema = toStrictManagerOutputSchema(z.object({
     outOfScope: z.array(z.string()),
     acceptanceCriteria: z.array(z.string()),
     constraints: z.array(z.string()),
+    specifications: z.object({
+      gherkin: z.string().nullable(), quint: z.string().nullable(), alloy: z.string().nullable(),
+    }).strict().nullable(),
     startBranch: z.string().nullable(),
     integrationBranch: z.string().nullable(),
   }).strict().nullable(),
@@ -34,6 +38,10 @@ const codexResponseSchema = responseSchema.extend({
   summary: z.preprocess((value) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
     const summary = { ...value } as Record<string, unknown>;
+    if (summary.specifications === null) delete summary.specifications;
+    else if (typeof summary.specifications === 'object' && summary.specifications !== undefined) {
+      summary.specifications = Object.fromEntries(Object.entries(summary.specifications).filter(([, text]) => text !== null));
+    }
     if (summary.repositoryDirectory === null) delete summary.repositoryDirectory;
     if (summary.startBranch === null) delete summary.startBranch;
     if (summary.integrationBranch === null) delete summary.integrationBranch;

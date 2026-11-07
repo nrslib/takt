@@ -449,6 +449,8 @@ director:
   managerError: "manager {managerId} の伝言処理が失敗しました（操作ID: {operationId}）: {message}"
   managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
+  verifyRepositoryRequired: "どのリポジトリの仕様を検証しますか？対象を伝えて /make-goal で登録案を作成し、もう一度 /verify を実行してください。"
+  verifyInterpretationFailed: "検証結果の説明に失敗しました。検査器の結果を表示します。原因: {error}"
   goalPr:
     preparationFailed: "PR の準備に失敗しました。原因を確認し、次の操作を判断してください。原因: {reason}"
     objective: "目的"
@@ -565,6 +567,20 @@ manager:
   description: "実験的な manager の会話 TUI を起動します"
   experimentalNotice: "manager\u00A0は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
+  notificationHumanHeadings:
+    progress: "[{project}] 進捗をお知らせします{context}"
+    awaiting_merge: "[{project}] マージを待っています{context}"
+    completed: "[{project}] ゴールが完成しました{context}"
+    blocked: "[{project}] 作業が止まっています{context}"
+    question: "[{project}] 質問があります{context}"
+    custom: "[{project}] お知らせ{context}"
+  notificationGoalContext: "（ゴール: {objective}）"
+  notificationPullRequest: "（PR #{number}）"
+  notificationHumanGoal: "ゴール: {objective}"
+  notificationHumanMerge: "仕上げ（{branch} の取り込み、レビュー、CI の通過）が終わってから、PR を確認して {branch} にマージしてください。"
+  notificationChanges: "変更: {summary}"
+  notificationRecommended: "（推奨）"
+  notificationHumanBlockedAction: "詳しくは takt manager で確かめられます。"
   notificationHeadings:
     progress: "進捗をお知らせします — {project}"
     awaiting_merge: "マージを待っています — {project}"
@@ -582,7 +598,7 @@ manager:
   notificationOptions: "選択肢: {options}"
   notificationMoreOptions: "ほかに{count}件の選択肢があります。すべての選択肢はTUIで確認できます。"
   notificationRecommendation: "推奨: {recommendation}"
-  notificationAnswer: "{project}で takt manager を開き、TUIで Ctrl+R を押し、一覧から問い合わせを選択して回答してください。"
+  notificationAnswer: "takt manager を開き、Ctrl+R で答えてください。"
   notificationMerge: "マージ用タスクでPRを準備し、レビューとCIの通過後にPRを {branch} ブランチへマージしてください。"
   notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
   notificationFullMessage: "{project}で takt manager を開き、TUIで会話と現在の作業状態を確認してください。"

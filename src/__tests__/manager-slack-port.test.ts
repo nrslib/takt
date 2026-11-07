@@ -31,6 +31,53 @@ function read(items: SnapshotItem[] = []): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
     mode: 'initial', items: (async function* () { yield* items; })(), complete: vi.fn(), cancel: vi.fn() };
 }
+it.each(['reply', 'notice', 'error'] as const)('posts the original %s in a MarkdownBlock and fallback text without changing conversation output', async (kind) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '確認してください');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const record = conversationRecord('/canonical');
+  const message = '## 結果\n**競合の中身**: [PR](https://example.test/pr)\n`**保存する文字**`\n**/*.ts\n\n**/*.js\n説明 ```md\n**x**\n```\n<https://example.test|手順 > 詳細>';
+  const result = kind === 'error' ? { kind, code: 'operation_failed', message } : { kind, message };
+  const output = { kind: 'result' as const, operationId: 'operation', result };
+  const before = structuredClone(output);
+  try {
+    expect(await port.delivery.deliver(record.id, output, { revision: record.revision, stateSequence: 1, operationId: 'operation' }))
+      .toEqual({ kind: 'delivered' });
+    expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message, [{ type: 'markdown', text: message }]);
+    expect(output).toEqual(before);
+  } finally { await port.close(); }
+});
+
+it.each([
+  { length: 11_999, markdown: true },
+  { length: 12_000, markdown: true },
+  { length: 12_001, markdown: false },
+  { length: 24_001, markdown: false },
+  { length: 40_001, markdown: false },
+])('posts a $length-character reply exactly once (markdown=$markdown)', async ({ length, markdown }) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '長い返事をください');
+  const post = vi.mocked(client.postThreadMessage);
+  post.mockClear();
+  const record = conversationRecord('/canonical');
+  const opening = '```ts\n';
+  const closing = '\n```';
+  const message = opening + 'あ'.repeat(length - opening.length - closing.length) + closing;
+  const output = { kind: 'result' as const, operationId: 'operation', result: { kind: 'reply' as const, message } };
+  const before = structuredClone(output);
+  try {
+    expect(await port.delivery.deliver(record.id, output, { revision: record.revision, stateSequence: 1, operationId: 'operation' }))
+      .toEqual({ kind: 'delivered' });
+    const blocks = markdown ? [{ type: 'markdown', text: message }] : undefined;
+    expect(post).toHaveBeenCalledExactlyOnceWith(endpoint, message, blocks);
+    expect(output).toEqual(before);
+  } finally { await port.close(); }
+});
+
 it.each(['ja', 'en'] as const)('posts labeled repository and optional branches with registration buttons in %s', async (lang) => {
   const labels = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
   vi.mocked(getLabel).mockImplementation(labels.getLabel);
@@ -39,20 +86,29 @@ it.each(['ja', 'en'] as const)('posts labeled repository and optional branches w
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
   await port.receive(endpoint, '/make-goal');
   const record = conversationRecord('/canonical');
-  const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository' };
+  const specifications = { gherkin: 'Feature: CSV\n  Scenario: Export', quint: 'module csv {}\n```\nRemaining specification', alloy: 'sig CSV {}\n`````\nRemaining specification' };
+  const pending = { ...record.pending!, repositoryDirectory: '/workspace/selected-repository',
+    summary: { ...record.pending!.summary, specifications } };
   try {
     for (const branches of [{}, { startBranch: 'release' }, { integrationBranch: 'main' }, { startBranch: 'release', integrationBranch: 'main' }]) {
+      const firstMessage = vi.mocked(client.postThreadMessage).mock.calls.length;
       await port.delivery.deliver(record.id, { kind: 'pending', state: { conversationId: record.id, assignment: record.assignment,
         revision: record.revision, pending: { ...pending, summary: { ...pending.summary, ...branches } },
         approval: null, running: null, interrupted: false } },
       { revision: record.revision, stateSequence: 1, operationId: 'operation' });
-      const [, text, blocks] = vi.mocked(client.postThreadMessage).mock.calls.at(-1)!;
+      const messages = vi.mocked(client.postThreadMessage).mock.calls.slice(firstMessage);
+      const text = messages.map(([, text]) => text).join('\n');
+      const blocks = messages.flatMap(([, , blocks]) => blocks ?? []);
       expect(text).toContain(lang === 'ja' ? 'リポジトリ: /workspace/selected-repository' : 'Repository: /workspace/selected-repository');
       expect(text).toContain(`${getLabel('manager.summary.objective', lang)}:\n${pending.summary.objective}`);
       for (const field of ['startBranch', 'integrationBranch'] as const) {
         const label = getLabel(`manager.summary.${field}`, lang);
         if (branches[field] === undefined) expect(text).not.toContain(label);
         else expect(text).toContain(`${label}: ${branches[field]}`);
+      }
+      for (const [notation, code] of Object.entries(specifications)) {
+        const fence = '`'.repeat(notation === 'gherkin' ? 3 : notation === 'quint' ? 4 : 6);
+        expect(text).toContain(`${fence}${notation}\n${code}\n${fence}`);
       }
       expect(text).not.toContain(getLabel('manager.summary.dismissHint', lang));
       expect(blocks).toContainEqual(expect.objectContaining({ type: 'actions', elements: [
@@ -181,8 +237,50 @@ it.each(['reply', 'notice'] as const)('delivers a %s result emitted before admis
   await Promise.all(delivered);
   await port.delivery.deliver(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), { kind: 'result', operationId: 'operation', result: { kind: 'reply', message: 'duplicate' } },
     { revision: 1, stateSequence: 1, operationId: 'operation' });
-  expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply');
+  expect(client.postThreadMessage).toHaveBeenLastCalledWith(endpoint, 'reply', [{ type: 'markdown', text: 'reply' }]);
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+});
+it.each(['failed', 'error'] as const)('posts the retained %s verification as the interrupted final result to the same thread', async (verdict) => {
+  const { port, input, client } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  await port.receive(endpoint, '/verify');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/canonical' });
+  const message = JSON.stringify({ verdict, runDirectory: '/canonical/.takt/runs/verify-test' });
+  const output = { kind: 'result' as const, operationId: 'operation', result: { kind: 'error' as const, code: 'interrupted', message } };
+  const version = { revision: 0, stateSequence: 1, operationId: 'operation' };
+  await port.delivery.deliver('other-conversation', output, version);
+  await port.delivery.deliver(id, output, { ...version, operationId: 'other-operation' });
+  await port.delivery.deliver(id, { ...output, operationId: 'other-operation' }, { ...version, operationId: 'other-operation' });
+  expect(client.postThreadMessage).not.toHaveBeenCalled();
+  await port.delivery.deliver(id, output, version);
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, message, [{ type: 'markdown', text: message }]);
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+  await port.delivery.deliver(id, output, version);
+  expect(client.postThreadMessage).toHaveBeenCalledOnce();
+  await port.close();
+});
+it('delivers the interrupted verification result once to its originating Slack thread when several turns are attached', async () => {
+  const { port, input, client } = fixture();
+  const deliveries: ConversationDelivery[] = [];
+  vi.mocked(input.open).mockImplementation(async (_open, delivery) => {
+    deliveries.push(delivery);
+    return { attachmentId: `attachment-${deliveries.length}`, read: read() };
+  });
+  vi.mocked(input.submit).mockResolvedValueOnce({ kind: 'accepted', operationId: 'first' });
+  vi.mocked(input.submit).mockResolvedValueOnce({ kind: 'accepted', operationId: 'second' });
+  await port.receive(endpoint, '/verify');
+  await port.receive({ ...endpoint, parentTs: 'another-thread' }, '/verify');
+  vi.mocked(client.postThreadMessage).mockClear();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/canonical' });
+  await Promise.all(deliveries.map((delivery) => delivery.deliver(id,
+    { kind: 'result', operationId: 'first', result: { kind: 'error', code: 'interrupted', message: 'retained verification result' } },
+    { revision: 0, stateSequence: 1, operationId: 'first' })));
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(endpoint, 'retained verification result', [{ type: 'markdown', text: 'retained verification result' }]);
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment-1');
+  await port.close();
+  expect(input.detach).toHaveBeenCalledTimes(2);
 });
 it.each(['open', 'submit'] as const)('reports queue capacity rejection from %s without resubmitting the message', async (stage) => {
   const { port, input, client } = fixture();
@@ -240,4 +338,15 @@ it('rejects an unreadable inquiry binding without misrouting its answer as conve
   await expect(port.receive(endpoint, '80')).rejects.toThrow();
   expect(input.submit).not.toHaveBeenCalled();
   await port.close();
+});
+
+
+it('passes a human /verify message from Slack to the manager conversation', async () => {
+  const { port, input } = fixture();
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'verify-operation' });
+  try {
+    await port.receive(endpoint, '/verify');
+    expect(input.submit).toHaveBeenCalledWith(expect.objectContaining({ command: { kind: 'message', text: '/verify' } }));
+  } finally { await port.close(); }
 });
