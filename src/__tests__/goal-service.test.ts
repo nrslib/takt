@@ -40,7 +40,7 @@ describe('Goal registration service', () => {
   });
 
   it('saves the approved record after creating its branch', async () => {
-    expect(await createGoal(request())).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(await createGoal(request())).toStrictEqual({ ...goalRecord(), createdAt: expect.any(String) });
     expect(doubles.assertAbsent).toHaveBeenCalledWith(goalRecord().id);
     expect(doubles.createBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);

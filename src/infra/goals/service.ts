@@ -19,7 +19,8 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   signal?.throwIfAborted();
   const goal = GoalSchema.parse({
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
-    acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints, specifications: input.specifications,
+    acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
+    ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
