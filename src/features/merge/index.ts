@@ -30,8 +30,12 @@ import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js'
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
 import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../tasks/execute/goalAbortMonitor.js';
-import type { GoalTaskResult } from '../../infra/goals/schema.js';
+import type { GoalBranchSync, GoalTaskResult } from '../../infra/goals/schema.js';
 import { TaskStoppedError } from '../../infra/task/taskStop.js';
+import { GoalBranchSyncError, synchronizeGoalBranch } from '../../infra/goals/branch-sync.js';
+import { hasUnpublishedPrWork } from '../../infra/goals/git-command.js';
+import { GoalStore } from '../../infra/goals/store.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { synchronizeRetryPrHead } from './retry-sync.js';
 
 const log = createLogger('merge');
@@ -59,6 +63,7 @@ interface MergeOptions {
 }
 
 interface PrWorkflowRequest {
+  readonly until?: 'prepare' | 'merge';
   readonly projectCwd: string;
   readonly prNumber: number;
   readonly pullRequest?: GitHubPullRequestTarget;
@@ -69,13 +74,35 @@ interface PrWorkflowRequest {
   readonly parentTaskName?: string;
 }
 
+interface PrMergeResult {
+  success: boolean;
+  merged: boolean;
+  outcome: 'prepared' | 'merged' | 'unresolved';
+  completion?: GoalTaskResult;
+  runSlug?: string;
+}
+
 interface MergeDependencies {
   readonly listOpenPrNumbers: (cwd: string) => number[];
   readonly fetchPrListItem: (prNumber: number, cwd: string) => PrListItem | undefined;
-  readonly executePrWorkflow: (request: PrWorkflowRequest) => Promise<{ merged: boolean }>;
+  readonly executePrWorkflow: (request: PrWorkflowRequest) => Promise<PrMergeResult>;
 }
 
-export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ merged: boolean }> {
+export async function executePrWorkflow(request: PrWorkflowRequest): Promise<PrMergeResult> {
+  const runner = new TaskRunner(request.projectCwd);
+  const task = await createPrMergeTask(request, runner);
+  return executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display);
+}
+
+export async function enqueuePrMergeTask(request: PrWorkflowRequest, goal: {
+  id: string; branch: string; integrationBranch: string;
+}): Promise<TaskInfo> {
+  return createPrMergeTask(request, new TaskRunner(request.projectCwd), goal);
+}
+
+async function createPrMergeTask(request: PrWorkflowRequest, runner: TaskRunner, goal?: {
+  id: string; branch: string; integrationBranch: string;
+}): Promise<TaskInfo> {
   const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   const cli = provider.checkCliStatus(request.projectCwd);
   if (!cli.available) throw new Error(cli.error);
@@ -84,28 +111,34 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
   }
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
   if (details.number !== request.prNumber) throw new Error('PR metadata refers to a different PR');
+  if (goal !== undefined && (!details.sameRepository || details.headBranch !== goal.branch
+    || details.baseBranch !== goal.integrationBranch)) {
+    throw new Error('PR does not match the goal head and integration branch');
+  }
   const cloneBase = resolveCloneBaseDir(request.projectCwd);
   mkdirSync(cloneBase, { recursive: true });
   const worktreePath = createTaskClonePath(cloneBase, new Date().toISOString().replace(/[-:.]/gu, '').slice(0, 13),
     undefined, `merge-pr-${request.prNumber}`);
-  const runner = new TaskRunner(request.projectCwd);
-  const task = runner.startPrMergeTask({
+  const input = {
     ...(request.pullRequest === undefined ? {} : { prUrl: request.pullRequest.url }),
     prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch,
     headSha: details.headSha, headRepositoryUrl: details.headRepositoryUrl,
     headRepositoryPushUrls: details.headRepositoryPushUrls,
+    until: request.until ?? 'merge',
     workflow: request.workflow, method: request.settings.method, worktreePath,
     threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
     concurrency: request.settings.concurrency,
-    parentTaskName: request.parentTaskName,
-  });
-  return executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display);
+  };
+  request.abortSignal?.throwIfAborted();
+  return goal === undefined
+    ? runner.startPrMergeTask({ ...input, parentTaskName: request.parentTaskName })
+    : runner.enqueuePrMergeTask({ ...input, goalId: goal.id });
 }
 
 export async function executePersistedPrMergeTask(
   task: TaskInfo, runner: TaskRunner, projectCwd: string,
   abortSignal?: AbortSignal, display?: MergeDisplayOptions,
-): Promise<{ merged: boolean; completion?: GoalTaskResult; runSlug?: string }> {
+): Promise<PrMergeResult> {
   const data = task.data;
   if (data?.merge_task !== true || data.pr_number === undefined || data.workflow === undefined
     || data.merge_method === undefined || task.worktreePath === undefined) {
@@ -123,61 +156,102 @@ export async function executePersistedPrMergeTask(
     : new GoalAbortMonitor(projectCwd, data.goal_id, controller, {
       taskName: task.name, executionId: runningTask.executionId,
     });
+  let branchSynchronization: GoalBranchSync | undefined;
+  let mergeOutcome: PrMergeResult['outcome'] = 'unresolved';
+  let workflowFailure: string | undefined;
   try {
     signal?.throwIfAborted();
+    if (data.goal_id !== undefined) {
+      const goal = await new GoalStore(projectCwd).get(data.goal_id);
+      if (goal.status !== 'awaiting_merge' || goal.executionStatus !== 'active'
+        || goal.branch !== data.branch || goal.integrationBranch !== data.base_branch
+        || goal.pullRequest?.number !== data.pr_number || task.prUrl === undefined
+        || parseGitHubPullRequestTarget(goal.pullRequest.url).url !== parseGitHubPullRequestTarget(task.prUrl).url) {
+        throw new Error('Goal is no longer available for this PR merge task');
+      }
+    }
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
-    const result = await runPrMergeWorkflow({
+    const execution = await runPrMergeWorkflow({
       projectCwd, prNumber: data.pr_number, workflow: data.workflow,
       ...(task.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(task.prUrl) }),
       settings: { ...settings, method: data.merge_method,
         concurrency: data.merge_concurrency ?? settings.concurrency,
         threatCheckMaxDiffBytes: data.merge_threat_check_max_diff_bytes ?? settings.threatCheckMaxDiffBytes },
       abortSignal: signal, display,
-    }, runningTask, runner, runSlug);
+    }, runningTask, runner, runSlug).then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    if (execution.ok) mergeOutcome = execution.result.outcome;
+    workflowFailure = !execution.ok ? getErrorMessage(execution.error)
+      : execution.result.success ? undefined : execution.result.failureReason
+        ?? `PR #${data.pr_number} has unresolved work; inspect ${task.name} with takt list`;
+    if (data.goal_id !== undefined) {
+      const goal = await new GoalStore(projectCwd).get(data.goal_id);
+      if (goal.branch !== data.branch) throw new Error('Goal branch changed during PR merge execution');
+      branchSynchronization = await synchronizeGoalBranch(projectCwd, goal.branch, undefined,
+        execution.ok && execution.result.merged && execution.result.headSha !== undefined
+          ? { cwd: task.worktreePath, sha: execution.result.headSha } : undefined);
+    }
+    if (!execution.ok) throw execution.error;
+    const result = execution.result;
     monitor?.check();
     signal?.throwIfAborted();
-    if (!result.merged) {
-      runner.failTask({ task: runningTask, success: false,
-        response: `PR #${data.pr_number} remains unmerged; inspect ${task.name} with takt list`,
-        executionLog: [], startedAt, completedAt: new Date().toISOString(),
-        branch: data.branch, worktreePath: task.worktreePath });
-      return result;
-    }
-    runner.completeTask({ task: runningTask, success: true, response: 'PR merged',
+    const completion: GoalTaskResult = {
+      success: result.success, interrupted: false,
+      workflowResult: result.success ? 'completed' : 'aborted', mergeOutcome: result.outcome,
+      ...(branchSynchronization === undefined ? {} : { branchSynchronization }),
+      ...(workflowFailure === undefined ? {} : { failureReason: sanitizeSensitiveText(workflowFailure) }),
+    };
+    const terminal = { task: runningTask, success: result.success,
+      response: completion.failureReason ?? (result.merged ? 'PR merged' : 'PR prepared'), completion,
       executionLog: [], startedAt, completedAt: new Date().toISOString(),
-      branch: data.branch, worktreePath: task.worktreePath });
+      branch: data.branch, worktreePath: task.worktreePath };
+    if (!result.success) {
+      runner.failTask(terminal);
+      return { ...result, completion, runSlug };
+    }
+    runner.completeTask(terminal);
     try {
       assertReusableWorktreePath(projectCwd, task.worktreePath);
-      rmSync(task.worktreePath, { recursive: true, force: true });
-      runner.clearCompletedPrMergeWorktree(task.name);
+      if (!await hasUnpublishedPrWork(task.worktreePath, data.branch!, execution.result.headSha, undefined)) {
+        rmSync(task.worktreePath, { recursive: true, force: true });
+        runner.clearCompletedPrMergeWorktree(task.name);
+      }
     } catch (cleanupError) {
-      log.error('Merged PR clone cleanup failed; the completed task retains its clone path', {
+      log.error('PR workflow clone cleanup failed; the completed task retains its clone path', {
         prNumber: data.pr_number, taskName: task.name, error: getErrorMessage(cleanupError),
       });
     }
-    return { merged: true };
+    return { ...result, completion, runSlug };
   } catch (caught) {
     const error = caught instanceof TaskStoppedError ? caught
       : controller.signal.aborted ? controller.signal.reason : caught;
     const current = runner.listAllTaskItems().find((item) => item.name === task.name);
     if (current?.kind === 'running') {
-      const saveFailure = (failure: unknown): GoalTaskResult | undefined => {
-        const reason = getErrorMessage(failure);
-        const completion: GoalTaskResult | undefined = failure instanceof TaskStoppedError
-          || failure instanceof GoalPausedError && data.goal_id !== undefined
-          ? { success: false, interrupted: true, workflowResult: 'aborted', failureReason: reason }
-          : undefined;
+      const saveFailure = (failure: unknown): GoalTaskResult => {
+        const failureMessage = getErrorMessage(failure);
+        const reason = sanitizeSensitiveText(workflowFailure !== undefined && workflowFailure !== failureMessage
+          ? `${workflowFailure}; ${failureMessage}` : failureMessage);
+        const completion: GoalTaskResult = {
+          success: false,
+          interrupted: failure instanceof TaskStoppedError || failure instanceof GoalPausedError,
+          workflowResult: failure instanceof TaskStoppedError || failure instanceof GoalPausedError || failure instanceof GoalAbortedError
+            || mergeOutcome === 'unresolved' ? 'aborted' : 'completed', failureReason: reason, mergeOutcome,
+          ...(failure instanceof GoalBranchSyncError ? { branchSynchronization: failure.result }
+            : branchSynchronization === undefined ? {} : { branchSynchronization }),
+        };
         runner.failTask({ task: runningTask, success: false, response: reason,
           ...(failure instanceof GoalAbortedError ? { failureRetryable: false } : {}),
           executionLog: [], startedAt, completedAt: new Date().toISOString(),
           branch: data.branch, worktreePath: task.worktreePath,
-          ...(completion === undefined ? {} : { completion }) });
+          completion });
         return completion;
       };
       try {
         const completion = saveFailure(error);
         if (error instanceof GoalPausedError && data.goal_id !== undefined) {
-          return { merged: false, completion, runSlug };
+          return { success: false, merged: false, outcome: 'unresolved', completion, runSlug };
         }
       } catch (terminalError) {
         if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
@@ -193,7 +267,7 @@ export async function executePersistedPrMergeTask(
 
 async function runPrMergeWorkflow(
   request: PrWorkflowRequest, task: TaskInfo, runner: TaskRunner, runSlug: string,
-): Promise<{ merged: boolean }> {
+): Promise<PrMergeResult & { headSha?: string; failureReason?: string }> {
   const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) throw new Error('The VCS provider does not support PR merge workflow execution');
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
@@ -294,7 +368,7 @@ async function runPrMergeWorkflow(
     if (!check.passed) {
       const comment = provider.commentOnPr(request.prNumber, toPublicThreatCheckComment(check.comment), request.projectCwd);
       if (!comment.success) throw new Error(comment.error);
-      return { merged: false };
+      return { success: false, merged: false, outcome: 'unresolved' };
     }
   }
   if (task.taskDir === undefined) throw new Error('PR merge task is missing taskDir');
@@ -320,6 +394,7 @@ async function runPrMergeWorkflow(
         : resolve(request.projectCwd, request.workflow)
       : request.workflow,
     task: taskSpec.taskPrompt,
+    ...(data.goal_id === undefined ? {} : { goalId: data.goal_id }),
     taskSpec,
     reportDirName: runSlug,
     ...(data.start_step === undefined ? {} : { startStep: data.start_step }),
@@ -337,6 +412,7 @@ async function runPrMergeWorkflow(
       headSha,
       headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       preserveConflictState: true,
+      preserveHeadBranch: data.goal_id !== undefined,
       mergeConcurrency: request.settings.concurrency,
       threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
     },
@@ -351,8 +427,11 @@ async function runPrMergeWorkflow(
     skipWorktreeRuntimeProtection: true,
   }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
-  return { merged: (await provider.fetchPrStatus(request.prNumber, request.projectCwd,
-    { signal: request.abortSignal })).merged };
+  const { merged, headSha: publishedHeadSha } = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
+    { signal: request.abortSignal });
+  return { success: result.success, merged, headSha: publishedHeadSha,
+    ...(!result.success && result.reason !== undefined ? { failureReason: sanitizeSensitiveText(result.reason) } : {}),
+    outcome: result.success ? (merged ? 'merged' : 'prepared') : 'unresolved' };
 }
 
 export async function runMerge(
@@ -374,7 +453,7 @@ export async function runMerge(
     },
     executePrWorkflow,
   },
-): Promise<{ processedCount: number; mergedCount: number; exitCode: number }> {
+): Promise<{ processedCount: number; mergedCount: number; preparedCount: number; exitCode: number }> {
   if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1) {
     throw new Error('Merge concurrency must be a positive integer');
   }
@@ -419,6 +498,8 @@ export async function runMerge(
   let notifyCompletion: (() => void) | undefined;
   let processedCount = 0;
   let mergedCount = 0;
+  let successCount = 0;
+  let preparedCount = 0;
 
   const execute = async (prNumber: number): Promise<void> => {
     try {
@@ -431,6 +512,8 @@ export async function runMerge(
         parentTaskName: options.parentTaskName,
       });
       if (result.merged) mergedCount += 1;
+      if (result.success) successCount += 1;
+      if (result.outcome === 'prepared') preparedCount += 1;
     } catch (error) {
       log.error('PR merge workflow failed', { prNumber, error: getErrorMessage(error) });
     }
@@ -463,7 +546,7 @@ export async function runMerge(
   } finally {
     await Promise.all(running);
   }
-  return { processedCount, mergedCount, exitCode: mergedCount === processedCount ? 0 : 1 };
+  return { processedCount, mergedCount, preparedCount, exitCode: successCount === processedCount ? 0 : 1 };
 }
 
 export async function runLinkedMergeSafely(

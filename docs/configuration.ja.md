@@ -493,6 +493,12 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
 
+## ゴール PR の仕上げ
+
+`manager.main_merge` はプロジェクトの `.takt/config.yaml` で `approve`（既定）または `auto` を指定します。どちらも完成申請で PR を作成します。`approve` は manager が `takt_merge_goal_pr` の `until: prepare` で仕上げて人のマージを待ち、`auto` は `until: merge` でマージまで進めます。人の明示的なマージ指示も `until: merge` を使います。手元への直接マージや、PR 作成失敗の時間・回数による自動再試行は行いません。
+
+`until: prepare` は `merge-prepare` を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
+
 ## Slack で manager と会話する
 
 会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録する」または「登録せずに会話に戻る」で操作でき、古い版のボタンは使えません。
@@ -1335,6 +1341,10 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 | `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` | `ask` ACP session mode + 生成 `--config` の deny ルール（`exec`、`edit`、`Write(**)`、`mcp__*`） |
 | `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成 `--config` の allow ルール（`exec`、`edit`、`Write(**)`） |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode。permission 要求には `allow_once` で応答 |
+
+Claude SDK（`claude-sdk` とその別名 `claude`）で `full` を要求しても、組織の管理ポリシーなどにより `bypassPermissions` が採用されない場合があります。TAKT は新規・再開セッションの `system/init` が報告した実際のモードを確認し、`bypassPermissions` でなければ `auto` への切り替え完了までツール実行を待たせます。ツールの許可・拒否は Claude CLI が判断します。要求したモード・実際のモード・切り替え先を警告ログに記録します。`auto` への切り替えも拒否された場合は失敗を警告ログに記録し、待機を解除して init が報告したモードで続行します。この警告は manager の会話本文に関する診断ログ抑制とは別に、通常のログ設定に従って出力します。この切り替えは `claude-headless` と `claude-terminal` には適用しません。
+
+manager の自前 MCP ツールは SDK の `allowedTools` に登録して事前承認します。他の通常ツールや利用者の MCP ツールは引き続き利用可能で、それぞれの権限設定に従います。director も既存の専用ツール制限を通じて自前 MCP ツールを事前承認します。
 
 Devin は print モードではなく `devin acp`（stdio 上の Agent Client Protocol）経由で実行されるため、permission mode は3つの層で強制されます。`session/set_mode` で設定する ACP session mode（`readonly` は `ask`、`edit` と未設定は `accept-edits`、`full` は `bypass`）、ユーザーの Devin config（`$XDG_CONFIG_HOME/devin/config.json`、既定 `~/.config/devin/config.json`。Windows は `%APPDATA%\devin\config.json`）を元に生成した `--config` へ追加する permission ルール、そして `session/request_permission` への応答です。TAKT に届いた要求に対しては `allow_once` が `full` モードでのみ選択され、`allow_always` は Devin config に決定を永続化するため選択されません。`strict-readonly` の internal-agent 隔離では `Fetch(**)` も追加で拒否します。
 

@@ -1,3 +1,4 @@
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn() }));
 import { beforeEach,expect,it,vi } from 'vitest';
 import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,mergeTaktGoalPr,reopenTaktGoal } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -5,7 +6,7 @@ import { firstTextContent } from './helpers/mcp-content.js';
 import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), mergePr: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { update = vi.fn(async (_id, transform) => transform(waitingGoal)); get = doubles.get; } }));
 vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check, reopenGoal: doubles.reopen }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: doubles.resolve }));
@@ -22,10 +23,10 @@ const waitingGoal = { ...goalRecord(), status: 'awaiting_merge' as const,
 it.each(['auto', 'approve'])('allows explicit PR merge instructions independently of the %s automatic completion policy', async (mainMerge) => {
   doubles.config.mockReturnValue({ mainMerge, policy });
   doubles.get.mockResolvedValue(waitingGoal);
-  doubles.mergePr.mockResolvedValue({ success: true, output: 'merged' });
-  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950 }, {}, signal);
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
+  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal);
   expect(result.isError).toBeUndefined();
-  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, 1950, waitingGoal.branch, waitingGoal.completion.goalSha, signal);
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, waitingGoal, 'merge', signal);
 });
 it.each(['created', 'completed', 'missing PR', 'wrong PR', 'paused', 'aborted'])('rejects %s before calling the PR merge runner', async (condition) => {
   const number = condition === 'wrong PR' ? 1951 : 1950;
@@ -33,7 +34,7 @@ it.each(['created', 'completed', 'missing PR', 'wrong PR', 'paused', 'aborted'])
     executionStatus: condition === 'paused' || condition === 'aborted' ? condition : 'active',
     ...(condition === 'completed' ? { completion: { ...waitingGoal.completion, targetSha: 'b'.repeat(40) } } : {}),
     pullRequest: condition === 'missing PR' ? undefined : { number, url: `https://github.com/example/project/pull/${number}` } });
-  expect((await mergeTaktGoalPr({ ...input, prNumber: 1950 }, {}, signal)).isError).toBe(true);
+  expect((await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal)).isError).toBe(true);
   expect(doubles.mergePr).not.toHaveBeenCalled();
 });
 it.each(['ja', 'en'])('passes human verification steps and resolved language %s to completion', async (language) => {
@@ -212,8 +213,8 @@ it.each(['merge', 'complete', 'check'] as const)('bounds %s results while retain
 
 it.each(['direct human instruction', 'event'])('allows PR merge tool calls from a %s turn without an authorization callback', async (_source) => {
   doubles.get.mockResolvedValue(waitingGoal);
-  doubles.mergePr.mockResolvedValue({ success: true, output: 'merged' });
-  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950 }, {}, signal);
+  doubles.mergePr.mockResolvedValue({ taskName: 'merge-pr-1950', status: 'pending' });
+  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950, until: 'merge' }, {}, signal);
   expect(result.isError).toBeUndefined();
-  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, 1950, waitingGoal.branch, waitingGoal.completion.goalSha, signal);
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, waitingGoal, 'merge', signal);
 });

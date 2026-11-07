@@ -35,13 +35,10 @@ describe('daemon turn process protocol', () => {
     expect(() => parseTurnProcessMessage(value, common.launchId)).toThrow();
   });
 
-  it('delivers a PR retry event to the manager turn', () => {
-    const event = { ...acceptedEvent, lane: 'other' as const, source: 'watcher' as const,
-      event: { kind: 'watch_observation' as const, observation: {
-        kind: 'goal_pr_retry' as const, targetId: 'goal', generation: 'failure', observedAt: '2026-11-06T00:00:00Z',
-        repositoryDirectory: '/repo', goalId: 'goal', failureId: 'failure', expectedSha: 'a'.repeat(40),
-        reason: 'commit_refs', attempt: 1, maxAttempts: 6,
-      } },
+  it('delivers a PR publication failure to the manager turn', () => {
+    const event = { ...acceptedEvent, lane: 'other' as const, source: 'run' as const,
+      event: { kind: 'goal_pr_failed' as const, repositoryDirectory: '/repo', goalId: 'goal',
+        expectedSha: 'a'.repeat(40), reason: 'commit_refs' },
     };
     const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
     expect(parseDaemonProcessMessage(message, common.launchId)).toEqual(message);

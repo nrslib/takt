@@ -351,7 +351,7 @@ describe('Published PR identity through production Caccia', () => {
       expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual([]);
     } else {
       const result = await resumed;
-      expect(result, JSON.stringify(await vi.mocked(runWorkflowExecution).mock.results.at(-1)?.value)).toEqual({ merged: true });
+      expect(result, JSON.stringify(await vi.mocked(runWorkflowExecution).mock.results.at(-1)?.value)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
       expect(mergeStarts).toHaveLength(1);
       expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual(['thread-target']);
     }

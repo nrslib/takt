@@ -84,6 +84,22 @@ export async function isGoalCommitIncluded(cwd: string, source: string, target: 
   return result.code === 0;
 }
 
+export async function hasUnpublishedPrWork(
+  cwd: string, branch: string, publishedHeadSha: string | undefined, signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const timeout = AbortSignal.timeout(30_000);
+  const checkSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+  if (await goalGitText(cwd, ['status', '--porcelain', '--untracked-files=all'], checkSignal) !== '') return true;
+  let remoteSha = publishedHeadSha;
+  if (remoteSha === undefined) {
+    const advertised = await runGoalGit(cwd, ['ls-remote', '--exit-code', '--heads', 'origin', toLocalBranchRef(branch)], 4096, checkSignal, [0, 2]);
+    if (advertised.code === 2) return true;
+    if (advertised.truncated) throw new Error('PR remote ref output exceeds the limit');
+    remoteSha = advertised.output.toString('utf8').split(/\s/u)[0]!;
+  }
+  return !await isGoalCommitIncluded(cwd, 'HEAD', remoteSha, checkSignal);
+}
+
 const CONTENT_OUTPUT_LIMIT = 8 * 1024 * 1024;
 
 function completeOutput(result: GoalGitOutput): string {

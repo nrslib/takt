@@ -30,19 +30,11 @@ ja:
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440113
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440113
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -190,9 +182,9 @@ ja:
             iteration: 3
         reports:
           - filename: fix-verification-1.md
-            sizeBytes: 416
+            sizeBytes: 622
           - filename: fix-verification-2.md
-            sizeBytes: 416
+            sizeBytes: 622
         stepLogPage:
           collection: stepLogs
           totalCount: 3
@@ -238,10 +230,10 @@ ja:
           iteration: 2
           content: |-
             # 修正確認 第1回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
-          totalBytes: 416
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。次は読む量を分け、残りの assertion と保存形式の文書を照合して、話者名と時刻の保存について判定する。確認対象や判定基準の追加は提案していない。
+          totalBytes: 622
           offset: 0
-          returnedBytes: 416
+          returnedBytes: 622
           direction: backward
           truncated: false
           nextOffset: null
@@ -273,10 +265,10 @@ ja:
           iteration: 3
           content: |-
             # 修正確認 第2回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
-          totalBytes: 416
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。次は読む量を分け、残りの assertion と保存形式の文書を照合して、話者名と時刻の保存について判定する。確認対象や判定基準の追加は提案していない。
+          totalBytes: 622
           offset: 0
-          returnedBytes: 416
+          returnedBytes: 622
           direction: backward
           truncated: false
           nextOffset: null
@@ -325,7 +317,7 @@ ja:
           status: done
           content: |-
             # 修正確認 第1回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。次は読む量を分け、残りの assertion と保存形式の文書を照合して、話者名と時刻の保存について判定する。確認対象や判定基準の追加は提案していない。
           instruction: ""
           timestamp: 2026-10-11T23:20:00.000Z
         - type: step_start
@@ -340,7 +332,7 @@ ja:
           status: done
           content: |-
             # 修正確認 第2回
-            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。
+            IDX-17: 未完了。src/index/record.ts:42 は話者名と時刻を保存している。テストの実行ログは成功。今回はログと tests/index-record.test.ts の assertion の照合を終えていない。検索結果が切れたため、残りの assertion と保存形式の文書を読み終えていない。実装の欠落や必要な証拠の欠落は報告していない。次は読む量を分け、残りの assertion と保存形式の文書を照合して、話者名と時刻の保存について判定する。確認対象や判定基準の追加は提案していない。
           instruction: ""
           timestamp: 2026-10-11T23:35:00.000Z
         - type: step_start
@@ -350,9 +342,9 @@ ja:
           timestamp: 2026-10-12T00:00:00.000Z
       reports:
         - filename: fix-verification-1.md
-          sizeBytes: 416
+          sizeBytes: 622
         - filename: fix-verification-2.md
-          sizeBytes: 416
+          sizeBytes: 622
 en:
   lang: en
   turn: event
@@ -385,19 +377,11 @@ en:
         kind: patrol
     questions: []
   event:
-    kind: watch_observation
-    observation:
-      kind: run_log_stalled
-      targetId: run-research-audio-index
-      generation: 650e8400-e29b-41d4-a716-446655440113
-      observedAt: 2026-10-12T00:31:00.000Z
-      lastUpdatedAt: 2026-10-12T00:00:00.000Z
-      task:
-        repositoryDirectory: /workspace/project
-        goalId: 650e8400-e29b-41d4-a716-446655440000
-        taskName: research-audio-index
-        runSlug: run-research-audio-index
-        executionId: 650e8400-e29b-41d4-a716-446655440113
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-10-12T00:31:00.000Z
   tasks:
     - name: seed-index
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -545,9 +529,9 @@ en:
             iteration: 3
         reports:
           - filename: fix-verification-1.md
-            sizeBytes: 421
+            sizeBytes: 623
           - filename: fix-verification-2.md
-            sizeBytes: 421
+            sizeBytes: 623
         stepLogPage:
           collection: stepLogs
           totalCount: 3
@@ -593,10 +577,10 @@ en:
           iteration: 2
           content: |-
             # Repair verification execution 1
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
-          totalBytes: 421
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported. Next, read smaller batches to cross-check the remaining assertions and storage-format document and judge speaker-name and timestamp storage. No additional verification targets or criteria are proposed.
+          totalBytes: 623
           offset: 0
-          returnedBytes: 421
+          returnedBytes: 623
           direction: backward
           truncated: false
           nextOffset: null
@@ -628,10 +612,10 @@ en:
           iteration: 3
           content: |-
             # Repair verification execution 2
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
-          totalBytes: 421
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported. Next, read smaller batches to cross-check the remaining assertions and storage-format document and judge speaker-name and timestamp storage. No additional verification targets or criteria are proposed.
+          totalBytes: 623
           offset: 0
-          returnedBytes: 421
+          returnedBytes: 623
           direction: backward
           truncated: false
           nextOffset: null
@@ -680,7 +664,7 @@ en:
           status: done
           content: |-
             # Repair verification execution 1
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported. Next, read smaller batches to cross-check the remaining assertions and storage-format document and judge speaker-name and timestamp storage. No additional verification targets or criteria are proposed.
           instruction: ""
           timestamp: 2026-10-11T23:20:00.000Z
         - type: step_start
@@ -695,7 +679,7 @@ en:
           status: done
           content: |-
             # Repair verification execution 2
-            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported.
+            IDX-17: incomplete. src/index/record.ts:42 saves speaker names and timestamps. The test execution log reports success. This execution did not finish cross-checking that log against assertions in tests/index-record.test.ts. Search output was truncated, so the remaining assertions and storage-format document have not been read. No missing implementation or required evidence is reported. Next, read smaller batches to cross-check the remaining assertions and storage-format document and judge speaker-name and timestamp storage. No additional verification targets or criteria are proposed.
           instruction: ""
           timestamp: 2026-10-11T23:35:00.000Z
         - type: step_start
@@ -705,6 +689,6 @@ en:
           timestamp: 2026-10-12T00:00:00.000Z
       reports:
         - filename: fix-verification-1.md
-          sizeBytes: 421
+          sizeBytes: 623
         - filename: fix-verification-2.md
-          sizeBytes: 421
+          sizeBytes: 623

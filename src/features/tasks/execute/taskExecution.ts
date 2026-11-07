@@ -128,12 +128,14 @@ export async function executeTaskAndCompleteWithDetails(
         taskColorIndex: parallelOptions?.taskColorIndex,
         taskDisplayLabel: parallelOptions?.taskDisplayLabel,
       });
-      return { success: result.merged,
+      return { success: result.success,
         ...(result.completion === undefined ? {} : {
           completion: result.completion, runSlug: result.runSlug, failureReason: result.completion.failureReason,
         }) };
     } catch (error) {
-      return { success: false, failureReason: getErrorMessage(error) };
+      const saved = taskRunner.listTaskStateItems().find((item) => item.name === task.name);
+      return { success: false, failureReason: getErrorMessage(error),
+        ...(saved?.completion === undefined ? {} : { completion: saved.completion, runSlug: saved.runSlug }) };
     }
   }
   const startedAt = new Date().toISOString();

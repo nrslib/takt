@@ -532,22 +532,24 @@ async function executeWorkflowInternal(
         mergeMethod: options.mergeMethod,
         prGitOperations: prExecution.prGitOperations,
         phase1ProcessSafetyByStep,
-        systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
-          ...serviceOptions,
-          runPaths: bootstrap.runPaths,
-          ...gitSafety,
-          ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
-            execute: (prNumber) => cacciaEffect({
-              ...serviceOptions, ...gitSafety, prContext,
-              prMergePushRecorder: options.prMergePushRecorder,
-              gitProvider: runContext?.gitProvider,
-              outputMode: options.outputMode, taskPrefix: options.taskPrefix,
-              eventSink: options.eventSink,
-              taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
-            }, prNumber),
-          } }),
-          ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
-        }),
+        systemStepServicesFactory: (serviceOptions) => {
+          return createDefaultSystemStepServices({
+            ...serviceOptions,
+            runPaths: bootstrap.runPaths,
+            ...gitSafety,
+            ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
+              execute: (prNumber) => cacciaEffect({
+                ...serviceOptions, ...gitSafety, prContext,
+                prMergePushRecorder: options.prMergePushRecorder,
+                gitProvider: runContext?.gitProvider,
+                outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+                eventSink: options.eventSink,
+                taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
+              }, prNumber),
+            } }),
+            ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
+          });
+        },
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });

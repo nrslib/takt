@@ -10,6 +10,10 @@ import { createAgentFailureError, isAgentFailureError } from '../../shared/types
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
 
+const managerToolNames = [
+  ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+];
+
 const addRepositoryTools = new Set([
   'takt_add_workspace_repository',
   `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
@@ -49,9 +53,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             prepared = await adapter.prepare(resolved, {
               cwd, abortSignal: signal, permissionMode: 'full',
               ...(plan.ctx.providerType === 'codex'
-                ? { toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: [
-                  ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
-                ] } } : {}),
+                ? { toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: managerToolNames } } : {}),
             });
           }
           signal.throwIfAborted();
@@ -62,6 +64,10 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             const response = await agent.call(prompt, {
               cwd, model: plan.ctx.model, sessionId, abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
+              ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
+                && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
+                ? { allowedTools: managerToolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`) }
+                : {}),
               outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
               ...(input.recovery === undefined ? {} : { callerManagedSession: true as const }),
               mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,

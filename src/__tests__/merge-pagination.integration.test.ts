@@ -17,7 +17,7 @@ function rawPr(number: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function run(executePrWorkflow: (request: { prNumber: number }) => Promise<{ merged: boolean }>,
+function run(executePrWorkflow: (request: { prNumber: number }) => Promise<{ success: boolean; merged: boolean; outcome: 'merged' | 'unresolved' }>,
   where?: { author: string }) {
   const provider = new GitHubProvider();
   return runMerge({ projectCwd: '/project', concurrency: 2,
@@ -66,19 +66,19 @@ describe('Merge bulk GitHub pagination', () => {
     const prs = Array.from({ length: count }, (_, index) => rawPr(index + 1));
     const events = serveOpenPrs(prs);
     const executed: number[] = [];
-    const result = await run(async ({ prNumber }) => { executed.push(prNumber); return { merged: true }; });
+    const result = await run(async ({ prNumber }) => { executed.push(prNumber); return { success: true, merged: true, outcome: 'merged' }; });
     expect(executed).toEqual(prs.map((pr) => pr.number));
     expect(events.slice(0, Math.ceil(count / 100))).toEqual(
       Array.from({ length: Math.ceil(count / 100) }, (_, index) => `list:${index + 1}`));
     expect(events.filter((event) => event.startsWith('detail:'))).toHaveLength(count);
-    expect(result).toEqual({ processedCount: count, mergedCount: count, exitCode: 0 });
+    expect(result).toEqual({ processedCount: count, mergedCount: count, preparedCount: 0, exitCode: 0 });
   });
 
   it('詳細取得時にclosedとなったPRを除外し残りの条件を判定する', async () => {
     const events = serveOpenPrs([rawPr(1), rawPr(2, { state: 'closed' }), rawPr(3, { user: { login: 'bob' } })]);
-    const executePrWorkflow = vi.fn(async (_request: { prNumber: number }) => ({ merged: true }));
+    const executePrWorkflow = vi.fn(async (_request: { prNumber: number }) => ({ success: true, merged: true, outcome: 'merged' as const }));
     expect(await run(executePrWorkflow, { author: 'alice' }))
-      .toEqual({ processedCount: 1, mergedCount: 1, exitCode: 0 });
+      .toEqual({ processedCount: 1, mergedCount: 1, preparedCount: 0, exitCode: 0 });
     expect(executePrWorkflow.mock.calls.map(([request]) => request.prNumber)).toEqual([1]);
     expect(events.slice(0, 1)).toEqual(['list:1']);
   });
@@ -86,7 +86,7 @@ describe('Merge bulk GitHub pagination', () => {
   it('後続ページの取得失敗では詳細取得もworkflowも開始しない', async () => {
     const prs = Array.from({ length: 101 }, (_, index) => rawPr(index + 1));
     const events = serveOpenPrs(prs, { failPage: 2 });
-    const executePrWorkflow = vi.fn(async () => ({ merged: true }));
+    const executePrWorkflow = vi.fn(async () => ({ success: true, merged: true, outcome: 'merged' as const }));
     await expect(run(executePrWorkflow)).rejects.toThrow('pagination failed');
     expect(events).toEqual(['list:1', 'list:2']);
     expect(executePrWorkflow).not.toHaveBeenCalled();

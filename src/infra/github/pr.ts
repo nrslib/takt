@@ -1750,14 +1750,15 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
   }
 }
 
-export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string, target?: GitHubPullRequestTarget): MergeResult {
+export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string, target?: GitHubPullRequestTarget, options?: { deleteBranch: boolean }): MergeResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'merge', target?.url ?? String(prNumber), `--${method}`, '--delete-branch',
+    execFileSync('gh', ['pr', 'merge', target?.url ?? String(prNumber), `--${method}`,
+      ...(options?.deleteBranch === false ? [] : ['--delete-branch']),
       ...(expectedHeadSha === undefined ? [] : ['--match-head-commit', expectedHeadSha])], {
       cwd,
       encoding: 'utf-8',

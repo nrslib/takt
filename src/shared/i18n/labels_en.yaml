@@ -450,8 +450,7 @@ director:
   managerInterrupted: "Manager {managerId} message was interrupted (operation ID: {operationId}): {message}"
 manager:
   goalPr:
-    retryLimitReached: "Automatic PR preparation retries stopped after reaching the limit of six events. Check the cause and submit completion again if needed. Reason: {reason}"
-    preparationFailed: "PR preparation failed. TAKT will retry automatically after a delay. Reason: {reason}"
+    preparationFailed: "PR preparation failed. Inspect the cause and decide the next operation. Reason: {reason}"
     objective: "Objective"
     changes: "Changes"
     verification: "Verification"
@@ -583,9 +582,7 @@ manager:
   notificationMoreOptions: "Additional options: {count}. View all options in the TUI."
   notificationRecommendation: "Recommendation: {recommendation}"
   notificationAnswer: "Open takt manager in {project}, press Ctrl+R in the TUI and select an inquiry from the list to answer."
-  notificationMerge: "Review the changes and merge them into the {branch} branch."
-  notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
-  notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
+  notificationMerge: "Prepare the PR through a PR merge task, then merge the PR into {branch} after review and CI pass."
   notificationBlockedAction: "Check the reason and required action above. For full details, open takt manager in {project} and follow up in the TUI."
   notificationFullMessage: "Open takt manager in {project} to check the conversation and current work state in the TUI."
   notificationDigestHint: "Remaining body lines omitted."

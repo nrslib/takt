@@ -22,15 +22,9 @@ export type WatchObservation = {
   observedAt: string;
 } & (
   | { kind: 'run_process_lost'; task: TaskRef; pid: number; startTime: string | null }
-  | { kind: 'run_log_stalled'; task: TaskRef; lastUpdatedAt: string }
-  | { kind: 'run_too_long'; task: TaskRef; startedAt: string }
-  | { kind: 'run_step_repeated'; task: TaskRef; workflow: string; step: string; stepIdentity: string; count: number }
   | { kind: 'pr_changed'; repositoryDirectory: string; goalId: string; url: string; state: 'MERGED' | 'CLOSED' }
-  | { kind: 'goal_pr_retry'; repositoryDirectory: string; goalId: string; failureId: string; expectedSha: string; reason: string;
-      attempt: number; maxAttempts: number }
+
   | { kind: 'pr_mismatch'; repositoryDirectory: string; goalId: string; url: string; reason: string }
-  | { kind: 'inquiry_stalled'; repositoryDirectory: string; questionId: string; goalId: string | null }
-  | { kind: 'goal_stalled'; repositoryDirectory: string; goalId: string; lastUpdatedAt: string }
   | { kind: 'run_launch_stalled'; repositoryDirectory: string }
   | { kind: 'watch_failed'; reason: string }
   | { kind: 'director_state_changed'; managerConversationId: string; repositoryDirectory: string; goalId: string | null; state: string }
@@ -43,6 +37,7 @@ export type TurnEvent =
   | { kind: 'inquiry_answer'; command: Extract<ConversationCommand, { kind: 'answer_question' }> }
   | { kind: 'task_completed' | 'task_failed'; task: TaskRef; result: GoalTaskResult }
   | { kind: 'director_message'; directorConversationId: string; text: string }
+  | { kind: 'goal_pr_failed'; repositoryDirectory: string; goalId: string; expectedSha: string; reason: string }
   | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation }
@@ -51,12 +46,12 @@ export type TurnEvent =
 export function eventGoalReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
-    case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
+    case 'goal_pr_failed': case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
     case 'patrol': return { repositoryDirectory: event.repositoryDirectory };
     case 'watch_observation': {
       const observation = event.observation;
       switch (observation.kind) {
-        case 'run_process_lost': case 'run_log_stalled': case 'run_too_long': case 'run_step_repeated': return observation.task;
+        case 'run_process_lost': return observation.task;
         case 'watch_failed': case 'director_state_changed': return undefined;
         default: return observation;
       }

@@ -10,7 +10,7 @@ TUI は相談、登録案の承認、質問回答、状態操作、表示を扱�
 
 ## 道具と復旧
 
-ゴール操作は対象の cwd と goalId を使います。引数定義を確認してください。takt_list_tasks は goalIntegration（integrated / not_integrated / unknown）と、不明な理由を goalIntegrationReason に返します。成功表示だけで取り込み済みと判断しません。
+ゴール操作は対象の cwd と goalId を使います。引数定義を確認してください。takt_list_tasks は goalIntegration（integrated / not_integrated / unknown / direct_push）と、不明な理由を goalIntegrationReason に返します。direct_push は PR のブランチへ直接 push するタスクを表し、取り込み成功を意味しません。成功表示だけで取り込み済みと判断しません。
 
 - takt_enqueue_goal_task は名前・scope reference・パスの workflow を使い、ゴールブランチを基点に worktree で実行します。autoPr と shouldPublishBranchToOrigin は省略時 false で、投入時に指定できます。merge_pr / close_pr を含む workflow も使えます。
 - takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed には startStep も選べます。exceeded の startStep 指定はできません。保存位置が使えなければ理由と候補が返ります。
@@ -25,11 +25,11 @@ manager の自動 run は auto_run を守り、ゴールタスクだけを実行
 
 ## 取り込みと PR
 
-成果をゴールブランチへ集めてから取り込み先へ反映します。manager.main_merge はプロジェクト設定だけを使い、既定 approve は PR の準備後に待ちます。auto は人が設定した継続の取り込み指示として扱い、自動取り込みを行います。取り込み先がチェックアウト中なら PR を準備します。
+成果をゴールブランチへ集めてから取り込み先へ反映します。manager.main_merge はプロジェクト設定だけを使います。approve と auto はどちらも PR を作ります。既定の approve は until: prepare のマージ用タスクで仕上げて人のマージを待ちます。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進めます。
 
 takt_complete_goal は確認した expectedSha、証拠付き summary と、PR が必要なら humanChecks を使います。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、既存 PR の head/base を照合し、番号と URL を pullRequest に保存します。push や PR 準備に失敗して PR 未保存なら、原因解消後に takt_complete_goal を呼び直せます。manager 自身も push の状態を調べ、必要な修正・再実行を行えます。
 
-takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber で takt merge を実行します。人が manager に直接「マージして」と指示した場合も使えます。保存 PR、awaiting_merge、停止状態の検査は残ります。成功後は takt_check_goal_completion で反映を確認します。保存 PR の head/base が一致してマージ済みなら、squash や追加コミットがあっても完成できます。PR が未マージで closed なら完成しません。PR を確認できない取り込み待ちは内容を比較します。完成証拠と PR を保持して created に戻した場合も確認できます。
+takt_merge_goal_pr は必須の cwd、goalId、保存 PR に一致する prNumber、until を受け、ゴール所属のマージ用タスクを pending で積み、タスク名をすぐに返します。until: prepare は merge-prepare、until: merge は merge.workflow（未設定なら merge-review-fix-simple）を使います。同じ対象の pending / running タスクは重ねません。保存 PR、awaiting_merge、停止状態を検査します。タスクは PR のブランチに直接 push し、手元のゴールブランチが祖先なら fast-forward します。分岐やチェックアウト中の作業コピーは上書きせず、結果と完了イベントに残します。結果は prepared、merged、unresolved を区別します。マージ済みなら takt_check_goal_completion で完成を確かめます。保存 PR の head/base が一致していれば squash や追加コミットにも対応します。未マージで closed なら完成しません。PR を確認できない取り込み待ちは内容を比較し、完成証拠と PR を保持して created に戻した場合も確認できます。 until: merge で積んだタスクも、ワークフローが COMPLETE で終わって PR が未マージなら成功・prepared として届くため、manager は結果を読んで次の対応を判断します。
 
 ## 記憶・問い合わせ・通知
 
@@ -39,4 +39,4 @@ takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber で tak
 
 manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。質問の回答画面は通知無効でも残ります。通常画面の通知は冒頭だけ表示し、起動前の通知は再表示しません。全文や過去の通知はゴール記録から読みます。通知失敗はログに残して作業を続けます。
 
-見張りはプロセス消失、ログ停滞、PR 状態変化などの変化・異常だけを配送し、時計だけで AI を呼びません。生存や開始時刻が不明なら死亡と決めません。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返します。対応する保存ログがなければ開始時刻は不明です。
+見張りはプロセス消失、PR 状態変化などの変化・異常だけを配送し、時計だけで AI を呼びません。生存や開始時刻が不明なら死亡と決めません。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返します。対応する保存ログがなければ開始時刻は不明です。
