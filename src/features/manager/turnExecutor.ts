@@ -69,7 +69,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             fresh: input.recovery === undefined || input.recovery.context.length === 0
               ? input.prompt : `${input.prompt}\n\nBusiness context (not approval): ${input.recovery.context}`,
           }, {
-            cwd, model: plan.ctx.model, sessionId: input.sessionId, abortSignal: signal,
+            cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
               && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
@@ -94,7 +94,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
                 } catch { return; }
               }
             },
-          }, input.recovery?.invalidateSession);
+          }, input.patrol ? undefined : input.recovery?.invalidateSession);
           signal.throwIfAborted();
           return { ...parseManagerResponse(response, plan.ctx.providerType),
             sessionId: response.sessionId, assignment };

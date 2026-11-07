@@ -55,6 +55,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const priorPending = state.current.pending;
       const directorMessage = event.kind === 'director_message';
       const human = event.kind === 'human_command';
+      const patrol = event.kind === 'patrol';
       let command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
@@ -67,7 +68,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
-        if (event.kind === 'patrol') {
+        if (patrol) {
           const store = new GoalStore(event.repositoryDirectory);
           const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
           io.signal.throwIfAborted();
@@ -138,18 +139,20 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
           const resolved = await runtime.resolve(assignment, io.signal, agentOverrides);
           try {
-            const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-              || contextKey !== undefined && contextKey !== resolved.contextKey;
-            if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
-              await state.save({ session: { provider: resolved.provider, model: resolved.model,
-                sessionId: changed ? null : state.current.session.sessionId,
-                ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
+            if (!patrol) {
+              const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
+                || contextKey !== undefined && contextKey !== resolved.contextKey;
+              if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
+                await state.save({ session: { provider: resolved.provider, model: resolved.model,
+                  sessionId: changed ? null : state.current.session.sessionId,
+                  ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
+              }
+              contextKey = resolved.contextKey;
             }
-            contextKey = resolved.contextKey;
             language = resolved.language;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
             const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
-            const interruptedMessage = state.current.interruptedMessage;
+            const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const prompt = [
               ...(interruptedMessage == null || verify ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
               command.text,
@@ -158,11 +161,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const output = await resolved.executor.execute({
               prompt,
               ...(verification === undefined ? {} : { verify: verification }),
-              sessionId: state.current.session.sessionId ?? undefined,
+              sessionId: patrol ? undefined : state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
               onActivity: (activity) => io.progress(activity),
-              patrol: event.kind === 'patrol',
+              patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
             if (verify) verificationMessage = output.message;
@@ -184,11 +187,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               validateManagerSummary(summary);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
-            return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({
+            return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
               ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
               ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
-            }) };
+            }) }) };
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
           case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;

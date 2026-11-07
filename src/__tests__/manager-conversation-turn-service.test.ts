@@ -516,7 +516,7 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
   }
 });
 
-it('inspects active patrol goals together using the saved conversation and no registration proposal', async () => {
+it('inspects active patrol goals together without resuming or updating the conversation session', async () => {
   const f = fixture();
   const active = goalRecord(); const paused = { ...goalRecord(), id: randomUUID(), executionStatus: 'paused' };
   doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : paused);
@@ -524,8 +524,11 @@ it('inspects active patrol goals together using the saved conversation and no re
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, paused.id] };
   const message = 'Patrol: 1 goal, no anomalies';
   f.execute.mockResolvedValue({ message, summary: null, sessionId: 'next', assignment: undefined });
-  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message },
-    change: { session: { sessionId: 'next' } } });
+  const outcome = await f.service.execute(f.input, f.io);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply', message } });
+  expect(outcome.change?.session).toBeUndefined();
+  expect(outcome.change?.proposal).toBeUndefined();
+  expect(f.request).not.toHaveBeenCalled();
   const turn = f.execute.mock.calls[0]![0];
   expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
@@ -537,9 +540,43 @@ it('inspects active patrol goals together using the saved conversation and no re
   expect(instruction).toMatch(/only findings confirmed to be outside the requested work/);
   expect(instruction).toMatch(/Do not judge by execution time or step counts/);
   expect(instruction).not.toMatch(/Check run duration|repeated steps/);
-  expect(turn).toMatchObject({ patrol: true, sessionId: 'shared-session' });
+  expect(turn).toMatchObject({ patrol: true, sessionId: undefined, recovery: { context: 'saved-goal-memory' } });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each(['completed', 'failed', 'interrupted'] as const)('preserves the conversation session and interrupted human input through a %s patrol', async (status) => {
+  const f = conversationFixture();
+  const humanController = new AbortController(); f.interruptNext(humanController);
+  await f.run(humanMessage('undelivered human request'), humanController);
+  const before = f.state();
+  const patrolController = new AbortController();
+  if (status === 'failed') f.execute.mockRejectedValueOnce(new Error('patrol failed'));
+  if (status === 'interrupted') f.interruptNext(patrolController);
+  const outcome = await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] }, patrolController);
+  expect(outcome).toMatchObject(status === 'interrupted' ? { kind: 'interrupted' }
+    : { kind: 'completed', result: { kind: status === 'failed' ? 'error' : 'reply' } });
+  const turn = f.execute.mock.calls[1]![0];
+  expect(turn.sessionId).toBeUndefined();
+  expect(JSON.parse(turn.prompt).event.kind).toBe('patrol');
+  expect(turn.prompt).not.toContain('undelivered human request');
+  expect(f.state().session).toEqual(before.session);
+  expect(f.state().interruptedMessage).toBe('undelivered human request');
+  await f.run(humanMessage('continue'));
+  expect(f.execute.mock.calls[2]![0]).toMatchObject({ sessionId: before.session.sessionId });
+  expect(f.execute.mock.calls[2]![0].prompt).toContain('undelivered human request');
+  expect(f.state().interruptedMessage).toBeNull();
+});
+
+it('keeps the human session and runtime context when a patrol resolves a different model or context', async () => {
+  const f = conversationFixture();
+  await f.run(humanMessage('before patrol'));
+  const before = f.state().session;
+  f.resolve.mockResolvedValueOnce({ provider: 'mock', model: 'patrol-model', contextKey: 'patrol-context', language: 'en', executor: { execute: f.execute } });
+  await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] });
+  expect(f.state().session).toEqual(before);
+  await f.run(humanMessage('after patrol'));
+  expect(f.execute.mock.calls[2]![0].sessionId).toBe(before.sessionId);
 });
 
 it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
