@@ -29,7 +29,7 @@ describe('GoalAbortMonitor', () => {
   });
   afterEach(() => { monitor?.stop(); monitor = undefined; vi.useRealTimers(); });
 
-  it.each(['created', 'completed'] as const)('マージ監視中に awaiting_merge から %s へ変わると専用の理由で中断する', (status) => {
+  it('マージ監視中に awaiting_merge から created へ変わると専用の理由で中断する', () => {
     doubles.get.mockReturnValue(awaitingMergeGoal());
     const controller = new AbortController();
     monitor = new GoalAbortMonitor('/project', goalId, controller,
@@ -37,14 +37,31 @@ describe('GoalAbortMonitor', () => {
     vi.advanceTimersByTime(500);
     expect(controller.signal.aborted).toBe(false);
 
-    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status });
+    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status: 'created' });
     vi.advanceTimersByTime(500);
 
     expect(controller.signal.aborted).toBe(true);
     expect(controller.signal.reason).toBeInstanceOf(GoalNotAwaitingMergeError);
     expect(controller.signal.reason.message).toContain(goalId);
     expect(controller.signal.reason.message).toContain('awaiting_merge');
-    expect(controller.signal.reason.message).toContain(status);
+    expect(controller.signal.reason.message).toContain('created');
+    monitor.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['周期確認', '明示確認'] as const)('マージ監視中に awaiting_merge から completed へ変わっても中断しない（%s）', (checkMethod) => {
+    doubles.get.mockReturnValue(awaitingMergeGoal());
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', goalId, controller,
+      { taskName: 'task-a', executionId: 'run-a' }, { requireAwaitingMerge: true });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.aborted).toBe(false);
+
+    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status: 'completed' });
+    if (checkMethod === '周期確認') vi.advanceTimersByTime(500);
+    else monitor.check();
+
+    expect(controller.signal.aborted).toBe(false);
     monitor.stop();
     expect(vi.getTimerCount()).toBe(0);
   });

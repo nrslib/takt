@@ -192,6 +192,37 @@ describe('Merge workflows own Caccia execution', () => {
     } finally { release(); await execution; }
   });
 
+  it('マージ成功後にゴールが completed になってもタスクを正常完了として保存する', async () => {
+    vi.useFakeTimers();
+    try {
+      const { goals, runner, claimed } = await claimGoalMergeTask('merge');
+      vi.spyOn(goalGit, 'hasUnpublishedPrWork').mockResolvedValue(false);
+      mocks.status.mockResolvedValue({ merged: false });
+      mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+        expect(goals.getSync(goalId).status).toBe('awaiting_merge');
+        expect(request.abortSignal!.aborted).toBe(false);
+        await request.prGitOperations!.push('HEAD:refs/heads/feature/pr');
+        const services = createDefaultSystemStepServices({ ...request, task: request.task });
+        expect(await services.executeEffect({ type: 'merge_pr', pr: 123 }, { pr: 123 }, {} as WorkflowState))
+          .toMatchObject({ success: true, failed: false });
+        mocks.status.mockResolvedValue({ merged: true, headSha });
+        await goals.update(goalId, (goal) => ({ ...goal, status: 'completed',
+          completion: { ...goal.completion!, targetSha: 'b'.repeat(40) } }));
+        return { success: true };
+      });
+
+      expect(await executePersistedPrMergeTask(claimed, runner, project))
+        .toMatchObject({ success: true, merged: true, outcome: 'merged',
+          completion: { success: true, workflowResult: 'completed', mergeOutcome: 'merged' } });
+
+      expect(goals.getSync(goalId).status).toBe('completed');
+      expect(new TaskStore(project).read().tasks.find((task) => task.name === claimed.name))
+        .toMatchObject({ status: 'completed', completion: {
+          success: true, workflowResult: 'completed', mergeOutcome: 'merged' } });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('監視周期の前にゴールが戻っても完了前の確認で中断し失敗結果を保存する', async () => {
     vi.useFakeTimers();
     try {
