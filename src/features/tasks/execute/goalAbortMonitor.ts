@@ -53,7 +53,7 @@ export class GoalAbortMonitor {
         const goal = this.store.getSync(this.goalId);
         if (goal?.executionStatus === 'aborted') this.controller.abort(new GoalAbortedError(this.goalId));
         if (goal?.executionStatus === 'paused') this.controller.abort(new GoalPausedError(this.goalId));
-        if (!this.controller.signal.aborted && this.options?.requireAwaitingMerge && goal.status !== 'awaiting_merge') {
+        if (!this.controller.signal.aborted && this.options?.requireAwaitingMerge && goal.status === 'created') {
           this.controller.abort(new GoalNotAwaitingMergeError(this.goalId, goal.status));
         }
       } catch (error) {
