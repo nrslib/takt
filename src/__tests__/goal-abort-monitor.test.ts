@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
-import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import {
+  GoalAbortMonitor, GoalAbortedError, GoalPausedError, GoalNotAwaitingMergeError,
+} from '../features/tasks/execute/goalAbortMonitor.js';
 import { TaskStoppedError } from '../infra/task/taskStop.js';
 
 const doubles = vi.hoisted(() => ({ get: vi.fn(), read: vi.fn(), error: vi.fn() }));
 vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read = doubles.read; } }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = doubles.get; } }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
+
+function awaitingMergeGoal() {
+  const goal = goalRecord();
+  return { ...goal, status: 'awaiting_merge' as const,
+    completion: { goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: goal.integrationBranch,
+      targetSha: 'b'.repeat(40), summary: 'verified', instructions: [], humanChecks: 'Read the result',
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+        files: [], truncated: false, totalsTruncated: false } } };
+}
 
 describe('GoalAbortMonitor', () => {
   let monitor: GoalAbortMonitor | undefined;
@@ -17,6 +28,63 @@ describe('GoalAbortMonitor', () => {
     doubles.read.mockReturnValue({ tasks: [] });
   });
   afterEach(() => { monitor?.stop(); monitor = undefined; vi.useRealTimers(); });
+
+  it.each(['created', 'completed'] as const)('マージ監視中に awaiting_merge から %s へ変わると専用の理由で中断する', (status) => {
+    doubles.get.mockReturnValue(awaitingMergeGoal());
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', goalId, controller,
+      { taskName: 'task-a', executionId: 'run-a' }, { requireAwaitingMerge: true });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.aborted).toBe(false);
+
+    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status });
+    vi.advanceTimersByTime(500);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toBeInstanceOf(GoalNotAwaitingMergeError);
+    expect(controller.signal.reason.message).toContain(goalId);
+    expect(controller.signal.reason.message).toContain('awaiting_merge');
+    expect(controller.signal.reason.message).toContain(status);
+    monitor.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('マージ監視中も awaiting_merge のままなら中断しない', () => {
+    doubles.get.mockReturnValue(awaitingMergeGoal());
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', goalId, controller,
+      { taskName: 'task-a', executionId: 'run-a' }, { requireAwaitingMerge: true });
+    vi.advanceTimersByTime(1500);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it('通常タスクの監視は awaiting_merge から created へ変わっても中断しない', () => {
+    doubles.get.mockReturnValue(awaitingMergeGoal());
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', goalId, controller, { taskName: 'task-a', executionId: 'run-a' });
+    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status: 'created' });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it('ゴール未所属ならマージ監視を有効にしてもゴールを読まず中断しない', () => {
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', undefined, controller,
+      { taskName: 'task-a', executionId: 'run-a' }, { requireAwaitingMerge: true });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.aborted).toBe(false);
+    expect(doubles.get).not.toHaveBeenCalled();
+  });
+
+  it.each(['paused', 'aborted'] as const)('マージ監視中の状態変更と %s が重なっても既存の停止理由を保持する', (executionStatus) => {
+    doubles.get.mockReturnValue(awaitingMergeGoal());
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', goalId, controller,
+      { taskName: 'task-a', executionId: 'run-a' }, { requireAwaitingMerge: true });
+    doubles.get.mockReturnValue({ ...awaitingMergeGoal(), status: 'created', executionStatus });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.reason).toBeInstanceOf(executionStatus === 'paused' ? GoalPausedError : GoalAbortedError);
+  });
 
   it.each(['paused', 'aborted'] as const)('active から %s への変化を停止理由として通知する', (status) => {
     const target = new AbortController();
