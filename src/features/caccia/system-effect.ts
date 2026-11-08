@@ -17,6 +17,8 @@ import type { CacciaDisplayOptions } from './output.js';
 import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
 import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 
+import { CacciaWorkflowError } from './workflow-report.js';
+
 const log = createLogger('caccia-effect');
 const HEAD_WAIT_MS = 60_000;
 const HEAD_POLL_INTERVAL_MS = 2_000;
@@ -201,6 +203,6 @@ export async function cacciaEffect(
       unresolvedCount: result.unresolvedCount, skipReason: result.skipReason ?? null, reason: result.reason ?? null };
   } catch (error) {
     log.error('Caccia effect failed', { prNumber, error: getErrorMessage(error) });
-    return { success: false, failed: true, error: safeExternalErrorMessage(error).replaceAll('@', '＠') };
+    return { success: false, failed: true, error: error instanceof CacciaWorkflowError ? error.message : safeExternalErrorMessage(error).replaceAll('@', '＠') };
   }
 }

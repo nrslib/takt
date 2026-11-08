@@ -691,6 +691,69 @@ for (const lang of ['ja', 'en']) {
   });
 
 }
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['spec-formal-on-code', 'spec-review-investigation']) {
+    test(`${lang}/${caseId}: formal code proposals require all three nonempty specification bodies in summary`, () => {
+      assertSemanticGrader(caseId, lang);
+      const output = { response: { message: 'Review the proposal.', summary: {
+        objective: 'Fix notification retries', outOfScope: [], constraints: [],
+        acceptanceCriteria: ['AC-1: Verify the saved specifications.'],
+        specifications: { gherkin: 'Feature: Notification retries', quint: 'module retries {}', alloy: 'module retries' },
+      } }, calls: [] };
+      assert.equal(score(output, caseId, lang).pass, true);
+      for (const key of ['gherkin', 'quint', 'alloy']) {
+        for (const body of [undefined, '', ' ']) {
+          const invalid = structuredClone(output);
+          invalid.response.summary.specifications[key] = body;
+          assert.equal(score(invalid, caseId, lang).pass, false, `${key}: ${JSON.stringify(body)}`);
+        }
+      }
+      const messageOnly = structuredClone(output);
+      messageOnly.response.message = JSON.stringify(messageOnly.response.summary.specifications);
+      delete messageOnly.response.summary.specifications;
+      assert.equal(score(messageOnly, caseId, lang).pass, false);
+      const missingSummary = structuredClone(output);
+      missingSummary.response.summary = null;
+      assert.equal(score(missingSummary, caseId, lang).pass, false);
+    });
+  }
+
+  test(`${lang}: formal mode off requires Gherkin and rejects either formal specification key`, () => {
+    const caseId = 'spec-formal-off-code';
+    assertSemanticGrader(caseId, lang);
+    const output = { response: { message: 'Review the proposal.', summary: {
+      objective: 'Fix notification retries', outOfScope: [], constraints: [],
+      acceptanceCriteria: ['AC-1: Verify the saved specifications.'],
+      specifications: { gherkin: 'Feature: Notification retries' },
+    } }, calls: [] };
+    assert.equal(score(output, caseId, lang).pass, true);
+    const missing = structuredClone(output);
+    delete missing.response.summary.specifications;
+    assert.equal(score(missing, caseId, lang).pass, false);
+    for (const key of ['quint', 'alloy']) {
+      const invalid = structuredClone(output);
+      invalid.response.summary.specifications[key] = 'Formal specification body';
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: documentation proposals use the objective and acceptance criteria and reject Gherkin`, () => {
+    const caseId = 'spec-docs-goal';
+    assertSemanticGrader(caseId, lang);
+    const output = { response: { message: 'Review the proposal.', summary: {
+      objective: 'Create a guide navigation document', outOfScope: [], constraints: [],
+      acceptanceCriteria: ['AC-1: Include feature references, examined sources and missing explanations.'],
+    } }, calls: [] };
+    assert.equal(score(output, caseId, lang).pass, true);
+    output.response.summary.specifications = {};
+    assert.equal(score(output, caseId, lang).pass, true);
+    output.response.summary.specifications.gherkin = 'Feature: Guide navigation';
+    assert.equal(score(output, caseId, lang).pass, false);
+    output.response.summary = null;
+    assert.equal(score(output, caseId, lang).pass, false);
+  });
+}
+
 test('summary turns cannot create a goal or submit work before human approval', () => {
   const output = goodOutput('summary-keeps-constraint', 'ja');
   output.calls.push(enqueue(loadManagerCase('parallel-cli', 'ja'), 'users-command'));
@@ -711,6 +774,51 @@ test('validates summaries with explicit constraints and optional branches withou
   const invalid = structuredClone(output);
   invalid.response.summary.id = '650e8400-e29b-41d4-a716-446655440000';
   assert.equal(score(invalid, caseId).pass, false);
+});
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: summary cases accept the production repository field and retain strict validation`, () => {
+    const specifications = { gherkin: 'Feature: Retry', quint: 'module retry {}', alloy: 'module retry' };
+    for (const [caseId, bodies] of [
+      ['summary-keeps-constraint', undefined],
+      ['spec-formal-on-code', specifications],
+      ['spec-review-investigation', specifications],
+      ['spec-formal-off-code', { gherkin: specifications.gherkin }],
+      ['spec-docs-goal', undefined],
+    ]) {
+      const output = goodOutput('summary-keeps-constraint', lang);
+      output.response.summary.repositoryDirectory = loadManagerCase(caseId, lang).cwd;
+      if (bodies !== undefined) output.response.summary.specifications = bodies;
+      assert.equal(score(output, caseId, lang).pass, true, caseId);
+      for (const [key, value] of [
+        ['repositoryDirectory', ''], ['repositoryDirectory', 42],
+        ['repositoryDirectory', '/workspace/other'], ['objective', 'unsafe\u001b[31m'],
+        ['workflow', 'default'], ['id', '650e8400-e29b-41d4-a716-446655440000'],
+      ]) {
+        const invalid = structuredClone(output);
+        invalid.response.summary[key] = value;
+        assert.equal(score(invalid, caseId, lang).pass, false, `${caseId}: ${key}`);
+      }
+    }
+  });
+}
+test('distinguishes invalid JSON from unsupported fields and invalid specification values', () => {
+  const caseId = 'spec-docs-goal';
+  const output = goodOutput('summary-keeps-constraint', 'ja');
+  for (const malformed of [
+    `${JSON.stringify(output)}}`,
+    JSON.stringify(output).replace('Delivery destinations', 'Delivery\ndestinations'),
+  ]) {
+    const graded = score(malformed, caseId);
+    assert.equal(graded.pass, false);
+    assert.match(graded.reason, /^Invalid JSON:/);
+  }
+  for (const [key, value] of [['workflow', 'default'], ['specifications', null]]) {
+    const invalid = structuredClone(output);
+    invalid.response.summary[key] = value;
+    const graded = score(invalid, caseId);
+    assert.equal(graded.pass, false);
+    assert.ok(graded.reason.includes(key));
+  }
 });
 test('validates standalone work log summaries and rejects unrelated fields', () => {
   const fixture = loadManagerCase('parallel-cli', 'ja');

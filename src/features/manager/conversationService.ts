@@ -195,7 +195,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
           case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;
-          case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io.signal, language); break;
+          case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io, language); break;
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
             const status = command.kind === 'pause_goal' ? 'paused' : command.kind === 'resume_goal' ? 'active' : 'aborted';

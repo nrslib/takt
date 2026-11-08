@@ -27,10 +27,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 132 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 140 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 132);
+  assert.equal(suite.tests.length, 140);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -368,6 +368,50 @@ test('ignores global and project facet overrides and restores the environment on
   }
 });
 
+test('specification cases resolve fixture project settings through production configuration in both languages', () => {
+  const prior = process.env.TAKT_CONFIG_DIR;
+  for (const lang of ['ja', 'en']) {
+    for (const [caseId, mode] of [
+      ['spec-formal-on-code', true], ['spec-formal-off-code', false], ['spec-docs-goal', true],
+      ['spec-review-investigation', true],
+      ['summary-keeps-constraint', false],
+    ]) {
+      const fixture = loadManagerCase(caseId, lang);
+      const prompt = buildManagerSystemPrompt(fixture);
+      const configuration = JSON.parse(prompt.split('Formal specification configuration: ')[1].split('\n')[0]);
+      assert.equal(configuration.mode, mode, `${caseId}/${lang}`);
+      if (caseId === 'spec-review-investigation') assert.equal(configuration.comments, true);
+      assert.equal(process.env.TAKT_CONFIG_DIR, prior);
+    }
+    const on = loadManagerCase('spec-formal-on-code', lang);
+    const off = loadManagerCase('spec-formal-off-code', lang);
+    assert.equal(on.user, off.user);
+  }
+});
+
+test('review investigation replays a prior conflict response and eight current Bash reads before a new proposal', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('spec-review-investigation', lang);
+    const prompt = buildPrompt({ vars: { case: 'spec-review-investigation', lang } });
+    assert.equal(fixture.turn, 'conversation');
+    assert.equal(fixture.previousTurns.length, 1);
+    assert.equal(fixture.previousTurns[0].event.observation.kind, 'pr_conflicting');
+    assert.equal(fixture.previousTurns[0].response.summary, null);
+    const history = JSON.parse(prompt.split('PREVIOUS TURNS:\n')[1].split('\n\nTOOLS:')[0]);
+    assert.deepEqual(history, fixture.previousTurns.map(({ event, response }) => ({
+      input: buildManagerEventInput(fixture.cwd, event), response,
+    })));
+    assert.ok(prompt.indexOf('PREVIOUS TURNS:\n') < prompt.indexOf(`USER:\n${fixture.user}`));
+    assert.equal(fixture.readResults.length, 8);
+    assert.ok(fixture.readResults.every(({ tool, arguments: args, result }) => tool === 'Bash'
+      && typeof args.command === 'string' && typeof result === 'string' && result.length > 0));
+    assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
+    assert.equal(fixture.goal, undefined);
+    const withoutHistory = buildPrompt({ vars: { case: 'spec-formal-on-code', lang } });
+    assert.ok(!withoutHistory.includes('PREVIOUS TURNS:\n'));
+  }
+});
+
 test('red mode removes only the Concurrency limit suffix', () => {
   const prior = process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
   try {
@@ -385,6 +429,8 @@ test('work contents, integrated verification and constraint cases receive semant
     'shared-resource', 'shared-definition', 'human-order', 'integration-check',
     'constraint-carryover', 'constraint-carryover-data', 'constraint-once',
     'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
+    'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
+    'spec-review-investigation',
     'escalate-repeated-failure', 'escalate-not-on-first-failure',
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',

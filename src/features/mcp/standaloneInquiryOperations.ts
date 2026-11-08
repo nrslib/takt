@@ -1,7 +1,20 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import { jsonResult, pagedResult } from './response.js';
-import type { ListStandaloneInquiriesInput, WithdrawStandaloneInquiryInput } from './schemas.js';
+import type { AskStandaloneQuestionInput, ListStandaloneInquiriesInput, WithdrawStandaloneInquiryInput } from './schemas.js';
+import { sendSavedStandaloneQuestionNotification } from '../manager/notifications.js';
+
+export async function askTaktStandaloneQuestion(
+  input: AskStandaloneQuestionInput, configDirectory: string, owner: InquiryOwner, signal: AbortSignal,
+): Promise<CallToolResult> {
+  signal.throwIfAborted();
+  const { cwd, ...questionInput } = input;
+  const question = await new StandaloneInquiryStore(configDirectory, owner).create({ ...questionInput,
+    operation: { toolName: 'takt_ask_standalone_question', args: JSON.stringify(input), cwd },
+  });
+  await sendSavedStandaloneQuestionNotification(cwd, question);
+  return jsonResult({ questionId: question.id });
+}
 
 export async function listTaktStandaloneInquiries(
   input: ListStandaloneInquiriesInput, configDirectory: string, owner: InquiryOwner,

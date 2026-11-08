@@ -135,7 +135,7 @@ function resolveCompletionTargetSha(cwd: string, goal: Goal, signal: AbortSignal
 async function prepareCompletionPullRequest(
   cwd: string, goal: Goal, completion: NonNullable<Goal['completion']>,
   humanChecks: string | undefined, language: Language, signal: AbortSignal | undefined,
-): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string }> {
+): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string; bodyFailure?: string }> {
   try {
     return { pullRequest: await prepareGoalPullRequest(cwd, goal, completion, humanChecks, language, signal, async () => {
       signal?.throwIfAborted();
@@ -150,14 +150,15 @@ async function prepareCompletionPullRequest(
   } catch (error) {
     signal?.throwIfAborted();
     if (!(error instanceof GoalPullRequestUnavailableError)) throw error;
-    return { failure: safeExternalErrorMessage(error) };
+    const failure = safeExternalErrorMessage(error);
+    return { failure, ...(error.operation === 'body' ? { bodyFailure: failure } : {}) };
   }
 }
 
 function recordPullRequestFailure(
   goal: Goal, failure: string | undefined, notifications: GoalNotificationPolicy, language: Language,
 ): Goal {
-  if (failure === undefined || goal.pullRequest !== undefined) return goal;
+  if (failure === undefined) return goal;
   const saved = appendGoalWorkLog(goal, { summary: failure });
   return appendGoalNotification(saved, {
     kind: 'blocked', severity: 'error',
@@ -186,20 +187,28 @@ export async function completeGoal(
       if (retryHumanChecks === undefined) {
         throw new Error('humanChecks is required to retry PR preparation. Provide humanChecks and call takt_complete_goal again.');
       }
-      const { pullRequest, failure } = await prepareCompletionPullRequest(
+      const { pullRequest, failure, bodyFailure } = await prepareCompletionPullRequest(
         cwd, goal, goal.completion, retryHumanChecks, language, signal,
       );
-      const saved = await store.update(goalId, (current) => {
+      await store.update(goalId, (current) => {
         signal?.throwIfAborted();
         assertCompletionAllowed(current, goal);
         const completion = current.completion!.humanChecks === undefined
           ? { ...current.completion!, humanChecks: retryHumanChecks }
           : current.completion;
-        return recordPullRequestFailure({ ...current, completion, ...(pullRequest === undefined ? {} : { pullRequest: current.pullRequest ?? pullRequest }) }, failure, notifications, language);
+        const updated = { ...current, completion,
+          ...(bodyFailure === undefined && pullRequest !== undefined
+            ? { pullRequest: current.pullRequest ?? pullRequest }
+            : {}) };
+        return recordPullRequestFailure(updated, failure, notifications, language);
       });
-      if (failure !== undefined && saved.pullRequest === undefined) {
+      if (failure !== undefined) {
         saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
       }
+      const current = store.getSync(goalId);
+      assertCompletionUnchanged(current, goal);
+      return { status: current.status, completion: current.completion, goal: current,
+        ...(bodyFailure === undefined ? {} : { pullRequestBodyError: bodyFailure }) };
     }
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);
@@ -218,24 +227,28 @@ export async function completeGoal(
     return { ...result, completion: saved.completion, goal: saved };
   }
   const worktrees = await targetWorktrees(cwd, targetBranch, signal);
+  const resolvedHumanChecks = humanChecks ?? (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha
+    ? goal.completion.humanChecks : undefined);
   const waiting = {
     ...completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, worktrees),
-    ...(humanChecks === undefined ? {} : { humanChecks }),
+    ...(resolvedHumanChecks === undefined ? {} : { humanChecks: resolvedHumanChecks }),
     reason: 'Goal PR requires preparation through a PR merge task',
   };
-  const { pullRequest, failure } = await prepareCompletionPullRequest(cwd, goal, waiting, humanChecks, language, signal);
+  const { pullRequest, failure, bodyFailure } = await prepareCompletionPullRequest(cwd, goal, waiting, resolvedHumanChecks, language, signal);
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
-    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure, notifications, language);
+    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting,
+      pullRequest: bodyFailure === undefined ? pullRequest : current.pullRequest }, failure, notifications, language);
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
       kind: 'awaiting_merge', body: summary,
     }, notifications);
   });
-  if (failure !== undefined && saved.pullRequest === undefined) {
+  if (failure !== undefined) {
     saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
   }
-  return { status: 'awaiting_merge', completion: waiting, goal: saved };
+  return { status: 'awaiting_merge', completion: waiting, goal: saved,
+    ...(bodyFailure === undefined ? {} : { pullRequestBodyError: bodyFailure }) };
 }
 
 export async function reopenGoal(

@@ -528,6 +528,7 @@
     "src/__tests__/parallel-runner-terminal-status.test.ts",
     "src/__tests__/pathText.test.ts",
     "src/__tests__/pending-inquiries.test.ts",
+    "src/__tests__/pending-inquiry-answers.test.ts",
     "src/__tests__/permission-mode.test.ts",
     "src/__tests__/persistedFailureText.test.ts",
     "src/__tests__/phase1-empty-recovery.test.ts",
