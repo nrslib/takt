@@ -182,7 +182,7 @@ describe('E2E: runtime.prepare with provider', () => {
         'initial_step: execute',
         'steps:',
         '  - name: execute',
-        '    edit: false',
+        '    edit: true',
         '    persona: ../fixtures/agents/test-coder.md',
         '    capabilities: readonly',
         '    required_permission_mode: full',
