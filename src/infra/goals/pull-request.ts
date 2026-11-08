@@ -25,18 +25,26 @@ const PullRequestBodySchema = z.object({ body: z.string() });
 const CODERABBIT_RELEASE_NOTES_START = '<!-- This is an auto-generated comment: release notes by coderabbit.ai -->';
 const CODERABBIT_RELEASE_NOTES_END = '<!-- end of auto-generated comment: release notes by coderabbit.ai -->';
 
+function escapeGoalBodyMarkers(value: string): string {
+  let escaped = value;
+  for (const marker of [TAKT_BODY_START, TAKT_BODY_END]) {
+    escaped = escaped.replaceAll(marker, marker.replaceAll('<', '&lt;').replaceAll('>', '&gt;'));
+  }
+  return escaped;
+}
+
 function buildGoalPullRequestBody(
   goal: Goal, completion: NonNullable<Goal['completion']>, humanChecks: string, language: Language,
 ): string {
   const changes = completion.changeSummary;
   return [
     TAKT_BODY_START,
-    `## ${getLabel('manager.goalPr.objective', language)}`, goal.objective,
+    `## ${getLabel('manager.goalPr.objective', language)}`, escapeGoalBodyMarkers(goal.objective),
     `## ${getLabel('manager.goalPr.changes', language)}`,
-    ...changes.files.map((file) => `- ${file.path}`),
+    ...changes.files.map((file) => `- ${escapeGoalBodyMarkers(file.path)}`),
     ...(changes.truncated ? [getLabel('manager.goalPr.truncated', language)] : []),
-    `## ${getLabel('manager.goalPr.verification', language)}`, completion.summary,
-    `## ${getLabel('manager.goalPr.humanChecks', language)}`, humanChecks, TAKT_BODY_END,
+    `## ${getLabel('manager.goalPr.verification', language)}`, escapeGoalBodyMarkers(completion.summary),
+    `## ${getLabel('manager.goalPr.humanChecks', language)}`, escapeGoalBodyMarkers(humanChecks), TAKT_BODY_END,
   ].join('\n\n');
 }
 
@@ -73,7 +81,11 @@ function replaceGoalPullRequestBody(body: string, replacement: string): string {
     || body.indexOf(TAKT_BODY_END, end + TAKT_BODY_END.length) !== -1) {
     throw new Error('TAKT PR body markers are incomplete or duplicated');
   }
-  return body.slice(0, start) + replacement + body.slice(end + TAKT_BODY_END.length);
+  const afterEnd = end + TAKT_BODY_END.length;
+  if (codeRabbitRanges(body).some((range) => start < range.end && range.start < afterEnd)) {
+    throw new Error('TAKT PR body markers overlap CodeRabbit release notes');
+  }
+  return body.slice(0, start) + replacement + body.slice(afterEnd);
 }
 
 export async function prepareGoalPullRequest(

@@ -160,6 +160,7 @@ export interface CacciaDependencies {
     cwd: string;
     projectCwd: string;
     task: string;
+    threadIds: readonly string[];
   }): Promise<CacciaWorkflowReport & { reportPath: string; workflowFailure?: string }>;
   commitAndPush(cwd: string, onPushedHead: CacciaPushedHeadListener | undefined): Promise<{ headSha: string; pushed: boolean }>;
   fetchCurrentPullRequestHeadSha(
@@ -392,34 +393,45 @@ function buildWorkflowTask(prNumber: number, threads: CacciaReviewThread[], pr: 
 async function executeCacciaWorkflow(
   input: CacciaNumberInput,
   display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
-  options: {
-    prNumber: number;
-    workflow: string;
-    cwd: string;
-    projectCwd: string;
-    task: string;
-  },
+  options: Parameters<CacciaDependencies['executeWorkflow']>[0],
 ): Promise<CacciaWorkflowReport & { reportPath: string; workflowFailure?: string }> {
   assertNotAborted(input.abortSignal);
   const { runWorkflowExecution } = await import('../tasks/execute/workflowExecutionApi.js');
-  const result = await runWorkflowExecution({
-    task: options.task,
-    cwd: options.cwd,
-    projectCwd: options.projectCwd,
-    workflowIdentifier: options.workflow,
-    runPathsDirectory: join(options.projectCwd, '.takt', 'runs'),
-    ...display,
-    eventSink: (event) => {
-      if (event.type === 'progress' && event.level === 'warn') {
-        return input.eventSink?.(event);
-      }
-    },
-    abortSignal: input.abortSignal,
-  });
+  let reportDirectory: string | undefined;
+  let result: Awaited<ReturnType<typeof runWorkflowExecution>>;
+  try {
+    result = await runWorkflowExecution({
+      task: options.task,
+      cwd: options.cwd,
+      projectCwd: options.projectCwd,
+      workflowIdentifier: options.workflow,
+      runPathsDirectory: join(options.projectCwd, '.takt', 'runs'),
+      ...display,
+      eventSink: (event) => {
+        if (event.type === 'run_started') reportDirectory = event.reportDirectory;
+        if (event.type === 'progress' && event.level === 'warn') {
+          return input.eventSink?.(event);
+        }
+      },
+      abortSignal: input.abortSignal,
+    });
+  } catch (error) {
+    if (reportDirectory === undefined) throw error;
+    let report: CacciaWorkflowReport;
+    try {
+      report = parseCacciaWorkflowReport(readFileSync(join(reportDirectory, CACCIA_REPORT_FILE_NAME), 'utf8'));
+    } catch {
+      // 実行例外をレポートの読込エラーで置き換えない。
+      throw error;
+    }
+    if (report.outcome === 'abort') {
+      assertCacciaWorkflowComplete(report, options.threadIds, getErrorMessage(error), { cause: error });
+    }
+    throw error;
+  }
   assertNotAborted(input.abortSignal);
-  const workflowReason = result.success ? undefined
+  const workflowFailure = result.success ? undefined
     : result.reason ?? `Caccia workflow "${options.workflow}" did not complete successfully`;
-  const workflowFailure = result.abortKind === 'step_transition' ? undefined : workflowReason;
   try {
     if (!result.reportDirectory) throw new Error('Caccia workflow returned without a report directory');
     const reportPath = join(result.reportDirectory, CACCIA_REPORT_FILE_NAME);
@@ -427,7 +439,7 @@ async function executeCacciaWorkflow(
     return { ...report, reportPath, ...(workflowFailure === undefined ? {} : { workflowFailure }) };
   } catch (error) {
     const detail = `Cannot read the Caccia workflow report: ${getErrorMessage(error)}`;
-    throw new CacciaWorkflowError(workflowReason === undefined ? detail : `${workflowReason}; ${detail}`, { cause: error });
+    throw new CacciaWorkflowError(workflowFailure === undefined ? detail : `${workflowFailure}; ${detail}`, { cause: error });
   }
 }
 
@@ -646,15 +658,17 @@ async function runCacciaWithDependencies(
     const clone = await dependencies.createTemporaryClone(prNumber, reviewedHeadSha);
     const pushed = await (async () => {
       try {
+        const threadIds = threads.map((thread) => thread.id);
         const workflowResult = await dependencies.executeWorkflow({
           prNumber,
           workflow: input.settings.workflow,
           cwd: clone.cwd,
           projectCwd: input.projectCwd,
           task: buildWorkflowTask(prNumber, threads, { title: clone.title, body: clone.body }),
+          threadIds,
         });
         assertNotAborted(input.abortSignal);
-        assertCacciaWorkflowComplete(workflowResult, threads.map((thread) => thread.id), workflowResult.workflowFailure);
+        assertCacciaWorkflowComplete(workflowResult, threadIds, workflowResult.workflowFailure);
         const pushResult = await dependencies.commitAndPush(clone.cwd,
           input.entry === 'linked' ? input.onPushedHead : undefined);
         if (pushResult.pushed) {

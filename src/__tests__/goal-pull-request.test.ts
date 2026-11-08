@@ -141,6 +141,55 @@ it('replaces the previously updated body on a second submission without duplicat
   expect(doubles.create).not.toHaveBeenCalled();
 });
 
+it.each(['objective', 'path', 'summary', 'humanChecks'] as const)(
+  'escapes input markers in %s and updates the same published body again', async (field) => {
+    const input = `Before ${taktStart} middle ${taktEnd} after ${taktStart}`;
+    const nextGoal = field === 'objective' ? { ...goal, objective: input } : goal;
+    const nextCompletion = { ...completion,
+      summary: field === 'summary' ? input : completion.summary,
+      changeSummary: { ...completion.changeSummary,
+        files: [{ ...completion.changeSummary.files[0]!, path: field === 'path' ? input : 'result.ts' }] },
+    };
+    const checks = field === 'humanChecks' ? input : 'Check the result';
+    await prepareGoalPullRequest('/project', nextGoal, nextCompletion, checks, 'en', signal, assertCurrent);
+    const published = doubles.create.mock.calls[0]![0].body as string;
+    expect(published.split(taktStart)).toHaveLength(2);
+    expect(published.split(taktEnd)).toHaveLength(2);
+    expect(published).toContain(input.replaceAll('<', '&lt;').replaceAll('>', '&gt;'));
+    doubles.find.mockReturnValue(pr);
+    serveBody(`${published}\n\n${releaseNotes}`);
+    await prepareGoalPullRequest('/project', goal, completion, 'Check the result', 'en', signal, assertCurrent);
+    const updated = editedBody();
+    expect(updated).toBe(`${expectedBody('en')}\n\n${releaseNotes}`);
+    doubles.command.mockClear();
+    serveBody(updated);
+    await prepareGoalPullRequest('/project', goal, { ...completion, summary: 'Final evidence' }, 'Final checks', 'en', signal, assertCurrent);
+    expect(editedBody()).toBe(`${expectedBody('en', 'Final evidence', 'Final checks')}\n\n${releaseNotes}`);
+  },
+);
+
+it.each([
+  `${taktStart}\n${releaseNotes}\n${taktEnd}`,
+  `${releaseNotesStart}\n${taktStart}\nOld\n${taktEnd}\n${releaseNotesEnd}`,
+  `${taktStart}\nOld\n${releaseNotesStart}\n${taktEnd}\nSummary\n${releaseNotesEnd}`,
+  `${releaseNotesStart}\nSummary\n${taktStart}\n${releaseNotesEnd}\nOld\n${taktEnd}`,
+])('rejects overlapping TAKT and CodeRabbit sections without editing: %s', async (body) => {
+  doubles.find.mockReturnValue(pr);
+  serveBody(body);
+  await expect(prepareGoalPullRequest('/project', goal, completion, 'Check', 'en', signal, assertCurrent))
+    .rejects.toMatchObject({ operation: 'body' });
+  expect(doubles.command.mock.calls.filter(([args]) => args[1] === 'edit')).toEqual([]);
+  expect(doubles.create).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('preserves directly adjacent CodeRabbit notes before TAKT: %s', async (before) => {
+  doubles.find.mockReturnValue(pr);
+  const old = expectedBody('en', 'Old evidence', 'Old checks');
+  serveBody(before ? releaseNotes + old : old + releaseNotes);
+  await prepareGoalPullRequest('/project', goal, completion, 'Check the result', 'en', signal, assertCurrent);
+  expect(editedBody()).toBe(before ? releaseNotes + expectedBody('en') : expectedBody('en') + releaseNotes);
+});
+
 it.each(['read', 'edit', 'edit applied'] as const)('retries a multiline body after %s fails without local publication state', async (operation) => {
   doubles.find.mockReturnValue(pr);
   let remoteBody = expectedBody('en', 'First evidence\n\n- Unit tests passed', 'First step\n\nSecond step');
