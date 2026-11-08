@@ -35,6 +35,9 @@ const patrolRequiredCases = new Set([
   'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
+const patrolRepairCases = new Set(['local-terminal-test-repair', 'local-pytest-config-repair']);
+const patrolLeaveAsIsCases = new Set(['local-env-failure-left-as-is']);
+const patrolUnrelatedRepairCases = new Set(['unrelated-history-repair']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
 const verificationTellCases = new Set(['verification-once', 'verification-mixed']);
 const verificationNoTellCases = new Set(['verification-repeated', 'verification-told']);
@@ -73,6 +76,9 @@ const caseWriteTools = {
   ...Object.fromEntries([...patrolTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_ask_goal_question'])])),
   ...Object.fromEntries([...patrolNoTellCases].map((caseId) => [caseId, new Set()])),
+  ...Object.fromEntries([...patrolRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_enqueue_goal_task'])])),
+  ...Object.fromEntries([...patrolLeaveAsIsCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
+  ...Object.fromEntries([...patrolUnrelatedRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run'])])),
 };
 const commonTools = new Set(['takt_record_goal_work_log', 'takt_notify_goal']);
@@ -185,6 +191,13 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (patrolRepairCases.has(caseId) || patrolLeaveAsIsCases.has(caseId) || patrolUnrelatedRepairCases.has(caseId)) {
+    if (!workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
+      return result(false, 'Record the repair decision and its reason in the target goal work log');
+    }
+    return result(patrolUnrelatedRepairCases.has(caseId) ? tells.length === 1 : enqueues.length <= 1,
+      'Respect the reasoned run plan with a target work log; for unrelated work send one correction. Decision, reasons and instruction content are graded by llm-rubric');
+  }
   if (caseId === 'existing-invoice-format'
     && !workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
     return result(false, 'Record the finding decision in the invoice-export goal work log');

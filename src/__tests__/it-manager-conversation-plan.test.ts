@@ -113,11 +113,14 @@ describe('manager conversation configuration and provider boundary', () => {
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), assistant: { formalSpec: { mode, comments: false } } });
     const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
     expect(prompt).toContain(`Formal specification configuration: ${JSON.stringify({ mode: enabled, comments: false, modelCheckTimeoutSeconds: 42 })}`);
-    expect(prompt.includes('Use actual valid Quint and Alloy syntax')).toBe(enabled);
-    expect(prompt.includes('Always include both Quint and Alloy for this goal.')).toBe(enabled);
-    expect(prompt).not.toContain('Omit a notation only');
+    const notation = readFileSync(join(process.cwd(), 'builtins', 'en', 'facets', 'partials', 'instructions', 'manager-specification-notation.md'), 'utf8');
+    const formalBody = notation.split('{{#if formalSpec}}')[1]!.split('{{/if}}')[0]!;
+    const commentsBody = notation.split('{{#if formalSpecCommentsEnabled}}')[1]!.split('{{/if}}')[0]!;
+    expect(prompt.includes(renderTemplate(formalBody.trim(), {
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints('en'),
+    }))).toBe(enabled);
+    expect(prompt).not.toContain(commentsBody.trim());
     expect(prompt).not.toMatch(/\{\{(?:#if|\/if|else)/);
-    expect(prompt).not.toContain('immediately precede every requirement-level formal construct');
     expect(prompt).toContain('Gherkin');
   });
 
@@ -192,16 +195,14 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
+  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager guidance', (language) => {
     const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
-    const heading = language === 'ja' ? '## 道具と復旧' : '## Tools and recovery';
-    const paragraph = knowledge.split(heading)[1]?.trim().split('\n\n')[0];
+    const paragraph = knowledge.split('\n\n').find((body) => body.includes('goalIntegration'));
     expect(paragraph).toBeDefined();
     const terms = paragraph?.match(/[A-Za-z_]+/g);
-    for (const field of ['takt_list_tasks', 'goalIntegration', 'integrated', 'not_integrated', 'unknown']) {
+    for (const field of ['takt_list_tasks', 'goalIntegration', 'goalIntegrationReason', 'integrated', 'not_integrated', 'unknown', 'direct_push']) {
       expect(terms).toContain(field);
     }
-    expect(paragraph).toMatch(language === 'ja' ? /理由/ : /reason/i);
     const plan = createManagerConversationPlan(cwd, { language });
     expect(plan.strategy.systemPrompt).toContain(paragraph!);
   });

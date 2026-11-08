@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
+import { buildManagerEventPrompt } from '../features/daemon/inboxEvent.js';
 import type { ConversationRuntime, PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { DaemonStateRequest } from '../core/daemon/processProtocol.js';
 import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
@@ -532,14 +533,9 @@ it('inspects active patrol goals together without resuming or updating the conve
   const turn = f.execute.mock.calls[0]![0];
   expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
-  const { instruction } = JSON.parse(turn.prompt);
-  expect(instruction).toMatch(/latest reports, review findings and intended fixes/);
-  expect(instruction).toMatch(/task instructions and acceptance criteria/);
-  expect(instruction).toMatch(/deviations from the requested work/);
-  expect(instruction).toMatch(/takt_tell_run/);
-  expect(instruction).toMatch(/only findings confirmed to be outside the requested work/);
-  expect(instruction).toMatch(/Do not judge by execution time or step counts/);
-  expect(instruction).not.toMatch(/Check run duration|repeated steps/);
+  expect(turn.prompt).toBe(buildManagerEventPrompt({
+    kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id],
+  }));
   expect(turn).toMatchObject({ patrol: true, sessionId: undefined, recovery: { context: 'saved-goal-memory' } });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();

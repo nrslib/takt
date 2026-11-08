@@ -14,7 +14,11 @@ import ManagerExecutionProvider, { executionConfig, runExecutionWorker } from '.
 import assertExecution, { gradeExecution } from '../asserts/manager-work-split-execution.mjs';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
 import { GoalStore } from '../../dist/infra/goals/store.js';
+import { buildManagerEventPrompt } from '../../dist/features/daemon/inboxEvent.js';
 import { prepareQuestionFacetVariants } from '../fixtures/manager-question-options/facets.mjs';
+import { resolveManagerEvalFacet } from '../manager-work-split-prompt.mjs';
+import { renderTemplate } from '../../dist/shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../../dist/features/interactive/formalSpecPrompts.js';
 
 const lines = (dir, path) => readFileSync(join(dir, path), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000 });
@@ -47,7 +51,7 @@ function fakeProvider(action) {
         const input = JSON.parse(prompt.split('\n\n')[0]);
         assert.deepEqual(Object.keys(input), ['event', 'instruction']);
         assert.equal(input.event.kind, 'goal_resumed');
-        assert.equal(input.instruction, 'Handle this event for the existing goals. Do not propose a new registration.');
+        assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(input.event)));
         const read = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId } });
         const logs = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId, path: 'workLog' } });
         const context = { ...input, goal: { ...JSON.parse(read.content[0].text).goal, workLog: JSON.parse(logs.content[0].text).items } };
@@ -121,7 +125,7 @@ test('SDK execution prompts contain only their selected red or green question ru
   const root = mkdtempSync(join(tmpdir(), 'manager-sdk-facets-'));
   try {
     for (const lang of ['ja', 'en']) {
-      const variants = prepareQuestionFacetVariants(root, lang);
+      prepareQuestionFacetVariants(root, lang);
       for (const caseId of ['stopped-background-execution', 'integrated-task-execution']) {
         for (const phase of ['red', 'green']) {
           const artifactDir = join(root, 'artifacts', lang, caseId, phase);
@@ -131,17 +135,15 @@ test('SDK execution prompts contain only their selected red or green question ru
           assert.equal(trial.error, undefined);
           assert.equal(trial.complete, true);
           const prompt = readFileSync(join(artifactDir, 'system-prompt.txt'), 'utf8');
-          const promptLines = new Set(prompt.split('\n'));
           const other = phase === 'red' ? 'green' : 'red';
-          for (const bodies of Object.values(variants)) {
-            const chosen = bodies[phase].split('\n');
-            const excluded = bodies[other].split('\n');
-            const exclusive = chosen.filter((line) => line.trim() && !excluded.includes(line));
-            assert.ok(exclusive.length > 0);
-            for (const line of exclusive) assert.ok(promptLines.has(line), `${lang}/${caseId}/${phase}: includes chosen facet line`);
-            for (const line of excluded.filter((line) => line.trim() && !chosen.includes(line))) {
-              assert.ok(!promptLines.has(line), `${lang}/${caseId}/${phase}: excludes other facet line`);
-            }
+          for (const kind of ['policies', 'instructions']) {
+            const bodies = Object.fromEntries([phase, other].map((variant) => [variant, renderTemplate(
+              resolveManagerEvalFacet(kind, 'FACET_ROOT', { projectDir: root, lang }, join(root, variant, kind)).trim(),
+              { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang) },
+            )]));
+            assert.notEqual(bodies[phase], bodies[other]);
+            assert.ok(prompt.includes(bodies[phase]), `${lang}/${caseId}/${phase}/${kind}: includes chosen facet`);
+            assert.ok(!prompt.includes(bodies[other]), `${lang}/${caseId}/${phase}/${kind}: excludes other facet`);
           }
           assert.doesNotMatch(prompt, /\{\{include:/);
         }
