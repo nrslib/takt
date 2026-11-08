@@ -20,6 +20,7 @@ import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
+import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -105,8 +106,9 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async patrolGoalIds(repositoryDirectory: string): Promise<readonly string[]> {
     const ids: string[] = [];
+    const tasks = await readWatchTasks(repositoryDirectory);
     for await (const goal of readWatchGoals(repositoryDirectory, this.onError, this.goalReader)) {
-      if (goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge') ids.push(goal.id);
+      if (isGoalPatrolCandidate(goal, tasks)) ids.push(goal.id);
     }
     return ids;
   }

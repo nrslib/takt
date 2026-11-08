@@ -50,7 +50,7 @@ const snapshotItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('state'), state: stateSchema }).strict(),
   z.object({ kind: z.literal('assignment'), assignment: displayAssignmentSchema }).strict(),
   z.object({ kind: z.literal('goal'), goal: GoalRecordObjectSchema.pick({ id: true, objective: true, status: true, executionStatus: true })
-    .extend({ repositoryDirectory: repository }).strict() }).strict(),
+    .extend({ repositoryDirectory: repository, awaitingHumanMerge: z.boolean() }).strict() }).strict(),
   z.object({ kind: z.literal('inquiry'), inquiry: inquirySchema }).strict(),
   z.object({ kind: z.literal('display_event'), event: z.object({ id: z.string(), message: z.string() }).strict() }).strict(),
   z.object({ kind: z.literal('remove'), key: z.string().min(1) }).strict(),

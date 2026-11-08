@@ -26,6 +26,8 @@ import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
+import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
+import { readWatchTasks } from '../daemon/watchers/state.js';
 
 function nextRevision(revision: number): number {
   if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
@@ -71,11 +73,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (patrol) {
           const store = new GoalStore(event.repositoryDirectory);
           const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          const tasks = await readWatchTasks(event.repositoryDirectory);
           io.signal.throwIfAborted();
           const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
           const patrolEvent = { ...event,
-            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge').map((goal) => goal.id),
+            goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
           if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
           command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };

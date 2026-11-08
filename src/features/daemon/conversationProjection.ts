@@ -9,6 +9,8 @@ import { listWatchEntries } from './watchers/files.js';
 import { DaemonRouting, projectKey } from './routing.js';
 import { projectManagerDisplayEvents } from '../manager/savedEvents.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
+import { readWatchTasks, TASKS_FILE_NAME } from './watchers/state.js';
+import { isGoalAwaitingHumanMerge } from '../../infra/goals/activity.js';
 
 /** 読取を consumer の要求に従わせ、全プロジェクトの本文を一度に保持しない。 */
 export async function* conversationProjection(routing: DaemonRouting, files: DaemonDisplayFiles, identity: Exclude<ConversationAssignment, { kind: 'daemon' }>,
@@ -23,6 +25,8 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
       const policy = Object.fromEntries((['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)
         .map((kind) => [kind, configuration.manager?.notifications?.[kind] ?? global.manager?.notifications?.[kind] ?? true])) as Record<'question' | 'awaiting_merge' | 'completed' | 'progress' | 'blocked' | 'custom', boolean>;
       const root = join(directory, '.takt', 'goals');
+      reading = join(directory, '.takt', TASKS_FILE_NAME);
+      const tasks = await readWatchTasks(directory);
       reading = root;
       for (const entry of await listWatchEntries(root)) {
         if (!entry.isDirectory()) continue;
@@ -30,7 +34,8 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
         reading = join(root, entry.name, 'goal.json');
         const goal = await files.goal(reading);
         if (goal.id !== entry.name) throw new Error('Display goal identity mismatch');
-        yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, repositoryDirectory: directory } };
+        yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
+          repositoryDirectory: directory, awaitingHumanMerge: isGoalAwaitingHumanMerge(goal, tasks) } };
         for (const question of goal.questions ?? []) {
           if (cancelled()) return;
           if (question.status === 'pending') yield { kind: 'inquiry', inquiry: { target: { goalId: goal.id, repositoryDirectory: directory }, question, objective: goal.objective } };

@@ -284,10 +284,10 @@ it('uses canonical inquiry identity and preserves assignment repository order an
   expect(snapshotItemKey(inquiry)).toBe(snapshotItemKey({ kind: 'inquiry', inquiry: { ...inquiry.inquiry,
     target: { repositoryDirectory: '/second', goalId: 'goal' } } }));
   const values: Exclude<SnapshotValue, { kind: 'state' }>[] = [
-    { kind: 'goal', goal: { id: 'a', objective: 'Second', repositoryDirectory: '/second', status: 'created', executionStatus: 'active' } },
+    { kind: 'goal', goal: { awaitingHumanMerge: false, id: 'a', objective: 'Second', repositoryDirectory: '/second', status: 'created', executionStatus: 'active' } },
     inquiry,
     { kind: 'assignment', assignment: { kind: 'repository', repositoryDirectory: '/first', repositoryDirectories: ['/first', '/second'] } },
-    { kind: 'goal', goal: { id: 'z', objective: 'First', repositoryDirectory: '/first', status: 'created', executionStatus: 'active' } },
+    { kind: 'goal', goal: { awaitingHumanMerge: false, id: 'z', objective: 'First', repositoryDirectory: '/first', status: 'created', executionStatus: 'active' } },
     { kind: 'inquiry', inquiry: { ...inquiry.inquiry, question: { ...question, id: randomUUID(), createdAt: '2026-01-01T00:00:00Z' } } },
   ];
   expect(orderSnapshotItems(new Map(values.map((value) => [snapshotItemKey(value), value])))).toEqual([
@@ -305,7 +305,7 @@ it('accepts empty deltas and validates changed repositories against the complete
   expect(observer.read).toHaveBeenLastCalledWith('complete', delta.transferId, 'delta');
   const invalid = { ...metadata(4, 1), mode: 'delta' as const };
   receiver.expectRead(invalid);
-  const goal = { kind: 'goal', goal: { id: randomUUID(), objective: 'Outside', repositoryDirectory: '/other', status: 'created', executionStatus: 'active' } };
+  const goal = { kind: 'goal', goal: { awaitingHumanMerge: false, id: randomUUID(), objective: 'Outside', repositoryDirectory: '/other', status: 'created', executionStatus: 'active' } };
   const values = await frames(invalid, [goal]);
   expect(() => values.forEach((frame) => receiver.receive(frame))).toThrow('Display repository outside assignment');
 });

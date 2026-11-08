@@ -424,8 +424,10 @@ describe('manager workspace storage and repository boundaries', () => {
         strategy: { systemPrompt: 'manager fixture' } } });
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', client, initialDiagnostics: [], onExit: vi.fn() }));
     try {
+      await client.ready;
+      expect(client.getSnapshot().readStatus).toBe('complete');
       await vi.waitFor(() => {
-        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 1 件 | 進行中 1 ／ 未回答 0');
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 1 件 | 進行中 1 ／ マージ待ち 0 ／ 未回答 0');
         expect(app.lastFrame()).toMatch(/進行中\s*1/u);
       });
       app.stdin.write('\x07');
@@ -442,7 +444,7 @@ describe('manager workspace storage and repository boundaries', () => {
       await vi.waitFor(() => expect(app.lastFrame()).toContain('担当を確認'));
       app.stdin.write('\r');
       await vi.waitFor(() => {
-        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 2 件 | 進行中 1 ／ 未回答 0');
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 2 件 | 進行中 1 ／ マージ待ち 0 ／ 未回答 0');
       }, { timeout: 30_000 });
     } finally { app.unmount(); await client.dispose(); }
   });
@@ -464,7 +466,7 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain('処理中');
-        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: b ほか 2 件 | 進行中 0 ／ 未回答 0');
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: b ほか 2 件 | 進行中 0 ／ マージ待ち 0 ／ 未回答 0');
       });
       expect(client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment).toMatchObject({ repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
     } finally { app.unmount(); await client.dispose(); }
@@ -488,7 +490,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const checkHeading = () => {
       const rows = app.lastFrame()!.split('\n');
       expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
-        getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '));
+        getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
       for (const value of [basename(cwd), workspace.id]) expect(rows.at(-1)).not.toContain(value);
     };
     try {
@@ -513,7 +515,7 @@ describe('manager workspace storage and repository boundaries', () => {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
         expect(app.lastFrame()!.split('\n').at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }),
-          getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '));
+          getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
       });
       const currentAssignment = (client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment)!;
       if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
@@ -522,7 +524,7 @@ describe('manager workspace storage and repository boundaries', () => {
       await vi.waitFor(() => {
         const rows = app.lastFrame()!.split('\n');
         expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
-          getLabel('manager.counts', lang, { goals: '0', questions: '0' })].join(' | '));
+          getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
         for (const value of [basename(cwd), workspace.id]) {
           expect(rows.at(-1)).not.toContain(getLabel('manager.assignmentHeading', lang, { name: value }));
         }
