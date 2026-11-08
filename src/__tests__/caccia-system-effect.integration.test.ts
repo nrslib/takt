@@ -889,6 +889,72 @@ describe('Caccia effect through PR workflow execution', () => {
     expect(result.reason).toBe('Workflow aborted by step transition');
   });
 
+  it('Cacciaの失敗から復旧した後の別工程のABORTには元の失敗理由を渡さない', async () => {
+    const failure = 'Earlier Caccia design decision required; missing T4';
+    mocks.caccia.mockRejectedValueOnce(new Error(failure));
+    writeFileSync(workflowFile, stringify({ name: 'recover-caccia', initial_step: 'review', steps: [
+      { name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(effect.review.caccia.failed == true)', next: 'recovered' }] },
+      { name: 'recovered', kind: 'system', effects: [{ type: 'comment_pr', pr: 123, body: 'Recovered' }],
+        rules: [{ condition: 'when(true)', next: 'later' }] },
+      { name: 'later', kind: 'system', rules: [{ condition: 'when(true)', next: 'ABORT' }] },
+    ] }));
+    const result = await runWorkflowExecution({ cwd: author, projectCwd: project, task: 'Recover Caccia',
+      workflowIdentifier: workflowFile, cacciaExecutionSource: 'from_pr',
+      prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+        headSha: initialHead, headRepositoryUrl: remote, headRepositoryPushUrls: [remote] },
+      outputMode: 'silent', runPathsDirectory: join(project, '.takt', 'runs') });
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+    expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123, 'Recovered', project);
+    expect(result).toMatchObject({ success: false, reason: 'Workflow aborted by step transition', lastStep: 'later' });
+    const meta = JSON.parse(readFileSync(join(result.runDirectory!, 'meta.json'), 'utf8'));
+    expect(meta.reason).toBe('Workflow aborted by step transition');
+    expect(meta.failure).toMatchObject({ step: 'later', error: 'Workflow aborted by step transition' });
+  });
+
+  it.each((['merge', 'from_pr'] as const).flatMap((entry) =>
+    [true, false].map((ready) => ({ entry, ready })),
+  ))('$entryで失敗コメントの待機条件が$readyの場合にABORTの理由を返却・保存する', async ({ entry, ready }) => {
+    const failure = 'Earlier Caccia design decision required; missing T4';
+    const expectedReason = ready ? failure : 'Workflow aborted by step transition';
+    mocks.caccia.mockRejectedValue(new Error(failure));
+    writeFileSync(workflowFile, stringify({ name: 'wait-caccia-error', initial_step: 'review', steps: [
+      { name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(effect.review.caccia.failed == true)', next: 'report' }] },
+      { name: 'report', kind: 'system',
+        wait: { until: `when(${ready})`, interval_ms: 1, max_retries: 0, on_timeout: 'ABORT' },
+        effects: [{ type: 'comment_pr', pr: 123, body: '{effect:review.caccia.error}' }],
+        rules: [{ condition: 'when(true)', next: 'ABORT' }] },
+    ] }));
+    const runner = new TaskRunner(project);
+    if (entry === 'merge') {
+      const result = await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
+        settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } });
+      expect(result).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
+    } else {
+      const services = createDefaultSystemStepServices({ cwd: project, projectCwd: project, task: 'enqueue PR' });
+      const effect = { type: 'enqueue_task', mode: 'from_pr', pr: 123, workflow: workflowFile, task: 'Review PR' } as const;
+      expect(await services.executeEffect(effect, effect, {} as WorkflowState)).toMatchObject({ success: true });
+      const task = runner.claimNextTasks(1)[0]!;
+      const result = await executeTaskAndCompleteWithDetails(task, runner, project,
+        (request) => runWorkflowExecution({ ...request, runPathsDirectory: join(project, '.takt', 'runs') }),
+        { provider: 'mock' }, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(result.failureReason).toBe(expectedReason);
+    }
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+    if (ready) expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123, failure, project);
+    else expect(mocks.comment).not.toHaveBeenCalled();
+    expect(mocks.merge).not.toHaveBeenCalled();
+    const execution = await mocks.execution.mock.calls[0]![0];
+    const meta = JSON.parse(readFileSync(join(execution.runDirectory!, 'meta.json'), 'utf8'));
+    const saved = new TaskRunner(project).listTaskStateItems().find((task) => task.kind === 'failed');
+    expect({ reason: execution.reason, metaReason: meta.reason, runFailure: meta.failure })
+      .toMatchObject({ reason: expectedReason, metaReason: expectedReason,
+        runFailure: { step: 'report', error: expectedReason } });
+    expect(entry === 'merge' ? saved?.completion?.failureReason : saved?.failure?.error).toBe(expectedReason);
+  });
+
   it('本体例外をerror結果へ変換して後続コメントへ渡す', async () => {
     const error = 'Pull request #123 head changed before resolving review thread';
     mocks.caccia.mockRejectedValue(new Error(error));

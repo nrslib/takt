@@ -53,6 +53,7 @@ export function assertCacciaWorkflowComplete(
   report: CacciaWorkflowReport,
   threadIds: readonly string[],
   workflowFailure?: string,
+  errorOptions?: ErrorOptions,
 ): void {
   const expected = new Set(threadIds);
   const seen = new Set<string>();
@@ -70,6 +71,6 @@ export function assertCacciaWorkflowComplete(
   if (report.outcome === 'abort') problems.push('The Caccia workflow reported abort');
   if (workflowFailure !== undefined) problems.push(workflowFailure);
   if (problems.length > 0) {
-    throw new CacciaWorkflowError([report.reason, ...problems].filter((part) => part.trim().length > 0).join('; '));
+    throw new CacciaWorkflowError([report.reason, ...problems].filter((part) => part.trim().length > 0).join('; '), errorOptions);
   }
 }

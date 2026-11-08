@@ -9,6 +9,7 @@ import * as githubPr from '../infra/github/pr.js';
 import * as taskClone from '../infra/task/clone-exec.js';
 import * as taskGit from '../infra/task/git.js';
 import * as slackWebhook from '../shared/utils/slackWebhook.js';
+import * as runMeta from '../features/tasks/execute/runMeta.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
 import {
@@ -132,6 +133,9 @@ describe('Caccia report lifecycle', () => {
     commitHeadSha?: string;
     judgmentError?: Error;
     abortAtJudgment?: AbortController;
+    laterAbort?: boolean;
+    terminalError?: Error;
+    removeReportBeforeError?: boolean;
   } = {}) {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-caccia-outcome-'));
     temporaryRoots.push(projectCwd);
@@ -140,11 +144,12 @@ describe('Caccia report lifecycle', () => {
       language: 'en', vcs_provider: 'github', provider: 'mock',
     }));
     writeFileSync(join(projectCwd, '.takt', 'workflows', 'report-test.yaml'), stringify({
-      name: 'report-test', max_steps: 1, initial_step: 'address',
+      name: 'report-test', max_steps: 2, initial_step: 'address',
       steps: [{ name: 'address', persona: 'coder', instruction: 'Review the supplied threads',
         output_contracts: { report: [{ name: 'caccia-decisions.json', format: 'caccia-decisions' }] },
-        rules: [{ condition: 'Finished', next: 'COMPLETE' }, { condition: 'Stopped', next: 'ABORT' }],
-      }],
+        rules: [{ condition: 'Finished', next: options.laterAbort ? 'later' : 'COMPLETE' }, { condition: 'Stopped', next: 'ABORT' }],
+      }, ...(options.laterAbort ? [{ name: 'later', kind: 'system',
+        rules: [{ condition: 'when(true)', next: 'ABORT' }] }] : [])],
     }));
     mockRunStatusJudgmentPhase.mockImplementationOnce(async () => {
       if (options.judgmentError !== undefined) throw options.judgmentError;
@@ -192,7 +197,15 @@ describe('Caccia report lifecycle', () => {
     const resolve = vi.spyOn(githubPr, 'resolveReviewThread').mockResolvedValue(undefined);
     const webhook = vi.spyOn(slackWebhook, 'getSlackWebhookUrl').mockReturnValue(undefined);
     const workflow = vi.spyOn(await import('../features/tasks/execute/workflowExecutionApi.js'), 'runWorkflowExecution');
-    const spies = [status, fetchThreads, fetchDetails, clone, git, commit, head, resolve, webhook, workflow];
+    const spies: Array<{ mockRestore(): void }> = [status, fetchThreads, fetchDetails, clone, git, commit, head, resolve, webhook, workflow];
+    if (options.terminalError !== undefined) {
+      spies.push(vi.spyOn(runMeta, 'finalizeFileRunMeta').mockImplementationOnce((input) => {
+        const reportPath = join(input.runPaths.reportsAbs, 'caccia-decisions.json');
+        expect(readFileSync(reportPath, 'utf8').trim()).toBe(rawReport.trim());
+        if (options.removeReportBeforeError) rmSync(reportPath);
+        throw options.terminalError;
+      }));
+    }
     try {
       const execution = await runCaccia({
         entry: 'standalone', projectCwd, prNumber: 42, outputMode: 'silent',
@@ -204,8 +217,10 @@ describe('Caccia report lifecycle', () => {
       const runs = join(projectCwd, '.takt', 'runs');
       const reports = readdirSync(runs, { recursive: true, encoding: 'utf8' })
         .filter((path) => path.endsWith(join('reports', 'caccia-decisions.json')));
-      expect(reports).toHaveLength(1);
-      expect(readFileSync(join(runs, reports[0]!), 'utf8').trim()).toBe(rawReport.trim());
+      expect(reports).toHaveLength(options.removeReportBeforeError ? 0 : 1);
+      if (!options.removeReportBeforeError) {
+        expect(readFileSync(join(runs, reports[0]!), 'utf8').trim()).toBe(rawReport.trim());
+      }
       expect(existsSync(clone.mock.calls[0]![1])).toBe(false);
       return { ...execution, commitCalls: commit.mock.calls.length, resolveCalls: resolve.mock.calls.length,
         resolvedThreads: resolve.mock.calls.map(([threadId]) => threadId),
@@ -229,25 +244,66 @@ describe('Caccia report lifecycle', () => {
     expect(execution.resolveCalls).toBe(1);
   });
 
-  it.each([false, true])('commits, pushes, and resolves a complete report when workflow abort is %s', async (workflowAbort) => {
+  it('commits, pushes, and resolves a complete report when the workflow succeeds', async () => {
     const headSha = 'b'.repeat(40);
     const report = { outcome: 'complete', reason: 'Reviewed all supplied threads.', decisions: [
       { thread_id: 'T1', valid: true, reason: 'Fixed the finding.' },
       { thread_id: 'T2', valid: true, reason: 'Fixed the second finding.' },
     ] };
 
-    const execution = await runReport(JSON.stringify(report), { threadCount: 2, workflowAbort, commitHeadSha: headSha });
+    const execution = await runReport(JSON.stringify(report), { threadCount: 2, commitHeadSha: headSha });
 
     expect(execution.error).toBeUndefined();
     expect(execution.result).toMatchObject({ outcome: 'success', headSha });
-    await expect(execution.workflowExecution).resolves.toMatchObject(workflowAbort
-      ? { success: false, abortKind: 'step_transition', reason: 'Workflow aborted by step transition' }
-      : { success: true });
-    if (!workflowAbort) await expect(execution.workflowExecution).resolves.not.toHaveProperty('abortKind');
+    await expect(execution.workflowExecution).resolves.toMatchObject({ success: true });
+    await expect(execution.workflowExecution).resolves.not.toHaveProperty('abortKind');
     expect(execution.commitCalls).toBe(1);
     expect(execution.gitCalls.filter(([, args]) => args[0] === 'push').map(([, args]) => args))
       .toEqual([['push', 'https://github.com/org/repo.git', 'HEAD:refs/heads/feature/report']]);
     expect(execution.resolvedThreads).toEqual(['T1', 'T2']);
+  });
+
+  it.each([false, true])('rejects a complete report when the workflow aborts in a later step: %s', async (laterAbort) => {
+    const execution = await runReport(JSON.stringify({ outcome: 'complete', reason: '', decisions: [
+      { thread_id: 'T1', valid: true, reason: 'Fixed.' },
+    ] }), { workflowAbort: !laterAbort, laterAbort, commitHeadSha: 'b'.repeat(40) });
+    expect(execution.error).toBeInstanceOf(Error);
+    expect((execution.error as Error).message).toContain('Workflow aborted by step transition');
+    expect(execution.commitCalls).toBe(0);
+    expect(execution.resolveCalls).toBe(0);
+    expect(execution.gitCalls.filter(([, args]) => args[0] === 'push')).toEqual([]);
+  });
+
+  it.each([false, true])('retains the saved abort diagnosis when terminal persistence fails after workflow abort: %s', async (workflowAbort) => {
+    const reason = 'Two remaining threads require a design decision.';
+    const terminalError = new Error('Terminal metadata persistence failed');
+    const execution = await runReport(JSON.stringify({ outcome: 'abort', reason, decisions: [
+      { thread_id: 'T1', valid: true, reason: 'Fixed.' },
+    ] }), { threadCount: 3, workflowAbort, terminalError });
+    expect(execution.error).toBeInstanceOf(Error);
+    const message = (execution.error as Error).message;
+    expect(message).toContain(reason);
+    expect(message).toContain('T2');
+    expect(message).toContain('T3');
+    const original = await execution.workflowExecution.catch((error: unknown) => error);
+    expect(message).toContain((original as Error).message);
+    if (original instanceof AggregateError) expect(original.errors).toContain(terminalError);
+    else expect(original).toBe(terminalError);
+    expect(execution.error).toHaveProperty('cause', original);
+    expect(execution.commitCalls).toBe(0);
+    expect(execution.resolveCalls).toBe(0);
+    expect(execution.gitCalls.filter(([, args]) => args[0] === 'push')).toEqual([]);
+  });
+
+  it.each([
+    { report: 'not JSON', removeReportBeforeError: false },
+    { report: JSON.stringify({ outcome: 'complete', reason: '', decisions: [] }), removeReportBeforeError: false },
+    { report: JSON.stringify({ outcome: 'abort', reason: 'Unavailable report', decisions: [] }), removeReportBeforeError: true },
+  ])('preserves the original terminal exception without a readable abort report: %j', async ({ report, removeReportBeforeError }) => {
+    const terminalError = new Error('Terminal metadata persistence failed');
+    const execution = await runReport(report, { terminalError, removeReportBeforeError });
+    const original = await execution.workflowExecution.catch((error: unknown) => error);
+    expect(execution.error).toBe(original);
   });
 
   it('rejects an abort report with every decision even when judgment also aborts', async () => {

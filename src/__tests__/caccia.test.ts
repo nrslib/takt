@@ -218,6 +218,22 @@ describe('Caccia workflow report parsing', () => {
       .toThrow('Report explanation; Provider failed');
   });
 
+  it('preserves the execution error as cause alongside the abort reason and missing decisions', () => {
+    const cause = new Error('Terminal persistence failed');
+    let failure: unknown;
+    try {
+      assertCacciaWorkflowComplete({ outcome: 'abort', reason: 'Design decision required',
+        decisions: [{ threadId: 'T1', valid: true, reason: 'Fixed' }] }, ['T1', 'T2'], cause.message, { cause });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(CacciaWorkflowError);
+    expect(failure).toHaveProperty('cause', cause);
+    expect((failure as Error).message).toContain('Design decision required');
+    expect((failure as Error).message).toContain('T2');
+    expect((failure as Error).message).toContain(cause.message);
+  });
+
   type ParseReport = (contents: string) => {
     outcome: 'complete' | 'abort';
     reason: string;
