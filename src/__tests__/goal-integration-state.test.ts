@@ -1029,6 +1029,21 @@ it('saves completion evidence and the failure reason when a PR is unavailable, t
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
 });
 
+it('does not pass saved human checks when resubmitting a different reviewed SHA', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Saved checks', 'ja');
+  const previous = structuredClone(goal);
+  const nextSha = 'c'.repeat(40);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? nextSha : targetSha);
+  const missingChecks = new Error('human checks are required');
+  vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(missingChecks);
+
+  await expect(completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja'))
+    .rejects.toBe(missingChecks);
+
+  expect(prepareGoalPullRequest).toHaveBeenLastCalledWith('/project', previous,
+    expect.objectContaining({ goalSha: nextSha }), undefined, 'ja', undefined, expect.any(Function));
+});
+
 it('refreshes the completion and notifies the first PR failure on a repeated completion request', async () => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   delete goal.pullRequest;
