@@ -96,8 +96,8 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      `Use takt_complete_goal to create or recover this goal PR (expectedSha: ${expectedSha}).`,
-      'Use takt_merge_goal_pr with until: prepare for approval mode, or until: merge for automatic or explicitly requested merging, after review and CI.',
+      `Use takt_complete_goal to deliver this goal's results and verification evidence to the PR (expectedSha: ${expectedSha}).`,
+      'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. The finishing task handles review and waiting for CI to complete.',
     ],
   };
 }

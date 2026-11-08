@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import { parse } from 'yaml';
-import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase } from './manager-work-split-prompt.mjs';
+import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase, resolveManagerEvalFacet } from './manager-work-split-prompt.mjs';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
 import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { goalSummary } from '../dist/features/mcp/goalResponse.js';
@@ -15,6 +15,8 @@ import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
 import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, goalWriteInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
 import { prepareQuestionFacetVariants } from './fixtures/manager-question-options/facets.mjs';
+import { renderTemplate } from '../dist/shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const runLogContent = (fixture, runSlug, index) => fixture.readResults.find(({ tool, arguments: args }) =>
@@ -25,10 +27,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 124 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 132 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 124);
+  assert.equal(suite.tests.length, 132);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -386,6 +388,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'escalate-repeated-failure', 'escalate-not-on-first-failure',
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',
+    'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
@@ -463,63 +466,24 @@ test('instruction file switching preserves input, schemas and other facets in bo
 test('recorded main question rules and green workspace facets are exclusive in assembled prompts', () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-question-redgreen-'));
   const prior = facetEnvKeys.map((key) => [key, process.env[key]]);
-  const newRuleMarkers = {
-    ja: [
-      '人に判断を求めるときは人宛ての質問を使い、',
-      '人に届く質問・操作依頼・通知の本文には、理由と試したことの要約を書く。',
-      '失敗の記録を確かめ、失敗した操作と、',
-      '人の答えが必要な未決定事項があり、それを尋ねる未回答の質問がなければ、',
-      '「停止したままにする」「あとで相談する」は、まだ決まっていない案の代わりにしない。',
-      '選択肢と理由付きの推奨案も付ける。',
-      '事実を答えてもらっただけで、その案を採ることの承認とみなさない。',
-      '人にしか分からない、すでに決まっている事実や値',
-      '何を決めるために必要か、何を調べても分からなかったかを本文に短く書く。',
-      '人への新しい質問を takt_ask_goal_question で作る。',
-      '選択肢を options に、推奨案と理由を recommendation に書く。',
-      '推奨回答を示すのは、案から選んでもらう質問のときだけです。',
-      '質問の直前に「推奨:」を文章で書く手順は、人の発言に応じるターンに適用します。',
-      '会話や手元の情報から対象のリポジトリやゴールを特定できないときは、',
-    ],
-    en: [
-      'Use a human-directed question when a decision is needed,',
-      'Put a brief explanation of the reason and what you tried in the body of the question,',
-      'check its records and include the operation that failed',
-      "If an unresolved matter requires the person's answer and no unanswered question addresses that matter,",
-      'Do not use "remain stopped" or "discuss later" as substitutes for the unresolved alternatives themselves.',
-      'State which alternative each answer selects, and include the options and a recommendation with its reason.',
-      'Do not treat an answer that only supplies a fact as approval to adopt an alternative.',
-      'When an already established fact or value that only a person knows',
-      'briefly state in its body what decision needs the information and what you checked without finding it.',
-      'create new questions for the person with takt_ask_goal_question.',
-      'put the options in options and the recommendation with its reason in recommendation.',
-      'Present a recommended answer only for a question asking the person to choose among alternatives.',
-      'Apply the step of writing "Recommended:" immediately before the question in turns responding to a person\'s message.',
-      'If the target repository or goal cannot be identified from the conversation and available context,',
-    ],
-  };
   try {
     for (const lang of ['ja', 'en']) {
-      const variants = prepareQuestionFacetVariants(root, lang);
+      prepareQuestionFacetVariants(root, lang);
       for (const key of facetEnvKeys) delete process.env[key];
       const prompts = {};
       for (const phase of ['red', 'green']) {
         process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, phase, 'policies');
         process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, phase, 'instructions');
         prompts[phase] = buildPrompt({ vars: { case: 'migration-method-event', lang } });
-        for (const marker of newRuleMarkers[lang]) {
-          assert.equal(prompts[phase].includes(marker), phase === 'green', `${lang}/${phase}: ${marker}`);
-        }
         const other = phase === 'red' ? 'green' : 'red';
-        const promptLines = new Set(prompts[phase].split('\n'));
-        for (const bodies of Object.values(variants)) {
-          const exclusive = bodies[phase].split('\n').filter((line) => line.trim() && !bodies[other].split('\n').includes(line));
-          assert.ok(exclusive.length > 0);
-          for (const line of exclusive) {
-            assert.ok(promptLines.has(line), `${lang}/${phase}: includes chosen facet line`);
-          }
-          for (const line of bodies[other].split('\n').filter((line) => line.trim() && !bodies[phase].split('\n').includes(line))) {
-            assert.ok(!promptLines.has(line), `${lang}/${phase}: excludes other facet line`);
-          }
+        for (const kind of ['policies', 'instructions']) {
+          const bodies = Object.fromEntries([phase, other].map((variant) => [variant, renderTemplate(
+            resolveManagerEvalFacet(kind, 'FACET_ROOT', { projectDir: root, lang }, join(root, variant, kind)).trim(),
+            { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang) },
+          )]));
+          assert.notEqual(bodies[phase], bodies[other]);
+          assert.ok(prompts[phase].includes(bodies[phase]), `${lang}/${phase}/${kind}: includes chosen facet`);
+          assert.ok(!prompts[phase].includes(bodies[other]), `${lang}/${phase}/${kind}: excludes other facet`);
         }
         assert.doesNotMatch(prompts[phase], /\{\{include:/);
       }

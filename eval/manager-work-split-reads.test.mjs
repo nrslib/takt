@@ -394,9 +394,10 @@ function cloneWorkingLocations(cwd, fixture, source) {
 test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
   const required = new Set(['local-config-tampering', 'offline-sync-queue',
-    'report-publish-replacement', 'verification-once', 'verification-mixed']);
+    'report-publish-replacement', 'verification-once', 'verification-mixed', 'unrelated-history-repair']);
   const optional = new Set(['reservation-validation', 'legacy-date-format', 'archive-test-coverage',
-    'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'existing-invoice-format', 'mail-dispatch-state']);
+    'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'existing-invoice-format', 'mail-dispatch-state',
+    'local-terminal-test-repair', 'local-pytest-config-repair', 'local-env-failure-left-as-is']);
   try {
     const source = join(root, 'source.git');
     git(['init', '--bare', '--quiet', '--initial-branch=main', source]);
@@ -435,9 +436,9 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
         else optionallyInstructed++;
       }
     }
-    assert.equal(inspected, 32);
-    assert.equal(instructed, 10);
-    assert.equal(optionallyInstructed, 16);
+    assert.equal(inspected, 40);
+    assert.equal(instructed, 12);
+    assert.equal(optionallyInstructed, 22);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
