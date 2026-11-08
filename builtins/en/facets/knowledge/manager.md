@@ -2,7 +2,7 @@
 
 ## Goals, tasks, and results
 
-One manager can be responsible for multiple repositories in a workspace. Each goal progresses in one assigned repository. A repository can be removed from the assignment once all its goals are complete.
+One manager can be responsible for multiple repositories in a workspace. Each goal progresses in one assigned repository. A repository can be removed from the assignment once each of its goals is completed or aborted.
 
 Task termination, integration of results into the goal branch, PR merging, and goal completion each have their own operations and recorded states. accepted denotes receipt; task success describes the execution result. takt_list_tasks returns integration state in goalIntegration (integrated / not_integrated / unknown / direct_push), with the reason for unknown in goalIntegrationReason. direct_push identifies tasks that push directly to the PR branch.
 
@@ -14,7 +14,7 @@ Pausing holds execution and subsequent events; aborting is terminal. Resuming al
 
 Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together. The PR watcher handles goals in awaiting_merge.
 
-PR finishing tasks handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. They can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
+The standard PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. Review and CI waiting in a custom merge.workflow follow its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
 
 manager.main_merge is resolved from project configuration. Both approve and auto create PRs. approve finishes preparation with until: prepare and waits for a person to merge. auto treats the person's setting as a continuing instruction to integrate and uses until: merge to finish preparation and merge.
 
@@ -38,7 +38,7 @@ Goal operations use the target cwd and goalId. Each tool's arguments and return 
 
 Results from ordinary tasks are gathered in the goal branch and integrated from there into the target branch.
 
-takt_complete_goal accepts expectedSha, an evidence-backed summary, and humanChecks for the PR. In awaiting_merge, it pushes the branch and creates or reuses a PR with the saved integration target as base. It checks GitHub, origin, and the PR head/base, and saves the number and URL in pullRequest. After addressing a PR preparation failure, preparation can be retried with the same tool.
+takt_complete_goal accepts expectedSha, an evidence-backed summary, and humanChecks for the PR. In awaiting_merge, it pushes the branch and creates or reuses a PR with the saved integration target as base. It checks GitHub, origin, and the PR head/base, and saves the number and URL in pullRequest. A repeated request at the same SHA in awaiting_merge returns the saved completion record while the goal content is not yet included in the target. When no PR is saved, preparation can be retried after addressing the cause. Correct evidence by separately updating the work log and the PR text.
 
 takt_merge_goal_pr accepts cwd, goalId, prNumber matching the saved PR, and until. It queues a merge task as pending and returns its name. until: prepare uses merge-prepare; until: merge uses merge.workflow (default: merge-review-fix-simple). It checks the saved PR, awaiting_merge, and pause/abort state.
 

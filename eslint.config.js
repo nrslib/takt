@@ -47,6 +47,7 @@ export default tseslint.config(
         console: 'readonly',
         process: 'readonly',
         AbortController: 'readonly',
+        structuredClone: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
       },

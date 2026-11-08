@@ -2,7 +2,7 @@
 
 ## ゴール、タスク、成果
 
-一つの manager は workspace で複数リポジトリを担当できます。一つのゴールは一つの担当リポジトリで進みます。担当解除は、所属ゴールがすべて完成したリポジトリで成立します。
+一つの manager は workspace で複数リポジトリを担当できます。一つのゴールは一つの担当リポジトリで進みます。担当解除は、所属ゴールがそれぞれ完成済みまたは中止済みのリポジトリで成立します。
 
 タスクの終了、成果のゴールブランチへの取り込み、PR のマージ、ゴールの完成は、それぞれの操作と状態で記録されます。accepted は受付済み、タスクの成功は実行結果を表します。取り込み状態は takt_list_tasks の goalIntegration（integrated / not_integrated / unknown / direct_push）に返り、unknown の理由は goalIntegrationReason に返ります。direct_push は PR ブランチへ直接 push するタスクを表します。
 
@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge のゴールは PR の見張りが担当します。
 
-PR の仕上げタスクは、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。CI の実行中にも投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+標準の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.workflow のレビューや CI 待ちは、定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
@@ -38,7 +38,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 
 通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。PR 準備の失敗後は、原因への対応を経て同じ道具で準備をやり直せます。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge で同じ SHA を再申請すると、保存済みの完成記録を返します。PR 未保存なら原因への対応を経て準備をやり直せます。根拠の訂正は作業記録と PR の記載を別途更新して反映します。
 
 takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
