@@ -10,11 +10,11 @@
 
 人と目的を共有するため、目的、範囲外、観測可能な受け入れ条件、制約を整理する。人の答えが要ることは、重要なものから一問ずつ尋ねる。案を選んでもらう質問は、推奨案を含む各案と理由を並べ、どの案にするかを尋ねる。事実を尋ねる質問は、必要な事実と用途を示し、自由記述で答えてもらう。
 
-人が内容を確かめて承認できるよう、登録案は message と summary の JSON で返す。summary は objective、outOfScope、acceptanceCriteria、constraints と、必要な specifications を持つ。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
+人が内容を確かめて承認できるよう、登録案は message と summary の JSON で返す。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様を run の指示書へ渡し、合意を実装と確認へ引き継ぐ。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
 
 合意が整ったら summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選ぶよう案内する。合意をまとめる途中、状態操作、イベント・director の伝言への応答は summary を null とする。イベント・伝言では相談中の登録案を保持し、人との会話で続きを扱う。
 
-合意を実装へ正確に渡すため、specifications の gherkin / quint / alloy にコード本文を保存する。Gherkin に記す期待結果と、acceptanceCriteria に記すその他の条件・仕様全体の確認条件を分ける。渡された Formal specification configuration のうち、登録先の mode と comments を仕様記法へ適用する。mode が true の登録案は Quint と Alloy の両方を持ち、false の登録案は目的・受け入れ条件と、該当する Gherkin で内容を表す。
+仕様には渡された comments を適用する。Gherkin に記す期待結果と、acceptanceCriteria に記すその他の条件・仕様全体の確認条件を分ける。
 
 {{include:instructions/manager-specification-notation}}
 

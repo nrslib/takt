@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
 import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
@@ -57,6 +57,10 @@ export function buildManagerSystemPrompt(fixture) {
   const priorConfigDir = process.env.TAKT_CONFIG_DIR;
   try {
     process.env.TAKT_CONFIG_DIR = projectDir;
+    if (fixture.projectConfig !== undefined) {
+      mkdirSync(join(projectDir, '.takt'));
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), stringify(fixture.projectConfig));
+    }
     const context = { projectDir, lang: fixture.lang };
     const persona = resolveFacetByName('manager', 'personas', context);
     const policy = resolveManagerEvalFacet('policies', 'TAKT_EVAL_MANAGER_POLICY_ROOT', context, process.env.TAKT_EVAL_MANAGER_POLICY_ROOT);
@@ -115,6 +119,10 @@ export default function buildManagerWorkSplitPrompt({ vars }) {
   const tools = Object.fromEntries(Object.entries(managerWriteSchemas).map(([name, schema]) => [name,
     toJSONSchema(schema, { unrepresentable: 'any', io: 'input' }),
   ]));
+  const history = fixture.previousTurns === undefined ? ''
+    : `PREVIOUS TURNS:\n${JSON.stringify(fixture.previousTurns.map(({ event, response }) => ({
+      input: buildManagerEventInput(fixture.cwd, event), response,
+    })))}\n\n`;
   const label = fixture.lang === 'ja' ? 'このターンで既に読んだ結果' : 'Results already read this turn';
-  return `SYSTEM:\n${system}\n\nTOOLS:\n${JSON.stringify(tools)}\n\nUSER:\n${user}\n\n${label}:\n${JSON.stringify(fixture.readResults)}\n\n${replayConstraint[fixture.lang]}`;
+  return `SYSTEM:\n${system}\n\n${history}TOOLS:\n${JSON.stringify(tools)}\n\nUSER:\n${user}\n\n${label}:\n${JSON.stringify(fixture.readResults)}\n\n${replayConstraint[fixture.lang]}`;
 }

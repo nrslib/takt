@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
-import { GoalSummarySchema } from '../../dist/infra/goals/schema.js';
+import { validateManagerSummary } from '../../dist/features/manager/turnResponse.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
 import { noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
 import assertExecution from './manager-work-split-execution.mjs';
 
 const responseSchema = z.object({
   message: z.string().min(1),
-  summary: GoalSummarySchema.nullable(),
+  summary: z.unknown(),
 }).strict();
 const envelopeSchema = z.object({
   response: responseSchema,
@@ -25,7 +25,11 @@ const readyKeys = {
   'escalate-not-on-first-failure': ['csv-import'],
 };
 const completionCases = new Set(['no-check-docs', 'no-check-same-module', 'integration-already-checked']);
-const summaryCases = new Set(['summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint']);
+const summaryCases = new Set([
+  'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
+  'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
+  'spec-review-investigation',
+]);
 const patrolTellCases = new Set([
   'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
 ]);
@@ -119,8 +123,18 @@ export default function assertManagerWorkSplit(output, context) {
   let parsed;
   try {
     parsed = envelopeSchema.parse(normalizeEnvelope(parseEnvelope(output), fixture.turn));
-  } catch {
+    if (parsed.response.summary !== null) parsed.response.summary = validateManagerSummary(parsed.response.summary);
+  } catch (error) {
+    if (error instanceof SyntaxError) return result(false, `Invalid JSON: ${error.message}`);
+    if (error instanceof z.ZodError) {
+      return result(false, `Invalid production response or calls: ${error.issues
+        .map(({ path, message }) => `${path.join('.') || 'response'}: ${message}`).join('; ')}`);
+    }
     return result(false, 'Expected a JSON envelope with a production response and calls');
+  }
+  if (parsed.response.summary?.repositoryDirectory !== undefined
+    && parsed.response.summary.repositoryDirectory !== fixture.cwd) {
+    return result(false, 'Wrong summary repository');
   }
   let submitted = false;
   for (const call of parsed.calls) {
@@ -187,7 +201,24 @@ export default function assertManagerWorkSplit(output, context) {
     return result(false, 'Do not send repeated instructions to the same task');
   }
   if (summaryCases.has(caseId)) {
-    return result(parsed.calls.length === 0 && parsed.response.summary !== null, 'Summary must precede human registration approval; semantics are graded separately');
+    if (parsed.calls.length !== 0 || parsed.response.summary === null) {
+      return result(false, 'Summary must precede human registration approval');
+    }
+    const specifications = parsed.response.summary.specifications ?? {};
+    if (['spec-formal-on-code', 'spec-review-investigation'].includes(caseId)) {
+      return result(['gherkin', 'quint', 'alloy'].every((key) => Object.hasOwn(specifications, key)),
+        'Formal mode code proposals require Gherkin, Quint and Alloy in summary.specifications');
+    }
+    if (caseId === 'spec-formal-off-code') {
+      return result(Object.hasOwn(specifications, 'gherkin')
+        && !Object.hasOwn(specifications, 'quint') && !Object.hasOwn(specifications, 'alloy'),
+      'Code proposals with formal mode off require Gherkin and omit Quint and Alloy');
+    }
+    if (caseId === 'spec-docs-goal') {
+      return result(!Object.hasOwn(specifications, 'gherkin'),
+        'Documentation proposals use the objective and acceptance criteria without Gherkin');
+    }
+    return result(true, 'Summary precedes human registration approval; semantics are graded separately');
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
