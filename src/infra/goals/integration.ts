@@ -96,7 +96,7 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). PR preparation retries use the saved completion evidence. To correct the saved evidence, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR's text separately.`,
+      'In awaiting_merge, resubmit takt_complete_goal only if PR preparation failed (the saved pullRequest was cleared or an error was returned) or completion evidence needs correction. Before resubmitting, inspect and verify the current tip of the goal branch, then pass that SHA as expectedSha with an evidence-backed summary. Resubmission can rebuild the completion record and existing PR body even at the same SHA. If only reading or updating the existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
       'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
     ],
   };
