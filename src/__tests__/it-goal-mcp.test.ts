@@ -1688,6 +1688,51 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
+  it.each([false, true])('checks the newly submitted goal after merging the published PR head (push fails: %s)', async (failPush) => {
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+    });
+    const previousSha = sha;
+    const previousBlob = git(cwd, ['rev-parse', `${previousSha}:goal-result.txt`]);
+    const nextBlob = git(cwd, ['hash-object', '-w', '--stdin'], 'additional goal result\n');
+    const nextTree = git(cwd, ['mktree'], `100644 blob ${previousBlob}\tgoal-result.txt\n100644 blob ${nextBlob}\tnext-result.txt\n`);
+    const nextSha = git(cwd, ['commit-tree', nextTree, '-p', previousSha, '-m', 'Additional goal result']);
+    git(cwd, ['update-ref', `refs/heads/${branch}`, nextSha]);
+    if (failPush) git(cwd, ['remote', 'set-url', '--push', 'origin', join(cwd, 'missing-origin.git')]);
+    await withServer(cwd, 'manager', async (client) => {
+      const submitted = await complete(client, { expectedSha: nextSha, summary: '追加成果を確認した。' });
+      expect(submitted.isError, firstTextContent(submitted.content)).toBeUndefined();
+      expect(await new GoalStore(cwd).get(goalId)).toMatchObject({ status: 'awaiting_merge',
+        completion: { goalSha: nextSha, summary: '追加成果を確認した。' } });
+    });
+
+    const before = await new GoalStore(cwd).get(goalId);
+    prHeadSha = git(remote, ['rev-parse', `refs/heads/${branch}`]);
+    expect(prHeadSha).toBe(failPush ? previousSha : nextSha);
+    expect(git(cwd, ['ls-tree', '--name-only', prHeadSha]).includes('next-result.txt')).toBe(!failPush);
+    git(remote, ['update-ref', 'refs/heads/main', prHeadSha]);
+    git(cwd, ['update-ref', 'refs/heads/main', prHeadSha]);
+    prState = 'MERGED';
+    await withServer(cwd, 'manager', async (client) => {
+      const checked = await client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      expect(checked.isError, firstTextContent(checked.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(checked.content))).toMatchObject({ included: !failPush,
+        goal: { status: failPush ? 'awaiting_merge' : 'completed', completion: { goalSha: nextSha } } });
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.pullRequest).toEqual(failPush ? undefined : pullRequest);
+      const completed = saved.notifications?.filter(({ kind }) => kind === 'completed') ?? [];
+      expect(completed).toHaveLength(failPush ? 0 : 1);
+      if (failPush) {
+        expect(saved).toEqual(before);
+        expect(saved.workLog.at(-1)?.summary).toContain('Goal PR push failed');
+        expect(saved.notifications?.at(-1)).toMatchObject({ kind: 'blocked', severity: 'error' });
+        expect(saveManagerEvent).toHaveBeenLastCalledWith(cwd, expect.objectContaining({ kind: 'pr_failed', expectedSha: nextSha }));
+      } else {
+        expect(saved.completion?.targetSha).toBe(prHeadSha);
+      }
+    });
+  });
+
   it('returns a fetch failure instead of using a stale target and preserves the goal', async () => {
     await withMerge(async (client) => {
       const check = () => client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
@@ -1950,7 +1995,7 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(sent).toHaveBeenCalledOnce();
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, summary: updatedSummary, humanChecks: updatedChecks } });
-      expect(saved.pullRequest).toBeUndefined();
+      expect(saved.pullRequest).toEqual(pullRequest);
       expect(saved.workLog.at(-1)?.summary).toContain(`fixture body ${operation} failed`);
       expect(saved.notifications).toEqual([...before.notifications!, expect.objectContaining({ kind: 'blocked', severity: 'error' })]);
       expect(saveManagerEvent).toHaveBeenLastCalledWith(cwd, expect.objectContaining({ kind: 'pr_failed', goalId, expectedSha: sha,

@@ -153,7 +153,7 @@ async function prepareCompletionPullRequest(
 function recordPullRequestFailure(
   goal: Goal, failure: string | undefined, notifications: GoalNotificationPolicy, language: Language,
 ): Goal {
-  if (failure === undefined || goal.pullRequest !== undefined) return goal;
+  if (failure === undefined) return goal;
   const saved = appendGoalWorkLog(goal, { summary: failure });
   return appendGoalNotification(saved, {
     kind: 'blocked', severity: 'error',
@@ -200,12 +200,13 @@ export async function completeGoal(
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
-    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure, notifications, language);
+    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting,
+      pullRequest: bodyFailure === undefined ? pullRequest : current.pullRequest }, failure, notifications, language);
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
       kind: 'awaiting_merge', body: summary,
     }, notifications);
   });
-  if (failure !== undefined && saved.pullRequest === undefined) {
+  if (failure !== undefined) {
     saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
   }
   return { status: 'awaiting_merge', completion: waiting, goal: saved,

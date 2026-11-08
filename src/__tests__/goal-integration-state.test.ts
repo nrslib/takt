@@ -1068,6 +1068,27 @@ it.each([undefined, 'New checks'])('rebuilds current evidence and changes after 
   expect(goal.notifications).toEqual(previous.notifications);
 });
 
+it.each(['read', 'update'] as const)('retains the PR and records every body %s failure regardless of blocked notification policy', async (operation) => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  const pullRequest = goal.pullRequest;
+  const failure = `Goal PR body ${operation} failed`;
+  vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError(failure, 'body'));
+  for (const blocked of [true, false]) {
+    const previous = structuredClone(goal);
+    const result = await completeGoal('/project', goal.id, sourceSha, 'new evidence', 'approve', undefined,
+      { ...policy, blocked }, 'New checks', 'ja');
+    expect(result).toMatchObject({ pullRequestBodyError: failure, goal: { pullRequest,
+      completion: { summary: 'new evidence', humanChecks: 'New checks' } } });
+    expect(goal.pullRequest).toEqual(pullRequest);
+    expect(goal.workLog).toEqual([...previous.workLog, expect.objectContaining({ summary: failure })]);
+    expect(goal.notifications).toEqual(blocked
+      ? [...previous.notifications!, expect.objectContaining({ kind: 'blocked', severity: 'error', body: expect.stringContaining(failure) })]
+      : previous.notifications);
+    expect(saveManagerEvent).toHaveBeenLastCalledWith('/project', { kind: 'pr_failed', goalId: goal.id, expectedSha: sourceSha, reason: failure });
+  }
+  expect(saveManagerEvent).toHaveBeenCalledTimes(2);
+});
+
 it.each([
   'Goal PR push failed: commit_refs',
   'Goal PR creation failed: GitHub unavailable',
@@ -1091,9 +1112,11 @@ it.each([
   expect(saveManagerEvent).toHaveBeenLastCalledWith('/project', { kind: 'pr_failed', goalId: goal.id, expectedSha: sourceSha, reason: failure });
 });
 
-it('respects disabled blocked notifications while retaining PR failure evidence', async () => {
+it.each([false, true])('respects disabled blocked notifications while retaining PR failure evidence (saved PR: %s)', async (withPr) => {
+  if (withPr) await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   vi.mocked(prepareGoalPullRequest).mockRejectedValue(new GoalPullRequestUnavailableError('Goal PR push failed: commit_refs'));
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, { ...policy, blocked: false }, 'Check', 'ja');
+  expect(goal.pullRequest).toBeUndefined();
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['awaiting_merge']);
   expect(vi.mocked(saveManagerEvent)).toHaveBeenLastCalledWith('/project', expect.objectContaining({ kind: 'pr_failed', expectedSha: sourceSha, reason: expect.stringContaining('commit_refs') }));
   expect(goal.workLog.at(-1)?.summary).toContain('commit_refs');
@@ -1156,7 +1179,7 @@ it('keeps an existing PR usable when the manager explicitly submits a newly revi
   expect(goal.completion?.goalSha).toBe(nextSha);
 });
 
-it('records a failed push of a newly reviewed SHA and restores the existing PR on retry', async () => {
+it('records failed pushes of a newly reviewed SHA and restores the existing PR only after a successful retry', async () => {
   const actual = await vi.importActual<typeof import('../infra/goals/pull-request.js')>('../infra/goals/pull-request.js');
   vi.mocked(prepareGoalPullRequest).mockImplementation(actual.prepareGoalPullRequest);
   const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
@@ -1190,6 +1213,16 @@ it('records a failed push of a newly reviewed SHA and restores the existing PR o
   ]);
   expect(publication.find).not.toHaveBeenCalled();
   const completion = structuredClone(goal.completion);
+
+  publication.git.mockResolvedValueOnce({ output: Buffer.alloc(0), code: 0, truncated: false })
+    .mockRejectedValueOnce(new Error('retry push failed'));
+  const failedRetry = await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja');
+  expect(failedRetry).toMatchObject({ goal: { pullRequest: undefined, completion } });
+  expect(goal.pullRequest).toBeUndefined();
+  expect(goal.workLog.at(-1)?.summary).toContain('retry push failed');
+  expect(goal.notifications?.filter((notice) => notice.kind === 'blocked')).toHaveLength(2);
+  expect(saveManagerEvent).toHaveBeenCalledTimes(2);
+  expect(publication.find).not.toHaveBeenCalled();
 
   const retried = await completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja');
 
