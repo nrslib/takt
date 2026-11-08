@@ -141,9 +141,10 @@ it('replaces the previously updated body on a second submission without duplicat
   expect(doubles.create).not.toHaveBeenCalled();
 });
 
-it.each(['objective', 'path', 'summary', 'humanChecks'] as const)(
-  'escapes input markers in %s and updates the same published body again', async (field) => {
-    const input = `Before ${taktStart} middle ${taktEnd} after ${taktStart}`;
+it.each((['objective', 'path', 'summary', 'humanChecks'] as const).flatMap((field) =>
+  [taktStart, taktEnd, releaseNotesStart, releaseNotesEnd].map((marker) => ({ field, marker }))))(
+  'escapes $marker in $field and updates the same published body again', async ({ field, marker }) => {
+    const input = `Before ${marker} middle ${marker} after`;
     const nextGoal = field === 'objective' ? { ...goal, objective: input } : goal;
     const nextCompletion = { ...completion,
       summary: field === 'summary' ? input : completion.summary,
@@ -155,6 +156,8 @@ it.each(['objective', 'path', 'summary', 'humanChecks'] as const)(
     const published = doubles.create.mock.calls[0]![0].body as string;
     expect(published.split(taktStart)).toHaveLength(2);
     expect(published.split(taktEnd)).toHaveLength(2);
+    expect(published.split(releaseNotesStart)).toHaveLength(1);
+    expect(published.split(releaseNotesEnd)).toHaveLength(1);
     expect(published).toContain(input.replaceAll('<', '&lt;').replaceAll('>', '&gt;'));
     doubles.find.mockReturnValue(pr);
     serveBody(`${published}\n\n${releaseNotes}`);
