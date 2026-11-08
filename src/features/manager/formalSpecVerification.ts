@@ -28,15 +28,15 @@ export async function verifyManagerConversation(
   const { ctx } = plan;
   const unchanged = { summary: null, sessionId: input.sessionId, assignment: input.assignment };
   if (!configuration.mode) return { ...unchanged, message: getLabel('interactive.ui.verifyUnavailable', ctx.lang) };
-  const reportActivity = createTurnActivityReporter((activity) => input.onActivity?.(activity));
+  const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
   const options = {
     cwd, model: ctx.model, providerOptions: ctx.providerOptions, language: ctx.lang,
     sessionId: input.sessionId, abortSignal: input.abortSignal,
     permissionMode: 'readonly' as const, internalAgentIsolation: 'strict-readonly' as const,
     callerManagedSession: true as const,
-    onStream: (event: Parameters<typeof reportActivity>[0]) => {
+    onStream: (event: Parameters<typeof reporter.onStream>[0]) => {
       input.onProviderOutput?.();
-      if (!input.abortSignal.aborted) reportActivity(event);
+      if (!input.abortSignal.aborted) reporter.onStream(event);
     },
   };
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: [
@@ -46,7 +46,12 @@ export async function verifyManagerConversation(
     }),
   ].join('\n\n') });
   const prompt = buildFormalSpecGenerationPrompt(ctx.lang, input.recovery?.context);
-  const generated = await callWithManagerSessionRecovery(generator, { resume: prompt, fresh: prompt }, options, input.recovery?.invalidateSession);
+  let generated: AgentResponse;
+  try {
+    generated = await callWithManagerSessionRecovery(generator, { resume: prompt, fresh: prompt }, options, input.recovery?.invalidateSession);
+  } finally {
+    if (!input.abortSignal.aborted) reporter.flush();
+  }
   input.abortSignal.throwIfAborted();
   const verification = await runFormalSpecVerification(generated.content, configuration.repositoryDirectory, {
     abortSignal: input.abortSignal, modelCheckTimeoutSeconds: configuration.modelCheckTimeoutSeconds,
@@ -70,6 +75,7 @@ export async function verifyManagerConversation(
     });
     assertSuccess(interpreted);
     input.abortSignal.throwIfAborted();
+    reporter.flush();
     const output = parseManagerResponse(interpreted, ctx.providerType);
     return { ...unchanged, sessionId: interpreted.sessionId ?? generated.sessionId,
       message: [output.message, retained].filter(Boolean).join('\n\n') };
@@ -80,5 +86,8 @@ export async function verifyManagerConversation(
         verificationResult,
         retained,
       ].filter(Boolean).join('\n\n') };
-  } finally { cleanupFormalSpecVerificationArtifacts(verification); }
+  } finally {
+    try { if (!input.abortSignal.aborted) reporter.flush(); }
+    finally { cleanupFormalSpecVerificationArtifacts(verification); }
+  }
 }

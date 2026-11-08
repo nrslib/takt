@@ -19,6 +19,73 @@ function fixture(execute = vi.fn(async (_input: TurnStart, _io: TurnIo): Promise
   return { runtime, messages, wait, initialize, execute, close, onFatal, envelope, transport };
 }
 
+it.each([false, true])('keeps intermediate text ordered behind a slow send and suppresses queued text after interruption=%s', async (interrupted) => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const finish = deferred<void>();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    io.progress({ kind: 'turn_text', message: 'first block' });
+    io.progress({ kind: 'tool', tool: 'Bash', description: '調査する' });
+    io.progress({ kind: 'turn_text', message: 'second block' });
+    await finish.promise;
+    return { kind: 'completed', result: { kind: 'reply', message: 'final' } };
+  }));
+  await f.initialize();
+  const send = f.transport.send.getMockImplementation()!;
+  f.transport.send.mockImplementation(async (message) => {
+    await send(message);
+    if (message.kind === 'turn_progress' && typeof message.message !== 'string'
+      && message.message.kind === 'turn_text' && message.message.message === 'first block') {
+      entered.resolve(); await release.promise;
+    }
+  });
+  const input = turnStart();
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
+  try {
+    await entered.promise;
+    expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(1);
+    if (interrupted) await f.runtime.receive({ ...f.envelope, kind: 'interrupt', turn: input.turn });
+    finish.resolve();
+    await Promise.resolve();
+    expect(f.messages.some((message) => message.kind === 'turn_finished')).toBe(false);
+    release.resolve();
+    expect(await done).toMatchObject({ outcome: { kind: interrupted ? 'interrupted' : 'completed' } });
+    const texts = f.messages.flatMap((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
+      && message.message.kind === 'turn_text' ? [message.message.message] : []);
+    expect(texts).toEqual(interrupted ? ['first block'] : ['first block', 'second block']);
+    expect(f.messages.at(-1)?.kind).toBe('turn_finished');
+    expect(f.onFatal).not.toHaveBeenCalled();
+  } finally { release.resolve(); finish.resolve(); await f.runtime.disconnect(); }
+});
+
+it('bounds queued text behind a blocked transport and reports capacity exhaustion', async () => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    for (let index = 0; index <= MAX_PROCESS_PENDING_REQUESTS; index++) {
+      io.progress({ kind: 'turn_text', message: String(index) });
+    }
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  }));
+  await f.initialize();
+  const send = f.transport.send.getMockImplementation()!;
+  f.transport.send.mockImplementation(async (message) => {
+    await send(message);
+    if (message.kind === 'turn_progress') { entered.resolve(); await release.promise; }
+  });
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  try {
+    await entered.promise;
+    expect(f.onFatal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: 'Process progress capacity exceeded' }));
+    expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(1);
+    release.resolve();
+    await done;
+    expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(MAX_PROCESS_PENDING_REQUESTS);
+  } finally { release.resolve(); await f.runtime.disconnect(); }
+});
+
 it('sends typed activity through the existing progress transport before the final result', async () => {
   const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
     io.progress({ kind: 'thinking' });
@@ -37,6 +104,31 @@ it('sends typed activity through the existing progress transport before the fina
   ]);
   expect(f.messages.at(-1)?.kind).toBe('turn_finished');
   expect(f.onFatal).not.toHaveBeenCalled();
+  await f.runtime.disconnect();
+});
+
+it('fails a rejected text delivery without sending the queued block and allows the next turn to complete', async () => {
+  const failed = new Error('text transport failed');
+  const execute = vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    io.progress({ kind: 'turn_text', message: 'first' });
+    io.progress({ kind: 'turn_text', message: 'queued' });
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  });
+  const f = fixture(execute);
+  await f.initialize();
+  f.transport.send.mockRejectedValueOnce(failed);
+  const input = turnStart();
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
+  expect(await done).toMatchObject({ outcome: { kind: 'failed' } });
+  expect(f.onFatal).toHaveBeenCalledExactlyOnceWith(failed);
+  expect(f.messages.filter((message) => message.kind === 'turn_progress')).toEqual([]);
+  await f.runtime.receive({ ...f.envelope, kind: 'result_committed', turn: input.turn });
+  execute.mockResolvedValueOnce({ kind: 'completed', result: { kind: 'reply', message: 'next' } });
+  const next = turnStart(input.turn.generation + 1);
+  const finished = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: next });
+  expect(await finished).toMatchObject({ outcome: { kind: 'completed', result: { message: 'next' } } });
   await f.runtime.disconnect();
 });
 

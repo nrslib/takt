@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { ConversationActivitySchema } from '../../shared/types/conversation-activity.js';
+import { ConversationActivitySchema, ConversationTextSchema } from '../../shared/types/conversation-activity.js';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssignmentSchema, ConversationIdSchema, PendingSummarySchema,
@@ -17,7 +17,7 @@ export const ConversationReadMetadataSchema = z.object({ ...version, transferId:
 export type ConversationReadMetadata = z.infer<typeof ConversationReadMetadataSchema>;
 const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment: ConversationAssignmentSchema,
   revision: sequence, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
-  running: RunningOperationSchema.omit({ owner: true }).extend({ kind: z.string().min(1), generation: sequence.optional() }).nullable(), interrupted: z.boolean(),
+  running: RunningOperationSchema.omit({ owner: true }).extend({ kind: z.string().min(1), generation: sequence.optional(), startedAt: sequence.optional() }).nullable(), interrupted: z.boolean(),
   queuedMessageCount: sequence.optional() }).strict()
   .superRefine((state, ctx) => {
     if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null)) {
@@ -63,6 +63,7 @@ const operationResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
+  ConversationTextSchema.extend({ operationId: z.uuid(), generation: sequence }).strict(),
   z.object({ kind: z.literal('activity'), operationId: z.uuid(), generation: sequence,
     activity: ConversationActivitySchema }).strict(),
   z.object({ kind: z.literal('user_message'), operationId: z.uuid(), message: z.string() }).strict(),

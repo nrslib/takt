@@ -205,9 +205,17 @@ MockProvider.prototype.setup = function(config) {
       if (Date.now() >= deadline) throw new Error('Test provider was not released');
       if (showActivity && !toolShown && existsSync(${JSON.stringify(toolGate)})) {
         toolShown = true;
-        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+        options.onStream?.({ type: 'text', data: { text: 'コードを読んで' } });
+        options.onStream?.({ type: 'text', data: { text: 'いるところです。' } });
+        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'Bash', input: {
+          description: '見回りの予定のコードを読む', command: 'private-input-marker',
+        } } });
       }
       await delay(20);
+    }
+    if (showActivity && toolShown) {
+      options.onStream?.({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
+      options.onStream?.({ type: 'text', data: { text: '調べがつきました。' } });
     }
     const result = await agent.call(prompt, options);
     record({ event: 'provider_complete', agent: config.name });

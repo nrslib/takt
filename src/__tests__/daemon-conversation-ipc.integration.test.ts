@@ -142,6 +142,46 @@ it('finishes each output transfer before newer state on both attachments', async
   } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
 });
 
+it.each([false, true])('keeps queued text ordered and suppresses it after interruption while the socket writer is blocked: %s', async (interrupted) => {
+  const connection = await authenticated();
+  const open = await opened(connection);
+  await connection.items(open.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let blocked = false;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string } };
+    if (!blocked && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      blocked = true; await gate;
+    }
+    await write(socket, value);
+  });
+  const operationId = '11111111-1111-4111-8111-111111111111';
+  const version = { revision: connection.latestState()!.revision, stateSequence: 10, operationId };
+  const controller = new AbortController();
+  const sending = service.deliver(selected.conversationId, { kind: 'notice', id: 'blocked', message: 'notice' }, { ...version, operationId: null });
+  const pending: Promise<void>[] = [sending];
+  try {
+    await vi.waitFor(() => expect(blocked).toBe(true));
+    for (const [index, message] of ['first', 'second'].entries()) pending.push(service.deliver(selected.conversationId,
+      { kind: 'turn_text', operationId, generation: 1, message }, { ...version, stateSequence: 11 + index }, controller.signal));
+    pending.push(service.deliver(selected.conversationId, { kind: 'result', operationId,
+      result: { kind: 'reply', message: 'final' } }, { ...version, stateSequence: 13 }));
+    if (interrupted) controller.abort();
+    resume(); await Promise.all(pending);
+    const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+    await vi.waitFor(() => {
+      observer.output.mockClear();
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      for (const frame of connection.frames) if (frame.type === 'event') receiver.receive(frame);
+      expect(observer.output).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'result' }), expect.anything());
+    });
+    expect(observer.output.mock.calls.flatMap(([output]) => output.kind === 'turn_text' ? [output.message] : []))
+      .toEqual(interrupted ? [] : ['first', 'second']);
+  } finally { resume(); await Promise.all(pending); writing.mockRestore(); }
+});
+
 it.each(['notice', 'activity'] as const)('coalesces activity per connection while a slow TUI %s write is blocked without disconnecting it', async (kind) => {
   const first = await authenticated(); const second = await authenticated();
   const firstOpen = await opened(first); const secondOpen = await opened(second);
