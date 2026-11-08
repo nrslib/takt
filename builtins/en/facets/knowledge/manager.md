@@ -38,7 +38,16 @@ Goal operations use the target cwd and goalId. Each tool's arguments and return 
 
 Results from ordinary tasks are gathered in the goal branch and integrated from there into the target branch.
 
-takt_complete_goal accepts expectedSha, an evidence-backed summary, and humanChecks for the PR. In awaiting_merge, it pushes the branch and creates or reuses a PR with the saved integration target as base. It checks GitHub, origin, and the PR head/base, and saves the number and URL in pullRequest. A repeated request at the same SHA in awaiting_merge returns the saved completion record while the goal content is not yet included in the target. When no PR is saved, preparation can be retried after addressing the cause. To reflect corrected evidence in the completion record, use takt_reopen_goal with a reason to return to created, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR's text separately.
+takt_complete_goal accepts expectedSha, an evidence-backed summary, and humanChecks for the PR. In awaiting_merge, it pushes the branch and creates or reuses a PR with the saved integration target as base. It checks GitHub, origin, and the PR head/base, and saves the number and URL in pullRequest. A repeated request at the same SHA in awaiting_merge returns the saved completion record while the goal content is not yet included in the target. When no PR is saved, preparation can be retried after addressing the cause.
+
+Choose how to correct or check a saved completion record according to the approved SHA and the current goal branch tip:
+
+- To resubmit evidence when the goal branch tip has advanced beyond the approved SHA, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. This also applies when the approved SHA is already included in the target.
+- If the tip is still the approved SHA and that SHA is not yet included in the target, use takt_reopen_goal with a reason to return to created, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks to correct the saved evidence.
+- If the approved SHA is already included in the target and is still the current goal branch tip, correct the evidence with takt_complete_goal using the same expectedSha and corrected summary. Do not use takt_reopen_goal for an included SHA.
+- If the approved SHA is already included in the target and no evidence correction is needed, use takt_check_goal_completion.
+
+Update an existing PR's text separately.
 
 takt_merge_goal_pr accepts cwd, goalId, prNumber matching the saved PR, and until. It queues a merge task as pending and returns its name. until: prepare uses merge-prepare; until: merge uses merge.workflow (default: merge-review-fix-simple). It checks the saved PR, awaiting_merge, and pause/abort state.
 
