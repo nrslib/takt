@@ -36,7 +36,7 @@ const event = z.discriminatedUnion('kind', [
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
-  z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string() }).strict(),
+  z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string(), inquiryAnswer: z.object({ questionId: id, question: z.string().optional(), answer: GoalAnswerSchema }).strict().optional() }).strict(),
   z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
@@ -63,7 +63,8 @@ const legacyStandaloneAnswer = z.object({
 }).strict().transform(({ eventId, requestId, conversationId: target, source, occurredAt, event: saved, operationId, acceptedSequence }) => ({
   eventId, requestId, conversationId: target, source, occurredAt, operationId, acceptedSequence, lane: 'other' as const,
   event: { kind: 'director_message' as const, directorConversationId: conversationId({ kind: 'daemon' }),
-    text: `A person answered a standalone inquiry. ${JSON.stringify({ questionId: saved.questionId, answer: saved.answer })}` },
+    text: 'A person answered a standalone inquiry.',
+    inquiryAnswer: { questionId: saved.questionId, answer: saved.answer } },
 }));
 // 旧イベントは不透明な保存値として扱い、索引と結果の確定にだけ渡す。新規受付・ターン実行には使わない。
 const storedAcceptedEvent = z.union([AcceptedEventSchema, legacyStandaloneAnswer, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;

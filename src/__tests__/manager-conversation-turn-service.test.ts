@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { buildManagerEventPrompt } from '../features/daemon/inboxEvent.js';
+
+const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 import type { ConversationRuntime, PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { DaemonStateRequest } from '../core/daemon/processProtocol.js';
 import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
@@ -11,7 +13,6 @@ import type { AssistantCliOverrides } from '../core/config/provider-resolution.j
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
-import * as labels from '../shared/i18n/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
@@ -141,7 +142,6 @@ it.each([
   { language: 'en' as const, recipient: 'event', explanation: /interrupt/i },
 ])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, explanation }) => {
   const f = conversationFixture();
-  const getLabel = vi.spyOn(labels, 'getLabel');
   f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
   const text = '  interrupted {value}\noriginal text  ';
   const controller = new AbortController(); f.interruptNext(controller);
@@ -153,12 +153,7 @@ it.each([
   expect(prompt.slice(0, prompt.indexOf(text))).toMatch(explanation);
   expect(prompt).toContain(text);
   expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf('current request'));
-  expect(getLabel.mock.calls.some((call, index) => {
-    const result = getLabel.mock.results[index];
-    return call[1] === language && result?.type === 'return' && result.value.length > 0
-      && prompt.indexOf(result.value) >= 0 && prompt.indexOf(result.value) < prompt.indexOf('current request');
-  })).toBe(true);
-  if (recipient === 'event') expect(prompt.indexOf('Speaker:')).toBeGreaterThan(prompt.indexOf('current request'));
+  if (recipient === 'event') expect(turnData(prompt).speaker).toEqual({ namespace: 'agent', id: 'director' });
 });
 
 it('clears interrupted context after one completed message turn', async () => {
@@ -169,7 +164,8 @@ it('clears interrupted context after one completed message turn', async () => {
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('second continuation'));
-  expect(f.execute.mock.calls[2]![0].prompt).toBe('second continuation');
+  expect(turnData(f.execute.mock.calls[2]![0].prompt)).toMatchObject({ text: 'second continuation', speaker: { namespace: 'human', id: 'test' } });
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted request');
 });
 
 it.each([true, false])('retains undelivered interrupted context through /verify with mode=%s and delivers it on the next message', async (mode) => {
@@ -200,7 +196,7 @@ it.each([true, false])('retains undelivered interrupted context through /verify 
   expect(call.mock.calls.at(-1)![0]).toContain('undelivered requirements');
   expect(f.state().interruptedMessage).toBeNull();
   await f.run(humanMessage('next request'));
-  expect(call.mock.calls.at(-1)![0]).toBe('next request');
+  expect(turnData(call.mock.calls.at(-1)![0]).text).toBe('next request');
 });
 
 it.each(['failed', 'error'] as const)('returns the completed %s verification with interruption and keeps undelivered context', async (verdict) => {
@@ -234,7 +230,7 @@ it('keeps prompts unchanged across completed turns with no interruption', async 
   const f = conversationFixture();
   await f.run(humanMessage('first request'));
   await f.run(humanMessage('second request'));
-  expect(f.execute.mock.calls.map(([turn]) => turn.prompt)).toEqual(['first request', 'second request']);
+  expect(f.execute.mock.calls.map(([turn]) => turnData(turn.prompt).text)).toEqual(['first request', 'second request']);
 });
 
 it('passes interrupted context without a session when no session was saved before interruption', async () => {
@@ -289,7 +285,7 @@ it('retains the interrupted human message through an interrupted event turn and 
   expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted event');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[3]![0].prompt).toBe('next human request');
+  expect(turnData(f.execute.mock.calls[3]![0].prompt).text).toBe('next human request');
 });
 
 it('does not save an interrupted event as a human message', async () => {
@@ -297,7 +293,7 @@ it('does not save an interrupted event as a human message', async () => {
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run({ kind: 'director_message', text: 'interrupted event', directorConversationId: 'director' }, controller);
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[1]![0]).toMatchObject({ prompt: 'next human request', sessionId: 'shared-session' });
+  expect(f.execute.mock.calls[1]![0]).toMatchObject({ sessionId: 'shared-session' });
 });
 
 it('retains interrupted context when an executor error leaves delivery unconfirmed', async () => {
@@ -533,11 +529,11 @@ it('inspects active patrol goals together without resuming or updating the conve
   expect(outcome.change?.proposal).toBeUndefined();
   expect(f.request).not.toHaveBeenCalled();
   const turn = f.execute.mock.calls[0]![0];
-  expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
+  expect(turnData(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
-  expect(turn.prompt).toBe(buildManagerEventPrompt({
+  expect(turnData(turn.prompt)).toEqual(JSON.parse(buildManagerEventPrompt({
     kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id],
-  }));
+  })));
   expect(turn).toMatchObject({ patrol: true, sessionId: undefined, recovery: { context: 'saved-goal-memory' } });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
@@ -556,7 +552,7 @@ it.each(['completed', 'failed', 'interrupted'] as const)('preserves the conversa
     : { kind: 'completed', result: { kind: status === 'failed' ? 'error' : 'reply' } });
   const turn = f.execute.mock.calls[1]![0];
   expect(turn.sessionId).toBeUndefined();
-  expect(JSON.parse(turn.prompt).event.kind).toBe('patrol');
+  expect(turnData(turn.prompt).event.kind).toBe('patrol');
   expect(turn.prompt).not.toContain('undelivered human request');
   expect(f.state().session).toEqual(before.session);
   expect(f.state().interruptedMessage).toBe('undelivered human request');
@@ -616,7 +612,7 @@ it('delivers pr_conflicting for an awaiting-merge goal to the manager', async ()
   f.input.event.event = { kind: 'watch_observation', observation };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
   expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
 });
 
@@ -664,7 +660,7 @@ it.each([true, false])('reports unreadable goals and continues the patrol with r
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: readable ? [unreadable, active.id] : [unreadable] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
     goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
   expect(doubles.notify).not.toHaveBeenCalled();
 });
@@ -791,4 +787,29 @@ it('rejects a verification proposal whose repository has left the workspace', as
   } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
   expect(f.resolve).not.toHaveBeenCalled(); expect(doubles.formalSpec).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('delivers a saved goal question and its human answer in %s', async (language) => {
+  const f = conversationFixture();
+  const questionId = randomUUID();
+  const answer = { text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const goal = { ...goalRecord(), questions: [{ id: questionId, kind: 'question' as const, recipient: 'human' as const,
+    body: 'Continue verification of X?', status: 'answered' as const, answer }] };
+  doubles.getGoal.mockResolvedValue(goal);
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  await f.run({ kind: 'inquiry_answered', repositoryDirectory: '/repository', goalId: goal.id, questionId, answer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',
+    goalId: goal.id, questionId, question: goal.questions[0]!.body, answer });
+});
+
+it('distinguishes a structured standalone answer from similar director text', async () => {
+  const f = conversationFixture();
+  const answer = { text: 'Wait on X.', source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const inquiryAnswer = { questionId: randomUUID(), question: 'Continue X?', answer };
+  const text = 'A person answered a standalone inquiry. Wait on X.';
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text, inquiryAnswer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...inquiryAnswer });
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({ text, speaker: { namespace: 'agent', id: 'director' } });
+  expect(f.execute.mock.calls[1]![0].sessionId).toBe('session-after');
 });

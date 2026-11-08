@@ -632,12 +632,34 @@ for (const lang of ['ja', 'en']) {
 }
 test('rejects extra check tasks for unrelated results and stale completion SHAs', () => {
   for (const caseId of ['no-check-docs', 'no-check-same-module', 'integration-already-checked']) {
-    const output = goodOutput(caseId, 'ja');
-    output.calls[0].arguments.expectedSha = 'b'.repeat(40);
-    assert.equal(score(output, caseId).pass, false);
-    output.calls[0].arguments.expectedSha = 'c'.repeat(40);
-    output.calls.unshift(enqueue(loadManagerCase(caseId, 'ja'), 'check-results'));
-    assert.equal(score(output, caseId).pass, false);
+    for (const lang of ['ja', 'en']) {
+      const output = goodOutput(caseId, lang);
+      output.calls[0].arguments.expectedSha = 'b'.repeat(40);
+      assert.equal(score(output, caseId, lang).pass, false);
+      output.calls[0].arguments.expectedSha = 'c'.repeat(40);
+      output.calls.unshift(enqueue(loadManagerCase(caseId, lang), 'check-results'));
+      assert.equal(score(output, caseId, lang).pass, false);
+    }
+  }
+});
+test('same-module completion reasons are delegated to semantic grading in both languages', () => {
+  for (const lang of ['ja', 'en']) {
+    const reasons = lang === 'ja' ? [
+      'ping のログと users のページングは独立しており、同じファイルというだけで追加の結合確認は求めません。統合済み先端の対象テストと build の成功証拠から完成申請します。',
+      '同じファイルを変更したため統合後の結合確認は必須でしたが、確認済みなので完成申請します。',
+      '変更は独立しているため最終確認は不要で、個別 run の成功だけで完成申請します。',
+    ] : [
+      'Ping logging and users pagination are independent; sharing a file alone does not require extra integration checks. Request completion using passing targeted tests and build at the integrated goal tip.',
+      'Because both tasks changed the same file, integration checks were mandatory, but they have passed, so request completion.',
+      'The changes are independent, so final verification is unnecessary and individual run successes suffice for completion.',
+    ];
+    for (const reason of reasons) {
+      const output = goodOutput('no-check-same-module', lang);
+      output.response.message = reason;
+      output.calls[0].arguments.summary = reason;
+      assert.equal(score(output, 'no-check-same-module', lang).pass, true);
+    }
+    assertSemanticGrader('no-check-same-module', lang);
   }
 });
 test('validates production tool names, arguments, goal identity, workflow and required fields', () => {
@@ -1765,3 +1787,38 @@ for (const lang of ['ja', 'en']) {
     });
   }
 }
+
+test('input-source cases require independent Y recovery and preserve a scoped X wait', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
+      'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const context = { vars: { case: caseId, lang } };
+      const encode = (calls) => JSON.stringify({ response: { message: 'Recovery decision', summary: null }, calls });
+      const recovery = { tool: 'takt_requeue_goal_task', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import' } };
+      const log = (goalId) => ({ tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId, summary: 'Decision and grounds' } });
+      const calls = [recovery, log(fixture.goal.id), log(fixture.additionalGoals[0].id)];
+      assert.equal(evaluate(encode(calls), context).pass, true, `${caseId}/${lang}`);
+      assert.equal(evaluate(encode([recovery]), context).pass, true, 'The semantic grader checks the decision and its grounds in the response and any records');
+      assert.equal(evaluate(encode(calls.slice(1)), context).pass, false);
+      assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, goalId: fixture.additionalGoals[0].id } }, ...calls.slice(1)]), context).pass, false);
+      const enqueue = { tool: 'takt_enqueue_goal_task', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, workKey: 'new-work', purpose: 'Independent work', task: 'Independent work', workflow: fixture.defaultWorkflow,
+      } };
+      if (!['human-wait-x-only', 'inquiry-answer-wait'].includes(caseId)) {
+        assert.equal(evaluate(encode([...calls, enqueue]), context).pass, true, 'The configured default is an available workflow');
+      }
+      assert.equal(evaluate(encode([...calls, { ...enqueue, arguments: { ...enqueue.arguments, workflow: 'missing-workflow' } }]), context).pass, false);
+      assert.equal(evaluate(encode([...calls, { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, body: 'May I continue?',
+      } }]), context).pass, false);
+      if (['human-wait-x-only', 'inquiry-answer-wait'].includes(caseId)) {
+        assert.equal(evaluate(encode(calls.slice(0, 2)), context).pass, true);
+        assert.equal(evaluate(encode([...calls, { tool: 'takt_enqueue_goal_task', arguments: {
+          cwd: fixture.cwd, goalId: fixture.additionalGoals[0].id, purpose: 'Continue X', task: 'Continue X', workflow: fixture.defaultWorkflow,
+        } }]), context).pass, false);
+      }
+      assertSemanticGrader(caseId, lang);
+    }
+  }
+});

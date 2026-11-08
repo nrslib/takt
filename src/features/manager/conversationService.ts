@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { buildManagerEventPrompt } from '../daemon/inboxEvent.js';
+import { buildManagerTurnPrompt } from './conversationPrompt.js';
 import { eventGoalReference } from '../../core/daemon/events.js';
 import type { TurnOutcome } from '../../core/daemon/messages.js';
 import type { ConversationDisplayAssignment, OperationResult } from './conversationPort.js';
@@ -58,13 +58,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const directorMessage = event.kind === 'director_message';
       const human = event.kind === 'human_command';
       const patrol = event.kind === 'patrol';
-      let command = human || event.kind === 'inquiry_answer' ? event.command
-        : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
+      const command = human || event.kind === 'inquiry_answer' ? event.command
+        : { kind: 'message' as const, text: directorMessage ? event.text : '' };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
       let verificationMessage: string | undefined;
+      let promptEvent = event;
       try {
         io.signal.throwIfAborted();
         const candidate = eventGoalReference(event);
@@ -87,7 +88,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
           if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
-          command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };
+          promptEvent = patrolEvent;
         }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
           reconcileLostRun(event.observation, io.signal);
@@ -160,13 +161,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }
             language = resolved.language;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
-            const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
-            const prompt = [
-              ...(interruptedMessage == null || verify ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
-              command.text,
-              ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
-            ].join('\n\n');
+            const question = event.kind === 'inquiry_answered'
+              ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
+            const prompt = buildManagerTurnPrompt({ lang: language, event: promptEvent, question,
+              interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
               ...(verification === undefined ? {} : { verify: verification }),

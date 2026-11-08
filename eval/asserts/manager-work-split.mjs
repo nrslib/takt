@@ -51,7 +51,11 @@ const verificationPlanCases = new Set(['stopped-background-check', 'integrated-t
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const goalPrCases = new Set(['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']);
+const provenanceCases = new Set(['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
+  'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop']);
+const scopedWaitCases = new Set(['human-wait-x-only', 'inquiry-answer-wait']);
 const caseWriteTools = {
+  ...Object.fromEntries([...provenanceCases].map((id) => [id, new Set(['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_enqueue_goal_task'])])),
   ...Object.fromEntries([...goalPrCases].map((id) => [id, new Set(['takt_merge_goal_pr'])])),
   'migration-method-event': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
   'migration-method-conversation': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
@@ -148,7 +152,7 @@ export default function assertManagerWorkSplit(output, context) {
     call.arguments = validated.data;
     const args = call.arguments;
     const goalIds = [fixture.goal?.id, ...(fixture.additionalGoals ?? []).map(({ id }) => id)];
-    const allowedGoalIds = commonTools.has(call.tool) ? goalIds : [fixture.goal?.id];
+    const allowedGoalIds = commonTools.has(call.tool) || provenanceCases.has(caseId) ? goalIds : [fixture.goal?.id];
     if (args.cwd !== fixture.cwd || !allowedGoalIds.includes(args.goalId)) return result(false, 'Wrong repository or goal');
     if (call.tool === 'takt_enqueue_goal_task') {
       if (args.workKey !== undefined && fixture.tasks.some((task) => task.goalWorkKey === args.workKey)) {
@@ -165,7 +169,7 @@ export default function assertManagerWorkSplit(output, context) {
     }
     if (call.tool === 'takt_requeue_goal_task' || call.tool === 'takt_retry_goal_task') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (task === undefined || !['failed', 'exceeded'].includes(task.status)
+      if (task === undefined || provenanceCases.has(caseId) && task.goalId !== args.goalId || !['failed', 'exceeded'].includes(task.status)
         || call.tool === 'takt_retry_goal_task' && task.status !== 'failed') return result(false, 'Choose a stopped goal task');
     }
     if (call.tool === 'takt_tell_run') {
@@ -222,6 +226,18 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (provenanceCases.has(caseId)) {
+    const independentGoal = fixture.goal.id;
+    const waitingGoal = fixture.additionalGoals[0].id;
+    if (retries.length !== 1 || retries[0].arguments.goalId !== independentGoal
+      || retries[0].arguments.taskName !== 'csv-import') {
+      return result(false, 'Advance the independent Y task by resuming or correcting its saved work once');
+    }
+    if (scopedWaitCases.has(caseId) && enqueues.some(({ arguments: args }) => args.goalId === waitingGoal)) {
+      return result(false, 'Keep X waiting with its scoped human reason while progressing Y');
+    }
+    return result(true, 'Targets and independent recovery checked; source attribution, stop records, reapproval and scoped waiting are graded by llm-rubric');
+  }
   if (patrolRepairCases.has(caseId) || patrolLeaveAsIsCases.has(caseId) || patrolUnrelatedRepairCases.has(caseId)) {
     if (!workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
       return result(false, 'Record the repair decision and its reason in the target goal work log');

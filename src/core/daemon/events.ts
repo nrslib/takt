@@ -36,7 +36,7 @@ export type TurnEvent =
   | { kind: 'human_command'; command: HumanCommand; speaker: ConversationActor; agentOverrides?: AssistantCliOverrides }
   | { kind: 'inquiry_answer'; command: Extract<ConversationCommand, { kind: 'answer_question' }> }
   | { kind: 'task_completed' | 'task_failed'; task: TaskRef; result: GoalTaskResult }
-  | { kind: 'director_message'; directorConversationId: string; text: string }
+  | { kind: 'director_message'; directorConversationId: string; text: string; inquiryAnswer?: { questionId: string; question?: string; answer: NonNullable<GoalQuestion['answer']> } }
   | { kind: 'goal_pr_failed'; repositoryDirectory: string; goalId: string; expectedSha: string; reason: string }
   | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }

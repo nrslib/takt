@@ -56,7 +56,7 @@ const event = z.discriminatedUnion('kind', [
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
-  z.object({ kind: z.literal('director_message'), directorConversationId: id, text }).strict(),
+  z.object({ kind: z.literal('director_message'), directorConversationId: id, text, inquiryAnswer: z.object({ questionId: id, question: text.optional(), answer: GoalAnswerSchema }).strict().optional() }).strict(),
   z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), ...repositoryGoal }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),

@@ -32,7 +32,7 @@ import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
-import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
 
 /** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
 export async function startDaemon(options: {
@@ -147,8 +147,7 @@ export async function startDaemon(options: {
         if (owner.kind === 'workspace') {
           const eventId = `workspace-answer-${owner.workspaceId}-${question.id}`;
           const admission = await dispatcher.accept({ eventId, requestId: eventId, conversationId: conversationId(owner),
-            occurredAt: question.answer.answeredAt, source: 'director', event: { kind: 'director_message',
-              directorConversationId: conversationId({ kind: 'daemon' }), text: inquiryAnswerMessage(question.id, question.answer, question.body) } });
+            occurredAt: question.answer.answeredAt, source: 'director', event: inquiryAnswerEvent(question.id, question.answer, question.body) });
           if (admission.kind !== 'accepted') throw new Error(`Standalone answer was not accepted: ${admission.reason}`);
           return;
         }

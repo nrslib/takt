@@ -533,3 +533,11 @@ test('pause fixtures, including before-start interruptions, and first failures a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('normalizing saved state reads preserves a single tasks artifact across replay input kinds', () => {
+  const fixture = fixtures.find(({ case: caseId, lang }) => caseId === 'human-quotes-review-stop' && lang === 'ja').fixture;
+  const first = managerStateReads(fixture);
+  const second = managerStateReads({ ...fixture, readResults: first });
+  assert.deepEqual(second, first);
+  assert.equal(second.filter(({ tool, arguments: args }) => tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`).length, 1);
+});

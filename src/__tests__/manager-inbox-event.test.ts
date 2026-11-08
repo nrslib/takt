@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
+import { buildManagerEventPrompt, managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
 import type { ManagerEvent } from '../infra/goals/events.js';
 import { ManagerEventSchema } from '../infra/goals/events.js';
-import { conversationId } from '../infra/conversations/identity.js';
-import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from '../features/daemon/inquiryAnswerEvent.js';
 
 const common = { goalId: '650e8400-e29b-41d4-a716-446655440000', createdAt: '2026-11-01T00:00:00.000Z' };
 const directory = '/workspace/project';
 
 describe('managerInboxTurnEvent', () => {
-  it('maps a standalone saved answer to a legacy-compatible director message', () => {
+  it('preserves a standalone human answer and its saved question through director delivery', () => {
     const answer = { text: 'CSV', answeredAt: common.createdAt, source: 'slack' };
     const saved = ManagerEventSchema.parse({ ...common, kind: 'answer', goalId: null,
       questionId: '650e8400-e29b-41d4-a716-446655440002', questionBody: 'Which format?', answer }) as Extract<ManagerEvent, { kind: 'answer' }>;
-    expect(managerInboxTurnEvent(directory, saved)).toEqual({ kind: 'director_message',
-      directorConversationId: conversationId({ kind: 'daemon' }),
-      text: inquiryAnswerMessage('650e8400-e29b-41d4-a716-446655440002', saved.answer, 'Which format?') });
+    expect(managerInboxTurnEvent(directory, saved)).toEqual(inquiryAnswerEvent(saved.questionId, saved.answer, saved.questionBody));
+    expect(managerInboxTurnEvent(directory, saved)).toMatchObject({ inquiryAnswer: {
+      questionId: saved.questionId, question: 'Which format?', answer,
+    } });
   });
   it('rejects legacy patrol events that the inbox retires without delivery', () => {
     expect(() => managerInboxTurnEvent(directory, { ...common, kind: 'patrol' })).toThrow();
@@ -50,8 +50,20 @@ describe('managerInboxTurnEvent', () => {
   });
 
   it.each([['registered', 'goal_registered'], ['resumed', 'goal_resumed']] as const)('maps %s to %s', (kind, expected) => {
-    expect(managerInboxTurnEvent(directory, { ...common, kind })).toEqual({
+    const event = managerInboxTurnEvent(directory, { ...common, kind });
+    expect(event).toEqual({
       kind: expected, repositoryDirectory: directory, goalId: common.goalId,
     });
+    expect(JSON.parse(buildManagerEventPrompt(event))).toEqual({ event, instruction: expect.any(String) });
+  });
+});
+
+describe('buildManagerEventPrompt', () => {
+  it('delivers readable and unreadable patrol goals with the turn instruction', () => {
+    const event = { kind: 'patrol' as const, repositoryDirectory: directory,
+      goalIds: [common.goalId], unreadableGoalIds: ['650e8400-e29b-41d4-a716-446655440099'] };
+    const prompt = JSON.parse(buildManagerEventPrompt(event));
+    expect(prompt).toEqual({ event, instruction: expect.any(String) });
+    expect(prompt.instruction.trim().length).toBeGreaterThan(0);
   });
 });

@@ -12,6 +12,8 @@ If the subject of the consultation is ambiguous, ask one question for the missin
 
 To establish a shared objective with the person, organize the objective, scope exclusions, observable acceptance criteria, and constraints. Ask one question at a time where the person's answer is needed, starting with the most important. When asking them to choose an approach, present the alternatives and their reasons, including a recommendation, and ask which they choose. When asking for a fact, explain the fact needed and its purpose, and invite a free-text answer.
 
+To carry the agreement into subsequent work, preserve the person's conditions on work methods, execution order, verification timing, and execution scope concretely in constraints. Organize the finished behavior and evidence in acceptanceCriteria, and retain the specified commands, ordering, targets, and when they apply in constraints.
+
 To let the person review and approve the content, return a registration proposal as JSON with message and summary. summary contains objective, outOfScope, acceptanceCriteria, constraints, and specifications: for goals that create or modify code, configuration, infrastructure, or tests, put code bodies in specifications.gherkin and, when the target repository's mode in the supplied Formal specification configuration is true, also in both specifications.quint and specifications.alloy; when it is false, put only gherkin in specifications. Pass the specifications saved at registration into run instructions to carry the agreement into implementation and verification. /verify generates and checks formal specifications from the current agreement. Use strings for array elements and give acceptance criteria identifiers that can be linked to evidence. Carry startBranch / integrationBranch specified by the person into the proposal. For a workspace, put the absolute path of one target repository in repositoryDirectory.
 
 Once agreement is reached, put the complete proposal in summary and direct the person to choose "Register goal" in the TUI or Slack proposal. Set summary to null while developing the agreement, for state operations, and when responding to events or messages relayed by director. Preserve the proposal under discussion during events and relayed messages, and continue it in the conversation with the person.
@@ -29,6 +31,8 @@ Choose the operation that fits the next step: takt_enqueue_goal_task for new wor
 ## Verification, integration, and PRs
 
 To preserve people's work and the verification target, use a temporary working location for verification. Record the target SHA and, when combining results, its relationship to the original results.
+
+Verify unintegrated results in a temporary working location at an existing branch or SHA containing those results. If verifying after real integration, use the goal-tip SHA obtained from the integration result. Distinguish arranged operations from operations whose results have been confirmed, and record how still-unknown SHAs and verification results will be obtained and that they remain unconfirmed.
 
 To gather results, pass the verified SHA of each ordinary task to takt_merge_goal_task. Select the checks needed for acceptance from the acceptance criteria, diff, existing verification procedures, and run reports. Record the outcomes, execution conditions, impact on the change, the run's assessment, and the decision you adopted. Reassess how the evidence relates to results when they change, and request completion using the verified goal-tip SHA.
 

@@ -18,6 +18,7 @@ describe('daemon turn process protocol', () => {
   it('transfers a standalone answer through the existing director message event shape', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
       kind: 'director_message', directorConversationId: 'director', text: 'A person answered a standalone inquiry.',
+      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' } },
     } };
     const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
@@ -35,7 +36,7 @@ describe('daemon turn process protocol', () => {
       const record = EventRecordSchema.parse({ state: 'queued', event: {
         ...acceptedEvent, lane: 'other', event,
       } });
-      expect(record.state === 'queued' && record.event.event.kind).toBe('director_message');
+      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId, answer: event.answer } });
     }
   });
 
