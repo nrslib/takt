@@ -1,3 +1,4 @@
+import '../environment.js';
 import { createTurnProcessRuntime } from '../../features/daemonTurn/processRuntime.js';
 import { createTurnBusiness } from '../../features/daemonTurn/turnBusiness.js';
 
