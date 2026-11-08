@@ -74,11 +74,24 @@ describe('facet include expansion', () => {
 
   it.each(['ja', 'en'] as const)('%s: manager provides its own question procedure without shared interview partials', (lang) => {
     const managerContext = { projectDir: tempDir, lang };
-    const manager = resolveRefToContent('manager', undefined, tempDir, 'instructions', managerContext);
-    const questionProcedure = manager?.split('\n\n').find(paragraph => paragraph.includes('takt_ask_goal_question'));
-    expect(questionProcedure).toBeDefined();
-    for (const field of ['body', 'options', 'recommendation', 'message']) {
-      expect(questionProcedure).toMatch(new RegExp(`\\b${field}\\b`));
+    const managerFacets = (['policies', 'instructions'] as const).map(kind =>
+      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
+    for (const facet of managerFacets) {
+      expect(facet).toBeDefined();
+    }
+    const manager = managerFacets.join('\n\n');
+    const terms = manager.match(/[A-Za-z_]+/g);
+    for (const term of ['takt_ask_goal_question', 'takt_ask_standalone_question', 'body', 'options', 'recommendation', 'message']) {
+      expect(terms).toContain(term);
+    }
+
+    const standaloneGuidance = manager.split('\n\n').find(paragraph => paragraph.includes('takt_ask_standalone_question'));
+    expect(standaloneGuidance).toMatch(/\bcwd\b/u);
+    const cwdConditions = lang === 'ja'
+      ? [/リポジトリ/u, /絶対/u, /パス/u, /イベント/u, /担当/u]
+      : [/\brepository\b/u, /\babsolute\b/u, /\bpath\b/u, /\bevent\b/u, /\bassignment\b/u];
+    for (const condition of cwdConditions) {
+      expect(standaloneGuidance).toMatch(condition);
     }
 
     for (const name of ['decision-question-priority', 'one-question-interview']) {
