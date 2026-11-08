@@ -18,6 +18,7 @@ import type {
   AskUserQuestionHandler,
   SelectorProviderInfo,
   StepProviderInfo,
+  WorkflowAbortKind,
   WorkflowCallResolver,
   WorkflowTraceTaskMetadata,
 } from '../../../core/workflow/types.js';
@@ -200,6 +201,7 @@ export interface WorkflowExecutionResult {
   setupFailed?: boolean;
   interrupted?: boolean;
   success: boolean;
+  abortKind?: WorkflowAbortKind;
   /** Whether the root or a started child workflow defines an explicit Caccia effect. */
   workflowHasCaccia?: boolean;
   reason?: string;

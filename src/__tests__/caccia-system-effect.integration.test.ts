@@ -216,7 +216,8 @@ describe('Caccia effect through PR workflow execution', () => {
     unresolvedCount = 0;
     mkdirSync(join(project, '.takt'), { recursive: true });
     configure({ enabled: true, wait_timeout_ms: 17, max_iterations: 2, workflow: 'custom-caccia' });
-    const details = () => ({ number: 123, headBranch: 'feature/pr', baseBranch: 'main',
+    const details = () => ({ number: 123, title: 'Preserve the PR purpose', body: 'Fix the changed code only.',
+      headBranch: 'feature/pr', baseBranch: 'main',
       headSha: git(root, '--git-dir', remote, 'rev-parse', 'refs/heads/feature/pr'),
       headRepositoryUrl: remote, headRepositoryPushUrls: [remote], sameRepository });
     mocks.details.mockImplementation(async () => details());
@@ -300,7 +301,7 @@ describe('Caccia effect through PR workflow execution', () => {
       return result;
     }, { provider: 'mock' }, { outputMode: 'silent' });
     expect(result.success, JSON.stringify(result)).toBe(expectedSuccess);
-    return { success: result.success, merged,
+    return { success: result.success, merged, failureReason: result.failureReason,
       outcome: merged ? 'merged' : result.success ? 'prepared' : 'unresolved' };
   }
 
@@ -335,7 +336,8 @@ describe('Caccia effect through PR workflow execution', () => {
       }
       return { persona: 'coder', status: 'done', timestamp: new Date(),
         content: options?.cwd === activeClone ? 'Fixed'
-          : JSON.stringify([{ thread_id: 'finding', valid: true, reason: 'Fixed the changed code' }]) };
+          : JSON.stringify({ outcome: 'complete', reason: '',
+            decisions: [{ thread_id: 'finding', valid: true, reason: 'Fixed the changed code' }] }) };
     });
     mocks.caccia.mockImplementation(async (input) => {
       pushedHead = git(activeClone, 'rev-parse', 'HEAD');
@@ -815,6 +817,142 @@ describe('Caccia effect through PR workflow execution', () => {
     expect(mocks.merge).toHaveBeenCalledOnce();
     expect(mocks.comment).toHaveBeenCalledWith(123,
       `outcome=skipped; head=${effectHead}; unresolved=0`, project);
+  });
+
+  it.each(['merge', 'from_pr'] as const)(
+    '%sで実レポートの中止理由と未判断IDをコメントと保存済みfailureReasonへそのまま渡す', async (entry) => {
+      await useRealCaccia([remote]);
+      const reason = 'Three findings were fixed; two remaining changes require a design decision.';
+      const report = { outcome: 'abort', reason, decisions: Array.from({ length: 3 }, (_, index) => ({
+        thread_id: `T${index + 1}`, valid: true, reason: 'Fixed the changed code.',
+      })) };
+      mocks.threads.mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({
+        id: `T${index + 1}`, author: 'coderabbitai', body: 'Fix the changed code.', replies: [],
+      })));
+      const agent = vi.mocked(runAgent).getMockImplementation()!;
+      vi.mocked(runAgent).mockImplementation(async (...args) => {
+        const response = await agent(...args);
+        if (args[2]?.cwd === activeClone) return response;
+        return { ...response, content: args[2]?.permissionMode === 'readonly'
+          ? JSON.stringify(report) : 'ABORT: Three of five findings fixed; the remainder require a design decision.' };
+      });
+      let failureMessage: string | undefined;
+      const caccia = mocks.caccia.getMockImplementation()!;
+      mocks.caccia.mockImplementation(async (input) => {
+        try {
+          return await caccia(input);
+        } catch (error) {
+          if (error instanceof Error) failureMessage = error.message;
+          throw error;
+        }
+      });
+
+      const result = await run(entry, false);
+      expect(result).toMatchObject({ success: false, merged: false });
+
+      expect(failureMessage).toEqual(expect.stringContaining(reason));
+      expect(failureMessage).toEqual(expect.stringContaining('T4'));
+      expect(failureMessage).toEqual(expect.stringContaining('T5'));
+      expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123, failureMessage, project);
+      const saved = new TaskRunner(project).listTaskStateItems().find((task) => task.kind === 'failed');
+      if (entry === 'merge') expect(saved?.completion?.failureReason).toBe(failureMessage);
+      else {
+        expect(result).toMatchObject({ failureReason: failureMessage });
+        expect(saved?.failure?.error).toBe(failureMessage);
+      }
+      expect((await mocks.execution.mock.calls[0]![0]).reason).toBe(failureMessage);
+      expect(mocks.resolveThread).not.toHaveBeenCalled();
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(effectHead).toBe(pushedHead);
+    },
+  );
+
+  it('同じworkflow内でCacciaを再実行して成功したら前の失敗理由を残さない', async () => {
+    const failure = 'Earlier Caccia design decision required; missing T4';
+    mocks.caccia.mockRejectedValueOnce(new Error(failure)).mockResolvedValue({
+      outcome: 'success', headSha: initialHead, unresolvedCount: 0,
+    });
+    writeFileSync(workflowFile, stringify({ name: 'retry-caccia', initial_step: 'first',
+      steps: [
+        { name: 'first', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+          rules: [{ condition: 'when(effect.first.caccia.failed == true)', next: 'retry' }] },
+        { name: 'retry', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+          rules: [{ condition: 'when(effect.retry.caccia.success == true)', next: 'ABORT' }] },
+      ] }));
+    const result = await runWorkflowExecution({ cwd: author, projectCwd: project, task: 'Retry Caccia',
+      workflowIdentifier: workflowFile, cacciaExecutionSource: 'from_pr',
+      prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+        headSha: initialHead, headRepositoryUrl: remote, headRepositoryPushUrls: [remote] },
+      outputMode: 'silent', runPathsDirectory: join(project, '.takt', 'runs') });
+    expect(mocks.caccia).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('Workflow aborted by step transition');
+  });
+
+  it('Cacciaの失敗から復旧した後の別工程のABORTには元の失敗理由を渡さない', async () => {
+    const failure = 'Earlier Caccia design decision required; missing T4';
+    mocks.caccia.mockRejectedValueOnce(new Error(failure));
+    writeFileSync(workflowFile, stringify({ name: 'recover-caccia', initial_step: 'review', steps: [
+      { name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(effect.review.caccia.failed == true)', next: 'recovered' }] },
+      { name: 'recovered', kind: 'system', effects: [{ type: 'comment_pr', pr: 123, body: 'Recovered' }],
+        rules: [{ condition: 'when(true)', next: 'later' }] },
+      { name: 'later', kind: 'system', rules: [{ condition: 'when(true)', next: 'ABORT' }] },
+    ] }));
+    const result = await runWorkflowExecution({ cwd: author, projectCwd: project, task: 'Recover Caccia',
+      workflowIdentifier: workflowFile, cacciaExecutionSource: 'from_pr',
+      prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+        headSha: initialHead, headRepositoryUrl: remote, headRepositoryPushUrls: [remote] },
+      outputMode: 'silent', runPathsDirectory: join(project, '.takt', 'runs') });
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+    expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123, 'Recovered', project);
+    expect(result).toMatchObject({ success: false, reason: 'Workflow aborted by step transition', lastStep: 'later' });
+    const meta = JSON.parse(readFileSync(join(result.runDirectory!, 'meta.json'), 'utf8'));
+    expect(meta.reason).toBe('Workflow aborted by step transition');
+    expect(meta.failure).toMatchObject({ step: 'later', error: 'Workflow aborted by step transition' });
+  });
+
+  it.each((['merge', 'from_pr'] as const).flatMap((entry) =>
+    [true, false].map((ready) => ({ entry, ready })),
+  ))('$entryで失敗コメントの待機条件が$readyの場合にABORTの理由を返却・保存する', async ({ entry, ready }) => {
+    const failure = 'Earlier Caccia design decision required; missing T4';
+    const expectedReason = ready ? failure : 'Workflow aborted by step transition';
+    mocks.caccia.mockRejectedValue(new Error(failure));
+    writeFileSync(workflowFile, stringify({ name: 'wait-caccia-error', initial_step: 'review', steps: [
+      { name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(effect.review.caccia.failed == true)', next: 'report' }] },
+      { name: 'report', kind: 'system',
+        wait: { until: `when(${ready})`, interval_ms: 1, max_retries: 0, on_timeout: 'ABORT' },
+        effects: [{ type: 'comment_pr', pr: 123, body: '{effect:review.caccia.error}' }],
+        rules: [{ condition: 'when(true)', next: 'ABORT' }] },
+    ] }));
+    const runner = new TaskRunner(project);
+    if (entry === 'merge') {
+      const result = await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
+        settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } });
+      expect(result).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
+    } else {
+      const services = createDefaultSystemStepServices({ cwd: project, projectCwd: project, task: 'enqueue PR' });
+      const effect = { type: 'enqueue_task', mode: 'from_pr', pr: 123, workflow: workflowFile, task: 'Review PR' } as const;
+      expect(await services.executeEffect(effect, effect, {} as WorkflowState)).toMatchObject({ success: true });
+      const task = runner.claimNextTasks(1)[0]!;
+      const result = await executeTaskAndCompleteWithDetails(task, runner, project,
+        (request) => runWorkflowExecution({ ...request, runPathsDirectory: join(project, '.takt', 'runs') }),
+        { provider: 'mock' }, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(result.failureReason).toBe(expectedReason);
+    }
+    expect(mocks.caccia).toHaveBeenCalledOnce();
+    if (ready) expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123, failure, project);
+    else expect(mocks.comment).not.toHaveBeenCalled();
+    expect(mocks.merge).not.toHaveBeenCalled();
+    const execution = await mocks.execution.mock.calls[0]![0];
+    const meta = JSON.parse(readFileSync(join(execution.runDirectory!, 'meta.json'), 'utf8'));
+    const saved = new TaskRunner(project).listTaskStateItems().find((task) => task.kind === 'failed');
+    expect({ reason: execution.reason, metaReason: meta.reason, runFailure: meta.failure })
+      .toMatchObject({ reason: expectedReason, metaReason: expectedReason,
+        runFailure: { step: 'report', error: expectedReason } });
+    expect(entry === 'merge' ? saved?.completion?.failureReason : saved?.failure?.error).toBe(expectedReason);
   });
 
   it('本体例外をerror結果へ変換して後続コメントへ渡す', async () => {
