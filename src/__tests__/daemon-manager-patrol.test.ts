@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DaemonIngress } from '../core/daemon/ports.js';
 import { startManagerPatrols, type ManagerPatrolTarget } from '../features/daemon/patrols.js';
-import type { WatchLoop } from '../features/daemon/watchers/loop.js';
+import { WATCH_INTERVALS, type WatchLoop } from '../features/daemon/watchers/loop.js';
 
 const initialTime = Date.parse('2026-11-08T00:00:00Z');
 const interval = 1_800_000;
@@ -165,6 +165,46 @@ it('reports a write failure while keeping the accepted patrol and subsequent obs
   await f.observe(initialTime + interval);
   expect(f.accept).toHaveBeenCalledTimes(2);
   expect(records.values.get(repositoryDirectory)).toBe(initialTime + interval);
+});
+
+it('limits retries for an unassigned repository and removes its schedule after saving', async () => {
+  const records = memoryRecords();
+  records.write.mockRejectedValue(new Error('write failed'));
+  const f = fixture({ records });
+  await f.loop.drain();
+  expect(records.write).toHaveBeenCalledExactlyOnceWith(repositoryDirectory, initialTime);
+
+  f.setTargets([]);
+  await f.observe(initialTime + 1000);
+  await vi.advanceTimersByTimeAsync(WATCH_INTERVALS.long - 1001);
+  expect(records.write).toHaveBeenCalledExactlyOnceWith(repositoryDirectory, initialTime);
+
+  records.write.mockImplementation(async (repository, lastQueued) => { records.values.set(repository, lastQueued); });
+  await vi.advanceTimersByTimeAsync(1);
+  expect(records.write).toHaveBeenCalledTimes(2);
+  expect(records.values.get(repositoryDirectory)).toBe(initialTime);
+
+  f.setTargets([f.target]);
+  await f.observe(initialTime + WATCH_INTERVALS.long + 1);
+  expect(records.read).toHaveBeenCalledTimes(2);
+  expect(f.accept).toHaveBeenCalledTimes(1);
+});
+
+it('accepts later patrols while timestamp writes fail and retries the latest acceptance time', async () => {
+  const records = memoryRecords([[repositoryDirectory, initialTime - interval]]);
+  records.write.mockRejectedValue(new Error('write failed'));
+  const f = fixture({ records });
+
+  await f.loop.drain();
+  await f.observe(initialTime + interval);
+  await f.observe(initialTime + 2 * interval);
+  expect(f.accept).toHaveBeenCalledTimes(3);
+  expect(records.write.mock.calls.at(-1)).toEqual([repositoryDirectory, initialTime + 2 * interval]);
+
+  records.write.mockImplementation(async (repository, lastQueued) => { records.values.set(repository, lastQueued); });
+  await f.observe(initialTime + 2 * interval + WATCH_INTERVALS.long);
+  expect(records.values.get(repositoryDirectory)).toBe(initialTime + 2 * interval);
+  expect(records.write.mock.calls.at(-1)).toEqual([repositoryDirectory, initialTime + 2 * interval]);
 });
 
 it('continues with another repository after a timestamp write fails', async () => {

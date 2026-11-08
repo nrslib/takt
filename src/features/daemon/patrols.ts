@@ -2,6 +2,16 @@ import { randomUUID } from 'node:crypto';
 import type { DaemonIngress } from '../../core/daemon/ports.js';
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './watchers/loop.js';
 
+const PATROL_RECORD_RETRY_MS = WATCH_INTERVALS.long;
+
+type PatrolSchedule = {
+  interval: number;
+  due: number;
+  lastQueued: number | undefined;
+  pendingWrite: number | undefined;
+  retryAt: number | undefined;
+};
+
 export interface ManagerPatrolTarget {
   conversationId: string;
   repositoryDirectory: string;
@@ -23,13 +33,19 @@ export function startManagerPatrols(dependencies: {
   now(): number;
   onError(error: unknown): void;
 }): WatchLoop {
-  const schedules = new Map<string, { interval: number; due: number; lastQueued: number | undefined; pendingWrite: number | undefined }>();
-  const persist = async (repositoryDirectory: string, schedule: { pendingWrite: number | undefined }, lastQueued: number): Promise<void> => {
+  const schedules = new Map<string, PatrolSchedule>();
+  const persist = async (repositoryDirectory: string, schedule: PatrolSchedule, lastQueued: number): Promise<void> => {
+    schedule.pendingWrite = lastQueued;
+    schedule.retryAt = undefined;
     try {
       await dependencies.records.write(repositoryDirectory, lastQueued);
-      if (schedule.pendingWrite === lastQueued) schedule.pendingWrite = undefined;
+      if (schedule.pendingWrite === lastQueued) {
+        schedule.pendingWrite = undefined;
+        schedule.retryAt = undefined;
+      }
     } catch (error) {
       schedule.pendingWrite = lastQueued;
+      schedule.retryAt = dependencies.now() + PATROL_RECORD_RETRY_MS;
       dependencies.onError(error);
     }
   };
@@ -43,7 +59,9 @@ export function startManagerPatrols(dependencies: {
       if (schedule.pendingWrite === undefined) continue;
       const target = targets.find((item) => item.repositoryDirectory === repositoryDirectory);
       if (target !== undefined && dependencies.pending(target.conversationId)) continue;
+      if (target === undefined && schedule.retryAt !== undefined && dependencies.now() < schedule.retryAt) continue;
       await persist(repositoryDirectory, schedule, schedule.pendingWrite);
+      if (target === undefined && schedule.pendingWrite === undefined) schedules.delete(repositoryDirectory);
     }
 
     for (const target of targets) {
@@ -57,7 +75,7 @@ export function startManagerPatrols(dependencies: {
         const restoredAt = dependencies.now();
         const correctedTimestamp = lastQueued !== undefined && lastQueued > restoredAt ? restoredAt : undefined;
         if (correctedTimestamp !== undefined) lastQueued = correctedTimestamp;
-        const restored = { interval, lastQueued, pendingWrite: correctedTimestamp,
+        const restored = { interval, lastQueued, pendingWrite: correctedTimestamp, retryAt: undefined,
           due: lastQueued === undefined ? restoredAt : lastQueued + interval };
         schedules.set(target.repositoryDirectory, restored);
         if (correctedTimestamp !== undefined) await persist(target.repositoryDirectory, restored, correctedTimestamp);
@@ -73,7 +91,6 @@ export function startManagerPatrols(dependencies: {
       signal.throwIfAborted();
       const schedule = schedules.get(target.repositoryDirectory)!;
       const interval = schedule.interval;
-      if (schedule.pendingWrite !== undefined) continue;
       if (dependencies.now() < schedule.due) continue;
       // 実行中・待機中の見回りがあれば、その周期は飛ばす。
       schedule.due = dependencies.now() + interval;
@@ -92,7 +109,11 @@ export function startManagerPatrols(dependencies: {
         await persist(target.repositoryDirectory, schedule, schedule.lastQueued);
       }
     }
-    nextDelay = Math.max(1, Math.min(WATCH_INTERVALS.files,
-      ...[...schedules.values()].map((schedule) => schedule.due - dependencies.now())));
+    const deadlines = targets.map((target) => schedules.get(target.repositoryDirectory)!.due - dependencies.now());
+    deadlines.push(...[...schedules.entries()]
+      .filter(([repositoryDirectory, schedule]) => !present.has(repositoryDirectory) && schedule.pendingWrite !== undefined
+        && schedule.retryAt !== undefined)
+      .map(([, schedule]) => schedule.retryAt! - dependencies.now()));
+    nextDelay = Math.max(1, Math.min(WATCH_INTERVALS.files, ...deadlines));
   }, dependencies.onError);
 }
