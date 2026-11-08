@@ -483,7 +483,7 @@ manager:
     answer_saved: "Answer saved."
   assignmentHeading: "Assignment: {name}"
   assignmentHeadingMultiple: "Assignment: {name} + {count} more"
-  counts: "Ongoing {goals} / Pending {questions}"
+  counts: "Ongoing {goals} / Awaiting merge {awaiting} / Pending {questions}"
   inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit"
   makeGoalDescription: "Create or regenerate a goal proposal"
   slackGoalApprove: "Register goal"

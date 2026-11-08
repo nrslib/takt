@@ -12,7 +12,7 @@ A goal is registered when a person approves its proposal in the TUI or Slack. /m
 
 Pausing holds execution and subsequent events; aborting is terminal. Resuming also makes pending tasks eligible to run. Saved task instructions are updated through the instruction-change operation.
 
-Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together. The PR watcher handles goals in awaiting_merge.
+Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together, including awaiting_merge goals with a linked merge task that is pending or running. Goals only waiting for a human merge are excluded from patrols and handled by the PR watcher.
 
 The standard PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. Review and CI waiting in a custom merge.workflow follow its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
 

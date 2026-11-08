@@ -420,7 +420,7 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
   const expectProposalFrame = (frame: string, updated: boolean): void => {
     const rows = stripVTControlCharacters(frame).split('\n');
     const heading = getLabel('manager.assignmentHeading', language, { name: basename(fixture.repository) });
-    const status = [heading, getLabel('manager.counts', language, { goals: '0', questions: '0' })].join(' | ');
+    const status = [heading, getLabel('manager.counts', language, { goals: '0', awaiting: '0', questions: '0' })].join(' | ');
     expect(rows.filter((row) => row.trim() === status)).toHaveLength(1);
     expect(rows.filter((row) => row.trim() !== '').at(-1)?.trim()).toBe(status);
     const confirmation = getLabel('manager.summary.confirmation', language);

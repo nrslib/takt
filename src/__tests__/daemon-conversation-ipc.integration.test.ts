@@ -500,7 +500,7 @@ it.each([7, 9])('transfers all %i large goals in directory order without the arr
     const value = await authenticated(); const result = await opened(value);
     const items = (await value.items(result.read.transferId)) as Array<{ kind: string; goal: unknown }>;
     expect(items.filter(({ kind }) => kind === 'goal').map(({ goal }) => goal)).toEqual(goals.map((goal) => ({ id: goal.id,
-      objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, repositoryDirectory: repository })));
+      objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository })));
     expect(list).not.toHaveBeenCalled();
     expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
   } finally { list.mockRestore(); }
@@ -675,7 +675,7 @@ it('reports a failed display read as incomplete and permits a complete refresh a
   saveGoal(goal);
   const repaired = (await value.request('snapshot', { attachmentId: first.attachmentId })).result!;
   expect((await value.items(repaired.read.transferId))).toContainEqual({ kind: 'goal', goal: {
-    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, repositoryDirectory: repository,
+    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository,
   } });
   expect(service.attachmentCount).toBe(1);
 });
@@ -709,7 +709,7 @@ it('stops pulling display payloads under real socket backpressure and closes the
         await gate;
         for (let index = 0; index < 256; index++) {
           pulled++;
-          yield { kind: 'goal' as const, goal: { ...goalRecord(), objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
+          yield { kind: 'goal' as const, goal: { ...goalRecord(), awaitingHumanMerge: false, objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
         }
       } finally { closed++; await iterator.return?.(); }
     })();

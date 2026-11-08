@@ -1237,7 +1237,7 @@ it('reads legacy proposal, session and accepted human/director queues while pres
   read.complete();
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
   expect(items).toContainEqual({ kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-    executionStatus: goal.executionStatus, repositoryDirectory: f.repository } });
+    executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: f.repository } });
   expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8'))).toEqual(goal);
   expect((await new ConversationStateStore(f.directory).read(f.id))!.record.directorMessages).toEqual([]);
 });
