@@ -32,7 +32,7 @@ function fixture() {
     return goal;
   });
   const answer = (value = command, current = assignment, signal = new AbortController().signal) =>
-    answerConversationInquiry(value, current, '/config', signal, 'en');
+    answerConversationInquiry(value, current, '/config', { signal, request: vi.fn() }, 'en');
   return { goals, answer };
 }
 beforeEach(() => { vi.resetAllMocks(); });

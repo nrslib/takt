@@ -6,6 +6,7 @@ import { z } from 'zod/v4';
 import { isMissing, listWatchEntries, MAX_WATCH_ENTRIES, readSmallJson } from './files.js';
 import { startWatchLoop, WATCH_INTERVALS, type WatchLoop } from './loop.js';
 import type { WatchTarget } from './observations.js';
+import { readInboxJson } from '../../../infra/daemon/inboxFiles.js';
 
 export interface DirectoryWatchTarget extends WatchTarget {
   directory: string;
@@ -83,7 +84,7 @@ export function startDirectoryWatcher(dependencies: {
     offset += page.length;
     for (const [path, target] of page) {
       signal.throwIfAborted();
-      const value = await readSmallJson(path);
+      const value = await (target.kind === 'inbox' ? readInboxJson(path) : readSmallJson(path));
       const info = await stat(path);
       const generation = createHash('sha256').update(JSON.stringify([
         target.targetId, target.generation, info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs, value,

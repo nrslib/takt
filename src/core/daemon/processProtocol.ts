@@ -51,7 +51,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, questionId: id, answer: GoalAnswerSchema }).strict(),
+  z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),
@@ -83,6 +83,7 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
   z.object({ kind: z.literal('save_conversation'), change }).strict(),
   z.object({ kind: z.literal('accept_director_message'), eventId: id, requestId: id, conversationId: id, occurredAt: z.iso.datetime(), text }).strict(),
   z.object({ kind: z.literal('notify_director'), notificationId: id, message: text,

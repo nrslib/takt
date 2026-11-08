@@ -415,7 +415,7 @@ describe('Caccia real Git isolation', () => {
     expect(existsSync(probe.markerPath)).toBe(true); rmSync(probe.markerPath);
     writeFileSync(join(fixture.projectCwd, '.takt/config.yaml'), `vcs_provider: github\nallow_git_filters: ${allowGitFilters}\n`);
     invalidateAllResolvedConfigCache();
-    mockFetchCacciaPullRequestDetails.mockReset().mockResolvedValue({ number: 42, headBranch: fixture.branch,
+    mockFetchCacciaPullRequestDetails.mockReset().mockResolvedValue({ number: 42, title: 'Review fixes', body: '', headBranch: fixture.branch,
       headSha, headRepositoryUrl: fixture.bareRemote, headRepositoryPushUrls: [fixture.bareRemote] });
     mockFetchCodeRabbitReviewStatus.mockReset().mockReturnValue({ headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] });
     mockFetchCodeRabbitReviewThreads.mockReset().mockReturnValue([{ id: 'thread-42', author: 'coderabbitai', body: 'Correct the PR.', replies: [] }]);
@@ -474,6 +474,7 @@ describe('Caccia real Git isolation', () => {
       expect(prNumber).toBe(42);
       return {
         number: 42,
+        title: 'Review fixes', body: '',
         headBranch: 'caccia/pr-42',
         headSha: 'head-sha',
         headRepositoryUrl: join(testRoot, 'remote.git'),
@@ -536,6 +537,7 @@ describe('Caccia real Git isolation', () => {
 
     mockFetchCacciaPullRequestDetails.mockReturnValue({
       number: 42,
+      title: 'Review fixes', body: '',
       headBranch: 'caccia/pr-42',
       headSha: 'head-sha',
       headRepositoryUrl: join(testRoot, 'unused-remote.git'),
@@ -642,6 +644,7 @@ describe('Caccia real Git isolation', () => {
       expect(prNumber).toBe(42);
       return {
         number: 42,
+        title: 'Review fixes', body: '',
         headBranch: branch,
         headSha: initialHeadSha,
         headRepositoryUrl: bareRemote,
@@ -669,11 +672,11 @@ describe('Caccia real Git isolation', () => {
       expect(git(options.cwd, ['rev-parse', 'HEAD'])).toBe(initialHeadSha);
       writeFileSync(join(options.cwd, 'caccia-fix.txt'), 'fixed in the temporary clone\n', 'utf8');
       mkdirSync(reportDirectory, { recursive: true });
-      writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify([{
+      writeFileSync(join(reportDirectory, 'caccia-decisions.json'), JSON.stringify({ outcome: 'complete', reason: '', decisions: [{
         thread_id: 'thread-42',
         valid: true,
         reason: 'The PR branch is missing the requested correction.',
-      }]), 'utf8');
+      }] }), 'utf8');
       expect(options).toMatchObject({
         cwd: expect.stringMatching(/^.*takt-caccia-42-/u),
         projectCwd,

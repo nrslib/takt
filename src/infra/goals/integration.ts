@@ -96,7 +96,7 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). PR preparation retries use the saved completion evidence. To correct the saved evidence, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR's text separately.`,
+      'In awaiting_merge, resubmit takt_complete_goal only if PR preparation failed (the saved pullRequest was cleared or an error was returned) or completion evidence needs correction. Before resubmitting, inspect and verify the current tip of the goal branch, then pass that SHA as expectedSha with an evidence-backed summary. Resubmission can rebuild the completion record and existing PR body even at the same SHA. If only reading or updating the existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
       'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
     ],
   };
@@ -130,7 +130,7 @@ function resolveCompletionTargetSha(cwd: string, goal: Goal, signal: AbortSignal
 async function prepareCompletionPullRequest(
   cwd: string, goal: Goal, completion: NonNullable<Goal['completion']>,
   humanChecks: string | undefined, language: Language, signal: AbortSignal | undefined,
-): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string }> {
+): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string; bodyFailure?: string }> {
   try {
     return { pullRequest: await prepareGoalPullRequest(cwd, goal, completion, humanChecks, language, signal, async () => {
       signal?.throwIfAborted();
@@ -145,14 +145,15 @@ async function prepareCompletionPullRequest(
   } catch (error) {
     signal?.throwIfAborted();
     if (!(error instanceof GoalPullRequestUnavailableError)) throw error;
-    return { failure: safeExternalErrorMessage(error) };
+    const failure = safeExternalErrorMessage(error);
+    return { failure, ...(error.operation === 'body' ? { bodyFailure: failure } : {}) };
   }
 }
 
 function recordPullRequestFailure(
   goal: Goal, failure: string | undefined, notifications: GoalNotificationPolicy, language: Language,
 ): Goal {
-  if (failure === undefined || goal.pullRequest !== undefined) return goal;
+  if (failure === undefined) return goal;
   const saved = appendGoalWorkLog(goal, { summary: failure });
   return appendGoalNotification(saved, {
     kind: 'blocked', severity: 'error',
@@ -175,24 +176,6 @@ export async function completeGoal(
   const targetBranch = goal.integrationBranch;
   const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   const included = await isGoalContentIncluded(cwd, expectedSha, targetSha, signal);
-  if (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha && !included) {
-    if (goal.pullRequest === undefined) {
-      const { pullRequest, failure } = await prepareCompletionPullRequest(
-        cwd, goal, goal.completion, humanChecks ?? goal.completion.humanChecks, language, signal,
-      );
-      const saved = await store.update(goalId, (current) => {
-        signal?.throwIfAborted();
-        assertCompletionAllowed(current, goal);
-        return recordPullRequestFailure({ ...current, ...(pullRequest === undefined ? {} : { pullRequest: current.pullRequest ?? pullRequest }) }, failure, notifications, language);
-      });
-      if (failure !== undefined && saved.pullRequest === undefined) {
-        saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
-      }
-    }
-    const current = store.getSync(goalId);
-    assertCompletionUnchanged(current, goal);
-    return { status: current.status, completion: current.completion, goal: current };
-  }
   const changeSummary = await readGoalDiffSummary(cwd, targetSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
   const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);
   const result = included ? { status: 'merged' as const, sha: targetSha } : undefined;
@@ -206,24 +189,28 @@ export async function completeGoal(
     return { ...result, completion: saved.completion, goal: saved };
   }
   const worktrees = await targetWorktrees(cwd, targetBranch, signal);
+  const resolvedHumanChecks = humanChecks ?? (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha
+    ? goal.completion.humanChecks : undefined);
   const waiting = {
     ...completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, worktrees),
-    ...(humanChecks === undefined ? {} : { humanChecks }),
+    ...(resolvedHumanChecks === undefined ? {} : { humanChecks: resolvedHumanChecks }),
     reason: 'Goal PR requires preparation through a PR merge task',
   };
-  const { pullRequest, failure } = await prepareCompletionPullRequest(cwd, goal, waiting, humanChecks, language, signal);
+  const { pullRequest, failure, bodyFailure } = await prepareCompletionPullRequest(cwd, goal, waiting, resolvedHumanChecks, language, signal);
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
-    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure, notifications, language);
+    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting,
+      pullRequest: bodyFailure === undefined ? pullRequest : current.pullRequest }, failure, notifications, language);
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
       kind: 'awaiting_merge', body: summary,
     }, notifications);
   });
-  if (failure !== undefined && saved.pullRequest === undefined) {
+  if (failure !== undefined) {
     saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
   }
-  return { status: 'awaiting_merge', completion: waiting, goal: saved };
+  return { status: 'awaiting_merge', completion: waiting, goal: saved,
+    ...(bodyFailure === undefined ? {} : { pullRequestBodyError: bodyFailure }) };
 }
 
 export async function reopenGoal(

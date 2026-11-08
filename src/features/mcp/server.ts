@@ -21,6 +21,7 @@ import {
   goalDiffInputSchema,
   goalHistoryInputSchema,
   askGoalQuestionInputSchema,
+  askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
   listStandaloneInquiriesInputSchema,
@@ -48,8 +49,8 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
-import { listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
-import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
+import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
+import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
@@ -96,7 +97,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
   'takt_withdraw_goal_question', 'takt_notify_goal',
-  'takt_list_standalone_inquiries', 'takt_withdraw_standalone_inquiry',
+  'takt_ask_standalone_question', 'takt_list_standalone_inquiries', 'takt_withdraw_standalone_inquiry',
   'takt_record_goal_work_log', 'takt_list_goal_work_log',
 ] as const;
 
@@ -137,7 +138,7 @@ export function createTaktMcpServer(
   const withTurn = (action: () => Promise<CallToolResult>): Promise<CallToolResult> => options.turnScope === undefined
     ? action() : options.turnScope.run(action);
   const turnSignal = (signal: AbortSignal): AbortSignal => options.turnScope === undefined ? signal : options.turnScope.signal(signal);
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: InquiryOwner | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
     try { return await withTurn(async () => {
       const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
       const currentDeps = assignment !== undefined
@@ -221,6 +222,15 @@ export function createTaktMcpServer(
     inputSchema: getWorkflowInputSchema,
   }, (input) => operation(input.cwd, 'Workflow read failed', (deps) => getTaktWorkflow(projectInput(input, deps), deps), false));
   if (options.toolSet !== 'read-only') {
+    server.registerTool('takt_ask_standalone_question', {
+      title: 'Ask a standalone question',
+      description: 'Save a pending inquiry without a goal in the current manager assignment. cwd must be an absolute path in an assigned repository. Supports kind question (default) or operation_request, with the same options and recommendation as goal questions. People answer through TUI or Slack. Returns questionId within 64 KiB.',
+      inputSchema: askStandaloneQuestionInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Standalone question failed', async (deps, assignment) => {
+      const current = assignment ?? await currentAssignment();
+      const cwd = assignment === undefined ? await resolveAssignedProjectRoot(input.cwd, current) : deps.allowedProjectRoot!;
+      return askTaktStandaloneQuestion({ ...input, cwd }, globalConfigDirectory, current, turnSignal(extra.signal));
+    }, false));
     server.registerTool('takt_list_standalone_inquiries', {
       title: 'List standalone inquiries',
       description: 'Read only pending standalone inquiries owned by the current manager assignment. Includes id, kind, body and creation time without changing saved state. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',

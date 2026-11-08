@@ -142,6 +142,7 @@ export async function harness() {
       case 'get_delivery': return { kind: 'delivery', conversationId: request.conversationId, assignment: turnState().assignment, connectedPorts: ['tui'] };
       case 'notify_director': return { kind: 'notification_saved', notificationId: request.notificationId };
       case 'accept_director_message': return { kind: 'event_accepted', admission: { kind: 'accepted', eventId: request.eventId, operationId: 'message-operation', acceptedSequence: 1 } };
+      case 'publish_workspace_inquiry_answer': return { kind: 'error', code: 'forbidden', message: 'No workspace inquiry store in this double' };
     }
   }) };
   const resources = { close: vi.fn(async () => {}) };

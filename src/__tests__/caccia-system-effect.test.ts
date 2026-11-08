@@ -4,6 +4,7 @@ import type { CacciaInput, CacciaResult } from '../features/caccia/index.js';
 import type { SystemStepServicesOptions } from '../core/workflow/system/system-step-services.js';
 import { PrHeadObservationMismatchError, type PrDetails } from '../core/workflow/system/pr-execution-context.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
+import { CacciaWorkflowError } from '../features/caccia/workflow-report.js';
 const mocks = vi.hoisted(() => ({
   run: vi.fn<(input: CacciaInput) => Promise<CacciaResult>>(),
   config: vi.fn(), git: vi.fn(), details: vi.fn(), threat: vi.fn(), detect: vi.fn(), comment: vi.fn(), execFile: vi.fn(),
@@ -36,6 +37,15 @@ function details(overrides: Partial<PrDetails>): PrDetails {
   return { ...options().prExecutionContext!, number: 123, sameRepository: true, ...overrides };
 }
 describe('Caccia effect result', () => {
+  it('preserves a sanitized report diagnostic even when it contains a generic error keyword', async () => {
+    const failure = new CacciaWorkflowError('permission denied while inspecting design; T4, T5 require a decision; @reviewer /private/source.ts');
+    mocks.run.mockRejectedValueOnce(failure);
+    expect(await cacciaEffect(options(), 123)).toMatchObject({ failed: true, error: failure.message });
+    expect(failure.message).toContain('T4, T5 require a decision');
+    expect(failure.message).not.toContain('/private/source.ts');
+    expect(failure.message).toContain('＠reviewer');
+  });
+
   it('passes the parent warning sink to linked Caccia without changing its result', async () => {
     const eventSink = vi.fn();
     mocks.run.mockImplementationOnce(async (input) => {
@@ -167,7 +177,7 @@ describe('Caccia effect result', () => {
     const remote = 'https://github.com/org/repo.git';
     const locator = (headSha: string) => ({ url: 'https://github.com/org/repo/pull/123', headRefOid: headSha });
     const graphql = { data: { repository: { pullRequest: {
-      number: 123, headRefName: 'feature', headRefOid: updated,
+      number: 123, title: 'Review fixes', body: '', headRefName: 'feature', headRefOid: updated,
       headRepository: { sshUrl: 'git@github.com:org/repo.git' },
     } } } };
     const stable = [locator(updated), graphql, remote, remote, { baseRefName: 'main', isCrossRepository: false }];

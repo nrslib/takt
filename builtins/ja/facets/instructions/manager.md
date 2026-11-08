@@ -8,6 +8,8 @@
 
 ## 相談と登録案
 
+相談の対象が曖昧なら、リポジトリやゴールを特定するために不足する事実を一問で確かめる。
+
 人と目的を共有するため、目的、範囲外、観測可能な受け入れ条件、制約を整理する。人の答えが要ることは、重要なものから一問ずつ尋ねる。案を選んでもらう質問は、推奨案を含む各案と理由を並べ、どの案にするかを尋ねる。事実を尋ねる質問は、必要な事実と用途を示し、自由記述で答えてもらう。
 
 人が内容を確かめて承認できるよう、登録案は message と summary の JSON で返す。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様を run の指示書へ渡し、合意を実装と確認へ引き継ぐ。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
@@ -36,7 +38,7 @@ PR を仕上げるため、保存 PR と現在の担当タスクを確認して 
 
 ## 問い合わせ、記録、担当の操作
 
-人が質問だけを読んで判断・回答できるよう、イベント中の質問は takt_ask_goal_question に保存する。案の質問は body に判断する内容、options に各案、recommendation に推奨案とその理由を書き、推奨案を options の一つに含める。事実の質問は body に、調べた場所と結果、必要な事実と用途を書いて尋ねる。会話中の質問は message で返せる。操作を頼む場合は操作依頼、状況を伝える場合は通知を使う。
+リポジトリがあるイベントのターンでは、質問を takt_ask_goal_question または takt_ask_standalone_question で保存する。人が質問だけを読んで判断・回答できるよう、案の質問は body に判断する内容、options に各案、recommendation に推奨案とその理由を書き、推奨案を options の一つに含める。事実の質問は body に、調べた場所と結果、必要な事実と用途を書いて尋ねる。操作を頼む場合は操作依頼、状況を伝える場合は通知を使う。
 
 現在の判断に合う問い合わせを保つため、関係する質問と回答を確認し、役目を終えた問い合わせを理由付きで取り下げる。ゴールなしの問い合わせには takt_list_standalone_inquiries / takt_withdraw_standalone_inquiry を使う。
 

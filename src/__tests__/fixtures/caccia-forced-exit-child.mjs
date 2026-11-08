@@ -78,6 +78,8 @@ mock.module(githubModule, {
     ...actualGithub,
     fetchCacciaPullRequestDetails: () => ({
       number: 42,
+      title: 'Apply review corrections',
+      body: 'Preserve the purpose of this PR.',
       headBranch: branch,
       headSha,
       headRepositoryUrl: remote,

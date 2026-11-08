@@ -35,6 +35,8 @@ import { appendGoalNotification,formatGoalQuestionNotification } from '../infra/
 import { addGoalQuestion,withdrawGoalQuestion } from '../infra/goals/questions.js';
 import type { Goal, GoalQuestion } from '../infra/goals/schema.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { JsonTaskListItem } from '../infra/task/listSerializer.js';
@@ -216,6 +218,41 @@ function confirmAbort(): void {
   app!.stdin.write('\x1b[A');
   app!.stdin.write('\r');
 }
+
+it('lists a newly created standalone question in Ctrl+R and saves its TUI answer with webhook notifications disabled', async () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  vi.stubEnv('TAKT_NOTIFY_WEBHOOK', 'https://example.test/standalone-question');
+  const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
+  const client = new Client({ name: 'standalone-display-test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    const { call } = await mountGoalControls('en', goalRecord());
+    await server.connect(b);
+    await client.connect(a);
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd, body: 'Which goal should handle this event?' } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const store = new StandaloneInquiryStore(process.env.TAKT_CONFIG_DIR!, { kind: 'repository', repositoryDirectory: cwd });
+    const questions = await store.listPending();
+    expect(questions).toHaveLength(1);
+    const question = questions[0]!;
+    await openMenu('answer');
+    await waitFor(() => expect(app!.lastFrame()).toContain(question.body));
+    app!.stdin.write('\r');
+    await waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
+    app!.stdin.write('Use the export goal');
+    app!.stdin.write('\r');
+    await waitFor(async () => expect(await store.get(question.id)).toMatchObject({ status: 'answered',
+      answer: { text: 'Use the export goal', source: 'tui' } }));
+    expect(await store.listPending()).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+  } finally {
+    try { await client.close(); } finally { await server.close(); }
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});
 
 it.each(['choice', 'free text'] as const)('persists only the selected inquiry through the real session with a %s answer', async (mode) => {
   const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',

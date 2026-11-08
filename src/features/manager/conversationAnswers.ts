@@ -7,12 +7,14 @@ import { answerGoalQuestion } from '../../infra/goals/questions.js';
 import { saveManagerEvent } from '../../infra/goals/events.js';
 import { ensureManagerRun } from './autoRun.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import type { TurnIo } from '../daemonTurn/processRuntime.js';
 
 export async function answerConversationInquiry(
   command: Extract<ConversationCommand, { kind: 'answer_question' }>, assignment: ManagerAssignment,
-  configDirectory: string, signal: AbortSignal, language: 'ja' | 'en',
+  configDirectory: string, io: Pick<TurnIo, 'signal' | 'request'>, language: 'ja' | 'en',
 ): Promise<OperationResult> {
   let answerSaved = false;
+  const { signal } = io;
   try {
     signal.throwIfAborted();
     const target = command.target;
@@ -28,8 +30,18 @@ export async function answerConversationInquiry(
     if (question === undefined || question.kind === 'approval') throw new ConversationError('invalid_input');
     signal.throwIfAborted();
     if (target.goalId === null) {
-      await standalone!.answer(command.questionId, command.answer, command.source);
+      const saved = await standalone!.answerForPublication(command.questionId, command.answer, command.source);
       answerSaved = true;
+      if (assignment.kind === 'workspace') {
+        const reply = await io.request({ kind: 'publish_workspace_inquiry_answer', questionId: command.questionId });
+        if (reply.kind !== 'event_accepted' || reply.admission.kind !== 'accepted') throw new ConversationError('operation_failed');
+      } else {
+        const repository = question.operation?.cwd ?? assignment.repositoryDirectory;
+        if (!assignment.repositoryDirectories.includes(repository)) throw new ConversationError('invalid_assignment');
+        saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: command.questionId,
+          questionBody: saved.body, answer: saved.answer! });
+      }
+      await standalone!.markAnswerPublished(command.questionId);
     } else {
       const saved = await new GoalStore(target.repositoryDirectory).update(target.goalId,
         (goal) => answerGoalQuestion(goal, command.questionId, command.answer, command.source), () => { answerSaved = true; });
