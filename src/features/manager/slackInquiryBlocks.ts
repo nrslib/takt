@@ -34,6 +34,11 @@ export function buildSlackInquiry(target: PendingQuestion, language: 'ja' | 'en'
   const section = (text: string): SectionBlock => ({ type: 'section', text: { type: 'plain_text', text } });
   const question = target.question;
   for (const text of splitText(question.body)) add([section(text)]);
+  if (question.recommendation !== undefined) {
+    for (const text of splitText(getLabel('manager.notificationRecommendation', language, { recommendation: question.recommendation }))) {
+      add([section(text)]);
+    }
+  }
   const buttons: Button[] = [];
   if (question.kind === 'operation_request') {
     for (const report of ['completed', 'unable'] as const) {

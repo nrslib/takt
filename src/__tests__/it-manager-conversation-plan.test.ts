@@ -391,6 +391,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(sdkOptions.config?.hooks).toBeUndefined();
       const manager = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>)[TAKT_MANAGER_MCP_SERVER_NAME]!;
       expect(manager.tools).toEqual(Object.fromEntries([...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'].map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.tools).toHaveProperty('takt_ask_standalone_question', { approval_mode: 'approve' });
       expect(manager.default_tools_approval_mode).toBeUndefined();
       const browser = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>).browser!;
       expect(browser.tools).toBeUndefined();

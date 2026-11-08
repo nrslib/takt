@@ -1,8 +1,8 @@
 import { access, mkdir, opendir, readFile, readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
+import { writeFileAtomic } from '../../shared/utils/atomic-file.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
-import { writeFileAtomic } from '../config/project/sessionStore.js';
 import { withInquiryLock } from './inquiry-lock.js';
 import { createInquiry, answerInquiry, withdrawInquiry } from './inquiry.js';
 import { GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
@@ -125,6 +125,24 @@ export class StandaloneInquiryStore {
     const answered = answerInquiry(await this.read(path, id), answer, source);
     this.write(path, answered);
     return answered;
+  }
+
+  async answerForPublication(id: string, answer: string | GoalAnswerInput,
+    source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Promise<GoalQuestion> {
+    const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
+    const answered = answerInquiry(await this.read(path, id), answer, source);
+    const pending = GoalQuestionSchema.parse({ ...answered, answerPublicationPending: true });
+    this.write(path, pending);
+    return pending;
+  }
+
+  async markAnswerPublished(id: string): Promise<GoalQuestion> {
+    const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
+    const question = await this.read(path, id);
+    if (question.answerPublicationPending !== true) return question;
+    const result = GoalQuestionSchema.parse({ ...question, answerPublicationPending: undefined });
+    this.write(path, result);
+    return result;
   }
 
   async withdraw(id: string, reason?: string): Promise<GoalQuestion> {
