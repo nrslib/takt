@@ -104,6 +104,117 @@ describe('Merge workflows own Caccia execution', () => {
   const run = () => executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'custom-merge',
     settings: resolveMergeSettings(undefined) });
 
+  async function claimGoalMergeTask(until: 'prepare' | 'merge') {
+    const prUrl = `https://github.com/org/repo/pull/${details.number}`;
+    const goals = new GoalStore(project);
+    await goals.create({ ...goalRecord(), branch: details.headBranch, status: 'awaiting_merge',
+      pullRequest: { number: details.number, url: prUrl },
+      completion: { goalBranch: details.headBranch, goalSha: headSha, targetBranch: details.baseBranch,
+        summary: 'verified', instructions: [], humanChecks: 'Read the result',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } } });
+    const runner = new TaskRunner(project);
+    const worktreePath = join(project, 'merge-clone');
+    runner.enqueuePrMergeTask({ goalId, prUrl, prNumber: details.number, headBranch: details.headBranch,
+      baseBranch: details.baseBranch, headSha, headRepositoryUrl: details.headRepositoryUrl,
+      headRepositoryPushUrls: details.headRepositoryPushUrls, until, workflow: 'custom-merge',
+      method: 'squash', worktreePath, threatCheckMaxDiffBytes: 100_000 });
+    return { goals, runner, claimed: runner.claimNextTasks(1)[0]!, worktreePath };
+  }
+
+  it.each(['prepare', 'merge'] as const)('%s 実行中にゴールを created へ戻すと中断理由を保存し clone を保持する', async (until) => {
+    const { goals, runner, claimed, worktreePath } = await claimGoalMergeTask(until);
+    const stop = vi.spyOn(GoalAbortMonitor.prototype, 'stop');
+    const unpublished = vi.spyOn(goalGit, 'hasUnpublishedPrWork').mockResolvedValue(false);
+    const cleanup = new AbortController();
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      const signal = request.abortSignal!;
+      signal.throwIfAborted();
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('System wait interrupted.')), { once: true });
+      });
+      return { success: true };
+    });
+    const settled = executePersistedPrMergeTask(claimed, runner, project, cleanup.signal)
+      .catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledOnce());
+      const request = mocks.workflow.mock.calls[0]![0] as WorkflowExecutionRequest;
+      const signal = request.abortSignal!;
+      expect(request.goalId).toBe(goalId);
+      expect(signal.aborted).toBe(false);
+      expect(goals.getSync(goalId).status).toBe('awaiting_merge');
+
+      await goals.update(goalId, (goal) => ({ ...goal, status: 'created' }));
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 3000 });
+      const error = await settled;
+      const saved = new TaskStore(project).read().tasks.find((task) => task.name === claimed.name)!;
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({ name: signal.reason.name, message: signal.reason.message });
+      expect(signal.reason.message).toContain('awaiting_merge');
+      expect(signal.reason.message).toContain('created');
+      expect(saved).toMatchObject({ status: 'failed', owner_pid: null, worktree_path: worktreePath,
+        completion: { success: false, workflowResult: 'aborted', mergeOutcome: 'unresolved' } });
+      expect(saved.failure!.error).toContain(signal.reason.message);
+      expect(saved.completion!.failureReason).toBe(saved.failure!.error);
+      expect(existsSync(worktreePath)).toBe(true);
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(unpublished).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      cleanup.abort(new Error('Test cleanup'));
+      await settled;
+    }
+  });
+
+  it.each(['prepare', 'merge'] as const)('%s 実行中も awaiting_merge のままなら監視後に正常完了する', async (until) => {
+    const { goals, runner, claimed } = await claimGoalMergeTask(until);
+    const reads = vi.spyOn(GoalStore.prototype, 'getSync');
+    vi.spyOn(goalGit, 'hasUnpublishedPrWork').mockResolvedValue(false);
+    mocks.status.mockResolvedValue({ merged: until === 'merge' });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.workflow.mockImplementationOnce(async () => { await pending; return { success: true }; });
+    const execution = executePersistedPrMergeTask(claimed, runner, project);
+    try {
+      await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledOnce());
+      const signal = (mocks.workflow.mock.calls[0]![0] as WorkflowExecutionRequest).abortSignal!;
+      const initialReads = reads.mock.calls.length;
+      await vi.waitFor(() => expect(reads.mock.calls.length).toBeGreaterThan(initialReads), { timeout: 3000 });
+      expect(goals.getSync(goalId).status).toBe('awaiting_merge');
+      expect(signal.aborted).toBe(false);
+      release();
+      expect(await execution).toMatchObject({ success: true, merged: until === 'merge',
+        outcome: until === 'merge' ? 'merged' : 'prepared' });
+      expect(new TaskStore(project).read().tasks.find((task) => task.name === claimed.name))
+        .toMatchObject({ status: 'completed', completion: { success: true, workflowResult: 'completed' } });
+    } finally { release(); await execution; }
+  });
+
+  it('監視周期の前にゴールが戻っても完了前の確認で中断し失敗結果を保存する', async () => {
+    vi.useFakeTimers();
+    try {
+      const { goals, runner, claimed } = await claimGoalMergeTask('merge');
+      mocks.status.mockResolvedValue({ merged: false });
+      mocks.workflow.mockImplementationOnce(async () => {
+        await goals.update(goalId, (goal) => ({ ...goal, status: 'created' }));
+        return { success: true };
+      });
+
+      await expect(executePersistedPrMergeTask(claimed, runner, project)).rejects.toThrow(/awaiting_merge/u);
+
+      const saved = new TaskStore(project).read().tasks.find((task) => task.name === claimed.name)!;
+      expect(saved).toMatchObject({ status: 'failed', owner_pid: null,
+        completion: { success: false, workflowResult: 'aborted' } });
+      expect(saved.completion!.mergeOutcome).not.toBe('merged');
+      expect(saved.failure!.error).toContain('created');
+      expect(saved.completion!.failureReason).toBe(saved.failure!.error);
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['prepare', 'merge'] as const)('%s intent uses workflow completion and current PR state', async (until) => {
     for (const completed of [true, false]) {
       for (const merged of [true, false]) {
