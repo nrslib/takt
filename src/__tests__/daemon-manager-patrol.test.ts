@@ -181,17 +181,49 @@ it('continues with another repository after a timestamp write fails', async () =
   expect(records.values.get('/workspace/b/service')).toBe(initialTime);
 });
 
-it('clamps a future saved timestamp once and accepts within one interval', async () => {
-  const f = fixture({ records: memoryRecords([[repositoryDirectory, initialTime + 3_600_000]]) });
+it('persists a clamped future timestamp so restarts keep the original deadline', async () => {
+  const records = memoryRecords([[repositoryDirectory, initialTime + 3_600_000]]);
+  const f = fixture({ records });
   await f.loop.drain();
   expect(f.accept).not.toHaveBeenCalled();
-  await f.observe(initialTime + interval / 2);
-  await f.observe(initialTime + interval - 1);
-  expect(f.accept).not.toHaveBeenCalled();
-  expect(f.records.write).not.toHaveBeenCalled();
-  await f.observe(initialTime + interval);
+  expect(records.write).toHaveBeenCalledExactlyOnceWith(repositoryDirectory, initialTime);
+  await f.loop.close();
+
+  vi.setSystemTime(initialTime + interval / 2);
+  const restarted = fixture({ records });
+  await restarted.loop.drain();
+  expect(restarted.accept).not.toHaveBeenCalled();
+  await restarted.observe(initialTime + interval - 1);
+  expect(restarted.accept).not.toHaveBeenCalled();
+  await restarted.observe(initialTime + interval);
+  expect(restarted.accept).toHaveBeenCalledTimes(1);
+  expect(records.write).toHaveBeenCalledWith(repositoryDirectory, initialTime + interval);
+});
+
+it('retries a failed acceptance timestamp after the patrol clears and preserves it across restart', async () => {
+  const records = memoryRecords();
+  records.write.mockRejectedValueOnce(new Error('write failed'));
+  const f = fixture({ records });
+  await f.loop.drain();
   expect(f.accept).toHaveBeenCalledTimes(1);
-  expect(f.records.write).toHaveBeenCalledWith(repositoryDirectory, initialTime + interval);
+  expect(records.write).toHaveBeenCalledExactlyOnceWith(repositoryDirectory, initialTime);
+  f.setPending(true);
+
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(records.write).toHaveBeenCalledExactlyOnceWith(repositoryDirectory, initialTime);
+  f.setPending(false);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(records.write).toHaveBeenCalledTimes(2);
+  expect(records.values.get(repositoryDirectory)).toBe(initialTime);
+  await f.loop.close();
+
+  const restarted = fixture({ records });
+  await restarted.loop.drain();
+  expect(restarted.accept).not.toHaveBeenCalled();
+  await restarted.observe(initialTime + interval - 1);
+  expect(restarted.accept).not.toHaveBeenCalled();
+  await restarted.observe(initialTime + interval);
+  expect(restarted.accept).toHaveBeenCalledTimes(1);
 });
 
 it('saves the acceptance completion time and uses it for the next interval', async () => {

@@ -23,12 +23,29 @@ export function startManagerPatrols(dependencies: {
   now(): number;
   onError(error: unknown): void;
 }): WatchLoop {
-  const schedules = new Map<string, { interval: number; due: number; lastQueued: number | undefined }>();
+  const schedules = new Map<string, { interval: number; due: number; lastQueued: number | undefined; pendingWrite: number | undefined }>();
+  const persist = async (repositoryDirectory: string, schedule: { pendingWrite: number | undefined }, lastQueued: number): Promise<void> => {
+    try {
+      await dependencies.records.write(repositoryDirectory, lastQueued);
+      if (schedule.pendingWrite === lastQueued) schedule.pendingWrite = undefined;
+    } catch (error) {
+      schedule.pendingWrite = lastQueued;
+      dependencies.onError(error);
+    }
+  };
   let nextDelay: number = WATCH_INTERVALS.files;
   return startWatchLoop(() => nextDelay, async (signal) => {
     const targets = await dependencies.targets();
     const present = new Set(targets.map((target) => target.repositoryDirectory));
-    for (const key of schedules.keys()) if (!present.has(key)) schedules.delete(key);
+    for (const [key, schedule] of schedules) if (!present.has(key) && schedule.pendingWrite === undefined) schedules.delete(key);
+
+    for (const [repositoryDirectory, schedule] of schedules) {
+      if (schedule.pendingWrite === undefined) continue;
+      const target = targets.find((item) => item.repositoryDirectory === repositoryDirectory);
+      if (target !== undefined && dependencies.pending(target.conversationId)) continue;
+      await persist(repositoryDirectory, schedule, schedule.pendingWrite);
+    }
+
     for (const target of targets) {
       signal.throwIfAborted();
       const interval = target.intervalSeconds * 1000;
@@ -38,9 +55,12 @@ export function startManagerPatrols(dependencies: {
         try { lastQueued = await dependencies.records.read(target.repositoryDirectory); }
         catch (error) { dependencies.onError(error); }
         const restoredAt = dependencies.now();
-        if (lastQueued !== undefined) lastQueued = Math.min(lastQueued, restoredAt);
-        schedules.set(target.repositoryDirectory, { interval, lastQueued,
-          due: lastQueued === undefined ? restoredAt : lastQueued + interval });
+        const correctedTimestamp = lastQueued !== undefined && lastQueued > restoredAt ? restoredAt : undefined;
+        if (correctedTimestamp !== undefined) lastQueued = correctedTimestamp;
+        const restored = { interval, lastQueued, pendingWrite: correctedTimestamp,
+          due: lastQueued === undefined ? restoredAt : lastQueued + interval };
+        schedules.set(target.repositoryDirectory, restored);
+        if (correctedTimestamp !== undefined) await persist(target.repositoryDirectory, restored, correctedTimestamp);
       } else if (schedule.interval !== interval) {
         schedule.interval = interval;
         schedule.due = schedule.lastQueued === undefined ? dependencies.now() : schedule.lastQueued + interval;
@@ -53,6 +73,7 @@ export function startManagerPatrols(dependencies: {
       signal.throwIfAborted();
       const schedule = schedules.get(target.repositoryDirectory)!;
       const interval = schedule.interval;
+      if (schedule.pendingWrite !== undefined) continue;
       if (dependencies.now() < schedule.due) continue;
       // 実行中・待機中の見回りがあれば、その周期は飛ばす。
       schedule.due = dependencies.now() + interval;
@@ -68,8 +89,7 @@ export function startManagerPatrols(dependencies: {
       else {
         schedule.lastQueued = dependencies.now();
         schedule.due = schedule.lastQueued + interval;
-        try { await dependencies.records.write(target.repositoryDirectory, schedule.lastQueued); }
-        catch (error) { dependencies.onError(error); }
+        await persist(target.repositoryDirectory, schedule, schedule.lastQueued);
       }
     }
     nextDelay = Math.max(1, Math.min(WATCH_INTERVALS.files,
