@@ -11,7 +11,7 @@ import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
 import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
-import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } from './watchers/state.js';
+import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type WatchTask } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
@@ -106,7 +106,10 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async patrolGoalIds(repositoryDirectory: string): Promise<readonly string[]> {
     const ids: string[] = [];
-    const tasks = await readWatchTasks(repositoryDirectory);
+    // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+    let tasks: readonly WatchTask[] = [];
+    try { tasks = await readWatchTasks(repositoryDirectory); }
+    catch (error) { this.onError(error); }
     for await (const goal of readWatchGoals(repositoryDirectory, this.onError, this.goalReader)) {
       if (isGoalPatrolCandidate(goal, tasks)) ids.push(goal.id);
     }

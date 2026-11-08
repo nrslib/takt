@@ -620,6 +620,39 @@ it('delivers pr_conflicting for an awaiting-merge goal to the manager', async ()
   expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
 });
 
+it('continues patrolling ordinary active goals while excluding awaiting-merge goals when tasks cannot be read', async () => {
+  const f = fixture();
+  const active = goalRecord();
+  const waiting = { ...active, id: randomUUID(), status: 'awaiting_merge' };
+  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : waiting);
+  doubles.readTasks.mockRejectedValue(new Error('Invalid tasks YAML'));
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, waiting.id] };
+
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it('interrupts without reporting or executing when a task read fails after cancellation', async () => {
+  const f = fixture();
+  const reading = deferred<void>();
+  const tasks = deferred<never>();
+  doubles.readTasks.mockImplementation(() => { reading.resolve(); return tasks.promise; });
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] };
+
+  const outcome = f.service.execute(f.input, f.io);
+  await reading.promise;
+  f.controller.abort();
+  tasks.reject(new Error('Invalid tasks YAML'));
+
+  expect(await outcome).toMatchObject({ kind: 'interrupted' });
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(f.io.progress).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
   const f = fixture();
   const active = goalRecord(); const unreadable = randomUUID();

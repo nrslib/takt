@@ -197,3 +197,23 @@ it('patrols linked pending and running merge work until only human merge waits r
   expect(await source.patrolGoalIds(directory)).toEqual([]);
   expect(errors).not.toHaveBeenCalled();
 });
+
+it('reports corrupt tasks and patrols ordinary active goals while excluding awaiting-merge goals', async () => {
+  const active = goalRecord();
+  const waiting: Goal = { ...active, id: randomUUID(), status: 'awaiting_merge', completion: {
+    goalBranch: active.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  for (const goal of [active, waiting]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  await writeFile(join(directory, '.takt', 'tasks.yaml'), 'tasks: [');
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+
+  expect(await source.patrolGoalIds(directory)).toEqual([active.id]);
+  expect(errors).toHaveBeenCalledOnce();
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});

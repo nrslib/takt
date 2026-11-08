@@ -12,6 +12,9 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { basename } from 'node:path';
 import { formatGoalNotification } from '../infra/goals/notifications.js';
+import { conversationProjection } from '../features/daemon/conversationProjection.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { DaemonDisplayFiles } from '../infra/daemon/displayFiles.js';
 let directory: string;
 let repository: string;
 function assignment() { return { kind: 'repository' as const, repositoryDirectory: repository, repositoryDirectories: [repository] }; }
@@ -22,6 +25,30 @@ function save(goal: Goal) {
 async function collect<T>(source: AsyncIterable<T>) { const values: T[] = []; for await (const value of source) values.push(value); return values; }
 beforeEach(() => { directory = getGlobalConfigDir(); repository = join(directory, 'repository'); mkdirSync(repository); });
 afterEach(() => vi.restoreAllMocks());
+
+it('reports corrupt tasks while projecting goals and inquiries with awaiting-merge goals treated as human waits', async () => {
+  const active = { ...goalRecord(), questions: [createInquiry({ body: 'Goal question' })] };
+  const waiting: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440000', status: 'awaiting_merge', completion: {
+    goalBranch: active.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  save(active); save(waiting);
+  const standalone = await new StandaloneInquiryStore(directory, assignment()).create({ body: 'Standalone question' });
+  const tasksPath = join(repository, '.takt', 'tasks.yaml');
+  writeFileSync(tasksPath, 'tasks: [');
+
+  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment(), () => false));
+
+  expect(items.filter((item) => item.kind === 'goal')).toEqual([active, waiting].map((goal) => ({ kind: 'goal', goal: {
+    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
+    repositoryDirectory: repository, awaitingHumanMerge: goal.id === waiting.id,
+  } })));
+  expect(items.filter((item) => item.kind === 'inquiry').map((item) => item.inquiry.question.id).sort())
+    .toEqual([active.questions[0]!.id, standalone.id].sort());
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual([{ kind: 'display_event', event: {
+    id: JSON.stringify(['diagnostic', tasksPath]), message: expect.stringContaining(tasksPath),
+  } }]);
+});
 
 it('reads only the demanded goal payload and reports corruption discovered before the next pull', async () => {
   const first = goalRecord(); const second = { ...first, id: '650e8400-e29b-41d4-a716-446655440000' };

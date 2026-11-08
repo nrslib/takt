@@ -27,7 +27,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
 import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
-import { readWatchTasks } from '../daemon/watchers/state.js';
+import { readWatchTasks, type WatchTask } from '../daemon/watchers/state.js';
 
 function nextRevision(revision: number): number {
   if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
@@ -73,7 +73,13 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (patrol) {
           const store = new GoalStore(event.repositoryDirectory);
           const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
-          const tasks = await readWatchTasks(event.repositoryDirectory);
+          // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+          let tasks: readonly WatchTask[] = [];
+          try { tasks = await readWatchTasks(event.repositoryDirectory); }
+          catch {
+            io.signal.throwIfAborted();
+            // 読取失敗は見回り対象の選定側が知らせるため、ターン内では通知しない。
+          }
           io.signal.throwIfAborted();
           const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');

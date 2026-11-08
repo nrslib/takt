@@ -9,8 +9,13 @@ import { listWatchEntries } from './watchers/files.js';
 import { DaemonRouting, projectKey } from './routing.js';
 import { projectManagerDisplayEvents } from '../manager/savedEvents.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import { readWatchTasks, TASKS_FILE_NAME } from './watchers/state.js';
+import { readWatchTasks, TASKS_FILE_NAME, type WatchTask } from './watchers/state.js';
 import { isGoalAwaitingHumanMerge } from '../../infra/goals/activity.js';
+
+function readDiagnostic(path: string, error: unknown): SnapshotItem {
+  return { kind: 'display_event', event: { id: JSON.stringify(['diagnostic', path]),
+    message: `${path}: ${sanitizeSensitiveText(getErrorMessage(error))}` } };
+}
 
 /** 読取を consumer の要求に従わせ、全プロジェクトの本文を一度に保持しない。 */
 export async function* conversationProjection(routing: DaemonRouting, files: DaemonDisplayFiles, identity: Exclude<ConversationAssignment, { kind: 'daemon' }>,
@@ -26,7 +31,13 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
         .map((kind) => [kind, configuration.manager?.notifications?.[kind] ?? global.manager?.notifications?.[kind] ?? true])) as Record<'question' | 'awaiting_merge' | 'completed' | 'progress' | 'blocked' | 'custom', boolean>;
       const root = join(directory, '.takt', 'goals');
       reading = join(directory, '.takt', TASKS_FILE_NAME);
-      const tasks = await readWatchTasks(directory);
+      // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+      let tasks: readonly WatchTask[] = [];
+      try { tasks = await readWatchTasks(directory); }
+      catch (error) {
+        if (cancelled()) return;
+        yield readDiagnostic(reading, error);
+      }
       reading = root;
       for (const entry of await listWatchEntries(root)) {
         if (!entry.isDirectory()) continue;
@@ -60,8 +71,7 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
     }
   } catch (error) {
     if (cancelled()) return;
-    yield { kind: 'display_event', event: { id: JSON.stringify(['diagnostic', reading]),
-      message: `${reading}: ${sanitizeSensitiveText(getErrorMessage(error))}` } };
+    yield readDiagnostic(reading, error);
     throw error;
   }
 }
