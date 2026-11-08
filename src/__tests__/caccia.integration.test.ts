@@ -274,10 +274,15 @@ describe('Caccia report lifecycle', () => {
     expect(execution.gitCalls.filter(([, args]) => args[0] === 'push')).toEqual([]);
   });
 
-  it.each([false, true])('retains the saved abort diagnosis when terminal persistence fails after workflow abort: %s', async (workflowAbort) => {
+  it.each([
+    { outcome: 'abort', workflowAbort: false },
+    { outcome: 'abort', workflowAbort: true },
+    { outcome: 'complete', workflowAbort: false },
+    { outcome: 'complete', workflowAbort: true },
+  ] as const)('retains the saved $outcome diagnosis when terminal persistence fails (workflow abort: $workflowAbort)', async ({ outcome, workflowAbort }) => {
     const reason = 'Two remaining threads require a design decision.';
     const terminalError = new Error('Terminal metadata persistence failed');
-    const execution = await runReport(JSON.stringify({ outcome: 'abort', reason, decisions: [
+    const execution = await runReport(JSON.stringify({ outcome, reason, decisions: [
       { thread_id: 'T1', valid: true, reason: 'Fixed.' },
     ] }), { threadCount: 3, workflowAbort, terminalError });
     expect(execution.error).toBeInstanceOf(Error);
@@ -289,7 +294,7 @@ describe('Caccia report lifecycle', () => {
     expect(message).toContain((original as Error).message);
     if (original instanceof AggregateError) expect(original.errors).toContain(terminalError);
     else expect(original).toBe(terminalError);
-    expect(execution.error).toHaveProperty('cause', original);
+    expect((execution.error as Error).cause).toBe(original);
     expect(execution.commitCalls).toBe(0);
     expect(execution.resolveCalls).toBe(0);
     expect(execution.gitCalls.filter(([, args]) => args[0] === 'push')).toEqual([]);
@@ -297,9 +302,11 @@ describe('Caccia report lifecycle', () => {
 
   it.each([
     { report: 'not JSON', removeReportBeforeError: false },
-    { report: JSON.stringify({ outcome: 'complete', reason: '', decisions: [] }), removeReportBeforeError: false },
+    { report: JSON.stringify({ outcome: 'complete', reason: '', decisions: [
+      { thread_id: 'T1', valid: true, reason: 'Fixed.' },
+    ] }), removeReportBeforeError: false },
     { report: JSON.stringify({ outcome: 'abort', reason: 'Unavailable report', decisions: [] }), removeReportBeforeError: true },
-  ])('preserves the original terminal exception without a readable abort report: %j', async ({ report, removeReportBeforeError }) => {
+  ])('preserves the original terminal exception when the report is valid or unreadable: %j', async ({ report, removeReportBeforeError }) => {
     const terminalError = new Error('Terminal metadata persistence failed');
     const execution = await runReport(report, { terminalError, removeReportBeforeError });
     const original = await execution.workflowExecution.catch((error: unknown) => error);

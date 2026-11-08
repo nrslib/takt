@@ -27,7 +27,7 @@ const CODERABBIT_RELEASE_NOTES_END = '<!-- end of auto-generated comment: releas
 
 function escapeGoalBodyMarkers(value: string): string {
   let escaped = value;
-  for (const marker of [TAKT_BODY_START, TAKT_BODY_END]) {
+  for (const marker of [TAKT_BODY_START, TAKT_BODY_END, CODERABBIT_RELEASE_NOTES_START, CODERABBIT_RELEASE_NOTES_END]) {
     escaped = escaped.replaceAll(marker, marker.replaceAll('<', '&lt;').replaceAll('>', '&gt;'));
   }
   return escaped;

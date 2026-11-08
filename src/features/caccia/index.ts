@@ -424,8 +424,10 @@ async function executeCacciaWorkflow(
       // 実行例外をレポートの読込エラーで置き換えない。
       throw error;
     }
-    if (report.outcome === 'abort') {
-      assertCacciaWorkflowComplete(report, options.threadIds, getErrorMessage(error), { cause: error });
+    try {
+      assertCacciaWorkflowComplete(report, options.threadIds);
+    } catch (reportError) {
+      throw new CacciaWorkflowError(`${getErrorMessage(reportError)}; ${getErrorMessage(error)}`, { cause: error });
     }
     throw error;
   }
