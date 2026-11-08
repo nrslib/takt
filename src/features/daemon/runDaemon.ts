@@ -11,6 +11,7 @@ import { ConversationStateStore } from '../../infra/daemon/conversationStateStor
 import { DaemonNotifications } from '../../infra/daemon/notifications.js';
 import { WatchObservations } from './watchers/observations.js';
 import { FileWatchRecords } from '../../infra/daemon/watchRecords.js';
+import { FilePatrolRecords } from '../../infra/daemon/patrolRecords.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { readPrivateFile } from '../../infra/daemon/privateFile.js';
 import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
@@ -153,7 +154,7 @@ export async function startDaemon(options: {
       }, now: Date.now, onError: (_target, error) => reportDaemonError(error) });
     patrols = startManagerPatrols({ targets: () => watchSource.patrols(), goals: (directory) => watchSource.patrolGoalIds(directory),
       pending: (id) => dispatcher.hasPendingPatrol(id),
-      ingress: dispatcher, now: Date.now, onError: reportDaemonError });
+      records: new FilePatrolRecords(directory), ingress: dispatcher, now: Date.now, onError: reportDaemonError });
     slack = await createDaemonSlackPorts({ repositories, configDirectory: directory, input, tokens: options.tokens, signal: options.signal,
       director: { language: global.language ?? 'en', slack: global.director?.slack === undefined ? undefined
         : { channelId: global.director.slack.channel_id, allowedUserIds: global.director.slack.allowed_user_ids } } });
