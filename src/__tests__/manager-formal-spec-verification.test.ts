@@ -24,6 +24,55 @@ function fixture(mode = true) {
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(runFormalSpecVerification).mockResolvedValue(verification); });
 afterEach(() => { vi.restoreAllMocks(); });
+it.each([
+  { ending: 'done', cancelled: false }, { ending: 'throw', cancelled: false }, { ending: 'error', cancelled: false },
+  { ending: 'done', cancelled: true }, { ending: 'throw', cancelled: true }, { ending: 'error', cancelled: true },
+] as const)('flushes generation text before settling after $ending unless cancelled=$cancelled', async ({ ending, cancelled }) => {
+  const f = fixture();
+  const controller = new AbortController();
+  const events: string[] = [];
+  const failure = new Error('generation failed');
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '仕様を作成しています。' } });
+    if (cancelled) controller.abort();
+    if (ending === 'throw') throw failure;
+    return { ...success, status: ending === 'error' ? 'error' : 'done', content: 'generated specification',
+      ...(ending === 'error' ? { error: failure.message } : {}) };
+  });
+  f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null } });
+  const execution = f.executor.execute({ ...f.input, abortSignal: controller.signal,
+    onText: (message) => events.push(message) }).finally(() => { events.push('settled'); });
+  if (ending === 'done' && !cancelled) await execution;
+  else if (ending === 'throw') await expect(execution).rejects.toBe(failure);
+  else await expect(execution).rejects.toThrow();
+  expect(events).toEqual(cancelled ? ['settled'] : ['仕様を作成しています。', 'settled']);
+  expect(f.call).toHaveBeenCalledTimes(ending === 'done' && !cancelled ? 2 : 1);
+  if (ending === 'done' && !cancelled) {
+    expect(runFormalSpecVerification).toHaveBeenCalledOnce();
+    expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledOnce();
+  } else {
+    expect(runFormalSpecVerification).not.toHaveBeenCalled();
+    expect(cleanupFormalSpecVerificationArtifacts).not.toHaveBeenCalled();
+  }
+});
+it('flushes generation and interpretation text separately and suppresses interpretation text after cancellation', async () => {
+  const f = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  const controller = new AbortController();
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '仕様を作成します。' } });
+    return { ...success, content: '```quint\nmodule csv {}\n```' };
+  });
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    expect(onText).toHaveBeenCalledExactlyOnceWith('仕様を作成します。');
+    options.onStream!({ type: 'text', data: { text: '解釈中の未確定本文' } });
+    controller.abort();
+    return { ...success, content: '', structuredOutput: { message: 'result', summary: null } };
+  });
+  await f.executor.execute({ ...f.input, onText, abortSignal: controller.signal });
+  expect(onText).toHaveBeenCalledExactlyOnceWith('仕様を作成します。');
+  expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(verification);
+});
 it('uses the interactive checker and returns its result to the same read-only manager session', async () => {
   const f = fixture();
   f.call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```\n```alloy\nsig CSV {}\n```', sessionId: 'generated' });

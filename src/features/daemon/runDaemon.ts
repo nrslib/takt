@@ -59,8 +59,8 @@ export async function startDaemon(options: {
   const startupFinished = new Promise<void>((resolve) => { finishStartup = resolve; });
   let markStopped!: () => void;
   const stopped = new Promise<void>((resolve) => { markStopped = resolve; });
-  const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version) => {
-    await input.deliver(id, output, version);
+  const conversations = new DaemonConversations(store, routing, notifications, async (id, output, version, signal) => {
+    await input.deliver(id, output, version, signal);
     if (output.kind === 'inquiry') await (await slackReady)?.delivery.deliver(id, output, version);
     if (output.kind === 'result' && id === conversationId({ kind: 'daemon' })) {
       const batch = [];

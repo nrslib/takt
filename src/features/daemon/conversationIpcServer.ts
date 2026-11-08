@@ -73,6 +73,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   let state: { conversationId: string; output: PortOutput; version: OutputVersion } | undefined;
   let activity: { conversationId: string; output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion } | undefined;
   const outputs: Array<{ iterator: ReturnType<typeof conversationTransferFrames>; started: boolean;
+    conversationId: string; transferId: string; signal?: AbortSignal;
     resolve(result: { kind: 'delivered' } | { kind: 'unavailable'; reason: string }): void }> = [];
   const cancelRead = (): void => {
     const old = snapshot;
@@ -125,6 +126,14 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
         if (outputs.length > 0) {
           const current = outputs[0]!;
           const next = await current.iterator.next();
+          if (current.signal?.aborted) {
+            outputs.shift();
+            await current.iterator.return(undefined);
+            if (current.started) await writeConversationFrame(socket, { protocolVersion: 1, type: 'event',
+              conversationId: current.conversationId, output: { kind: 'transfer_error', transferId: current.transferId, code: 'interrupted' } });
+            current.resolve({ kind: 'unavailable', reason: 'interrupted' });
+            continue;
+          }
           if (next.done) { outputs.shift(); current.resolve({ kind: 'delivered' }); }
           else { await writeConversationFrame(socket, next.value.frame); current.started = true; }
           continue;
@@ -184,7 +193,8 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     void pump();
   };
   const delivery: ConversationDelivery = {
-    async deliver(conversationId, value, version) {
+    async deliver(conversationId, value, version, signal) {
+      if (signal?.aborted) return { kind: 'unavailable', reason: 'interrupted' };
       if (socket.destroyed) return { kind: 'unavailable', reason: 'disconnected' };
       if (value.kind === 'snapshot') { beginRead(value.read); return { kind: 'delivered' }; }
       if (value.kind === 'pending' || value.kind === 'running') {
@@ -204,8 +214,9 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
         return { kind: 'unavailable', reason: 'output capacity unavailable' };
       }
       return new Promise((resolve) => {
-        outputs.push({ iterator: conversationTransferFrames(conversationId, { ...version, transferId: randomUUID() },
-          'output', (async function* () { yield value; })()), started: false, resolve });
+        const transferId = randomUUID();
+        outputs.push({ iterator: conversationTransferFrames(conversationId, { ...version, transferId },
+          'output', (async function* () { yield value; })()), started: false, conversationId, transferId, signal, resolve });
         wakeWriter?.();
         void pump();
       });

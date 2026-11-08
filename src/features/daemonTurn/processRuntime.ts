@@ -40,6 +40,9 @@ export function createTurnProcessRuntime(input: {
   let pendingActivity: { turn: TurnIdentity; activity: ConversationActivity } | undefined;
   let sendingActivity = false;
   let activityUnavailable = false;
+  const progressQueue: Array<{ turn: TurnIdentity; message: ConversationProgress; signal: AbortSignal }> = [];
+  let flushingProgress = false;
+  let progressCompletion = Promise.resolve();
   const envelope = () => {
     if (initialized === undefined) throw new Error('Turn process is not initialized');
     return { protocolVersion: TURN_PROTOCOL_VERSION, launchId: initialized.launchId } as const;
@@ -57,6 +60,8 @@ export function createTurnProcessRuntime(input: {
     sendingActivity = true;
     try {
       while (pendingActivity !== undefined) {
+        if (flushingProgress) await progressCompletion;
+        if (pendingActivity === undefined) break;
         const { turn, activity } = pendingActivity;
         pendingActivity = undefined;
         if (active === undefined || !sameTurn(active.turn, turn) || active.controller.signal.aborted || active.outcome !== undefined) continue;
@@ -71,6 +76,22 @@ export function createTurnProcessRuntime(input: {
       pendingActivity = undefined;
       sendingActivity = false;
     }
+  };
+  const flushProgress = async (): Promise<void> => {
+    flushingProgress = true;
+    try {
+      while (progressQueue.length > 0) {
+        const pending = progressQueue[0]!;
+        try {
+          if (!pending.signal.aborted) await send({ ...envelope(), kind: 'turn_progress', turn: pending.turn, message: pending.message });
+        } finally {
+          progressQueue.shift();
+        }
+      }
+    } catch (error) {
+      progressQueue.length = 0;
+      throw error;
+    } finally { flushingProgress = false; }
   };
   const rejectRequests = (error: unknown): void => {
     for (const pending of requests.values()) pending.reject(error);
@@ -130,6 +151,7 @@ export function createTurnProcessRuntime(input: {
           const current = { turn: message.input.turn, controller, completion: Promise.resolve(), outcome: undefined as TurnOutcome | undefined };
           active = current;
           activityUnavailable = false;
+          progressCompletion = Promise.resolve();
           current.completion = Promise.resolve().then(async () => {
             let outcome: TurnOutcome;
             try {
@@ -137,18 +159,29 @@ export function createTurnProcessRuntime(input: {
                 request: (value) => request(current.turn, value),
                 progress: (value) => {
                   if (controller.signal.aborted || current.outcome !== undefined) return;
-                  if (typeof value !== 'string') {
+                  if (typeof value !== 'string' && value.kind !== 'turn_text') {
                     if (activityUnavailable) return;
                     pendingActivity = { turn: current.turn, activity: value };
                     if (!sendingActivity) void flushActivity();
                     return;
                   }
-                  void send({ ...envelope(), kind: 'turn_progress', turn: current.turn,
-                    message: truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value }).catch(input.onFatal);
+                  const message = typeof value === 'string' ? truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value
+                    : { kind: value.kind, message: truncateUtf8(value.message, MAX_PROCESS_PROGRESS_BYTES).value };
+                  if (progressQueue.length >= MAX_PROCESS_PENDING_REQUESTS) {
+                    input.onFatal(new Error('Process progress capacity exceeded'));
+                    return;
+                  }
+                  progressQueue.push({ turn: current.turn, message, signal: controller.signal });
+                  if (!flushingProgress) {
+                    progressCompletion = flushProgress();
+                    void progressCompletion.catch(input.onFatal);
+                  }
                 } });
             } catch {
               outcome = controller.signal.aborted ? { kind: 'interrupted' } : { kind: 'failed', message: 'Turn execution failed' };
             }
+            try { await progressCompletion; }
+            catch { outcome = { kind: 'failed', message: 'Turn progress delivery failed' }; }
             if (controller.signal.aborted && outcome.kind !== 'interrupted') outcome = { kind: 'interrupted' };
             current.outcome = outcome;
             pendingActivity = undefined;

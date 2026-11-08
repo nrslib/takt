@@ -29,6 +29,7 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
+import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
   { command: '/verify', labelKey: 'interactive.commands.verify' }];
@@ -63,6 +64,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayedMessages = useRef(new Set<string>());
   const displayedResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
+  const interruptedTurn = useRef<{ operationId: string; generation?: number } | null>(null);
+  const clock = useRef<{ operationId: string; generation?: number; startedAt: number } | null>(null);
+  const [, tick] = useState(0);
   const lastError = useRef<string | null>(null);
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
   const savingAnswer = useRef<{ operationId: string | null } | null>(null);
@@ -87,9 +91,18 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const state = snapshot.state;
   const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   const running = state?.running;
+  if (running == null) clock.current = null;
+  else if (clock.current?.operationId !== running.operationId || clock.current?.generation !== running.generation) {
+    clock.current = { operationId: running.operationId, generation: running.generation, startedAt: running.startedAt ?? Date.now() };
+  }
+  useEffect(() => {
+    if (running == null) return;
+    const timer = setInterval(() => tick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, [running?.operationId, running?.generation]);
   const currentActivity = snapshot.connection === 'connected' && running?.operationId === activity?.operationId
     && running?.generation === activity?.generation ? activity?.value : undefined;
-  const activityLabel = currentActivity?.kind === 'tool' ? toSingleLineText(currentActivity.tool)
+  const activityLabel = currentActivity?.kind === 'tool' ? toSingleLineText(currentActivity.description ?? currentActivity.tool)
     : currentActivity === undefined ? undefined
     : getLabel(currentActivity.kind === 'thinking' ? 'tui.ui.extendedThinking'
       : currentActivity.kind === 'responding' ? 'tui.ui.responding' : 'tui.ui.thinking', lang);
@@ -202,6 +215,14 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   useEffect(() => {
     mounted.current = true;
+    let observedRunning = client.getSnapshot().state?.running;
+    const unsubscribeState = client.subscribe(() => {
+      const state = client.getSnapshot().state;
+      if (state?.interrupted && state.running === null && observedRunning != null) {
+        interruptedTurn.current = { operationId: observedRunning.operationId, generation: observedRunning.generation };
+      }
+      observedRunning = state?.running;
+    });
     const unsubscribe = client.onOutput((output) => {
       if (output.kind === 'user_message') {
         if (!displayedMessages.current.has(output.operationId)) {
@@ -217,6 +238,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
         if (current.connection === 'connected' && running?.operationId === output.operationId && running.generation === output.generation) {
           setActivity({ operationId: output.operationId, generation: output.generation, value: output.activity });
         }
+      } else if (output.kind === 'turn_text') {
+        const current = client.getSnapshot();
+        const running = current.state?.running;
+        const interrupted = interruptedTurn.current;
+        if (current.connection === 'connected'
+          && !(interrupted?.operationId === output.operationId && interrupted.generation === output.generation)
+          && (running == null || running.operationId === output.operationId && running.generation === output.generation)) {
+          append(output.message, 'assistant');
+        }
       } else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') {
         append(output.message, output.kind === 'reply' ? 'assistant' : 'system');
       }
@@ -226,7 +256,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
         void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
     }, 500);
-    return () => { mounted.current = false; clearInterval(timer); unsubscribe(); client.close(); };
+    return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
   const register = async (revision: number): Promise<void> => {
     const current = client.getSnapshot();
@@ -314,12 +344,27 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
-    abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }); },
+    abortTurn: () => {
+      const running = latest.current.state?.running;
+      if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }, () => {
+        interruptedTurn.current = { operationId: running.operationId, generation: running.generation };
+      });
+    },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
     slashCompletion,
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
+  const baseLabel = activityLabel ?? (state?.queuedMessageCount
+    ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) })
+    : summarizing ? getLabel('manager.summaryWorking', lang)
+    : running?.kind === 'turn' ? getLabel('tui.ui.thinking', lang) : ja ? '処理中' : 'Working');
+  const elapsed = clock.current === null ? undefined
+    : formatElapsedTime(Math.max(0, Math.floor((Date.now() - (running?.startedAt ?? clock.current.startedAt)) / 1000)));
+  const displayedActivity = elapsed === undefined ? baseLabel
+    : truncateStatusText(baseLabel, (columns ?? 80) - 2 - measureWidth(elapsed) - 1);
+  const statusLabel = elapsed === undefined ? displayedActivity
+    : displayedActivity === '' ? elapsed : `${displayedActivity} ${elapsed}`;
   return <Box flexDirection="column">
     <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
@@ -331,7 +376,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
-    <StatusLine busy={busy} label={activityLabel ?? (state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working')} streamed="" />
+    <StatusLine busy={busy} label={statusLabel} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}
