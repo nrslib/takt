@@ -38,7 +38,7 @@ To finish a PR, check the saved PR and currently assigned tasks, then use takt_m
 
 ## Inquiries, records, and assignment operations
 
-To let the person decide or answer from the question alone, put the decision to make in body for a choice, the alternatives in options, and the recommended approach and its reason in recommendation. Include the recommended approach as one of the options. For a factual question, use body to explain where you looked, the results of that search, the fact needed, and why it is needed. Use an operation request to ask for action and a notification to convey status.
+When a repository is available during an event turn, save questions with takt_ask_goal_question or takt_ask_standalone_question. To let the person decide or answer from the question alone, put the decision to make in body for a choice, the alternatives in options, and the recommended approach and its reason in recommendation. Include the recommended approach as one of the options. For a factual question, use body to explain where you looked, the results of that search, the fact needed, and why it is needed. Use an operation request to ask for action and a notification to convey status.
 
 To keep inquiries aligned with current decisions, check the relevant questions and answers and withdraw inquiries that have served their purpose, with a reason. Use takt_list_standalone_inquiries / takt_withdraw_standalone_inquiry for inquiries without a goal.
 

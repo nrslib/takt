@@ -72,7 +72,7 @@ describe('facet include expansion', () => {
     expect(grill).not.toContain('{{include:');
   });
 
-  it.each(['ja', 'en'] as const)('%s: manager provides its own question procedure without shared interview partials', (lang) => {
+  it.each(['ja', 'en'] as const)('%s: manager excludes shared interview partials and ignores their project overrides', (lang) => {
     const managerContext = { projectDir: tempDir, lang };
     const managerFacets = (['policies', 'instructions'] as const).map(kind =>
       resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
@@ -80,24 +80,17 @@ describe('facet include expansion', () => {
       expect(facet).toBeDefined();
     }
     const manager = managerFacets.join('\n\n');
-    const terms = manager.match(/[A-Za-z_]+/g);
-    for (const term of ['takt_ask_goal_question', 'takt_ask_standalone_question', 'body', 'options', 'recommendation', 'message']) {
-      expect(terms).toContain(term);
-    }
-
-    const standaloneGuidance = manager.split('\n\n').find(paragraph => paragraph.includes('takt_ask_standalone_question'));
-    expect(standaloneGuidance).toMatch(/\bcwd\b/u);
-    const cwdConditions = lang === 'ja'
-      ? [/リポジトリ/u, /絶対/u, /パス/u, /イベント/u, /担当/u]
-      : [/\brepository\b/u, /\babsolute\b/u, /\bpath\b/u, /\bevent\b/u, /\bassignment\b/u];
-    for (const condition of cwdConditions) {
-      expect(standaloneGuidance).toMatch(condition);
-    }
+    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
+    mkdirSync(partialsDir, { recursive: true });
 
     for (const name of ['decision-question-priority', 'one-question-interview']) {
       const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
       expect(manager).not.toContain(partial);
+      writeFileSync(join(partialsDir, `${name}.md`), `Project override for ${name}`);
     }
+    const managerWithOverrides = (['policies', 'instructions'] as const).map(kind =>
+      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
+    expect(managerWithOverrides).toEqual(managerFacets);
     expect(manager).not.toContain('{{include:');
   });
 
