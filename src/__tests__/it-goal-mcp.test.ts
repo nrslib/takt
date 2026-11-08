@@ -989,7 +989,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     });
   });
 
-  it.each(['approve', 'default', 'auto root', 'auto linked'])('records PR merge instructions without moving references for %s', async (mode) => {
+  it.each(['approve', 'default', 'auto root', 'auto linked'])('records completion evidence without moving references for %s', async (mode) => {
     configure(mode.startsWith('auto') ? 'auto' : mode === 'default' ? undefined : 'approve');
     const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
@@ -1005,11 +1005,11 @@ describe('local goal integration and inspection through manager MCP', () => {
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved.status).not.toBe('created');
       expect(saved.status).not.toBe('completed');
-      for (const text of [JSON.stringify(saved), firstTextContent(result.content)]) {
-        for (const value of [branch, sha, 'main', summary]) expect(text).toContain(value);
-        expect(text).toContain('takt_merge_goal_pr');
-        if (mode.startsWith('auto')) expect(text).toContain(directory);
-      }
+      expect(saved.completion).toMatchObject({ goalBranch: branch, goalSha: sha, targetBranch: 'main', summary });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+        goal: { id: goalId, status: saved.status }, completion: saved.completion,
+      });
+      if (mode.startsWith('auto')) expect(saved.completion?.worktrees).toContain(directory);
       expect(git(cwd, ['show-ref', '--heads'])).toBe(refs);
       expect(humanSnapshot(directory)).toEqual(human);
     });
@@ -1019,7 +1019,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     { mode: 'auto', location: 'linked' },
     { mode: 'approve', location: 'linked' },
     { mode: 'approve', location: 'root' },
-  ] as const)('returns PR preparation instructions without changing the $location target worktree in $mode mode', async ({ mode, location }) => {
+  ] as const)('returns completion evidence without changing the $location target worktree in $mode mode', async ({ mode, location }) => {
     configure(mode);
     const sha = await commitFiles(branch, { 'result.txt': 'ready\n', 'src/a.ts': 'new one\nnew two\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
@@ -1040,9 +1040,7 @@ describe('local goal integration and inspection through manager MCP', () => {
         files: [{ path: 'result.txt', additions: 1, deletions: 0 }, { path: 'src/a.ts', additions: 2, deletions: 1 }],
         truncated: false, totalsTruncated: false,
       });
-      expect(completion.instructions).toHaveLength(2);
-      expect(completion.instructions.join('\n')).toContain('takt_merge_goal_pr');
-      expect(completion.instructions.join('\n')).not.toContain('git merge');
+      expect(completion.goalSha).toBe(sha);
       expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(originalBranch);
       expect(git(directory, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
       expect(existsSync(join(directory, 'result.txt'))).toBe(false);
@@ -1100,9 +1098,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       }
       expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
       expect(completion.worktrees).toBeUndefined();
-      expect(completion.instructions.join('\n')).toContain('takt_complete_goal');
-      expect(completion.instructions.join('\n')).toContain(sha);
-      expect(completion.instructions.join('\n')).not.toContain('git merge');
+      expect(completion.goalSha).toBe(sha);
     });
   });
 
@@ -2088,7 +2084,7 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
-  it.each(['push', 'PR creation'] as const)('saves local merge instructions after %s failure and recovers the PR on retry', async (failure) => {
+  it.each(['push', 'PR creation'] as const)('saves completion evidence after %s failure and recovers the PR on retry', async (failure) => {
     if (failure === 'push') git(cwd, ['remote', 'set-url', '--push', 'origin', join(cwd, 'missing-origin.git')]);
     else vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
     await withServer(cwd, 'manager', async (client) => {
@@ -2097,7 +2093,6 @@ describe('goal PR publication and merge through manager MCP', () => {
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, humanChecks } });
       expect(saved.pullRequest).toBeUndefined();
-      expect(saved.completion?.instructions.some((line) => line.includes(sha))).toBe(true);
       expect(saved.workLog.at(-1)?.summary).toMatch(/PR.*failed/i);
       expect(prs).toEqual([]);
       if (failure === 'push') {
@@ -2168,7 +2163,7 @@ describe('goal PR publication and merge through manager MCP', () => {
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved.status).toBe('awaiting_merge');
       expect(saved.pullRequest).toBeUndefined();
-      expect(saved.completion?.instructions.some((line) => line.includes(sha))).toBe(true);
+      expect(saved.completion?.goalSha).toBe(sha);
       expect(saved.workLog.at(-1)?.summary).toMatch(/PR/);
       expect(githubPr.findExistingPr).not.toHaveBeenCalled();
       expect(githubPr.createPullRequest).not.toHaveBeenCalled();

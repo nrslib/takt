@@ -1014,13 +1014,12 @@ it.each(['before final check', 'after final check'])(
   },
 );
 
-it('saves PR recovery instructions and the failure reason when a PR is unavailable, then recovers on retry', async () => {
+it('saves completion evidence and the failure reason when a PR is unavailable, then recovers on retry', async () => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('origin unavailable'));
   const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(result).toMatchObject({ status: 'awaiting_merge', goal });
   expect(goal.pullRequest).toBeUndefined();
-  expect(goal.completion?.instructions.join('\n')).toContain('takt_merge_goal_pr');
-  expect(goal.completion?.instructions.join('\n')).not.toContain('git merge');
+  expect(goal.completion?.goalSha).toBe(sourceSha);
   expect(goal.workLog.at(-1)?.summary).toContain('origin unavailable');
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
   const completion = structuredClone(goal.completion);
