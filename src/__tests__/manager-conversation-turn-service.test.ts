@@ -594,7 +594,7 @@ it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s 
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [merging.id, waiting.id] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(doubles.readTasks).toHaveBeenCalledExactlyOnceWith('/repository');
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
   doubles.readTasks.mockResolvedValue([{ goal_id: merging.id, merge_task: true, status: 'completed' }]);
   f.execute.mockClear();
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
@@ -626,7 +626,7 @@ it('continues patrolling ordinary active goals while excluding awaiting-merge go
 
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
   expect(doubles.notify).not.toHaveBeenCalled();
 });
 
