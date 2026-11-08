@@ -8,33 +8,51 @@ export interface ManagerPatrolTarget {
   intervalSeconds: number;
 }
 
-/** 予定はメモリ内だけに持ち、停止中の周期を再生しない。 */
+export interface PatrolRecordStore {
+  read(repositoryDirectory: string): Promise<number | undefined>;
+  write(repositoryDirectory: string, lastQueued: number): Promise<void>;
+}
+
+/** 前回受付時刻を保存・復元し、停止中に過ぎた周期はまとめて再生しない。 */
 export function startManagerPatrols(dependencies: {
   targets(): Promise<readonly ManagerPatrolTarget[]>;
   goals(repositoryDirectory: string): Promise<readonly string[]>;
   pending(conversationId: string): boolean;
   ingress: Pick<DaemonIngress, 'accept'>;
+  records: PatrolRecordStore;
   now(): number;
   onError(error: unknown): void;
 }): WatchLoop {
-  const schedules = new Map<string, { interval: number; due: number; lastQueued: number }>();
+  const schedules = new Map<string, { interval: number; due: number; lastQueued: number | undefined }>();
   let nextDelay: number = WATCH_INTERVALS.files;
   return startWatchLoop(() => nextDelay, async (signal) => {
-    const observedAt = dependencies.now();
     const targets = await dependencies.targets();
     const present = new Set(targets.map((target) => target.repositoryDirectory));
     for (const key of schedules.keys()) if (!present.has(key)) schedules.delete(key);
-    // 同じ workspace のリポジトリが同時に期限を迎えても、毎回同じ一つを優先しない。
-    const ordered = [...targets].sort((left, right) => (schedules.get(left.repositoryDirectory)?.lastQueued ?? 0)
-      - (schedules.get(right.repositoryDirectory)?.lastQueued ?? 0));
-    for (const target of ordered) {
+    for (const target of targets) {
       signal.throwIfAborted();
       const interval = target.intervalSeconds * 1000;
-      let schedule = schedules.get(target.repositoryDirectory);
-      if (schedule === undefined || schedule.interval !== interval) {
-        schedule = { interval, due: observedAt + interval, lastQueued: 0 };
-        schedules.set(target.repositoryDirectory, schedule);
+      const schedule = schedules.get(target.repositoryDirectory);
+      if (schedule === undefined) {
+        let lastQueued: number | undefined;
+        try { lastQueued = await dependencies.records.read(target.repositoryDirectory); }
+        catch (error) { dependencies.onError(error); }
+        const restoredAt = dependencies.now();
+        if (lastQueued !== undefined) lastQueued = Math.min(lastQueued, restoredAt);
+        schedules.set(target.repositoryDirectory, { interval, lastQueued,
+          due: lastQueued === undefined ? restoredAt : lastQueued + interval });
+      } else if (schedule.interval !== interval) {
+        schedule.interval = interval;
+        schedule.due = schedule.lastQueued === undefined ? dependencies.now() : schedule.lastQueued + interval;
       }
+    }
+    // 同じ workspace のリポジトリが同時に期限を迎えても、毎回同じ一つを優先しない。
+    const ordered = [...targets].sort((left, right) => (schedules.get(left.repositoryDirectory)!.lastQueued ?? 0)
+      - (schedules.get(right.repositoryDirectory)!.lastQueued ?? 0));
+    for (const target of ordered) {
+      signal.throwIfAborted();
+      const schedule = schedules.get(target.repositoryDirectory)!;
+      const interval = schedule.interval;
       if (dependencies.now() < schedule.due) continue;
       // 実行中・待機中の見回りがあれば、その周期は飛ばす。
       schedule.due = dependencies.now() + interval;
@@ -47,7 +65,12 @@ export function startManagerPatrols(dependencies: {
         conversationId: target.conversationId, source: 'daemon', occurredAt: new Date(dependencies.now()).toISOString(),
         event: { kind: 'patrol', repositoryDirectory: target.repositoryDirectory, goalIds: [...goalIds] } });
       if (admission.kind === 'rejected') dependencies.onError(new Error(`Patrol admission rejected: ${admission.reason}`));
-      else schedule.lastQueued = dependencies.now();
+      else {
+        schedule.lastQueued = dependencies.now();
+        schedule.due = schedule.lastQueued + interval;
+        try { await dependencies.records.write(target.repositoryDirectory, schedule.lastQueued); }
+        catch (error) { dependencies.onError(error); }
+      }
     }
     nextDelay = Math.max(1, Math.min(WATCH_INTERVALS.files,
       ...[...schedules.values()].map((schedule) => schedule.due - dependencies.now())));
