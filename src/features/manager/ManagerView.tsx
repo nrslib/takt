@@ -335,7 +335,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const hintSeparator = selectingSummary ? ' / ' : '  ';
   const hintItems = inputHint.split(hintSeparator);
   const statusDetails = getLabel('manager.counts', lang, {
-    goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length),
+    goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && !goal.awaitingHumanMerge).length),
+    awaiting: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && goal.awaitingHumanMerge).length),
+    questions: String(questions.length),
   });
   const statusWidth = Math.max(1, columns ?? 80);
   const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);

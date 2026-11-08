@@ -13,7 +13,7 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
-import { GoalSchema } from '../infra/goals/schema.js';
+import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 let directory: string;
@@ -170,4 +170,50 @@ it.each([true, false])('observes runnable awaiting-merge work only for merge_tas
   expect(launches).toHaveLength(mergeTask ? 1 : 0);
   if (mergeTask) expect(launches[0]).toMatchObject({ repositoryDirectory: directory, runnablePending: true, autoRun: true });
   expect(errors).not.toHaveBeenCalled();
+});
+
+it('patrols linked pending and running merge work until only human merge waits remain', async () => {
+  const base = goalRecord();
+  const completion = { goalBranch: base.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
+  const goals: Goal[] = Array.from({ length: 7 }, () => ({ ...base, id: randomUUID(), status: 'awaiting_merge', completion }));
+  goals[5]!.executionStatus = 'paused';
+  goals[6]!.executionStatus = 'aborted';
+  for (const goal of goals) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const tasks = goals.map((goal, index) => ({ name: `task-${index}`, goal_id: goal.id, merge_task: index !== 3,
+    status: index === 0 || index >= 3 ? 'pending' : index === 1 ? 'running' : 'completed',
+    created_at: '2026-11-06T00:00:00.000Z', started_at: null, completed_at: null }));
+  tasks[4]!.goal_id = randomUUID();
+  const tasksPath = join(directory, '.takt', 'tasks.yaml');
+  await writeFile(tasksPath, JSON.stringify({ tasks }));
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  expect([...(await source.patrolGoalIds(directory))].sort()).toEqual([goals[0]!.id, goals[1]!.id].sort());
+  await writeFile(tasksPath, JSON.stringify({ tasks: tasks.map((task) => ({ ...task, status: 'completed' })) }));
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('reports corrupt tasks and patrols ordinary active goals while excluding awaiting-merge goals', async () => {
+  const active = goalRecord();
+  const waiting: Goal = { ...active, id: randomUUID(), status: 'awaiting_merge', completion: {
+    goalBranch: active.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  for (const goal of [active, waiting]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  await writeFile(join(directory, '.takt', 'tasks.yaml'), 'tasks: [');
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+
+  expect(await source.patrolGoalIds(directory)).toEqual([active.id]);
+  expect(errors).toHaveBeenCalledOnce();
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
 });

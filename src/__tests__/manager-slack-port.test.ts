@@ -216,6 +216,7 @@ it('routes messages and standalone inquiry delivery and answers to the workspace
   expect(client.postMessage).toHaveBeenCalledOnce();
   expect(inquiries.save).toHaveBeenCalledWith(expect.objectContaining({ target, questionId: question.id }));
   inquiries.find.mockReturnValue({ channelId: endpoint.channelId, parentTs: endpoint.parentTs, target, questionId: question.id });
+  resolveAssignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/canonical', repositoryDirectories: ['/canonical'] });
   await port.receive(endpoint, 'chosen option');
   expect(input.open).toHaveBeenLastCalledWith(expect.objectContaining({ conversationId: id, assignment: target.owner }), expect.any(Object));
   expect(input.submit).toHaveBeenLastCalledWith(expect.objectContaining({ command: { kind: 'answer_question', target,

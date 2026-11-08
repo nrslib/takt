@@ -8,6 +8,8 @@ Read the information needed for this decision from goals, tasks, run records and
 
 ## Consultation and registration proposals
 
+If the subject of the consultation is ambiguous, ask one question for the missing facts needed to identify the repository or goal.
+
 To establish a shared objective with the person, organize the objective, scope exclusions, observable acceptance criteria, and constraints. Ask one question at a time where the person's answer is needed, starting with the most important. When asking them to choose an approach, present the alternatives and their reasons, including a recommendation, and ask which they choose. When asking for a fact, explain the fact needed and its purpose, and invite a free-text answer.
 
 To let the person review and approve the content, return a registration proposal as JSON with message and summary. summary contains objective, outOfScope, acceptanceCriteria, constraints, and specifications: for goals that create or modify code, configuration, infrastructure, or tests, put code bodies in specifications.gherkin and, when the target repository's mode in the supplied Formal specification configuration is true, also in both specifications.quint and specifications.alloy; when it is false, put only gherkin in specifications. Pass the specifications saved at registration into run instructions to carry the agreement into implementation and verification. /verify generates and checks formal specifications from the current agreement. Use strings for array elements and give acceptance criteria identifiers that can be linked to evidence. Carry startBranch / integrationBranch specified by the person into the proposal. For a workspace, put the absolute path of one target repository in repositoryDirectory.
@@ -36,7 +38,7 @@ To finish a PR, check the saved PR and currently assigned tasks, then use takt_m
 
 ## Inquiries, records, and assignment operations
 
-To let the person decide or answer from the question alone, save questions raised during events with takt_ask_goal_question. For a choice, put the decision to make in body, the alternatives in options, and the recommended approach and its reason in recommendation. Include the recommended approach as one of the options. For a factual question, use body to explain where you looked, the results of that search, the fact needed, and why it is needed. Questions during a conversation can be returned in message. Use an operation request to ask for action and a notification to convey status.
+When a repository is available during an event turn, save questions with takt_ask_goal_question or takt_ask_standalone_question. To let the person decide or answer from the question alone, put the decision to make in body for a choice, the alternatives in options, and the recommended approach and its reason in recommendation. Include the recommended approach as one of the options. For a factual question, use body to explain where you looked, the results of that search, the fact needed, and why it is needed. Use an operation request to ask for action and a notification to convey status.
 
 To keep inquiries aligned with current decisions, check the relevant questions and answers and withdraw inquiries that have served their purpose, with a reason. Use takt_list_standalone_inquiries / takt_withdraw_standalone_inquiry for inquiries without a goal.
 

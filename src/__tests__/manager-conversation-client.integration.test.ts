@@ -90,6 +90,33 @@ beforeEach(async () => {
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
 
+it('refreshes the human merge wait classification through IPC when finishing work starts and ends', async () => {
+  const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
+    goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  saveGoal(goal);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const check = async (awaiting: boolean) => {
+    await waitFor(() => {
+      expect(displayedGoals(client)).toMatchObject([{ id: goal.id, awaitingHumanMerge: awaiting }]);
+      expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', {
+        goals: awaiting ? '0' : '1', awaiting: awaiting ? '1' : '0', questions: '0',
+      }));
+    });
+  };
+  await check(true);
+  for (const status of ['pending', 'running', 'completed']) {
+    writeFileSync(join(repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{
+      name: 'finishing-work', goal_id: goal.id, merge_task: true, status,
+      created_at: '2026-11-08T00:00:00.000Z', started_at: null, completed_at: null,
+    }] }));
+    await client.refresh(); await complete();
+    await check(status === 'completed');
+  }
+});
+
 it('delivers Bash descriptions and ordered text through daemon IPC without saving transient output or sending it to Slack', async () => {
   const useTool = deferred<void>();
   const respond = deferred<void>();
@@ -1131,7 +1158,7 @@ it('retains the corrupt-record diagnostic and incomplete status until a repaired
   await client.refresh(); await complete();
   expect(client.getSnapshot().items.filter((item) => item.kind === 'goal')).toEqual([
     { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-      executionStatus: goal.executionStatus, repositoryDirectory: repository } },
+      executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository } },
   ]);
   expect(client.getSnapshot().items.some((item) => item.kind === 'display_event' && item.event.message.includes(file))).toBe(false);
 });
@@ -1158,11 +1185,11 @@ it.each([7, 9])('restores the exact IDs, order and objectives of %i large goals 
   for (const goal of [...goals].reverse()) saveGoal(goal);
   await client.connect(); await complete();
   expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []))
-    .toEqual(goals.map(({ id, objective, status, executionStatus }) => ({ id, objective, status, executionStatus, repositoryDirectory: repository })));
+    .toEqual(goals.map(({ id, objective, status, executionStatus }) => ({ id, objective, status, executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository })));
   const { selection } = await displayedSelection('\x07', 'goal');
   if (selection.kind !== 'goal') throw new Error('Expected goal selection');
   expect(selection.candidates).toEqual(goals.map(({ id, objective, status, executionStatus }) => ({
-    id, objective, status, executionStatus, repositoryDirectory: repository,
+    id, objective, status, executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository,
   })));
 });
 
@@ -1332,7 +1359,7 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect(inquiries).toHaveLength(30);
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) })];
+    getLabel('manager.counts', 'en', { goals: String(goals.length), awaiting: '0', questions: String(inquiries.length) })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   const bytes = observation.bytes;
 
@@ -1381,7 +1408,7 @@ it('[SCN-SNAP-DELTA-P1] hides appended work logs while displaying the changed go
 
   expect.soft(received.items.filter((item) => item.kind !== 'state')).toEqual([
     { kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
-      executionStatus: 'paused', repositoryDirectory: repository } },
+      executionStatus: 'paused', awaitingHumanMerge: false, repositoryDirectory: repository } },
     { kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
       message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } },
   ]);
@@ -1416,7 +1443,7 @@ it('[SCN-SNAP-DELTA-P2] updates a paused goal and removes its answered inquiry w
   await vi.waitFor(() => {
     expect(app.lastFrame()).not.toContain('Snapshot goal 1');
     expect(app.lastFrame()).toContain('Snapshot goal 2');
-    expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', questions: '1' }));
+    expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '1' }));
   });
   app.stdin.write('\x1b[27u');
   await vi.waitFor(() => expect(app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.answer', 'en')));
@@ -1454,7 +1481,7 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
     const received = connections[1]!.snapshots[0]!;
     expect(received.items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual([goal!.id, added.id]);
     expect.soft(received.items.map((item) => item.kind).filter((kind) => !['state', 'assignment', 'goal', 'inquiry'].includes(kind))).toEqual([]);
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', questions: '1' })));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '1' })));
     expect(app.lastFrame()).not.toContain(duringDisconnect.summary);
     expect(app.lastFrame()).not.toContain(disconnectedNotification.body);
     const notification = { id: randomUUID(), recordedAt: new Date().toISOString(),
@@ -1542,7 +1569,7 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   await client.connect(); await complete();
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: '2', questions: '2' })];
+    getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '2' })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
   await openSnapshotMenu(app, 'answer', connections[0]!);
@@ -1609,7 +1636,7 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   const received = await refreshSnapshot(client, connections[0]!);
 
   expect(received.items).toContainEqual({ kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
-    executionStatus: 'paused', repositoryDirectory: repository } });
+    executionStatus: 'paused', awaitingHumanMerge: false, repositoryDirectory: repository } });
   expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
     message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } });
   expect(displayedInquiries(client)).toEqual([previousInquiries[1]]);

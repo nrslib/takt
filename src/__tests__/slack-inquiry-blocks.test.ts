@@ -26,6 +26,16 @@ it('creates explicit completed and unable reports for operation requests', () =>
   ]);
 });
 
+it('shows a recommendation and its reason with the choices', () => {
+  const recommendation = 'Export is safer because it preserves the original data.';
+  const target = { ...approval(), question: createInquiry({ body: 'Choose a format', options: ['Export', 'Import'], recommendation }) };
+  const result = buildSlackInquiry(target, assignment, 'en');
+  const texts = result.blocks.filter((block): block is SectionBlock => block.type === 'section').map(({ text }) => text!.text);
+  expect(texts.some((text) => text.includes(recommendation))).toBe(true);
+  expect(texts).toContain('1. Export');
+  expect(texts).toContain('2. Import');
+});
+
 it('distinguishes choices with the same long prefix using their number and full displayed text', () => {
   const options = [`${'A'.repeat(75)}東`, `${'A'.repeat(75)}西`];
   const result = buildSlackInquiry({ ...approval(), question: createInquiry({ body: 'Q', options }) }, assignment, 'ja');

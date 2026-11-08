@@ -24,7 +24,8 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+const doubles = vi.hoisted(() => ({ readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
@@ -102,6 +103,7 @@ function conversationFixture() {
 afterEach(() => { vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.readTasks.mockResolvedValue([]);
   doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
@@ -584,6 +586,25 @@ it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not
   expect(f.resolve).not.toHaveBeenCalled();
 });
 
+it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
+  const f = fixture();
+  const merging = { ...goalRecord(), status: 'awaiting_merge' };
+  const waiting = { ...merging, id: randomUUID() };
+  doubles.getGoal.mockImplementation(async (id: string) => id === merging.id ? merging : waiting);
+  doubles.readTasks.mockResolvedValue([
+    { goal_id: merging.id, merge_task: true, status },
+    { goal_id: waiting.id, status: 'running' },
+  ]);
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [merging.id, waiting.id] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(doubles.readTasks).toHaveBeenCalledExactlyOnceWith('/repository');
+  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
+  doubles.readTasks.mockResolvedValue([{ goal_id: merging.id, merge_task: true, status: 'completed' }]);
+  f.execute.mockClear();
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
 it('delivers pr_conflicting for an awaiting-merge goal to the manager', async () => {
   const f = fixture();
   const goal = { ...goalRecord(), status: 'awaiting_merge' };
@@ -597,6 +618,39 @@ it('delivers pr_conflicting for an awaiting-merge goal to the manager', async ()
   expect(f.execute).toHaveBeenCalledOnce();
   expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
   expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
+});
+
+it('continues patrolling ordinary active goals while excluding awaiting-merge goals when tasks cannot be read', async () => {
+  const f = fixture();
+  const active = goalRecord();
+  const waiting = { ...active, id: randomUUID(), status: 'awaiting_merge' };
+  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : waiting);
+  doubles.readTasks.mockRejectedValue(new Error('Invalid tasks YAML'));
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, waiting.id] };
+
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it('interrupts without reporting or executing when a task read fails after cancellation', async () => {
+  const f = fixture();
+  const reading = deferred<void>();
+  const tasks = deferred<never>();
+  doubles.readTasks.mockImplementation(() => { reading.resolve(); return tasks.promise; });
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] };
+
+  const outcome = f.service.execute(f.input, f.io);
+  await reading.promise;
+  f.controller.abort();
+  tasks.reject(new Error('Invalid tasks YAML'));
+
+  expect(await outcome).toMatchObject({ kind: 'interrupted' });
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(f.io.progress).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
 });
 
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {

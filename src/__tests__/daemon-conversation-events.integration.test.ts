@@ -43,9 +43,13 @@ import type { PreparedConversationRuntime } from '../features/manager/conversati
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { WatchChecks } from '../features/daemon/watchers/checks.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
+import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
 import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 
+const directorSpeaker = `Speaker: ${JSON.stringify({ namespace: 'agent', id: 'director' })}`;
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
   get initializingCount() { return ipc.initializingCount; }, stopAccepting() {}, async close() {},
@@ -77,6 +81,427 @@ async function fixture(seed?: (directory: string, repository: string) => Promise
   const post = (name: string, lane: 'human' | 'other' = 'human') => daemon.dispatcher.accept(input(name, id, lane));
   return { ...daemon, directory, repository, runner, id, opened, post, outputs };
 }
+
+it.each([
+  { source: 'tui' as const, body: 'Which goal should handle this event?', text: 'Use the export goal' },
+  { source: 'tui' as const, body: 'Q'.repeat(128 * 1024), text: 'Use the export goal' },
+  { source: 'tui' as const, body: 'Q'.repeat(128 * 1024), text: 'A'.repeat(128 * 1024) },
+  { source: 'slack' as const, body: '問'.repeat(128 * 1024), text: 'Use the export goal' },
+  { source: 'slack' as const, body: '問'.repeat(128 * 1024), text: '答'.repeat(128 * 1024) },
+])('delivers a saved standalone $source answer through the inbox, event store and IPC to the manager executor ($body.length/$text.length characters)', async ({ source, body, text }) => {
+  const f = await fixture();
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const owner = { kind: 'repository' as const, repositoryDirectory: f.repository };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const question = await store.create({ body,
+    operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } });
+  const before = await f.conversations.snapshot(f.id);
+  const pending = [];
+  for await (const item of before.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
+  before.complete();
+  expect(pending).toContain(question.id);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'answer-session', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'standalone-answer', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>, turnInput = call.input) => {
+    const outcome = await service.execute(turnInput, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+
+  accepted(await f.dispatcher.accept({ ...input('standalone-answer', f.id), source,
+    event: { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text }, source } } }));
+  expect(await perform(await f.runner.started(1))).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+  expect(execute).not.toHaveBeenCalled();
+  const saved = await store.get(question.id);
+  expect(saved).toMatchObject({ status: 'answered', answer: { text, source } });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(1);
+  const errors = vi.fn();
+  const watcher = startDirectoryWatcher({
+    targets: async () => [{ targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' }],
+    changed: (change) => receiveInboxChange(change, files, f.conversations, f.dispatcher), onError: errors,
+  });
+  cleanups.push(watcher.close);
+  await watcher.drain();
+  expect(errors).not.toHaveBeenCalled();
+  await watcher.close();
+  const turn = await f.runner.started(2);
+  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
+  expect(turn.input.event.event).toEqual(expected);
+  const restored = await new FileEventStore(f.directory).restore();
+  const storedEvents = [];
+  for await (const record of restored.pending) storedEvents.push(record.event.event);
+  expect(storedEvents).toContainEqual(expected);
+  const message = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'standalone-answer',
+    kind: 'start_turn', input: turn.input })), 'standalone-answer');
+  if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
+  expect(await perform(turn, message.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Answer received' } });
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
+  expect(await readdir(inbox)).toEqual([]);
+  const after = await f.conversations.snapshot(f.id);
+  const remaining = [];
+  for await (const item of after.items) if (item.kind === 'inquiry') remaining.push(item.inquiry.question.id);
+  after.complete();
+  expect(remaining).not.toContain(question.id);
+});
+
+it.each([
+  { publication: 'saved' as const, body: 'Q'.repeat(128 * 1024), text: 'Export' },
+  { publication: 'saved' as const, body: 'Q'.repeat(128 * 1024), text: 'A'.repeat(128 * 1024) },
+  { publication: 'pending' as const, body: 'Which goal?', text: 'Export' },
+  { publication: 'pending' as const, body: '問'.repeat(128 * 1024), text: 'Export' },
+])('delivers a $publication repository answer across daemon startup ($body.length/$text.length characters)', async ({ publication, body, text }) => {
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const f = await fixture(async (directory, repository) => {
+    const store = new StandaloneInquiryStore(directory, { kind: 'repository', repositoryDirectory: repository });
+    const question = await store.create({ body });
+    const saved = await store.answerForPublication(question.id, { text }, 'tui');
+    if (publication === 'saved') {
+      saveManagerEvent(repository, { kind: 'answer', goalId: null, questionId: question.id, questionBody: body, answer: saved.answer! });
+      await store.markAnswerPublished(question.id);
+    }
+  });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const errors = vi.fn();
+  const watcher = startDirectoryWatcher({
+    targets: async () => [{ targetId: f.repository, conversationId: f.id, kind: 'inbox', directory: inbox, generation: 'answer' }],
+    changed: (change) => receiveInboxChange(change, files, f.conversations, f.dispatcher), onError: errors,
+  });
+  cleanups.push(watcher.close);
+  await watcher.drain();
+  expect(errors).not.toHaveBeenCalled();
+  await watcher.close();
+  const [question] = await new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository }).list();
+  expect(question!.answerPublicationPending).toBeUndefined();
+  const turn = await f.runner.started(1);
+  const expected = inquiryAnswerMessage(question!.id, question!.answer!, body);
+  expect(turn.input.event.event).toEqual({ kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }), text: expected });
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'startup-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'startup-answer', executor: { execute } };
+  }, async close() {} });
+  const message = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'startup-answer',
+    kind: 'start_turn', input: turn.input })), 'startup-answer');
+  if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
+  const outcome = await service.execute(message.input, { signal: turn.signal, progress() {},
+    request: (request) => f.dispatcher.request(turn.turn, request, turn.signal) });
+  await f.runner.finish(turn, outcome);
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected, directorSpeaker].join('\n\n'));
+  expect(await readdir(inbox)).toEqual([]);
+});
+
+it.each([
+  { source: 'tui' as const, restart: false },
+  { source: 'slack' as const, restart: false },
+  { source: 'tui' as const, restart: true },
+  { source: 'slack' as const, restart: true },
+])('deduplicates a repository $source answer published before its receipt is recorded (restart=$restart)', async ({ source, restart }) => {
+  const watchers = vi.spyOn(watcherModule, 'startDaemonWatchers').mockImplementation(() => ({
+    changed() {}, async drain() {}, async close() {},
+  }));
+  let f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  const owner = { kind: 'repository' as const, repositoryDirectory: f.repository };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const questionInput = { body: 'Which goal?',
+    operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } };
+  const question = await store.create(questionInput);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'answer-session', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'answer-retry', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>) => {
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const target = { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' };
+  const receive = async (name: string) => {
+    const receipts = vi.spyOn(f.dispatcher, 'accept');
+    await receiveInboxChange({ target, path: join(inbox, name), removed: false, generation: 'answer', value: {} },
+      files, f.conversations, f.dispatcher);
+    const receipt = await receipts.mock.results.at(-1)!.value;
+    receipts.mockRestore();
+    return receipt;
+  };
+  const finishAnswers = async () => {
+    await f.dispatcher.drain();
+    for (const call of f.runner.calls) if (!call.finished) await perform(call);
+    await f.dispatcher.drain();
+  };
+  const reached = deferred<void>();
+  const release = deferred<void>();
+  const mark = vi.spyOn(StandaloneInquiryStore.prototype, 'markAnswerPublished').mockImplementationOnce(async () => {
+    reached.resolve();
+    await release.promise;
+    if (restart) throw new Error('Publication receipt interrupted');
+    return store.markAnswerPublished(question.id);
+  });
+  accepted(await f.dispatcher.accept({ ...input('answer-before-receipt', f.id), source,
+    event: { kind: 'inquiry_answer', command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text: 'Export' }, source } } }));
+  const answering = perform(await f.runner.started(1));
+  try {
+    await reached.promise;
+    expect((await store.get(question.id)).answerPublicationPending).toBe(true);
+    const [original] = await readdir(inbox);
+    expect(original).toBeDefined();
+    const firstReceipt = await receive(original!);
+    if (restart) {
+      release.resolve();
+      expect(await answering).toMatchObject({ kind: 'completed', result: { kind: 'error', answerSaved: true } });
+      await finishAnswers();
+      expect(execute).toHaveBeenCalledOnce();
+      await f.close();
+      f = await fixture();
+    }
+    await watchers.mock.calls.at(-1)![0].source.inquiries();
+    const [retry] = await readdir(inbox);
+    expect(retry).toBeDefined();
+    expect(retry).not.toBe(original);
+    const retryReceipt = await receive(retry!);
+    if (!restart) {
+      release.resolve();
+      expect(await answering).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+    }
+    await finishAnswers();
+    const saved = await store.get(question.id);
+    const expected = [inquiryAnswerMessage(question.id, saved.answer!, question.body), directorSpeaker].join('\n\n');
+    expect.soft(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected]);
+    expect.soft(retryReceipt).toEqual(firstReceipt);
+    expect(saved.answerPublicationPending).toBeUndefined();
+    expect(await readdir(inbox)).toEqual([]);
+
+    const other = await store.create(questionInput);
+    expect(other.id).not.toBe(question.id);
+    const answered = await store.answerForPublication(other.id, { text: 'Export' }, source);
+    await watchers.mock.calls.at(-1)![0].source.inquiries();
+    const [next] = await readdir(inbox);
+    expect(await receive(next!)).not.toEqual(firstReceipt);
+    await finishAnswers();
+    expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected,
+      [inquiryAnswerMessage(other.id, answered.answer!, other.body), directorSpeaker].join('\n\n')]);
+  } finally {
+    release.resolve();
+    await answering;
+    mark.mockRestore();
+  }
+});
+
+it('retains a standalone answer after storage rejection and consumes it after successful admission', async () => {
+  const f = await fixture();
+  const store = new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository });
+  const question = await store.create({ body: 'Q'.repeat(128 * 1024) });
+  const answered = await store.answer(question.id, { text: 'A'.repeat(128 * 1024) });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: null, questionId: question.id, questionBody: question.body, answer: answered.answer! });
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  const path = join(inbox, (await readdir(inbox))[0]!);
+  const change = { target: { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' },
+    path, removed: false, generation: 'answer', value: {} };
+  const accept = vi.fn<typeof f.dispatcher.accept>().mockResolvedValueOnce({ kind: 'rejected', reason: 'storage' })
+    .mockImplementation((event) => f.dispatcher.accept(event));
+  await expect(receiveInboxChange(change, files, f.conversations, { accept })).rejects.toThrow();
+  expect(await readFile(path, 'utf8')).toContain(question.id);
+  expect(f.runner.calls).toHaveLength(0);
+  await receiveInboxChange(change, files, f.conversations, { accept });
+  expect(accept.mock.calls[1]![0]).toEqual(accept.mock.calls[0]![0]);
+  const turn = await f.runner.started(1);
+  expect(turn.input.event.event).toMatchObject({ kind: 'director_message', text: inquiryAnswerMessage(question.id, answered.answer!, question.body) });
+  await f.runner.finish(turn);
+  expect(f.runner.calls).toHaveLength(1);
+  await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([
+  { source: 'tui' as const, empty: false, operation: true },
+  { source: 'slack' as const, empty: false, operation: true },
+  { source: 'tui' as const, empty: true, operation: true },
+  { source: 'slack' as const, empty: true, operation: false },
+  { source: 'tui' as const, empty: true, operation: true, large: true },
+])('delivers a workspace $source answer after assignment removal (empty=$empty, operation=$operation, large=$large)', async ({ source, empty, operation, large }) => {
+  const workspaceId = '750e8400-e29b-41d4-a716-446655440001';
+  const owner = { kind: 'workspace' as const, workspaceId };
+  const f = await fixture(async (directory) => {
+    await mkdir(join(directory, 'workspaces', workspaceId), { recursive: true });
+    await mkdir(join(directory, 'other'), { recursive: true });
+    await writeFile(join(directory, 'workspaces', workspaceId, 'workspace.json'), JSON.stringify({
+      id: workspaceId, name: 'Workspace', repositoryDirectories: [],
+    }));
+  });
+  await writeFile(join(f.directory, 'workspaces', workspaceId, 'workspace.json'), JSON.stringify({
+    id: workspaceId, name: 'Workspace', repositoryDirectories: [f.repository, join(f.directory, 'other')],
+  }));
+  await f.conversations.ensure(owner);
+  const id = conversationId(owner);
+  const opened = await f.input.open({ conversationId: id, assignment: owner, speaker: { namespace: 'local', id: 'operator' },
+    binding: { port: source, key: 'workspace-answer', counterpart: { namespace: 'local', id: 'operator' } } },
+  { async deliver() { return { kind: 'delivered' }; } });
+  opened.read.cancel();
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const body = large ? 'Q'.repeat(128 * 1024) : 'Which goal?';
+  const question = await store.create({ body, ...(operation ? {
+    operation: { cwd: f.repository, toolName: 'takt_ask_standalone_question', args: JSON.stringify({ cwd: f.repository, body }) },
+  } : {}) });
+  if (large) expect((await readFile(join(f.directory, 'workspaces', workspaceId, 'inquiries', `${question.id}.json`))).byteLength)
+    .toBeGreaterThan(256 * 1024);
+  await workspaceRegistry.removeWorkspaceRepository(f.directory, workspaceId, f.repository);
+  if (empty) await workspaceRegistry.removeWorkspaceRepository(f.directory, workspaceId, join(f.directory, 'other'));
+  const snapshot = await f.input.snapshot(opened.attachmentId);
+  const pending = [];
+  for await (const item of snapshot.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
+  snapshot.complete();
+  expect(pending).toContain(question.id);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'workspace-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'workspace-answer', executor: { execute } };
+  }, async close() {} });
+  const perform = async (call: Awaited<ReturnType<typeof f.runner.started>>, start = call.input) => {
+    const outcome = await service.execute(start, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    return outcome;
+  };
+  expect(await f.input.submit({ attachmentId: opened.attachmentId, requestId: 'workspace-answer',
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'answer_question', target: { goalId: null, owner },
+      questionId: question.id, answer: { text: 'Export' }, source } })).toMatchObject({ kind: 'accepted' });
+  expect(await perform(await f.runner.started(1))).toMatchObject({ kind: 'completed', result: { kind: 'answer_saved', answerSaved: true } });
+  const saved = await store.get(question.id);
+  expect(saved.operation).toEqual(question.operation);
+  const next = await f.runner.started(2);
+  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
+  expect(next.input.event).toMatchObject({ conversationId: id, event: expected });
+  const restored = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event.event);
+  expect(restored).toContainEqual(expected);
+  const ipc = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'workspace', kind: 'start_turn', input: next.input })), 'workspace');
+  if (ipc.kind !== 'start_turn') throw new Error('Expected next turn');
+  expect(await perform(next, ipc.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
+  expect(f.runner.calls).toHaveLength(2);
+});
+
+it('publishes distinct saved workspace answers once and preserves their events on repeated publication', async () => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const id = conversationId(owner);
+  await f.conversations.ensure(owner);
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const questions = [];
+  for (const text of ['Export', 'Import']) {
+    const question = await store.create({ body: 'Which goal?' });
+    questions.push(await store.answer(question.id, { text }, 'tui'));
+  }
+  accepted(await f.dispatcher.accept(input('publish-answers', id)));
+  const call = await f.runner.started(1);
+  const publish = (questionId: string) => f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer', questionId }, call.signal);
+  const receipts = [];
+  for (const question of questions) receipts.push(await publish(question.id));
+  expect(receipts.every((reply) => reply.kind === 'event_accepted' && reply.admission.kind === 'accepted')).toBe(true);
+  expect(receipts[0]).not.toEqual(receipts[1]);
+  expect(await publish(questions[0]!.id)).toEqual(receipts[0]);
+  const restored = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event);
+  const answers = restored.filter(({ event }) => event.kind === 'director_message' && event.text.includes('standalone inquiry'));
+  expect(answers).toHaveLength(2);
+  for (const question of questions) expect(answers).toContainEqual(expect.objectContaining({ conversationId: id,
+    event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+      text: inquiryAnswerMessage(question.id, question.answer!, question.body) } }));
+  expect(new Set(answers.map(({ eventId }) => eventId)).size).toBe(2);
+  for (const event of answers) {
+    expect(event.eventId).toContain(workspace.id);
+    expect(event.eventId).toBe(event.requestId);
+  }
+  await f.runner.finish(call);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Received', summary: null, sessionId: 'saved-answer', assignment: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'answer', executor: { execute } };
+  }, async close() {} });
+  for (let index = 2; index <= 3; index++) {
+    const next = await f.runner.started(index);
+    const outcome = await service.execute(next.input, { signal: next.signal, progress() {},
+      request: (request) => f.dispatcher.request(next.turn, request, next.signal) });
+    await f.runner.finish(next, outcome);
+  }
+  expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual(questions.map((question) =>
+    [inquiryAnswerMessage(question.id, question.answer!, question.body), directorSpeaker].join('\n\n')));
+  accepted(await f.dispatcher.accept(input('publish-settled-answer', id)));
+  const repeat = await f.runner.started(4);
+  expect(await f.dispatcher.request(repeat.turn, { kind: 'publish_workspace_inquiry_answer', questionId: questions[0]!.id }, repeat.signal)).toEqual(receipts[0]);
+  await f.runner.finish(repeat);
+  expect(f.runner.calls).toHaveLength(4);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+});
+
+it.each(['pending', 'other-owner', 'repository', 'director'] as const)('rejects workspace answer publication from %s without an event', async (condition) => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const other = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Other', repositoryDirectories: [] });
+  const store = new StandaloneInquiryStore(f.directory, condition === 'other-owner' ? { ...owner, workspaceId: other.id } : owner);
+  const question = await store.create({ body: 'Which goal?' });
+  if (condition !== 'pending') await store.answer(question.id, { text: 'Export' });
+  await f.conversations.ensure(owner);
+  const id = condition === 'repository' ? f.id : condition === 'director' ? conversationId({ kind: 'daemon' }) : conversationId(owner);
+  accepted(await f.dispatcher.accept(input('invalid-publication', id)));
+  const call = await f.runner.started(1);
+  const publication = f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer', questionId: question.id }, call.signal);
+  if (condition === 'other-owner') await expect(publication).rejects.toThrow();
+  else expect(await publication).toMatchObject({ kind: 'error', code: 'forbidden' });
+  await f.runner.finish(call);
+  expect(f.runner.calls).toHaveLength(1);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+});
+
+it.each(['missing', 'invalid-json', 'invalid-schema', 'wrong-id'] as const)('rejects a workspace inquiry read with %s without publishing an event', async (condition) => {
+  const f = await fixture();
+  const workspace = await workspaceRegistry.createWorkspace({ globalConfigDirectory: f.directory, name: 'Workspace', repositoryDirectories: [] });
+  const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const store = new StandaloneInquiryStore(f.directory, owner);
+  const question = await store.create({ body: 'Which goal?' });
+  const saved = await store.answer(question.id, { text: 'Export' });
+  const path = join(f.directory, 'workspaces', workspace.id, 'inquiries', `${question.id}.json`);
+  if (condition === 'invalid-json') await writeFile(path, '{');
+  if (condition === 'invalid-schema') await writeFile(path, JSON.stringify({ ...saved, body: null }));
+  if (condition === 'wrong-id') await writeFile(path, JSON.stringify({ ...saved, id: randomUUID() }));
+  await f.conversations.ensure(owner);
+  accepted(await f.dispatcher.accept(input('read-inquiry', conversationId(owner))));
+  const call = await f.runner.started(1);
+  await expect(f.dispatcher.request(call.turn, { kind: 'publish_workspace_inquiry_answer',
+    questionId: condition === 'missing' ? randomUUID() : question.id }, call.signal)).rejects.toThrow();
+  await f.runner.finish(call);
+  expect(f.runner.calls).toHaveLength(1);
+  expect(f.dispatcher.hasPendingEvents).toBe(false);
+  const remaining = [];
+  for await (const record of (await new FileEventStore(f.directory).restore()).pending) remaining.push(record);
+  expect(remaining).toEqual([]);
+});
 
 async function conversationProcess(f: Awaited<ReturnType<typeof fixture>>, execute: PreparedConversationRuntime['executor']['execute']) {
   const envelope = { protocolVersion: 1 as const, launchId: randomUUID() };
@@ -812,7 +1237,7 @@ it('reads legacy proposal, session and accepted human/director queues while pres
   read.complete();
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
   expect(items).toContainEqual({ kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-    executionStatus: goal.executionStatus, repositoryDirectory: f.repository } });
+    executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: f.repository } });
   expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8'))).toEqual(goal);
   expect((await new ConversationStateStore(f.directory).read(f.id))!.record.directorMessages).toEqual([]);
 });

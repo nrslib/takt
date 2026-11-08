@@ -286,7 +286,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
   it('shows assignment and counts on one bottom row after the key hints', async () => {
     const client = new ManagerClientDouble();
     const assignment = client.getSnapshot().items[0]!;
-    client.change({ items: [assignment, { kind: 'goal', goal: { ...goalRecord(), repositoryDirectory: cwd } }, {
+    client.change({ items: [assignment, { kind: 'goal', goal: { ...goalRecord(), awaitingHumanMerge: false, repositoryDirectory: cwd } }, {
       kind: 'inquiry', inquiry: { question: createInquiry({ body: 'Pending question' }),
         target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: cwd } } },
     }] });
@@ -294,7 +294,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: 120 });
     context.app.stdout.emit('resize');
     const heading = getLabel('manager.assignmentHeading', lang, { name: 'manager-repository' });
-    const counts = getLabel('manager.counts', lang, { goals: '1', questions: '1' });
+    const counts = getLabel('manager.counts', lang, { goals: '1', awaiting: '0', questions: '1' });
     const status = [heading, counts].join(' | ');
     await waitFor(() => {
       const rows = context.app.lastFrame()!.split('\n');
@@ -318,7 +318,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     const { app } = mount(lang, client);
     await waitFor(() => expect(app.lastFrame()!.split('\n').at(-1)).toBe([
       getLabel('manager.assignmentHeadingMultiple', lang, { name: 'manager-repository', count: '2' }),
-      getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+      getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' }),
     ].join(' | ')));
   });
 
@@ -330,12 +330,12 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     const { app } = mount(lang, client);
     await waitFor(() => expect(app.lastFrame()!.split('\n').at(-1)).toBe([
       getLabel('manager.selectionEmpty.repository', lang),
-      getLabel('manager.counts', lang, { goals: '0', questions: '0' }),
+      getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' }),
     ].join(' | ')));
     expect(app.lastFrame()).not.toContain('manager-repository');
   });
 
-  it.each(lang === 'ja' ? [36, 38] : [38, 40])('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
+  it.each([0, 2].map((extra) => measureWidth(getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })) + 15 + extra))('preserves the status suffix with a truncated ordinary assignment heading within %i columns', async (columns) => {
     const { app } = mount(lang);
     Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
     app.stdout.emit('resize');
@@ -343,7 +343,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       const rows = app.lastFrame()!.split('\n');
       const status = rows.at(-1)!;
       const [heading] = status.split(' | ');
-      const counts = getLabel('manager.counts', lang, { goals: '0', questions: '0' });
+      const counts = getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' });
       expect(heading).toContain('…');
       expect(status.split(' | ')).toEqual([heading, counts]);
       expect(rows.filter((row) => row.includes(counts))).toEqual([status]);
@@ -351,7 +351,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     });
   });
 
-  it.each([52, 80])('truncates only the assignment heading and preserves counts within %i columns', async (columns) => {
+  it.each([64, 80])('truncates only the assignment heading and preserves counts within %i columns', async (columns) => {
     const name = '開発repository'.repeat(30);
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
       kind: 'repository', repositoryDirectory: `/test/${name}`, repositoryDirectories: [`/test/${name}`],
@@ -364,18 +364,18 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       const status = rows.at(-1)!;
       const [heading, counts] = status.split(' | ');
       expect(heading).toContain('…');
-      expect(counts).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+      expect(counts).toBe(getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' }));
       expect(rows.filter((row) => row.includes(counts!))).toEqual([status]);
       for (const row of rows.slice(rows.findIndex((row) => row.startsWith('╭')))) expect(measureWidth(row)).toBeLessThanOrEqual(columns);
     });
   });
 
-  it.each(lang === 'ja' ? [24, 28, 30] : [26, 30, 32])('shows the assignment above counts within %i columns', async (columns) => {
+  it.each([0, 4, 6].map((extra) => measureWidth(getLabel('manager.counts', lang, { goals: '1', awaiting: '0', questions: '1' })) + extra))('shows the assignment above counts within %i columns', async (columns) => {
     const name = `開発-${'repository'.repeat(10)}-末尾`;
     const repositoryDirectory = `/test/${name}`;
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
       kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory],
-    } }, { kind: 'goal', goal: { ...goalRecord(), repositoryDirectory } }, { kind: 'inquiry', inquiry: {
+    } }, { kind: 'goal', goal: { ...goalRecord(), awaitingHumanMerge: false, repositoryDirectory } }, { kind: 'inquiry', inquiry: {
       question: createInquiry({ body: 'Pending question' }),
       target: { goalId: null, owner: { kind: 'repository', repositoryDirectory } },
     } }] });
@@ -383,7 +383,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
     app.stdout.emit('resize');
     const fullHeading = getLabel('manager.assignmentHeading', lang, { name });
-    const counts = getLabel('manager.counts', lang, { goals: '1', questions: '1' });
+    const counts = getLabel('manager.counts', lang, { goals: '1', awaiting: '0', questions: '1' });
     const details = counts;
     await waitFor(() => {
       const rows = app.lastFrame()!.split('\n');
@@ -406,7 +406,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory],
     } }] });
     const { app } = mount(lang, client);
-    const counts = getLabel('manager.counts', lang, { goals: '0', questions: '0' });
+    const counts = getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' });
     const details = counts;
     for (const columns of [1, 2, 8, 12]) {
       Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
@@ -423,20 +423,40 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     }
   });
 
+  it('separates human merge waits from ongoing goals without changing goal operation candidates', async () => {
+    const base = { ...goalRecord(), repositoryDirectory: cwd, awaitingHumanMerge: false };
+    const goals = [base, { ...base, id: randomUUID(), status: 'awaiting_merge' as const },
+      { ...base, id: randomUUID(), objective: 'Human merge wait', status: 'awaiting_merge' as const, awaitingHumanMerge: true },
+      { ...base, id: randomUUID(), executionStatus: 'paused' as const },
+      { ...base, id: randomUUID(), status: 'completed' as const },
+      { ...base, id: randomUUID(), executionStatus: 'aborted' as const }];
+    const client = new ManagerClientDouble();
+    client.change({ items: [...client.getSnapshot().items, ...goals.map((goal) => ({ kind: 'goal' as const, goal }))] });
+    const { app } = mount(lang, client);
+    const counts = getLabel('manager.counts', lang, { goals: '3', awaiting: '1', questions: '0' });
+    await waitFor(() => expect(app.lastFrame()).toContain(counts));
+    app.stdin.write('\x07');
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', lang));
+      expect(app.lastFrame()).toContain('Human merge wait');
+    });
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
   it('preserves both ends of a long workspace assignment heading and nonzero counts when resized', async () => {
     const name = `開発-${'👩‍💻e\u0301作業'.repeat(20)}-末尾`;
     const repositoryDirectory = `/test/${name}`;
     const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment: {
       kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001', name: 'Workspace',
       repositoryDirectories: [repositoryDirectory, '/test/second', '/test/third'],
-    } }, ...Array.from({ length: 12 }, () => ({ kind: 'goal' as const, goal: { ...goalRecord(), id: randomUUID(), repositoryDirectory } })),
+    } }, ...Array.from({ length: 12 }, () => ({ kind: 'goal' as const, goal: { ...goalRecord(), awaitingHumanMerge: false, id: randomUUID(), repositoryDirectory } })),
     ...Array.from({ length: 3 }, () => ({ kind: 'inquiry' as const, inquiry: {
       question: createInquiry({ body: 'Pending question' }),
       target: { goalId: null, owner: { kind: 'repository' as const, repositoryDirectory } },
     } }))] });
     const { app } = mount(lang, client);
     const fullHeading = getLabel('manager.assignmentHeadingMultiple', lang, { name, count: '2' });
-    const counts = getLabel('manager.counts', lang, { goals: '12', questions: '3' });
+    const counts = getLabel('manager.counts', lang, { goals: '12', awaiting: '0', questions: '3' });
     for (const columns of [80, 60, 120]) {
       Object.defineProperty(app.stdout, 'columns', { configurable: true, value: columns });
       app.stdout.emit('resize');
@@ -462,7 +482,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     const target = { goalId: null, owner: { kind: 'repository', repositoryDirectory: cwd } } as const;
     client.change({ items: [client.getSnapshot().items[0]!, { kind: 'inquiry', inquiry: { target, question } }] });
     const context = mount(lang, client);
-    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.counts', lang, { goals: '0', questions: '1' })));
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '1' })));
     context.app.stdin.write(QUESTION_MENU);
     await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', lang)));
     context.app.stdin.write(ENTER);
@@ -486,7 +506,7 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
       const target = { goalId: null, owner: { kind: 'repository', repositoryDirectory: cwd } } as const;
       client.change({ items: [client.getSnapshot().items[0]!, { kind: 'inquiry', inquiry: { target, question } }] });
       const context = mount(lang, client);
-      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.counts', lang, { goals: '0', questions: '1' })));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '1' })));
       context.app.stdin.write(QUESTION_MENU);
       await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', lang)));
       context.app.stdin.write(ENTER);

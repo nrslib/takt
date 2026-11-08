@@ -26,6 +26,8 @@ import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
+import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
+import { readWatchTasks, type WatchTask } from '../daemon/watchers/state.js';
 
 function nextRevision(revision: number): number {
   if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
@@ -71,11 +73,18 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (patrol) {
           const store = new GoalStore(event.repositoryDirectory);
           const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+          let tasks: readonly WatchTask[] = [];
+          try { tasks = await readWatchTasks(event.repositoryDirectory); }
+          catch {
+            io.signal.throwIfAborted();
+            // 読取失敗は見回り対象の選定側が知らせるため、ターン内では通知しない。
+          }
           io.signal.throwIfAborted();
           const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
           const patrolEvent = { ...event,
-            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge').map((goal) => goal.id),
+            goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
           if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
           command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };
@@ -196,7 +205,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
           case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;
-          case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io.signal, language); break;
+          case 'answer_question': result = await answerConversationInquiry(command, assignment, configDirectory, io, language); break;
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
             const status = command.kind === 'pause_goal' ? 'paused' : command.kind === 'resume_goal' ? 'active' : 'aborted';

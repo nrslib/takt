@@ -1,5 +1,7 @@
 import type { TurnEvent } from '../../core/daemon/events.js';
 import type { ManagerEvent } from '../../infra/goals/events.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
 
 export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): TurnEvent {
   switch (saved.kind) {
@@ -12,8 +14,11 @@ export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): T
     };
     case 'pr_failed': return { kind: 'goal_pr_failed', repositoryDirectory: directory,
       goalId: saved.goalId, expectedSha: saved.expectedSha, reason: saved.reason };
-    case 'answer': return { kind: 'inquiry_answered', repositoryDirectory: directory,
-      goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer };
+    case 'answer': return saved.goalId === null
+      ? { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+        text: inquiryAnswerMessage(saved.questionId, saved.answer, saved.questionBody) }
+      : { kind: 'inquiry_answered', repositoryDirectory: directory,
+        goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer };
     case 'registered': case 'resumed': return { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed',
       repositoryDirectory: directory, goalId: saved.goalId };
   }

@@ -47,12 +47,16 @@ export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
   createdAt: z.iso.datetime().optional(),
   answer: GoalAnswerSchema.optional(),
+  answerPublicationPending: z.literal(true).optional(),
   withdrawalReason: goalText.optional(),
   withdrawnAt: z.iso.datetime().optional(),
   consumedAt: z.iso.datetime().optional(),
 }).superRefine((question, ctx) => {
   if ((question.status === 'answered') !== (question.answer !== undefined)) {
     ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Only answered questions require an answer' });
+  }
+  if (question.answerPublicationPending && question.status !== 'answered') {
+    ctx.addIssue({ code: 'custom', path: ['answerPublicationPending'], message: 'Only answered questions can await publication' });
   }
   if (question.kind === 'approval' && question.operation === undefined) {
     ctx.addIssue({ code: 'custom', path: ['operation'], message: 'An approval requires an operation' });

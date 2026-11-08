@@ -11,13 +11,16 @@ import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
 import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
-import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } from './watchers/state.js';
+import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type WatchTask } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
+import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemon/persistedFiles.js';
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
+import type { GoalQuestion } from '../../infra/goals/schema.js';
+import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
+import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -30,7 +33,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
-    private readonly stateChanges?: WatchObservations) {}
+    private readonly stateChanges?: WatchObservations,
+    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>) {}
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -55,6 +59,13 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       try {
         if ((await readWatchTasks(project.repositoryDirectory)).some((task) => task.status === 'pending' || task.status === 'running')) return true;
       } catch (error) { this.onError(error); }
+    }
+    for (const assignment of await this.conversations.routing.assignments()) {
+      if (assignment.kind === 'daemon') continue;
+      const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
+        ? { kind: 'workspace', workspaceId: assignment.workspaceId }
+        : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
+      if ((await files.listPendingInquiryAnswerPublications(owner)).length > 0) return true;
     }
     return false;
   }
@@ -95,8 +106,12 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async patrolGoalIds(repositoryDirectory: string): Promise<readonly string[]> {
     const ids: string[] = [];
+    // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+    let tasks: readonly WatchTask[] = [];
+    try { tasks = await readWatchTasks(repositoryDirectory); }
+    catch (error) { this.onError(error); }
     for await (const goal of readWatchGoals(repositoryDirectory, this.onError, this.goalReader)) {
-      if (goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge') ids.push(goal.id);
+      if (isGoalPatrolCandidate(goal, tasks)) ids.push(goal.id);
     }
     return ids;
   }
@@ -129,6 +144,15 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
     this.inquiriesInitialized = true;
     for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
+    await this.publishPendingAnswers();
+  }
+
+  private async publishPendingAnswers(): Promise<void> {
+    if (this.publishAnswer === undefined) return;
+    const owners = (await this.conversations.routing.assignments()).flatMap((assignment): DaemonInquiryOwner[] => assignment.kind === 'daemon'
+      ? [] : [assignment.kind === 'workspace' ? { kind: 'workspace', workspaceId: assignment.workspaceId }
+        : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory }]);
+    await publishPendingInquiryAnswers(this.conversations.routing.directory, owners, this.publishAnswer, this.onError);
   }
 
   private async *inquiryNotices(): AsyncGenerator<InquiryNotice> {

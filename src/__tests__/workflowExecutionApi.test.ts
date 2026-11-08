@@ -260,9 +260,10 @@ describe('runWorkflowExecution', () => {
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
-  it('should return structured failure information without process exit', async () => {
+  it.each([undefined, 'step_transition', 'runtime_error'] as const)('should return structured failure information without process exit for abort kind %s', async (abortKind) => {
     mockExecuteTaskWorkflow.mockResolvedValueOnce({
       success: false,
+      ...(abortKind === undefined ? {} : { abortKind }),
       reason: 'Step "draft" failed',
       lastStep: 'draft',
       lastMessage: 'provider error',
@@ -281,6 +282,7 @@ describe('runWorkflowExecution', () => {
 
     expect(result).toEqual({
       success: false,
+      ...(abortKind === undefined ? {} : { abortKind }),
       reason: 'Step "draft" failed',
       lastStep: 'draft',
       lastMessage: 'provider error',

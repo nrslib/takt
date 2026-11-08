@@ -3,6 +3,13 @@ import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
+import { askTaktStandaloneQuestion } from '../features/mcp/standaloneInquiryOperations.js';
+import { askStandaloneQuestionInputSchema } from '../features/mcp/schemas.js';
+import { sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+
+vi.mock('../features/manager/notifications.js', () => ({ sendSavedStandaloneQuestionNotification: vi.fn() }));
+vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
 
 const io = vi.hoisted(() => ({
   read: vi.fn(), syncRead: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(),
@@ -14,7 +21,7 @@ vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
   readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access,
 }));
-vi.mock('../infra/config/project/sessionStore.js', () => ({ writeFileAtomic: io.write }));
+vi.mock('../shared/utils/atomic-file.js', () => ({ writeFileAtomic: io.write }));
 vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('node:crypto', async (original) => {
@@ -75,6 +82,32 @@ beforeEach(() => {
   })());
 });
 afterEach(() => vi.useRealTimers());
+
+it('saves a standalone MCP question before notifying and returns its saved ID', async () => {
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?', options: ['A', 'B'], recommendation: 'A' });
+  const result = await askTaktStandaloneQuestion(input, config, workspace, new AbortController().signal);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: firstId });
+  const saved = await new StandaloneInquiryStore(config, workspace).get(firstId);
+  expect(saved).toMatchObject({ body: input.body, options: input.options, recommendation: input.recommendation,
+    status: 'pending', kind: 'question', operation: { cwd: input.cwd, toolName: 'takt_ask_standalone_question', args: JSON.stringify(input) } });
+  expect(sendSavedStandaloneQuestionNotification).toHaveBeenCalledExactlyOnceWith(input.cwd, saved);
+  expect(io.write.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(sendSavedStandaloneQuestionNotification).mock.invocationCallOrder[0]!);
+});
+
+it('does not notify when saving a standalone MCP question fails', async () => {
+  io.write.mockImplementationOnce(() => { throw new Error('write failed'); });
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?' });
+  await expect(askTaktStandaloneQuestion(input, config, workspace, new AbortController().signal)).rejects.toThrow();
+  expect(files.size).toBe(0);
+  expect(sendSavedStandaloneQuestionNotification).not.toHaveBeenCalled();
+});
+
+it('does not save or notify a cancelled standalone MCP question', async () => {
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?' });
+  await expect(askTaktStandaloneQuestion(input, config, workspace, AbortSignal.abort())).rejects.toThrow();
+  expect(files.size).toBe(0);
+  expect(sendSavedStandaloneQuestionNotification).not.toHaveBeenCalled();
+});
 
 describe('standalone inquiry ownership and persistence', () => {
   it('stores a workspace inquiry in its config directory and restores the full shared record', async () => {

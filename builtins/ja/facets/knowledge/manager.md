@@ -12,7 +12,7 @@
 
 一時停止は実行と後続イベントを保留し、中止は終端状態です。再開すると待機中のタスクも実行可能になります。保存されたタスクの指示は、指示変更の操作によって更新されます。
 
-タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge のゴールは PR の見張りが担当します。
+タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
 標準の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.workflow のレビューや CI 待ちは、定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
@@ -38,7 +38,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 
 通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge で同じ SHA を再申請すると、保存済みの完成記録を返します。PR 未保存なら原因への対応を経て準備をやり直せます。訂正した根拠を完成記録へ反映するには、takt_reopen_goal に理由を渡して created へ戻し、確認済み expectedSha、訂正済み summary、humanChecks で takt_complete_goal に再申請します。既存 PR の本文は別途更新します。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge では、同じ SHA の再申請でも、渡された summary と現在の差分から完成記録を作り直し、既存 PR の本文も更新します。awaiting_merge で humanChecks を省略した場合は、保存済みの完成記録と SHA が同じときに限り保存値を使います。PR を準備できなかった場合は、保存済みの pullRequest が外れるか、エラーが返ります。申請し直すのは、準備の失敗に対応するときか、完成の根拠を訂正するときです。ゴールブランチの現在の先端を確かめて検証し、その SHA を expectedSha に、証拠付きの報告を summary に渡します。既存 PR の本文の読み取りや更新だけが失敗した場合は、保存済みの PR が残り、pullRequestBodyError が返ります。
 
 takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
