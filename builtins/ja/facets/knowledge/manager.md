@@ -38,7 +38,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 
 通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge で同じ SHA を再申請すると、保存済みの完成記録を返します。PR 未保存なら原因への対応を経て準備をやり直せます。根拠の訂正は作業記録と PR の記載を別途更新して反映します。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映の awaiting_merge で同じ SHA を再申請すると、保存済みの完成記録を返します。PR 未保存なら原因への対応を経て準備をやり直せます。訂正した根拠を完成記録へ反映するには、takt_reopen_goal に理由を渡して created へ戻し、確認済み expectedSha、訂正済み summary、humanChecks で takt_complete_goal に再申請します。既存 PR の本文は別途更新します。
 
 takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
