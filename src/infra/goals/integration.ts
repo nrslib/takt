@@ -88,6 +88,8 @@ export async function integrateGoalTask(
     ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
+const includedGoalCompletionGuidance = 'To correct evidence for an approved goal SHA already included in the target branch, use takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion.';
+
 function completionRecord(
   goal: Goal, expectedSha: string, targetBranch: string, summary: string,
   changeSummary: NonNullable<Goal['completion']>['changeSummary'], worktrees: string[],
@@ -96,7 +98,10 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). PR preparation retries use the saved completion evidence. To correct the saved evidence, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR's text separately.`,
+      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). Reuse the saved completion evidence and humanChecks; supply humanChecks only when it has not been saved.`,
+      'If the goal branch tip has advanced beyond the saved goalSha, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks.',
+      'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR\'s text separately.',
+      includedGoalCompletionGuidance,
       'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
     ],
   };
@@ -177,13 +182,20 @@ export async function completeGoal(
   const included = await isGoalContentIncluded(cwd, expectedSha, targetSha, signal);
   if (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha && !included) {
     if (goal.pullRequest === undefined) {
+      const retryHumanChecks = goal.completion.humanChecks ?? humanChecks;
+      if (retryHumanChecks === undefined) {
+        throw new Error('humanChecks is required to retry PR preparation. Provide humanChecks and call takt_complete_goal again.');
+      }
       const { pullRequest, failure } = await prepareCompletionPullRequest(
-        cwd, goal, goal.completion, humanChecks ?? goal.completion.humanChecks, language, signal,
+        cwd, goal, goal.completion, retryHumanChecks, language, signal,
       );
       const saved = await store.update(goalId, (current) => {
         signal?.throwIfAborted();
         assertCompletionAllowed(current, goal);
-        return recordPullRequestFailure({ ...current, ...(pullRequest === undefined ? {} : { pullRequest: current.pullRequest ?? pullRequest }) }, failure, notifications, language);
+        const completion = current.completion!.humanChecks === undefined
+          ? { ...current.completion!, humanChecks: retryHumanChecks }
+          : current.completion;
+        return recordPullRequestFailure({ ...current, completion, ...(pullRequest === undefined ? {} : { pullRequest: current.pullRequest ?? pullRequest }) }, failure, notifications, language);
       });
       if (failure !== undefined && saved.pullRequest === undefined) {
         saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
@@ -235,7 +247,7 @@ export async function reopenGoal(
   const approvedSha = goal.completion.goalSha;
   const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   if (await isGoalContentIncluded(cwd, approvedSha, targetSha, signal)) {
-    throw new Error('Approved goal SHA is already included in the target branch. Use takt_check_goal_completion.');
+    throw new Error(includedGoalCompletionGuidance);
   }
   signal?.throwIfAborted();
   const env = await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false });
@@ -252,7 +264,7 @@ export async function reopenGoal(
     const included = isGoalContentIncludedSync(cwd, approvedSha, currentTargetSha, env);
     signal?.throwIfAborted();
     if (included) {
-      throw new Error('Approved goal SHA is already included in the target branch. Use takt_check_goal_completion.');
+      throw new Error(includedGoalCompletionGuidance);
     }
     return appendGoalWorkLog({ ...current, status: 'created' }, { summary: reason });
   });
