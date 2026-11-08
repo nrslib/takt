@@ -24,8 +24,16 @@ it.each(['ja', 'en'] as const)('formats a standalone question with the same %s d
   const before = structuredClone(question);
   const goal = { ...goalRecord(), questions: [question] };
   const goalText = formatGoalNotification(goal, { kind: 'question', body: formatGoalQuestionNotification(question, language) }, language, 'project').split('\n');
-  expect(formatStandaloneQuestionNotification(question, language, 'project').split('\n'))
-    .toEqual([goalText[0], ...goalText.slice(2)]);
+  const standaloneText = formatStandaloneQuestionNotification(question, language, 'project').split('\n');
+  expect(standaloneText[0]).toBe(language === 'ja' ? '質問があります — project' : 'Question — project');
+  expect(goalText[0]).toBe(language === 'ja'
+    ? `[project] 質問があります（ゴール: ${goal.objective}）`
+    : `[project] Question (Goal: ${goal.objective})`);
+  expect(standaloneText[1]).toBe(question.body);
+  expect(standaloneText.slice(1)).toEqual(goalText.slice(1));
+  expect(standaloneText.at(-1)).toBe(language === 'ja'
+    ? 'takt manager を開き、Ctrl+R で答えてください。'
+    : 'Open takt manager and press Ctrl+R to answer.');
   expect(question).toEqual(before);
 });
 

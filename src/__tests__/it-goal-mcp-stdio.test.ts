@@ -867,11 +867,13 @@ describe('manager questions, answers and notifications through production bounda
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
       const text = requests[0]!.text;
-      expect(text.split('\n')[0]).toBe(getLabel('manager.notificationHeadings.question', language, { project: basename(selected) }));
-      expect(text.split('\n')).toEqual(expect.arrayContaining([askedQuestion.body,
-        getLabel('manager.notificationOptions', language, { options: 'CSV, JSON' }),
-        getLabel('manager.notificationRecommendation', language, { recommendation: 'CSV' })]));
-      expect(text).toContain(getLabel('manager.notificationAnswer', language, { project: basename(selected), id: questionId }));
+      expect(text.split('\n')).toEqual([
+        language === 'ja' ? '質問があります — second-repository' : 'Question — second-repository',
+        askedQuestion.body,
+        language === 'ja' ? '1. CSV（推奨）' : '1. CSV (recommended)',
+        '2. JSON',
+        language === 'ja' ? 'takt manager を開き、Ctrl+R で答えてください。' : 'Open takt manager and press Ctrl+R to answer.',
+      ]);
       expect(text).not.toContain(goalId);
     } finally { invalidateResolvedConfigCache(selected); }
   });
