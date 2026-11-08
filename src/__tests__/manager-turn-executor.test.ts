@@ -20,6 +20,36 @@ function fixture() {
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
 
+it.each([true, false, undefined])('uses fresh business context only for patrols when patrol=%s', async (patrol) => {
+  const { call, executor, input, invalidateSession } = fixture();
+  call.mockResolvedValue(success);
+  await executor.execute({ ...input, patrol });
+  await executor.execute({ ...input, patrol });
+  expect(call).toHaveBeenCalledTimes(2);
+  for (const [prompt, options] of call.mock.calls) {
+    expect(options.sessionId).toBe(patrol ? undefined : input.sessionId);
+    expect(options.callerManagedSession).toBe(true);
+    if (patrol) {
+      expect(prompt).toContain(input.prompt);
+      expect(prompt).toContain(input.recovery!.context);
+    } else expect(prompt).toBe(input.prompt);
+  }
+  expect(invalidateSession).not.toHaveBeenCalled();
+});
+
+it('does not invalidate the conversation session when a patrol retries an overflow', async () => {
+  const { call, executor, input, invalidateSession } = fixture();
+  call.mockRejectedValueOnce(new Error('Prompt is too long'));
+  call.mockResolvedValueOnce(success);
+  expect(await executor.execute({ ...input, patrol: true })).toMatchObject({ message: 'reply' });
+  expect(call).toHaveBeenCalledTimes(2);
+  for (const [prompt, options] of call.mock.calls) {
+    expect(options.sessionId).toBeUndefined();
+    expect(prompt).toContain(input.recovery!.context);
+  }
+  expect(invalidateSession).not.toHaveBeenCalled();
+});
+
 it('reports only activity changes and tool names without stream bodies or tool inputs', async () => {
   const { call, executor, input } = fixture();
   const onActivity = vi.fn();

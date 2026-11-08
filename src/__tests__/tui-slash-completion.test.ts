@@ -56,14 +56,27 @@ it('hides on Esc, lets the next Esc reach the caller, and resets selection when 
   await vi.waitFor(() => expect(complete).toHaveBeenCalledExactlyOnceWith('/resume '));
 });
 
-it.each(['ja', 'en'] as const)('resolves only the supplied manager command and its translated description in %s', (lang) => {
-  const definitions = [{ command: '/make-goal', labelKey: 'manager.makeGoalDescription' }];
-  for (const draft of ['/', '/ma', '/make-goal']) {
-    expect(resolveSlashCompletions(draft, lang, {}, definitions)).toEqual([
+it.each(['ja', 'en'] as const)('resolves /make-goal and /verify with translated descriptions and filters by prefix in %s', (lang) => {
+  const definitions = [
+    { command: '/make-goal', labelKey: 'manager.makeGoalDescription' },
+    { command: '/verify', labelKey: 'interactive.commands.verify' },
+  ];
+  const availability = { formalSpec: true };
+  expect(resolveSlashCompletions('/', lang, availability, definitions)).toEqual([
+    { command: '/make-goal', description: getLabel('manager.makeGoalDescription', lang) },
+    { command: '/verify', description: getLabel('interactive.commands.verify', lang) },
+  ]);
+  for (const draft of ['/ma', '/make-goal']) {
+    expect(resolveSlashCompletions(draft, lang, availability, definitions)).toEqual([
       { command: '/make-goal', description: getLabel('manager.makeGoalDescription', lang) },
     ]);
   }
-  for (const draft of ['/xyz', 'hello', 'hello /make-goal', '/make-goal ']) {
-    expect(resolveSlashCompletions(draft, lang, {}, definitions)).toEqual([]);
+  for (const draft of ['/ver', '/verify']) {
+    expect(resolveSlashCompletions(draft, lang, availability, definitions)).toEqual([
+      { command: '/verify', description: getLabel('interactive.commands.verify', lang) },
+    ]);
+  }
+  for (const draft of ['/xyz', 'hello', 'hello /make-goal', '/make-goal ', '/verify ']) {
+    expect(resolveSlashCompletions(draft, lang, availability, definitions)).toEqual([]);
   }
 });

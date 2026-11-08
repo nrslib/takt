@@ -83,8 +83,8 @@ it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspac
   const lines = text.split('\n');
   expect(lines[0]).toContain('customer-workspace');
   expect(lines[0]).toMatch(language === 'ja' ? /お知らせ|通知/u : /notification|update/iu);
-  expect(lines[1]).toContain(current.id.slice(0, 8));
-  expect(lines[1]).not.toContain(current.id);
+  expect(lines[0]).toContain(current.objective);
+  expect(text).not.toContain(current.id.slice(0, 8));
   expect(lines).toContain(notice.body);
   expect(current).toEqual(before);
 });
@@ -99,15 +99,13 @@ it('delivers the saved human question with localized details and its ID-free ans
   const text = doubles.send.mock.calls[0]![1] as string;
   expect(text.split('\n')[0]).toContain('customer-export');
   expect(text).toContain(question.body);
-  expect(text).toMatch(/選択肢:\s*CSV.*JSON/u);
-  expect(text).toMatch(/推奨:\s*CSV/u);
+  expect(text.split('\n')).toContain('1. CSV（推奨）');
+  expect(text.split('\n')).toContain('2. JSON');
   const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
   expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
   expect(guidance[0]).not.toContain(question.id);
-  expect(guidance[0]).toMatch(/一覧|選択/u);
   expect(text).toContain('takt manager');
-  expect(text).toContain('TUI');
   expect(text).not.toMatch(/Options:|Recommendation:/u);
 });
 
@@ -127,17 +125,16 @@ it.each([
   await sendSavedGoalNotifications('/work/customer-export', goalRecord(), current, 'https://example.test/secret');
   expect(doubles.send).toHaveBeenCalledOnce();
   const lines = (doubles.send.mock.calls[0]![1] as string).split('\n');
-  expect(lines[3]).toBe((language === 'ja' ? '選択肢: ' : 'Options: ') + question.options!.slice(0, 5).join(', '));
-  expect(lines[4]).toBe(language === 'ja'
+  expect(lines.slice(2, 7)).toEqual(question.options!.slice(0, 5).map((option, index) => `${index + 1}. ${option}`));
+  expect(lines[7]).toBe(language === 'ja'
     ? 'ほかに1件の選択肢があります。すべての選択肢はTUIで確認できます。'
     : 'Additional options: 1. View all options in the TUI.');
-  expect(lines[4]).toContain('TUI');
+  expect(lines[7]).toContain('TUI');
   const guidance = lines.filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(status === 'pending' ? 1 : 0);
   if (status === 'pending') {
     expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
     expect(guidance[0]).not.toContain(question.id);
-    expect(guidance[0]).toMatch(language === 'ja' ? /一覧|選択/u : /list|select|choose/iu);
   }
   expect(current).toEqual(before);
 });
@@ -161,11 +158,11 @@ it.each([
   expect(current).toEqual(before);
   const lines = text.split('\n');
   expect(lines[0]).toContain('customer-export');
-  expect(lines.slice(2, 4).join('\n')).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
-  const guidance = lines.slice(4).join('\n');
-  expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
+  expect(lines.slice(1, 3).join('\n')).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
+  const guidance = lines.slice(3).join('\n');
+  if (kind === 'custom') expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
   expect(guidance).not.toMatch(/Ctrl\+N|\^N/u);
-  expect(guidance).toContain('TUI');
+  if (kind === 'custom') expect(guidance).toContain('TUI');
   expect(guidance).toContain('takt manager');
-  expect(guidance).toContain('customer-export');
+  if (kind === 'custom') expect(guidance).toContain('customer-export');
 });

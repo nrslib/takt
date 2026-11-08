@@ -9,6 +9,7 @@ import type { TurnBusiness } from '../daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../daemonTurn/conversationState.js';
 import { buildTurnBusinessContext } from '../daemonTurn/turnContext.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
+import type { ManagerTurnInput } from './turnExecutor.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
@@ -23,6 +24,7 @@ import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
 
 function nextRevision(revision: number): number {
@@ -53,24 +55,27 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const priorPending = state.current.pending;
       const directorMessage = event.kind === 'director_message';
       const human = event.kind === 'human_command';
+      const patrol = event.kind === 'patrol';
       let command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : buildManagerEventPrompt(event) };
+      const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
+      let verificationMessage: string | undefined;
       try {
         io.signal.throwIfAborted();
         const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
-        if (event.kind === 'patrol') {
+        if (patrol) {
           const store = new GoalStore(event.repositoryDirectory);
           const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
           io.signal.throwIfAborted();
           const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
           const patrolEvent = { ...event,
-            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed').map((goal) => goal.id),
+            goalIds: goals.filter((goal) => goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge').map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
           if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
           command = { kind: 'message', text: buildManagerEventPrompt(patrolEvent) };
@@ -91,7 +96,21 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
-        if (human && command.kind !== 'approve_summary') {
+        let verification: ManagerTurnInput['verify'];
+        if (verify) {
+          const verificationRepository = priorPending?.repositoryDirectory
+            ?? (assignment.repositoryDirectories.length === 1 ? assignment.repositoryDirectories[0] : undefined);
+          if (verificationRepository === undefined) return { kind: 'completed', result: {
+            kind: 'reply', message: getLabel('manager.verifyRepositoryRequired', language),
+          } };
+          if (!assignment.repositoryDirectories.includes(verificationRepository)) throw new ConversationError('invalid_assignment');
+          verification = { repositoryDirectory: verificationRepository,
+            ...resolveFormalSpecConfigurationWithoutPrompt(verificationRepository) };
+          if (!verification.mode) return { kind: 'completed', result: {
+            kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
+          } };
+        }
+        if (human && command.kind !== 'approve_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
         }
@@ -120,33 +139,37 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
           const resolved = await runtime.resolve(assignment, io.signal, agentOverrides);
           try {
-            const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-              || contextKey !== undefined && contextKey !== resolved.contextKey;
-            if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
-              await state.save({ session: { provider: resolved.provider, model: resolved.model,
-                sessionId: changed ? null : state.current.session.sessionId,
-                ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
+            if (!patrol) {
+              const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
+                || contextKey !== undefined && contextKey !== resolved.contextKey;
+              if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
+                await state.save({ session: { provider: resolved.provider, model: resolved.model,
+                  sessionId: changed ? null : state.current.session.sessionId,
+                  ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
+              }
+              contextKey = resolved.contextKey;
             }
-            contextKey = resolved.contextKey;
             language = resolved.language;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
             const speaker = directorMessage ? { namespace: 'agent', id: 'director' } : human ? event.speaker : undefined;
-            const interruptedMessage = state.current.interruptedMessage;
+            const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const prompt = [
-              ...(interruptedMessage == null ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
+              ...(interruptedMessage == null || verify ? [] : [getLabel('manager.conversation.interrupted_message', language), interruptedMessage]),
               command.text,
               ...(speaker?.namespace === 'agent' ? [`Speaker: ${JSON.stringify(speaker)}`] : []),
             ].join('\n\n');
             const output = await resolved.executor.execute({
               prompt,
-              sessionId: state.current.session.sessionId ?? undefined,
+              ...(verification === undefined ? {} : { verify: verification }),
+              sessionId: patrol ? undefined : state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
               abortSignal: io.signal,
               onActivity: (activity) => io.progress(activity),
-              patrol: event.kind === 'patrol',
+              patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
-            interruptedMessageDelivered = interruptedMessage != null;
+            if (verify) verificationMessage = output.message;
+            interruptedMessageDelivered = interruptedMessage != null && !verify;
             io.signal.throwIfAborted();
             const latest = assignment.kind === 'daemon' ? assignment
               : await resolveCurrentManagerAssignment(identityOf(assignment), configDirectory);
@@ -164,11 +187,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               validateManagerSummary(summary);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
-            return { kind: 'completed', result: { kind: 'reply', message: output.message }, change: state.change({
+            return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
               ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
-              ...(human && assignment.kind !== 'daemon' ? { proposal: { revision: state.current.revision, pending } } : {}),
-            }) };
+              ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
+            }) }) };
           } finally { await resolved.release?.(); }
         } else if (assignment.kind !== 'daemon') switch (command.kind) {
           case 'dismiss_summary': result = { kind: 'notice', message: getLabel('manager.conversation.dismissed', language) }; break;
@@ -189,7 +212,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       } catch (error) {
         if (io.signal.aborted) {
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
-          return { kind: 'interrupted', ...(human && command.kind === 'message'
+          return { kind: 'interrupted', ...(verificationMessage === undefined ? {} : { message: verificationMessage }), ...(human && command.kind === 'message' && !verify
             ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
               ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
         }

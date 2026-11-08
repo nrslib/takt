@@ -20,7 +20,7 @@ export async function notifyManagerTurnFailure(cwd: string, goalId: string | und
     const reason = sanitizeSensitiveText(getErrorMessage(error));
     if (goalId === undefined) {
       const message = [
-        getLabel('manager.notificationHeadings.blocked', language, { project: basename(cwd) }),
+        getLabel('manager.notificationHumanHeadings.blocked', language, { project: basename(cwd), context: '' }),
         getLabel('manager.conversationFailureNotification', language, { reason }),
       ].join('\n');
       if (webhookUrl) await sendSlackNotification(webhookUrl, message);

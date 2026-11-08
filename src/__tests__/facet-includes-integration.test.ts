@@ -61,18 +61,31 @@ describe('facet include expansion', () => {
     expect(references).toBeGreaterThan(0);
   });
 
-  it.each(['ja', 'en'] as const)('%s: manager and grill-me expand the same interview partial', (lang) => {
-    const manager = resolveRefToContent('manager', undefined, tempDir, 'instructions', { projectDir: tempDir, lang });
+  it.each(['ja', 'en'] as const)('%s: grill-me expands interview partials while the assistant omits them', (lang) => {
     const grill = loadTemplate('score_interactive_system_prompt', lang, { grillMe: true });
     const assistant = loadTemplate('score_interactive_system_prompt', lang, { grillMe: false });
     for (const name of ['decision-question-priority', 'one-question-interview']) {
       const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
-      expect(manager).toContain(partial);
       expect(grill).toContain(partial);
       expect(assistant).not.toContain(partial);
     }
-    expect(manager).not.toContain('{{include:');
     expect(grill).not.toContain('{{include:');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: manager provides its own question procedure without shared interview partials', (lang) => {
+    const managerContext = { projectDir: tempDir, lang };
+    const manager = resolveRefToContent('manager', undefined, tempDir, 'instructions', managerContext);
+    const questionProcedure = manager?.split('\n\n').find(paragraph => paragraph.includes('takt_ask_goal_question'));
+    expect(questionProcedure).toBeDefined();
+    for (const field of ['body', 'options', 'recommendation', 'message']) {
+      expect(questionProcedure).toMatch(new RegExp(`\\b${field}\\b`));
+    }
+
+    for (const name of ['decision-question-priority', 'one-question-interview']) {
+      const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
+      expect(manager).not.toContain(partial);
+    }
+    expect(manager).not.toContain('{{include:');
   });
 
   it('should expand {{include:instructions/<name>}} in an instruction facet', () => {

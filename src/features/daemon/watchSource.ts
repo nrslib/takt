@@ -106,7 +106,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async patrolGoalIds(repositoryDirectory: string): Promise<readonly string[]> {
     const ids: string[] = [];
     for await (const goal of readWatchGoals(repositoryDirectory, this.onError, this.goalReader)) {
-      if (goal.executionStatus === 'active' && goal.status !== 'completed') ids.push(goal.id);
+      if (goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge') ids.push(goal.id);
     }
     return ids;
   }

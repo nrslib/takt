@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import '../environment.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';

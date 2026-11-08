@@ -7,6 +7,9 @@ import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
 import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
+import { resolveFormalSpecConfigurationWithoutPrompt } from '../dist/features/interactive/taskInstructionFormat.js';
+import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
+import { renderTemplate } from '../dist/shared/prompts/index.js';
 import { managerStateReads } from './manager-work-split-reads.mjs';
 import * as schemas from '../dist/features/mcp/schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRetrySchemas.js';
@@ -62,8 +65,14 @@ export function buildManagerSystemPrompt(fixture) {
     if ([persona, policy, knowledge, instruction].some((body) => body === undefined)) {
       throw new Error('Manager facets are missing');
     }
+    const specificationConfiguration = resolveFormalSpecConfigurationWithoutPrompt(projectDir);
     return [
-      persona.trim(), policy.trim(), knowledge.trim(), instruction.trim(),
+      persona.trim(), policy.trim(), knowledge.trim(), renderTemplate(instruction.trim(), {
+        formalSpec: specificationConfiguration.mode,
+        formalSpecCommentsEnabled: specificationConfiguration.mode && specificationConfiguration.comments,
+        formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang),
+      }),
+      `Formal specification configuration: ${JSON.stringify(specificationConfiguration)}`,
       `Repository: ${JSON.stringify(fixture.cwd)}`,
       `Default workflow: ${JSON.stringify(fixture.defaultWorkflow)}`,
       `Repository manager.main_merge: ${JSON.stringify(fixture.mainMerge)}`,

@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Admission, EventInput, WatchObservation } from '../core/daemon/events.js';
 import type { CommandPort, CommandResult, ProcessObservation } from '../core/daemon/io.js';
+import { EventInputSchema } from '../infra/daemon/eventRecord.js';
 import { parseDaemonProcessMessage } from '../core/daemon/processProtocol.js';
 import { WatchChecks, type LaunchWatchTarget, type RunWatchTarget } from '../features/daemon/watchers/checks.js';
 import { startDirectoryWatcher, type DirectoryWatchTarget, type WatchFileChange } from '../features/daemon/watchers/directories.js';
@@ -36,6 +37,7 @@ function harness() {
   };
   const accepted = new Map<string, EventInput>();
   const accept = vi.fn(async (input: EventInput): Promise<Admission> => {
+    EventInputSchema.parse(input);
     parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'launch-1', input: {
       event: { ...input, operationId: input.eventId, acceptedSequence: 1, lane: 'other' },
       turn: { conversationId: input.conversationId, operationId: input.eventId, generation: 1 },
@@ -251,9 +253,82 @@ function commandWith(response: object, patch: Partial<CommandResult> = {}) {
   const result: CommandResult = { code: 0, signal: null, stdout: Buffer.from(JSON.stringify(response)), stderr: Buffer.alloc(0), truncated: false, ...patch };
   return { run: vi.fn<CommandPort['run']>().mockResolvedValue(result) };
 }
-const prResponse = (state = 'MERGED') => ({ number: 9, url: pr.url, state, headRefName: 'goal', baseRefName: 'main' });
+const prResponse = (state = 'MERGED') => ({ mergeable: 'MERGEABLE', number: 9, url: pr.url, state, headRefName: 'goal', baseRefName: 'main' });
 
 describe('保存済みPRの照会', () => {
+  it('衝突を初回に一度だけ通知し、再起動後も同じ衝突を繰り返さない', async () => {
+    const h = harness();
+    const command = commandWith({ ...prResponse('OPEN'), mergeable: 'CONFLICTING' });
+    await observePullRequest(pr, command, h.observations, options());
+    await observePullRequest(pr, command, h.observations, options());
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, command, restarted, options());
+    expect(observedKinds(h.accepted)).toEqual(['pr_conflicting']);
+    expect([...h.accepted.values()][0]?.event).toEqual({ kind: 'watch_observation', observation: {
+      kind: 'pr_conflicting', targetId: pr.targetId, generation: pr.generation, observedAt: expect.any(String),
+      repositoryDirectory: pr.repositoryDirectory, goalId: pr.goalId, url: pr.url,
+    } });
+    expect(command.run).toHaveBeenCalledTimes(3);
+    expect(command.run).toHaveBeenCalledWith(expect.objectContaining({ executable: 'gh',
+      args: ['pr', 'view', pr.url, '--json', 'number,url,state,headRefName,baseRefName,mergeable'],
+    }), expect.any(Object));
+  });
+
+  it('衝突の解消を記録し、再起動後に再発したら一度だけ通知する', async () => {
+    const h = harness();
+    for (const mergeable of ['MERGEABLE', 'CONFLICTING', 'MERGEABLE']) {
+      await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable }), h.observations, options());
+    }
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    for (const _attempt of [1, 2]) {
+      await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable: 'CONFLICTING' }), restarted, options());
+    }
+    expect(observedKinds(h.accepted)).toEqual(['pr_conflicting', 'pr_conflicting']);
+    expect(h.accept).toHaveBeenCalledTimes(2);
+  });
+
+  it('CLOSEDで衝突の記録を解除し、再起動後に再オープンして衝突したら一度だけ通知する', async () => {
+    const h = harness();
+    const conflicting = commandWith({ ...prResponse('OPEN'), mergeable: 'CONFLICTING' });
+    const closed = commandWith({ ...prResponse('CLOSED'), mergeable: 'UNKNOWN' });
+    await observePullRequest(pr, conflicting, h.observations, options());
+    await observePullRequest(pr, closed, h.observations, options());
+    await observePullRequest(pr, closed, h.observations, options());
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, conflicting, restarted, options());
+    await observePullRequest(pr, conflicting, restarted, options());
+    expect([...h.accepted.values()].map((input) => input.event)).toMatchObject([
+      { kind: 'watch_observation', observation: { kind: 'pr_conflicting' } },
+      { kind: 'watch_observation', observation: { kind: 'pr_changed', state: 'CLOSED' } },
+      { kind: 'watch_observation', observation: { kind: 'pr_conflicting' } },
+    ]);
+    expect(h.accept).toHaveBeenCalledTimes(3);
+  });
+
+  it('UNKNOWNを衝突の発生にも解消にも扱わず、再起動後も異常の記録を保持する', async () => {
+    const h = harness();
+    await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable: 'UNKNOWN' }), h.observations, options());
+    expect(h.accept).not.toHaveBeenCalled();
+    for (const mergeable of ['CONFLICTING', 'UNKNOWN']) {
+      await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable }), h.observations, options());
+    }
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, commandWith({ ...prResponse('OPEN'), mergeable: 'CONFLICTING' }), restarted, options());
+    expect(observedKinds(h.accepted)).toEqual(['pr_conflicting']);
+    expect(h.accept).toHaveBeenCalledOnce();
+  });
+
+  it('照会失敗で衝突の記録を解除しない', async () => {
+    const h = harness();
+    const response = { ...prResponse('OPEN'), mergeable: 'CONFLICTING' };
+    await observePullRequest(pr, commandWith(response), h.observations, options());
+    await expect(observePullRequest(pr, commandWith(response, { code: 1 }), h.observations, options())).rejects.toThrow();
+    const restarted = new WatchObservations(h.records, { accept: h.accept }, Date.now);
+    await observePullRequest(pr, commandWith(response), restarted, options());
+    expect(observedKinds(h.accepted)).toEqual(['pr_conflicting']);
+    expect(h.accept).toHaveBeenCalledOnce();
+  });
+
   it('OPENを観測せずCLOSEDからMERGEDになっても、再起動後に別の変化として一度だけ通知する', async () => {
     const h = harness();
     await observePullRequest(pr, commandWith(prResponse('CLOSED')), h.observations, options());
@@ -274,7 +349,7 @@ describe('保存済みPRの照会', () => {
     await observePullRequest(pr, command, h.observations, io);
     expect(observedKinds(h.accepted)).toEqual(['pr_changed']);
     expect(command.run).toHaveBeenCalledWith(expect.objectContaining({ executable: 'gh',
-      args: ['pr', 'view', pr.url, '--json', 'number,url,state,headRefName,baseRefName'],
+      args: ['pr', 'view', pr.url, '--json', 'number,url,state,headRefName,baseRefName,mergeable'],
       cwd: '/repo', maxOutputBytes: 16384 }), io);
   });
 

@@ -8,6 +8,7 @@ import type {
 import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply } from './dispatcherMailbox.js';
 import { createTurnQueues } from './turnQueues.js';
+import { conversationId } from '../../infra/conversations/identity.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -30,7 +31,7 @@ interface ActiveTurn {
   turn: TurnIdentity;
   abort: AbortController;
   requestAbort: AbortController;
-  interrupted: boolean;
+  interruption: 'requested' | 'shutdown' | 'restart' | undefined;
   launchPending: boolean;
   requests: Map<number, Reply<DaemonStateReply>>;
   progress: Map<number, Reply<void>>;
@@ -299,6 +300,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     this.generation = Math.max(this.generation, turn.generation);
     this.queues.markStarted(event.eventId);
     const active = this.newTurn(event, turn);
+    active.interruption = 'restart';
     this.active.set(event.conversationId, active);
     this.finish(active, stored.state === 'settling' ? stored.result.outcome : { kind: 'interrupted' }, effects,
       stored.state === 'settling');
@@ -355,7 +357,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const accepted = saved.kind === 'stored' ? admission.event : saved.event;
     if (accepted.lane === 'human' && (saved.kind === 'stored' || saved.state === 'queued')) {
       const active = this.active.get(accepted.conversationId);
-      if (active?.event.event.kind === 'patrol' && active.phase !== 'settling') this.interrupt(active, effects);
+      if (active?.event.event.kind === 'patrol' && active.phase !== 'settling') this.interrupt(active, 'requested', effects);
     }
     const observed = accepted.event;
     if (observed.kind === 'watch_observation' && observed.observation.kind === 'director_state_changed' && observed.observation.goalId !== null) {
@@ -365,7 +367,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   }
 
   private newTurn(event: AcceptedEvent, turn: TurnIdentity): ActiveTurn {
-    return { event, turn, abort: new AbortController(), requestAbort: new AbortController(), interrupted: false, launchPending: false,
+    return { event, turn, abort: new AbortController(), requestAbort: new AbortController(), interruption: undefined, launchPending: false,
       requests: new Map(), progress: new Map(), phase: 'starting', save: 'waiting', saveAttempt: 0 };
   }
 
@@ -389,13 +391,13 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const { event, turn, abort } = active;
     if (notice.kind === 'start_saved' && !notice.result.ok) {
       this.failure('start', event, notice.result.error, effects);
-      this.finish(active, active.interrupted ? { kind: 'interrupted' }
+      this.finish(active, active.interruption !== undefined ? { kind: 'interrupted' }
         : { kind: 'failed', message: 'Turn start could not be saved' }, effects);
       return;
     }
-    if (notice.kind !== 'process_started' && active.interrupted) { this.finish(active, { kind: 'interrupted' }, effects); return; }
+    if (notice.kind !== 'process_started' && active.interruption !== undefined) { this.finish(active, { kind: 'interrupted' }, effects); return; }
     if (!notice.result.ok) {
-      this.finish(active, active.interrupted ? { kind: 'interrupted' }
+      this.finish(active, active.interruption !== undefined ? { kind: 'interrupted' }
         : { kind: 'failed', message: notice.result.error instanceof Error ? notice.result.error.message : String(notice.result.error) }, effects);
       return;
     }
@@ -418,10 +420,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const active = this.current(message.turn);
     if (active === undefined || active.phase !== 'running') { response.resolve(); return; }
     if (message.kind === 'turn_finished') {
-      const outcome = active.interrupted && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
+      const outcome = active.interruption !== undefined && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
       active.finishReply = response;
       this.finish(active, outcome, effects);
-    } else if (active.interrupted || active.event.event.kind === 'patrol' && typeof message.message === 'string') {
+    } else if (active.interruption !== undefined || active.event.event.kind === 'patrol' && typeof message.message === 'string') {
       // 見回りは完了結果だけを表示し、後から中断したターンの途中結果を残さない。
       response.resolve();
     } else {
@@ -436,7 +438,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     const { turn, request, signal, reply: response } = notice;
     if (this.shutdown !== undefined) { response.resolve({ kind: 'error', code: 'stopping', message: 'Daemon is stopping' }); return; }
     const active = this.current(turn);
-    if (active === undefined || active.phase !== 'running' || active.interrupted) {
+    if (active === undefined || active.phase !== 'running' || active.interruption !== undefined) {
       response.resolve({ kind: 'error', code: 'stale_turn', message: 'Turn is no longer active' });
       return;
     }
@@ -449,8 +451,13 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private finish(active: ActiveTurn, outcome: TurnOutcome, effects: DispatcherEffect[], preserveOutcome = false): void {
     const event = active.event.event;
+    if (!preserveOutcome && outcome.kind === 'interrupted' && active.event.lane === 'other'
+      && (active.interruption === 'shutdown' || active.interruption === 'restart')) {
+      outcome = { kind: 'deferred' };
+    }
     if (!preserveOutcome && outcome.kind === 'interrupted' && outcome.change?.interruptedMessage === undefined
-      && event.kind === 'human_command' && event.command.kind === 'message') {
+      && event.kind === 'human_command' && event.command.kind === 'message'
+      && (event.command.text.trim() !== '/verify' || active.turn.conversationId === conversationId({ kind: 'daemon' }))) {
       outcome = { ...outcome, change: {
         // 子の変更結果がなくても、保存時に最新の版へ載せ直す本文だけの変更を確定する。
         operationId: active.turn.operationId, expectedVersion: 0, ...outcome.change,
@@ -501,7 +508,11 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         effects.push(effect(() => this.dependencies.runner.resultCommitted(turn), (completion) => ({ kind: 'result_committed', turn, attempt, result: completion })));
         break;
       case 'result_committed':
-        if (result.outcome.kind === 'deferred') this.queues.defer(event.eventId);
+        if (result.outcome.kind === 'deferred') {
+          // 起動時は queued と同じ順序で戻し、停止中は次の起動まで実行しない。
+          if (active.interruption === 'restart') this.queues.confirm(event.eventId);
+          else this.queues.defer(event.eventId);
+        }
         else {
           this.queues.remove(event.eventId);
           if (event.event.kind === 'goal_resumed') this.queues.resumeGoal(event.event);
@@ -522,19 +533,19 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     if (event.kind === 'stop') {
       if (this.shutdown !== undefined) { response.reply = this.shutdown.reply; return; }
       this.shutdown = { reply: response.reply, phase: 'runner', errors: [] };
-      for (const active of this.active.values()) if (active.phase !== 'settling') this.interrupt(active, effects);
+      for (const active of this.active.values()) if (active.phase !== 'settling') this.interrupt(active, 'shutdown', effects);
       effects.push(effect(() => this.dependencies.runner.close(), (result) => ({ kind: 'runner_closed', result })));
       return;
     }
     const active = this.current(event);
-    if (active === undefined || active.phase === 'settling' || active.interrupted) { response.reply.resolve({ kind: 'ignored' }); return; }
-    this.interrupt(active, effects);
+    if (active === undefined || active.phase === 'settling' || active.interruption !== undefined) { response.reply.resolve({ kind: 'ignored' }); return; }
+    this.interrupt(active, 'requested', effects);
     response.reply.resolve({ kind: 'interrupted' });
   }
 
-  private interrupt(active: ActiveTurn, effects: DispatcherEffect[]): void {
-    if (active.interrupted) return;
-    active.interrupted = true;
+  private interrupt(active: ActiveTurn, reason: 'requested' | 'shutdown', effects: DispatcherEffect[]): void {
+    if (active.interruption !== undefined) return;
+    active.interruption = reason;
     const { abort, turn, phase } = active;
     this.ancillary(() => {
       abort.abort();

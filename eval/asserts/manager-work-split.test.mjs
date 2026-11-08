@@ -1567,3 +1567,93 @@ for (const lang of ['ja', 'en']) {
     });
   }
 }
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is']) {
+    test(`${lang}/${caseId}: validates repair operations and target work log, leaving reasons to the semantic grader`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const control = caseId === 'unrelated-history-repair';
+      const leaveAsIs = caseId === 'local-env-failure-left-as-is';
+      const summary = control
+        ? 'All prescribed checks passed. Remove the unrelated history screen change from the booking export plan.'
+        : leaveAsIs
+          ? lang === 'ja'
+            ? '異常なし。作業前でも再現し CI では通る環境依存の失敗を、直さずに条件と結果を報告して進める計画は妥当。'
+            : 'No anomalies. Reporting conditions and results without repairing an environment-dependent failure that also reproduces before the task and passes in CI is reasonable.'
+          : lang === 'ja'
+            ? '異常なし。計画はこの環境で再現した失敗への妥当な対処。'
+            : 'No anomalies. The plan is a reasonable response to failures reproduced in this environment.';
+      const output = verificationOutput(fixture, summary);
+      if (control) output.calls.unshift(tellRun(fixture, summary));
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+
+      for (const mutate of [
+        (value) => { value.calls = value.calls.filter(({ tool }) => tool !== 'takt_record_goal_work_log'); },
+        (value) => { value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+        (value) => { value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.cwd = '/workspace/other'; },
+        (value) => { value.calls.push({ tool: 'takt_complete_goal', arguments: {
+          cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Done.',
+        } }); },
+      ]) {
+        const invalid = structuredClone(output);
+        mutate(invalid);
+        assert.equal(score(invalid, caseId, lang).pass, false);
+      }
+      const badTarget = structuredClone(output);
+      badTarget.calls.unshift(tellRun(fixture, summary));
+      badTarget.calls[0].arguments.taskName = 'other-task';
+      assert.equal(score(badTarget, caseId, lang).pass, false);
+      const repeatedTell = structuredClone(output);
+      repeatedTell.calls = [tellRun(fixture, summary), tellRun(fixture, summary), ...output.calls.filter(({ tool }) => tool !== 'takt_tell_run')];
+      assert.equal(score(repeatedTell, caseId, lang).pass, false);
+
+      if (control) {
+        const noTell = structuredClone(output);
+        noTell.calls = noTell.calls.filter(({ tool }) => tool !== 'takt_tell_run');
+        assert.equal(score(noTell, caseId, lang).pass, false);
+        const extraTask = structuredClone(output);
+        extraTask.calls.push(enqueue(fixture, 'history-repair'));
+        assert.equal(score(extraTask, caseId, lang).pass, false);
+      } else if (leaveAsIs) {
+        const reporting = structuredClone(output);
+        reporting.calls.unshift(tellRun(fixture, 'Include the reproduction environment, commands and failed check results in the final report.'));
+        assert.equal(score(reporting, caseId, lang).pass, true);
+        const imposedRepair = structuredClone(output);
+        imposedRepair.calls.unshift(enqueue(fixture, 'history-test-repair'));
+        assert.equal(score(imposedRepair, caseId, lang).pass, false);
+      } else {
+        const continueRun = structuredClone(output);
+        continueRun.calls.unshift(tellRun(fixture, summary));
+        assert.equal(score(continueRun, caseId, lang).pass, true);
+        const prerequisite = structuredClone(continueRun);
+        const repair = enqueue(fixture, 'verification-environment-repair');
+        repair.arguments.purpose = 'Restore the prescribed checks on this PC';
+        repair.arguments.task = 'Apply the environment repair in the latest plan and rerun the prescribed checks. The original run will use this result before completing verification.';
+        prerequisite.calls.unshift(repair);
+        assert.equal(score(prerequisite, caseId, lang).pass, true);
+        const unknownWorkflow = structuredClone(prerequisite);
+        unknownWorkflow.calls[0].arguments.workflow = 'absent';
+        assert.equal(score(unknownWorkflow, caseId, lang).pass, false);
+        const duplicate = structuredClone(prerequisite);
+        duplicate.calls.unshift(structuredClone(repair));
+        assert.equal(score(duplicate, caseId, lang).pass, false);
+        const secondRepair = structuredClone(prerequisite);
+        secondRepair.calls.unshift(enqueue(fixture, 'second-repair'));
+        assert.equal(score(secondRepair, caseId, lang).pass, false);
+        const sameWork = structuredClone(prerequisite);
+        sameWork.calls[0].arguments.workKey = fixture.tasks[0].goalWorkKey;
+        assert.equal(score(sameWork, caseId, lang).pass, false);
+      }
+      const semanticFailure = structuredClone(output);
+      const wrongDecision = control ? 'Also fix the history screen.'
+        : leaveAsIs ? 'Fix the existing history date test before completing this task.'
+          : 'Drop the environment repair as out of scope.';
+      semanticFailure.calls = [tellRun(fixture, wrongDecision), ...output.calls.filter(({ tool }) => tool !== 'takt_tell_run')];
+      assert.equal(score(semanticFailure, caseId, lang).pass, true, 'JS checks structure; llm-rubric must reject the wrong decision');
+      const noReason = structuredClone(output);
+      noReason.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.summary = 'No anomaly.';
+      assert.equal(score(noReason, caseId, lang).pass, true, 'The semantic grader owns the decision and evidence');
+    });
+  }
+}

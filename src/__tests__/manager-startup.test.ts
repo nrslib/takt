@@ -144,7 +144,7 @@ describe('daemon manager runtime preparation', () => {
       assertStrictStructuredOutputSchema(outputSchema);
       validateStructuredOutputAgainstSchema({ message: '確認', summary: {
         objective: 'CSV出力', outOfScope: [], acceptanceCriteria: ['CSV取得'], repositoryDirectory: null,
-        startBranch: null, integrationBranch: null, constraints: [],
+        startBranch: null, integrationBranch: null, constraints: [], specifications: null,
       } }, outputSchema);
     });
     await prepare();

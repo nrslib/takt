@@ -52,7 +52,7 @@ export type TurnOutcome =
   | { kind: 'failed'; message: string; change?: ConversationChange }
   // 現ターンの中断処理で確定した session 更新・承認予約の解除等。中断後も反映する。
   // 中断済みターンの completed/failed の change と、別ターン・世代の通知は反映しない。
-  | { kind: 'interrupted'; change?: ConversationChange };
+  | { kind: 'interrupted'; message?: string; change?: ConversationChange };
 
 /** saveResult → apply → markSettled。復元時もこの値だけを再反映する。 */
 export interface TurnResult extends TurnIdentity {

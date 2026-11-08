@@ -624,10 +624,11 @@ it.each([
   const records = await Promise.all((await readdir(join(f.directory, 'daemon-events'))).filter((name) => name.endsWith('.json'))
     .map(async (name) => EventRecordSchema.parse(JSON.parse(await readFile(join(f.directory, 'daemon-events', name), 'utf8')) as unknown)));
   const settled = records.find((record) => record.event.eventId === active.input.event.eventId);
-  if (settled?.state !== 'settled') throw new Error('Expected a saved interrupted result');
-  expect(settled.result.outcome.kind).toBe('interrupted');
-  if (source === 'human') expect(settled.result.outcome).toMatchObject({ change: { interruptedMessage } });
-  await store.apply(settled.result);
+  if (source === 'human') {
+    if (settled?.state !== 'settled') throw new Error('Expected a saved interrupted result');
+    expect(settled.result.outcome).toMatchObject({ kind: 'interrupted', change: { interruptedMessage } });
+    await store.apply(settled.result);
+  } else expect(settled).toEqual({ state: 'queued', event: active.input.event });
   expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toEqual(saved?.state);
   const restarted = await fixture();
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
@@ -641,7 +642,12 @@ it.each([
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].sessionId).toBe(invalidated ? undefined : 'provider-session');
   expect(execute.mock.calls[0]![0].prompt).toContain(interruptedMessage);
-  expect(restarted.runner.calls).toHaveLength(1);
+  if (source === 'event') {
+    const redelivered = await restarted.runner.started(2);
+    expect(redelivered.input.event).toEqual(active.input.event);
+    await restarted.runner.finish(redelivered);
+  }
+  expect(restarted.runner.calls).toHaveLength(source === 'event' ? 2 : 1);
 });
 
 it('roundtrips message-only changes and clearing through IPC and conversation storage', async () => {
@@ -1671,7 +1677,7 @@ it('continues monitoring later repositories after an unreadable tasks file', asy
   expect(errors).toHaveBeenCalledTimes(2);
 });
 
-it('selects active patrol goals per repository and resolves project, global and default intervals', async () => {
+it('excludes awaiting-merge goals from patrol and resolves project, global and default intervals', async () => {
   const f = await fixture();
   const source = createWatchSource(f.conversations, async () => {}, (error) => { throw error; });
   const active = goalRecord();
@@ -1687,8 +1693,10 @@ it('selects active patrol goals per repository and resolves project, global and 
   }
   expect(await source.patrols()).toEqual([{ conversationId: f.id, repositoryDirectory: f.repository,
     intervalSeconds: 1800 }]);
-  expect(await source.patrolGoalIds(f.repository)).toEqual(expect.arrayContaining([active.id, awaiting.id]));
-  expect(await source.patrolGoalIds(f.repository)).toHaveLength(2);
+  expect(await source.patrolGoalIds(f.repository)).toEqual([active.id]);
+  expect(await source.pullRequests()).toMatchObject([{ goalId: awaiting.id }]);
+  await writeFile(join(f.repository, '.takt', 'goals', active.id, 'goal.json'), JSON.stringify({ ...active, executionStatus: 'paused' }));
+  expect(await source.patrolGoalIds(f.repository)).toEqual([]);
   await writeFile(join(f.directory, 'config.yaml'), 'manager:\n  patrol_interval: 900\n');
   expect((await source.patrols())[0]!.intervalSeconds).toBe(900);
   await writeFile(join(f.repository, '.takt', 'config.yaml'), 'manager:\n  patrol_interval: 60\n');

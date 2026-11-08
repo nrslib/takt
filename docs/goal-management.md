@@ -4,14 +4,18 @@
 
 ## Manager patrols
 
-For each repository with active goals (excluding paused, aborted and completed goals), the manager periodically inspects all active goals together. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+Each patrol runs in a new session, separate from the conversation, and does not read the conversation history. The initial prompt includes the business context it needs. Results remain in work records and are available to later conversation turns through that context. Human conversations continue in their original session.
+
+For each repository with active goals (excluding paused, aborted, completed and awaiting-merge goals), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+
+Goals awaiting merge (`awaiting_merge`) are monitored by the PR watcher. In addition to merges and closures, it delivers conflicts with the integration target (`mergeable: CONFLICTING`) as events to the manager. It does not repeat a conflict while it persists; after it resolves, a recurrence is reported again. `mergeable: UNKNOWN` is not counted as a change. Time and counts do not determine anomalies. The manager checks current state and existing tasks, then enqueues preparation with `takt_merge_goal_pr` when needed. The default `approve` mode uses `until: prepare` and waits for human merge.
 
 ```yaml
 manager:
   patrol_interval: 1800
 ```
 
-Patrols enter the non-human event queue. Processing priority is human input, ordinary events, then patrols; a patrol starts only when neither of the first two has waiting input. Accepting human input from the TUI or Slack in the same conversation interrupts a running patrol so the human input can be processed first. The interrupted patrol is not retried; patrols resume at the next interval. Queued input and events remain intact. Human input does not interrupt other running turns. Pending or running patrols do not accumulate, and missed intervals while the daemon is stopped are not replayed. While the TUI is connected, it displays one short result from a completed patrol, such as “Patrol: 2 goals, no anomalies”, without intermediate output. Details remain in work records. Inspection records alone do not count as progress. No Slack or other notification is sent when nothing is wrong. The manager uses existing notification or inquiry tools when a problem requires attention.
+Patrols enter the non-human event queue. Processing priority is human input, ordinary events, then patrols; a patrol starts only when neither of the first two has waiting input. Accepting human input from the TUI or Slack in the same conversation interrupts a running patrol so the human input can be processed first. A patrol interrupted by human input or an explicit interrupt is not retried; patrols resume at the next interval. A patrol interrupted by daemon shutdown or restart is redelivered on the next startup. Queued input and events remain intact. Human input does not interrupt other running turns. Pending or running patrols do not accumulate, and missed intervals while the daemon is stopped are not replayed. While the TUI is connected, it displays one short result from a completed patrol, such as “Patrol: 2 goals, no anomalies”, without intermediate output. Details remain in work records. Inspection records alone do not count as progress. No Slack or other notification is sent when nothing is wrong. The manager uses existing notification or inquiry tools when a problem requires attention.
 
 Patrols compare the latest reports and records from running runs against the task instructions and acceptance criteria to check for deviations from the requested work. Threats or assumptions beyond the target scope, impossible premises, requirements absent from the acceptance criteria and unnecessary machinery are reported to the run with supporting evidence. Execution time and step counts do not determine anomalies. The `run_launch_stalled` observation remains to report a TAKT failure when a pending task has not started after 30 seconds. Director patrols remain disabled; the legacy `director.patrol_interval` setting is read and ignored.
 
@@ -21,9 +25,9 @@ Start `takt manager` in an interactive terminal and describe the objective, scop
 
 Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a goal proposal itself.
 
-The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message.
+The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal` and `/verify` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. Input starting with `/` other than `/make-goal` and `/verify` is sent to manager as a regular message.
 
-Below the input box, key hints are followed by the status line (example below). The `/make-goal` explanation appears in slash completion rather than as a permanent hint. The full experimental notice appears once at startup.
+Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
 ```text
 Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
@@ -32,7 +36,9 @@ Assignment: takt | Ongoing 1 / Pending 0
 
 The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting **Register goal** and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
 
-The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn. Within the other queue, patrols wait behind ordinary events; acceptance order is preserved among human inputs, among ordinary events and among patrols. A conversation shares one session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
+The daemon is event driven. It has two queues: human input and other events. Human input takes priority when starting the next turn. Within the other queue, patrols wait behind ordinary events; acceptance order is preserved among human inputs, among ordinary events and among patrols. Turns other than patrols share one conversation session, retaining context learned from events for later human messages. Messages, approvals, and inquiry answers can be accepted and saved while a turn is running; snapshot reads and interruption remain available. accepted means durable admission, not completion. Interrupting the active turn preserves waiting input. Failed turns are not blindly replayed; manager inspects current state and side effects to decide recovery.
+
+Non-human events interrupted by daemon shutdown, or found still `running` at startup, return to their original queue positions and are redelivered. This includes task results, PR changes, patrols, and director messages. Human-input priority and the lower priority of patrols remain unchanged. Turns explicitly interrupted by the human stay settled and are not redelivered. Interrupted human messages retain the existing `interruptedMessage` behavior for the next message.
 
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays notifications and lets you continue the conversation with a manager that receives those events. Work records are not displayed in the TUI. Closing the TUI also leaves an already running run active.
 
@@ -118,7 +124,7 @@ Manager advances goals within its assigned repository or workspace: it submits t
 
 Replies, failures, and interruptions are saved with the same operation ID and shown later in the director TUI. If saving the message fails, the tool returns a failure without accepting it. An accepted message remains saved after a lost connection, and director does not automatically resend it.
 
-After a daemon restart, messages that have not started run even without a client connection. A message that started but has no saved result is reported as interrupted to director and the human, and is not automatically rerun.
+After a daemon restart, messages that have not started run even without a client connection. Director messages interrupted by daemon shutdown, or found still `running` at startup, are redelivered in their original acceptance order. Explicitly interrupted messages are not redelivered.
 
 Director cannot run shell commands, write files, or change settings. It does not inspect task internals such as run phases, adjudications, or logs; each manager inspects its own tasks. Merge decisions, specification decisions, and irreversible operations such as deletion remain with the human. Director does not answer inquiries on the human's behalf.
 
@@ -222,3 +228,17 @@ Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusi
 ## Future plans
 
 A choice of Docker or local execution, goals spanning repositories, delegated-work completion notices and adjudication are planned. The director does not yet order work across managers using dependencies, overlapping change targets or combined-result checks.
+
+## Manager goals and formal specifications
+
+`assistant.formal_spec` also applies to manager goal proposals. The manager does not ask at each registration: `true` and `"Y/n"` include both Quint and Alloy, while `false` and `"y/N"` omit them. Project configuration takes precedence over global configuration, resolving object fields independently. `comments` and `model_check_timeout_seconds` use the same settings as interactive mode.
+
+Development and implementation goals use Gherkin for important observable behavior where a misunderstanding would change the result. Do not repeat those expected outcomes in acceptance criteria. Gherkin keywords are English; descriptions may use the conversation language. Goals for research, documentation, operations, or other non-implementation work do not use Gherkin.
+
+Enter `/verify` in the manager conversation in either TUI or Slack to generate Quint and Alloy specifications from the current agreement and run the same checkers as interactive mode. Results return to the same conversation for the manager to interpret diagnostics and counterexamples. When formal specifications are disabled, verification is reported as unavailable. Registration does not automatically run verification, and verification alone does not register a goal or modify its proposal or saved specifications.
+
+Specifications are stored as code bodies in the optional goal field `specifications: { gherkin?, quint?, alloy? }` and displayed in both TUI and Slack proposals. Existing goals without specifications remain readable. As with acceptance criteria, the manager includes complete relevant specifications in assigned task instructions as the basis for implementation and review. Final PR review tasks automatically receive all saved specifications.
+
+Read complete specification bodies using `takt_get_goal` with `path: specifications.gherkin`, `specifications.quint`, or `specifications.alloy`. Specifications are finalized at registration and saved with the goal.
+
+In a workspace, `/verify` uses the configuration of the repository selected in the proposal. Without a proposal, it uses the sole assigned repository if there is one. When multiple repositories are assigned, it does not start verification and asks you to specify the target and create a proposal with `/make-goal`.

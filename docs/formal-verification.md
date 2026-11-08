@@ -118,3 +118,11 @@ A retention marker protects workspaces with completed failed, errored, or timed-
 If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with both errors. The remaining ownership marker protects the workspace from automatic cleanup even after the owner exits. Follow the notice to copy any needed artifacts manually.
 
 Workspaces without either marker become eligible for cleanup after more than one hour of inactivity. When deletion following success or cancellation fails, TAKT records the pending deletion in the current process. The next `/verify` in that process retries deletion after more than one hour of inactivity, even if the ownership marker could not be removed.
+
+## Manager goals and formal specifications
+
+`assistant.formal_spec` also applies to manager goal proposals. The manager does not ask at each registration: `true` and `"Y/n"` include both Quint and Alloy, while `false` and `"y/N"` omit them. Project configuration takes precedence over global configuration, resolving object fields independently. `comments` and `model_check_timeout_seconds` use the same settings as interactive mode.
+
+Development and implementation goals use Gherkin for important observable behavior where a misunderstanding would change the result. Do not repeat those expected outcomes in acceptance criteria. Gherkin keywords are English; descriptions may use the conversation language. Goals for research, documentation, operations, or other non-implementation work do not use Gherkin.
+
+Enter `/verify` in the manager conversation in either TUI or Slack to generate Quint and Alloy specifications from the current agreement and run the same checkers as interactive mode. Results return to the same conversation for the manager to interpret diagnostics and counterexamples. When formal specifications are disabled, verification is reported as unavailable. Registration does not automatically run verification, and verification alone does not register a goal or modify its proposal or saved specifications.

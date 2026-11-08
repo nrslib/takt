@@ -4,10 +4,142 @@ import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
 import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import type { AcceptedEvent, TurnEvent } from '../core/daemon/events.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
+import type { EventStore } from '../core/daemon/ports.js';
 
 const interrupt = (turn: TurnIdentity) => ({ kind: 'interrupt' as const, ...turn });
 
+async function storedDispatcher(h: Awaited<ReturnType<typeof harness>>, store: EventStore) {
+  const runner = new ControlledTurnRunner();
+  const dispatcher = await createDaemonDispatcher({
+    store, runner, conversations: h.owner, stateRequests: h.stateRequests, resources: h.resources,
+    limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: h.failures,
+  });
+  runner.bus = dispatcher;
+  return { dispatcher, runner };
+}
+
+const repositoryGoal = { repositoryDirectory: '/project', goalId: '650e8400-e29b-41d4-a716-446655440001' };
+const interruptedEvents: TurnEvent[] = [
+  { kind: 'task_failed', task: { ...repositoryGoal, taskName: 'merge-pr' }, result: { success: false, interrupted: false, failureReason: 'merge failed' } },
+  { kind: 'task_completed', task: { ...repositoryGoal, taskName: 'build' }, result: { success: true, interrupted: false } },
+  { kind: 'watch_observation', observation: { kind: 'pr_changed', ...repositoryGoal, url: 'https://example.com/pr/1', state: 'MERGED',
+    targetId: 'pr', generation: 'watch-1', observedAt: '2026-11-03T00:00:00Z' } },
+  { kind: 'watch_observation', observation: { kind: 'pr_conflicting', ...repositoryGoal, url: 'https://example.com/pr/1',
+    targetId: 'pr', generation: 'watch-1', observedAt: '2026-11-03T00:00:00Z' } },
+  { kind: 'patrol', repositoryDirectory: repositoryGoal.repositoryDirectory, goalIds: [repositoryGoal.goalId] },
+];
+
 describe('event driven daemon dispatcher', () => {
+  it.each(['starting', 'reading'] as const)('redelivers an event interrupted by shutdown while %s before provider execution', async (phase) => {
+    const h = await harness();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    if (phase === 'starting') h.store.beforeStart = async () => { entered.resolve(); await release.promise; };
+    else {
+      const snapshot = h.owner.snapshot;
+      h.owner.snapshot = vi.fn(async (id) => { entered.resolve(); await release.promise; return snapshot(id); });
+    }
+    await h.dispatcher.accept(input('E1', 'conversation', 'other'));
+    await entered.promise;
+    const stopping = h.dispatcher.control({ kind: 'stop' });
+    release.resolve();
+    await stopping;
+    expect(h.store.records.get('E1')?.state).toBe('queued');
+    expect(h.runner.calls).toHaveLength(0);
+
+    const restarted = await storedDispatcher(h, h.store);
+    const redelivered = await restarted.runner.started(1);
+    expect(redelivered.input.event).toEqual(h.store.records.get('E1')?.event);
+    await restarted.runner.finish(redelivered);
+    await restarted.dispatcher.control({ kind: 'stop' });
+  });
+
+  it.each(interruptedEvents)('redelivers $kind interrupted by shutdown in its original queue position', async (event) => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const first = await storedDispatcher(h, new FileEventStore(directory));
+    await first.dispatcher.accept({ ...input('E1', 'conversation', 'other'), event });
+    const active = await first.runner.started(1);
+    await first.dispatcher.accept({ ...input('E2', 'conversation', 'other'), event });
+
+    expect(await first.dispatcher.control({ kind: 'stop' })).toEqual({ kind: 'stopped' });
+    expect(first.runner.calls).toHaveLength(1);
+    const pending = [];
+    for await (const record of (await new FileEventStore(directory).restore()).pending) pending.push(record);
+    expect(pending).toEqual(expect.arrayContaining([{ state: 'queued', event: active.input.event }]));
+
+    const restarted = await storedDispatcher(h, new FileEventStore(directory));
+    const redelivered = await restarted.runner.started(1);
+    expect(redelivered.input.event).toEqual(active.input.event);
+    await restarted.runner.finish(redelivered);
+    const next = await restarted.runner.started(2);
+    expect(next.input.event.eventId).toBe('E2');
+    await restarted.runner.finish(next);
+    expect(restarted.runner.calls).toHaveLength(2);
+    expect(h.failures).not.toHaveBeenCalled();
+    await restarted.dispatcher.control({ kind: 'stop' });
+  });
+
+  it.each(['running', 'settling'] as const)('redelivers an event restored as %s before later queued events', async (state) => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const store = new FileEventStore(directory);
+    const event: AcceptedEvent = { ...input('E1', 'conversation', 'other'), event: interruptedEvents[0]!,
+      operationId: 'saved-operation', acceptedSequence: 1, lane: 'other' };
+    const turn = { conversationId: event.conversationId, operationId: event.operationId, generation: 42 };
+    await store.accept(event);
+    await store.markStarted(event.eventId, turn);
+    if (state === 'settling') await store.saveResult(event.eventId, { ...turn, event, outcome: { kind: 'deferred' } });
+    await store.accept({ ...input('E2', 'conversation', 'other'), operationId: 'next-operation', acceptedSequence: 2, lane: 'other' });
+
+    const restarted = await storedDispatcher(h, new FileEventStore(directory));
+    const redelivered = await restarted.runner.started(1);
+    expect(redelivered.input.event).toEqual(event);
+    expect(redelivered.turn.generation).toBeGreaterThan(turn.generation);
+    await restarted.runner.finish(redelivered);
+    const next = await restarted.runner.started(2);
+    expect(next.input.event.eventId).toBe('E2');
+    await restarted.runner.finish(next);
+    expect(h.failures).not.toHaveBeenCalled();
+    await restarted.dispatcher.control({ kind: 'stop' });
+  });
+
+  it.each(['finish', 'shutdown'] as const)('does not redeliver a manually interrupted event after %s and restart', async (completion) => {
+    const h = await harness();
+    const directory = getGlobalConfigDir();
+    const first = await storedDispatcher(h, new FileEventStore(directory));
+    await first.dispatcher.accept(input('E1', 'conversation', 'other'));
+    const active = await first.runner.started(1);
+    await first.dispatcher.control(interrupt(active.turn));
+    if (completion === 'finish') await first.runner.finish(active, { kind: 'interrupted' });
+    await first.dispatcher.control({ kind: 'stop' });
+
+    expect(h.applied.get(active.turn.operationId)?.outcome.kind).toBe('interrupted');
+    const restarted = await storedDispatcher(h, new FileEventStore(directory));
+    await restarted.dispatcher.drain();
+    expect(restarted.runner.calls).toHaveLength(0);
+    expect(await restarted.dispatcher.accept(input('E1', 'conversation', 'other'))).toMatchObject({ operationId: active.turn.operationId });
+    await restarted.dispatcher.drain();
+    expect(restarted.runner.calls).toHaveLength(0);
+    await restarted.dispatcher.control({ kind: 'stop' });
+  });
+
+  it('keeps /verify as an interrupted ordinary message in the director conversation', async () => {
+    const h = await harness();
+    await h.dispatcher.accept({ ...input('verify', conversationId({ kind: 'daemon' })), event: {
+      kind: 'human_command', command: { kind: 'message', text: '/verify' }, speaker: { namespace: 'test', id: 'operator' },
+    } });
+    const active = await h.runner.started(1);
+    await h.dispatcher.control(interrupt(active.turn));
+    await h.runner.finish(active, { kind: 'interrupted' });
+    expect(h.applied.get(active.turn.operationId)?.outcome.change?.interruptedMessage).toBe('/verify');
+    await h.dispatcher.control({ kind: 'stop' });
+  });
+
   it('accepts and persists H1/H2 during T1 without waiting for provider completion', async () => {
     const h = await harness();
     await h.dispatcher.accept(input('T1'));
