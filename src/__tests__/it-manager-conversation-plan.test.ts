@@ -1,4 +1,5 @@
 import type { CodexOptions } from '@openai/codex-sdk';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,6 +9,8 @@ import { resolveAssistantProviderModel } from '../features/interactive/assistant
 import { renderTemplate } from '../shared/prompts/index.js';
 import { loadFormalSpecVerifierConstraints } from '../features/interactive/formalSpecPrompts.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
@@ -104,6 +107,59 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 2');
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), concurrency: 3 });
     expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 3');
+  });
+
+  it.each(['auto', 'full'] as const)('rebuilds the conversation runtime after global manager permission changes from %s', async (permission) => {
+    const globalConfigPath = join(getGlobalConfigDir(), 'config.yaml');
+    writeFileSync(globalConfigPath, `manager:\n  permission: ${permission}\n`);
+    const preflight = vi.fn();
+    vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({
+      supportsStructuredOutput: true, supportedMcpTransports: new Set(['stdio']), preflight,
+    }));
+    const dispose = vi.fn(async () => {});
+    const client = new Client({ name: 'manager-runtime-test', version: '1.0.0' });
+    const connect = vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose });
+    const runtime = createConversationRuntime(getGlobalConfigDir());
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const signal = new AbortController().signal;
+    try {
+      const first = await runtime.resolve(assignment, signal);
+      expect(preflight).toHaveBeenLastCalledWith(expect.objectContaining({ aiReviewPermissions: permission === 'auto' }));
+
+      writeFileSync(globalConfigPath, `manager:\n  permission: ${permission === 'auto' ? 'full' : 'auto'}\n`);
+      const second = await runtime.resolve(assignment, signal);
+
+      expect(preflight).toHaveBeenLastCalledWith(expect.objectContaining({ aiReviewPermissions: permission !== 'auto' }));
+      expect(second.contextKey).not.toBe(first.contextKey);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(await runtime.resolve(assignment, signal)).toBe(second);
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('reloads cached project configuration on the next conversation resolve', async () => {
+    const dispose = vi.fn(async () => {});
+    const client = new Client({ name: 'manager-runtime-test', version: '1.0.0' });
+    vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose });
+    const runtime = createConversationRuntime(getGlobalConfigDir());
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const signal = new AbortController().signal;
+    try {
+      const first = await runtime.resolve(assignment, signal);
+      expect(first.language).toBe('en');
+
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmodel: legacy-manager\nlanguage: ja\n');
+      const second = await runtime.resolve(assignment, signal);
+
+      expect(second.language).toBe('ja');
+      expect(second.contextKey).not.toBe(first.contextKey);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
   });
 
   it.each([true, 'Y/n', false, 'y/N'] as const)('resolves manager formal_spec %s without prompting', (mode) => {

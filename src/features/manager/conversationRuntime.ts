@@ -1,5 +1,6 @@
 import { TurnToolScope } from '../daemonTurn/toolScope.js';
 import { createHash } from 'node:crypto';
+import { invalidateGlobalConfigCache } from '../../infra/config/global/globalConfig.js';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
@@ -34,6 +35,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
       const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
         : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, configDirectory).cwd;
+      invalidateGlobalConfigCache();
       const plan = createManagerConversationPlan(cwd, { ...agentOverrides,
         ...(assignment.kind === 'workspace' ? { repositoryDirectories: assignment.repositoryDirectories } : {}),
       });
