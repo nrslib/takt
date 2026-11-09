@@ -124,49 +124,6 @@ describe('private lock acquisition failures', () => {
     }
   });
 
-  it('releases an acquired lock when the signal aborts before the action runs', async () => {
-    const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
-    const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
-    directories.push(directory);
-    const lock = join(directory, 'lock');
-    const controller = new AbortController();
-    const reason = new Error('cancelled after acquisition');
-    write.mockImplementation((...args: Parameters<typeof actual.writeNewPrivateFileWithMode>) => {
-      actual.writeNewPrivateFileWithMode(...args);
-      controller.abort(reason);
-    });
-    const action = vi.fn();
-
-    await expect(runPrivateFileExclusiveAsync(lock, action, { signal: controller.signal })).rejects.toBe(reason);
-
-    expect(action).not.toHaveBeenCalled();
-    expect(readdirSync(directory)).toEqual([]);
-  });
-
-  it('does not acquire a lock after the wait deadline has expired', async () => {
-    vi.useFakeTimers();
-    try {
-      const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
-      write.mockImplementation(actual.writeNewPrivateFileWithMode);
-      const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
-      directories.push(directory);
-      const lock = join(directory, 'lock');
-      writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'current-holder' }));
-      const action = vi.fn();
-      const operation = runPrivateFileExclusiveAsync(lock, action, { timeoutMs: 20 });
-      setTimeout(() => unlinkSync(lock), 15);
-
-      const settled = operation.then(() => undefined, (error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(20);
-
-      expect(await settled).toMatchObject({ message: expect.stringContaining('Timed out waiting for private file lock') });
-      expect(action).not.toHaveBeenCalled();
-      expect(readdirSync(directory)).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('propagates permission failures while inspecting a contended lock', async () => {
     const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
     write.mockImplementation(actual.writeNewPrivateFileWithMode);

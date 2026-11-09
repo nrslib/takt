@@ -42,7 +42,6 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { synchronizeRetryPrHead } from './retry-sync.js';
 
 const log = createLogger('merge');
-const ABORTED_PR_STATUS_RECHECK_TIMEOUT_MS = 1_000;
 
 export { resolveMergeSettings } from './settings.js';
 
@@ -200,7 +199,7 @@ export async function executePersistedPrMergeTask(
     if (!execution.ok) throw execution.error;
     const result = execution.result;
     monitor?.check();
-    if (signal?.aborted && !(result.success && result.merged && signal.reason instanceof GoalNotAwaitingMergeError)) {
+    if (signal?.aborted && !(result.merged && signal.reason instanceof GoalNotAwaitingMergeError)) {
       signal.throwIfAborted();
     }
     const completion: GoalTaskResult = {
@@ -440,8 +439,7 @@ async function runPrMergeWorkflow(
   } catch (error) {
     if (!request.abortSignal?.aborted) throw error;
     try {
-      status = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
-        { timeoutMs: ABORTED_PR_STATUS_RECHECK_TIMEOUT_MS });
+      status = await provider.fetchPrStatus(request.prNumber, request.projectCwd);
     } catch {
       throw error;
     }

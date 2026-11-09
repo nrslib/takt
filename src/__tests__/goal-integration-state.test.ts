@@ -9,7 +9,6 @@ import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '.
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), remoteSha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
-const completionLocks = vi.hoisted(() => ({ goalIds: [] as string[] }));
 const standalone = vi.hoisted(() => ({ construct: vi.fn(), create: vi.fn(), answer: vi.fn(), withdraw: vi.fn() }));
 const clones = vi.hoisted(() => ({ cleanup: vi.fn(), load: vi.fn() }));
 vi.mock('../infra/task/clone.js', () => ({ cleanupOrphanedClone: clones.cleanup }));
@@ -32,10 +31,7 @@ vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: do
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync = doubles.getSync; list = doubles.list; update = doubles.update; } }));
 vi.mock('../infra/goals/execution-lock.js', async (original) => ({
   ...await original<typeof import('../infra/goals/execution-lock.js')>(),
-  withGoalCompletionLock: async <Result>(_cwd: string, goalId: string, action: () => Result | PromiseLike<Result>) => {
-    completionLocks.goalIds.push(goalId);
-    return action();
-  },
+  withGoalCompletionLock: async <Result>(_cwd: string, _goalId: string, action: () => Result | PromiseLike<Result>) => action(),
 }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.tasks; } }));
 vi.mock('../infra/goals/merge-git.js', () => ({ mergeGoalBranch: doubles.merge, targetWorktrees: doubles.worktrees }));
@@ -823,7 +819,6 @@ it('lets the manager integrate reviewed useful work from a failed task', async (
 
 it.each(['  追加の修正が必要  ', '理'.repeat(128 * 1024)])('reopens waiting work while preserving evidence and the complete reason', async (reason) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
-  completionLocks.goalIds.length = 0;
   const before = structuredClone(goal);
   doubles.sha.mockResolvedValue(targetSha);
   const result = await reopenGoal('/project', goal.id, reason, undefined);
@@ -832,7 +827,6 @@ it.each(['  追加の修正が必要  ', '理'.repeat(128 * 1024)])('reopens wai
   expect(goal.notifications).toEqual(before.notifications);
   expect(goal.workLog).toEqual([...before.workLog, expect.objectContaining({ summary: reason, id: result.workLogEntryId })]);
   expect(result).toEqual({ goal, workLogEntryId: goal.workLog.at(-1)!.id });
-  expect(completionLocks.goalIds).toEqual([goal.id]);
   expect(doubles.contentIncluded).toHaveBeenLastCalledWith('/project', sourceSha, targetSha, undefined);
   expect(doubles.sha).toHaveBeenLastCalledWith('/project', goal.integrationBranch, undefined);
 });

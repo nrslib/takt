@@ -272,12 +272,6 @@ async function completeGoalWhileLocked(
 export async function reopenGoal(
   cwd: string, goalId: string, reason: string, signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> {
-  return withGoalCompletionLock(cwd, goalId, () => reopenGoalWhileLocked(cwd, goalId, reason, signal), signal);
-}
-
-async function reopenGoalWhileLocked(
-  cwd: string, goalId: string, reason: string, signal: AbortSignal | undefined,
-): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
