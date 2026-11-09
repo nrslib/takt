@@ -90,7 +90,7 @@ beforeEach(async () => {
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
 
-it('refreshes the human merge wait classification through IPC when finishing work starts and ends', async () => {
+it('refreshes human merge wait and ongoing counts through IPC when finishing work runs, fails and is retried', async () => {
   const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
     goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
     changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
@@ -107,13 +107,21 @@ it('refreshes the human merge wait classification through IPC when finishing wor
     });
   };
   await check(true);
-  for (const status of ['pending', 'running', 'completed']) {
-    writeFileSync(join(repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{
-      name: 'finishing-work', goal_id: goal.id, merge_task: true, status,
+  for (const { statuses, awaiting } of [
+    { statuses: ['pending'], awaiting: false },
+    { statuses: ['running'], awaiting: false },
+    { statuses: ['failed'], awaiting: false },
+    { statuses: ['exceeded'], awaiting: false },
+    { statuses: ['pr_failed'], awaiting: false },
+    { statuses: ['failed', 'pending'], awaiting: false },
+    { statuses: ['failed', 'completed'], awaiting: true },
+  ]) {
+    writeFileSync(join(repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: statuses.map((status, index) => ({
+      name: `finishing-work-${index}`, goal_id: goal.id, merge_task: true, status,
       created_at: '2026-11-08T00:00:00.000Z', started_at: null, completed_at: null,
-    }] }));
+    })) }));
     await client.refresh(); await complete();
-    await check(status === 'completed');
+    await check(awaiting);
   }
 });
 
