@@ -83,6 +83,49 @@ afterEach(async () => {
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
+async function patrolRecords(directory: string) {
+  const { FilePatrolRecords } = await import('../infra/daemon/patrolRecords.js');
+  return new FilePatrolRecords(directory);
+}
+
+describe('durable manager patrol timestamps', () => {
+  it('returns no timestamp for a repository that has never been patrolled', async () => {
+    const records = await patrolRecords(await root());
+    await expect(records.read('/workspace/a/service')).resolves.toBeUndefined();
+  });
+
+  it('restores a repository timestamp after recreating the file store', async () => {
+    const directory = await root();
+    const records = await patrolRecords(directory);
+    await records.write('/workspace/a/service', 1793923200000);
+    const restored = await patrolRecords(directory);
+    await expect(restored.read('/workspace/a/service')).resolves.toBe(1793923200000);
+    const names = await readdir(join(directory, 'daemon-patrols'));
+    expect(names).toHaveLength(1);
+    if (process.platform !== 'win32') {
+      expect((await stat(join(directory, 'daemon-patrols', names[0]!))).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('keeps timestamps separate for repositories with the same final directory name', async () => {
+    const directory = await root();
+    const records = await patrolRecords(directory);
+    await records.write('/workspace/a/service', 1793923200000);
+    await records.write('/workspace/b/service', 1793925000000);
+    const restored = await patrolRecords(directory);
+    await expect(restored.read('/workspace/a/service')).resolves.toBe(1793923200000);
+    await expect(restored.read('/workspace/b/service')).resolves.toBe(1793925000000);
+  });
+
+  it.each(['{', '{"lastQueued":"not-a-timestamp"}'])('reports an invalid saved patrol timestamp (%s)', async (content) => {
+    const directory = await root();
+    const key = createHash('sha256').update('/workspace/a/service').digest('hex');
+    await writePrivateFile(join(directory, 'daemon-patrols', `${key}.json`), content);
+    const records = await patrolRecords(directory);
+    await expect(records.read('/workspace/a/service')).rejects.toThrow();
+  });
+});
+
 describe('durable daemon event storage', () => {
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
