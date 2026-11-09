@@ -978,7 +978,7 @@ Promotion is not supported on parallel sub-steps.
 | `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `instruction` | - | An instruction key, inline text, or a non-empty ordered array of them. Facet references resolve through the section map or, for bare names, project → user → builtin |
-| `edit` | - | Whether the step can edit project files (`true`/`false`). Codex runs Phase 1 of steps with explicit `false` in a `read-only` sandbox |
+| `edit` | - | Whether the step can edit project files (`true`/`false`). With TAKT-managed Codex permissions, explicit `false` prevents writes in Phase 1 while `network_access` independently controls network access |
 | `companion` | - | Run companion reviewers for a normal agent or Team Leader step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
@@ -1001,7 +1001,9 @@ The effective tool list may be narrower than configured. When `edit: false`, or 
 
 The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
 
-Codex runs Phase 1 of steps with an explicit `edit: false` in a `read-only` sandbox, regardless of the resolved permission mode and even with `permission_control: codex`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Common permission resolution, other providers, omitted `edit`, and `edit: true` keep their existing behavior.
+With TAKT-managed Codex permissions, an explicit `edit: false` prevents writes in Phase 1 regardless of the resolved permission mode. With `network_access: true`, TAKT passes a read-only permission profile that enables network access; otherwise it uses the `read-only` sandbox. With `permission_control: codex`, Codex's own settings determine both permissions, even with `edit: false`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Phase 2 always uses the `read-only` sandbox. Common permission resolution and other providers keep their existing behavior. See [Codex permission control](./configuration.md#codex-permission-control-permission_control).
+
+TAKT-managed Codex calls also pass `--ignore-rules` for writable steps and for new and resumed sessions, so user or project execpolicy `.rules` cannot bypass the configured sandbox. Delegated Codex calls retain those rules except in Phase 2, which always disables them and prohibits writes and network access. A selected `config_profile` continues to apply alongside `--ignore-rules` in Phase 2.
 
 ## Workflow-level Configuration
 
@@ -1253,7 +1255,7 @@ Companion definitions resolve from `.takt/companions/`, `~/.takt/companions/`, t
 ## Best Practices
 
 1. **Keep iterations reasonable** — 10-30 is typical for development workflows
-2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code
+2. **Use `edit: false` for review steps** — Prevent reviewers from modifying code. When delegating permission control to Codex, also disable writes in Codex itself
 3. **Use descriptive step names** — Makes logs easier to read
 4. **Test workflows incrementally** — Start simple, add complexity
 5. **Customize with `takt eject <workflow>`** — Copy a builtin workflow and edit it

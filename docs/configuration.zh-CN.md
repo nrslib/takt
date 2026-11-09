@@ -1261,6 +1261,8 @@ provider_options:
     network_access: true
 ```
 
+在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 始终使用 `read-only` sandbox，即使设置 `network_access: true` 也无法访问网络。
+
 OpenCode 通过 `webfetch` / `websearch` 工具权限实现同一抽象：
 
 ```yaml
@@ -1274,7 +1276,16 @@ provider_options:
 
 #### Codex 权限控制（`permission_control`）
 
-Codex 默认使用 TAKT 的权限映射，相当于 `permission_control: takt`，并将解析出的 TAKT `permission_mode` 传给 Codex SDK 的 `sandboxMode`。设置 `network_access` 时也会传入 `networkAccessEnabled`；省略时 Codex 保持默认 `false`。
+Codex 默认由 TAKT 管理权限，相当于 `permission_control: takt`。写入权限与 `network_access` 分开解析。Phase 1 中，`edit: false` 或解析出的 `permission_mode: readonly` 会禁止写入；即使 `permission_mode: full`，`edit: false` 仍然优先。
+
+| 写入权限 | `network_access` | 传给 Codex 的设置 |
+|---|---|---|
+| 允许 | `true` | `workspace-write` sandbox（`full` 使用 `danger-full-access`）及 `networkAccessEnabled: true` |
+| 允许 | `false` / 未指定 | 保持原有 sandbox 映射；显式传递 `false`，省略时保留 Codex 默认值 |
+| 禁止 | `true` | 不传 sandbox 标志；通过 `--config` 传递继承 `:read-only` 且设置 `network.enabled=true` 的 `takt-readonly-network` 权限 profile |
+| 禁止 | `false` / 未指定 | `read-only` sandbox |
+
+TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 例外。Phase 2 和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
 
 ```yaml
 provider_options:
@@ -1287,9 +1298,9 @@ provider_options:
       repo: true
 ```
 
-使用 `permission_control: codex` 时，TAKT 从每次 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
+Phase 1 使用 `permission_control: codex` 时，TAKT 从 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
 
-但 Phase 2 和显式设置 `edit: false` 的 step 的 Phase 1 仍会传入 `read-only` sandbox。Codex 在 Phase 1 中无论解析出的 permission mode 是什么，都会使用此 sandbox，包括 `permission_control: codex`。这些调用的 `network_access` 也按 TAKT 管理权限时的规则处理。
+Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，结构化调用同样适用。Phase 2 是例外：即使委托权限，TAKT 仍始终传递 `read-only` sandbox。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 

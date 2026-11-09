@@ -1627,6 +1627,8 @@ provider_options:
     network_access: true
 ```
 
+TAKT が権限を管理する Phase 1 では、書き込みを禁止したまま通信を許可できます。`edit: false` の step と `permission_mode: readonly` に解決された呼び出しが対象です。`permission_control: codex` では Codex 側で通信を設定してください。Phase 2 は常に `read-only` sandbox を使うため、`network_access: true` でも通信できません。
+
 OpenCode はネイティブのサンドボックスを持ちません。TAKT は `webfetch` / `websearch` ツールの権限を抽象化レイヤーで制御し、同じキーで設定できます。
 
 ```yaml
@@ -1664,7 +1666,16 @@ runtime profile、legacy の `provider_routing`、project・global の `provider
 
 #### Codex の permission control (`permission_control`)
 
-Codex はデフォルトで TAKT の permission mode マッピングを使います。これは `permission_control: takt` と同じで、解決済みの TAKT `permission_mode` を Codex SDK の `sandboxMode` へ渡します。`network_access` を指定した場合は `networkAccessEnabled` にも渡します。省略時は Codex の既定値（`false`）を維持します。
+Codex の権限はデフォルトで TAKT が管理します。これは `permission_control: takt` と同じです。書き込み可否と `network_access` を別々に解決します。Phase 1 では `edit: false` または解決済みの `permission_mode: readonly` により書き込みを禁止します。`permission_mode: full` でも `edit: false` が優先されます。
+
+| 書き込み | `network_access` | Codex に渡す設定 |
+|---|---|---|
+| 許可 | `true` | `workspace-write` sandbox（`full` なら `danger-full-access`）と `networkAccessEnabled: true` |
+| 許可 | `false` / 未指定 | 従来の sandbox マッピング。明示した `false` は渡し、未指定なら Codex の既定値を維持 |
+| 禁止 | `true` | sandbox フラグを渡さず、`:read-only` を継承して `network.enabled=true` にした `takt-readonly-network` 権限プロファイルを `--config` で渡す |
+| 禁止 | `false` / 未指定 | `read-only` sandbox |
+
+TAKT が権限を管理する場合は、書き込み可能な step を含むすべての `codex exec` に `--ignore-rules` を付けます。新規セッションと `exec ... resume <id>` の両方が対象です。これにより、サンドボックス外でのコマンド実行を許可する利用者・プロジェクトの execpolicy `.rules` ファイルを読み込ませません。`permission_control: codex` ではルールを利用者の設定に委ねます。ただし Phase 2 と MCP のみに副作用を許可するモードは常に `--ignore-rules` を付け、書き込みと通信を禁止します。Phase 2 で `config_profile` を指定した場合は `--ignore-rules` と `--profile <name>` の両方を渡します。補助コマンドの `mcp list` / `mcp get` には exec 用のフラグを付けません。
 
 Codex 側へ権限制御を委譲する場合だけ、明示的に opt-in します。
 
@@ -1681,7 +1692,7 @@ provider_options:
 
 `permission_control: codex` ではサンドボックスとネットワークの権限を Codex の設定に委ねます。この場合、TAKT の `network_access` は Codex の実効権限に反映されません。非対話実行の `approvalPolicy: never` は引き続き適用されるため、使用する Codex の設定を確認してください。`reasoning_effort`、`fast_mode`、`skills` は通常どおり適用されます。
 
-ただし、Phase 2 と、`edit: false` を明示した step の Phase 1 では、TAKT が `read-only` sandbox を渡します。Codex の Phase 1 では、解決された permission mode にかかわらずこの sandbox を使用し、`permission_control: codex` でも適用されます。この場合は `network_access` も通常の TAKT 管理時と同じ扱いになります。
+Phase 1 の `permission_control: codex` では `edit: false` や `permission_mode: readonly` でも TAKT の sandbox・ネットワーク指定を省略し、実効権限を Codex の設定に委ねます。構造化呼び出しにも同じ規則を適用します。Phase 2 は例外で、権限を委譲していても常に `read-only` sandbox を渡します。MCP のみに副作用を許可するモードも `read-only` sandbox を維持し、通信と Web 検索を明示的に禁止します。このモードと `permission_control: codex` は併用できません。
 
 Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
 

@@ -1,8 +1,9 @@
 import type { CodexOptions } from '@openai/codex-sdk';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
-import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_PROFILE, type CodexCallOptions, type CodexSpawnEnvironment } from './types.js';
+import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_OPTIONS, type CodexCallOptions, type CodexSpawnEnvironment } from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
+import { resolveCodexPermissions } from './permissions.js';
 
 function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
   for (const key of Object.keys(environment)) {
@@ -23,7 +24,9 @@ export function hasCodexShellEnvironmentFilter(
 export function buildCodexSessionConfig(options: CodexCallOptions): {
   config: NonNullable<CodexOptions['config']>;
   env: Record<string, string>;
+  permissionThreadOptions: ReturnType<typeof resolveCodexPermissions>['threadOptions'];
 } {
+  const permissions = resolveCodexPermissions(options);
   const skillScopes = options.mcpOnlySideEffects ? { repo: false, user: false } : options.skills;
   let codexSkillConfig = skillScopes
     ? buildCodexSkillConfig({
@@ -56,11 +59,12 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     if (value !== undefined) codexEnvironment[name] = value;
   }
   const referencesProfileEnv = hasCodexShellEnvironmentFilter(headerFilters, CODEX_CONFIG_PROFILE_ENV);
-  if (referencesProfileEnv) {
-    codexEnvironment[CODEX_SPAWN_PROFILE] = {
-      ...(options.configProfile === undefined ? {} : { configProfile: options.configProfile }),
-    };
-  } else {
+  codexEnvironment[CODEX_SPAWN_OPTIONS] = {
+    ...(options.configProfile === undefined ? {} : { configProfile: options.configProfile }),
+    execArgs: permissions.execArgs,
+    preserveConfigProfileEnv: referencesProfileEnv,
+  };
+  if (!referencesProfileEnv) {
     removeCodexConfigProfileMarker(codexEnvironment);
     if (options.configProfile !== undefined) {
       codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
@@ -74,6 +78,7 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
   };
   const codexConfig: CodexOptions['config'] = {
     ...(codexSkillConfig ?? {}),
+    ...permissions.config,
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),
@@ -91,5 +96,5 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
           shell_environment_policy: shellPolicy,
         }),
   };
-  return { config: codexConfig, env: codexEnvironment };
+  return { config: codexConfig, env: codexEnvironment, permissionThreadOptions: permissions.threadOptions };
 }

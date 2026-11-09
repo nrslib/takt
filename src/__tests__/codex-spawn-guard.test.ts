@@ -7,6 +7,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexProvider } from '../infra/providers/codex.js';
+import type { ProviderCallOptions } from '../infra/providers/types.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -15,7 +16,12 @@ import {
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import '../infra/codex/codex-spawn-guard.js';
-import { CODEX_SPAWN_PROFILE } from '../infra/codex/types.js';
+import { CODEX_SPAWN_OPTIONS } from '../infra/codex/types.js';
+
+vi.mock('../infra/codex/mcp-list.js', () => ({
+  runCodexMcpList: vi.fn(async () => '[]'),
+  hasCodexMcpServer: vi.fn(async () => false),
+}));
 
 vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -355,6 +361,70 @@ async function runCodex(executablePath: string): Promise<void> {
 }
 
 describe('codex-spawn-guard', () => {
+  const retryPhaseCases = [
+    { executionPhase: 1 as const, execPrefix: ['exec', '--profile', 'automation-review'], ignoreRulesCount: 0 },
+    { executionPhase: 2 as const, execPrefix: ['exec', '--ignore-rules', '--profile', 'automation-review'], ignoreRulesCount: 1 },
+  ];
+  const permissionCases: Array<{
+    name: string;
+    options: Partial<ProviderCallOptions>;
+    ignoreRules: boolean;
+    isolated?: boolean;
+  }> = [
+    { name: 'default writable', options: { permissionMode: 'full' }, ignoreRules: true },
+    { name: 'explicit TAKT writable', options: { edit: true, providerOptions: { codex: { permissionControl: 'takt', networkAccess: true } } }, ignoreRules: true },
+    { name: 'edit=false with network', options: { edit: false, permissionMode: 'full', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
+    { name: 'readonly with network', options: { permissionMode: 'readonly', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
+    { name: 'delegated edit=false', options: { edit: false, providerOptions: { codex: { permissionControl: 'codex', networkAccess: true } } }, ignoreRules: false },
+    { name: 'delegated readonly', options: { permissionMode: 'readonly', providerOptions: { codex: { permissionControl: 'codex' } } }, ignoreRules: false },
+    { name: 'TAKT Phase 2', options: { executionPhase: 2, providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
+    { name: 'delegated Phase 2 with profile', options: { executionPhase: 2, providerOptions: fakeProviderOptions('automation-review') }, ignoreRules: true },
+    { name: 'MCP-only', options: { mcpOnlySideEffects: [], providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
+    { name: 'isolated structured', options: {}, ignoreRules: true, isolated: true },
+    { name: 'delegated isolated structured', options: { providerOptions: fakeProviderOptions('automation-review') }, ignoreRules: false, isolated: true },
+  ];
+
+  it.skipIf(process.platform === 'win32').each(permissionCases.flatMap((entry) =>
+    [undefined, 'thread-resume'].map((sessionId) => ({ ...entry, sessionId })),
+  ))('passes resolved rule loading through Provider and SDK to exec ($name, session=$sessionId)', async ({ options, ignoreRules, isolated, sessionId }) => {
+    const fixture = makeProtocolExecutable('success');
+    vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
+    const provider = new CodexProvider();
+    const setup = { name: 'fixture', ...(sessionId === undefined ? {} : { systemPrompt: 'Review' }) };
+    const agent = isolated ? provider.setupIsolatedStructured(setup) : provider.setup(setup);
+    const result = await agent.call('Inspect', {
+      cwd: '/tmp', executionPhase: 1, sessionId, outputSchema: { type: 'object' },
+      ...options, childProcessEnv: fakeChildProcessEnv(fixture.recordPath),
+    });
+    expect(result.status).toBe('done');
+    const invocations = readProtocolInvocations(fixture.recordPath);
+    expect(invocations).toHaveLength(1);
+    const args = invocations[0]!.args;
+    expect(args[0]).toBe('exec');
+    expect(args.filter((arg) => arg === '--ignore-rules')).toHaveLength(ignoreRules ? 1 : 0);
+    if (ignoreRules) expect(args[1]).toBe('--ignore-rules');
+    const profile = options.providerOptions?.codex?.configProfile;
+    if (profile !== undefined) {
+      const profileIndex = args.indexOf('--profile');
+      expect(args.slice(profileIndex, profileIndex + 2)).toEqual(['--profile', profile]);
+    }
+    expect(args.includes('resume')).toBe(sessionId !== undefined && !isolated);
+    expect(invocations[0]?.marker).toBe('absent');
+  });
+
+  it.skipIf(process.platform === 'win32').each([['mcp', 'list'], ['mcp', 'get', 'docs']])('keeps exec flags out of auxiliary command %j', async (...args) => {
+    const { executablePath, recordPath } = makeRecordingExecutable();
+    const child = childProcessModule.spawn(executablePath, args, {
+      ...spawnOptions(),
+      env: {
+        ...process.env, TAKT_TEST_RECORD: recordPath,
+        [CODEX_SPAWN_OPTIONS]: { execArgs: ['--ignore-rules'], preserveConfigProfileEnv: false },
+      },
+    });
+    await waitForClose(child);
+    expect(readFileSync(recordPath, 'utf8').trim().split('\n')).toEqual(args);
+  });
+
   afterEach(() => {
     return cleanupCodexProcesses().finally(() => {
       vi.useRealTimers();
@@ -451,7 +521,7 @@ describe('codex-spawn-guard', () => {
     const env = {
       ...process.env, TAKT_TEST_RECORD: recordPath,
       TAKT_CODEX_CONFIG_PROFILE: 'synthetic-header-value',
-      [CODEX_SPAWN_PROFILE]: { configProfile },
+      [CODEX_SPAWN_OPTIONS]: { configProfile, execArgs: [], preserveConfigProfileEnv: true },
     };
     const child = childProcessModule.spawn(executablePath, ['exec', '--experimental-json', 'prompt'], { ...spawnOptions(), env: { ...env } });
     await waitForClose(child);
@@ -461,7 +531,7 @@ describe('codex-spawn-guard', () => {
       '--experimental-json', 'prompt', 'marker=synthetic-header-value',
     ]);
     expect(env.TAKT_CODEX_CONFIG_PROFILE).toBe('synthetic-header-value');
-    expect(env[CODEX_SPAWN_PROFILE]).toEqual({ configProfile });
+    expect(env[CODEX_SPAWN_OPTIONS]).toEqual({ configProfile, execArgs: [], preserveConfigProfileEnv: true });
   });
 
   it.skipIf(process.platform === 'win32')('forwards a profile through Provider, SDK, and the real CLI process', async () => {
@@ -545,12 +615,13 @@ describe('codex-spawn-guard', () => {
     expect(invocation?.args).toContain('approval_policy="never"');
   });
 
-  it.skipIf(process.platform === 'win32')('keeps the profile in every real standard retry spawn', async () => {
+  it.skipIf(process.platform === 'win32').each(retryPhaseCases)('keeps the profile and rule-loading mode in every real standard retry spawn (Phase $executionPhase)', async ({ executionPhase, execPrefix, ignoreRulesCount }) => {
     const fixture = makeProtocolExecutable('capacity-first');
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
     const result = await new CodexProvider().setup({ name: 'coder' }).call('prompt', {
       cwd: '/tmp',
       openaiApiKey: 'test-api-key',
+      executionPhase,
       providerOptions: fakeProviderOptions('automation-review'),
       childProcessEnv: fakeChildProcessEnv(fixture.recordPath),
     });
@@ -560,18 +631,20 @@ describe('codex-spawn-guard', () => {
     const invocations = readProtocolInvocations(fixture.recordPath);
     expect(invocations).toHaveLength(2);
     for (const invocation of invocations) {
-      expect(invocation.args.slice(0, 3)).toEqual(['exec', '--profile', 'automation-review']);
+      expect(invocation.args.slice(0, execPrefix.length)).toEqual(execPrefix);
+      expect(invocation.args.filter((arg) => arg === '--ignore-rules')).toHaveLength(ignoreRulesCount);
       expect(invocation.marker).toBe('absent');
     }
     expect(invocations[1]?.args).toEqual(expect.arrayContaining(['resume', 'thread-fake']));
   });
 
-  it.skipIf(process.platform === 'win32')('keeps the profile in every real refusal retry spawn', async () => {
+  it.skipIf(process.platform === 'win32').each(retryPhaseCases)('keeps the profile and rule-loading mode in every real refusal retry spawn (Phase $executionPhase)', async ({ executionPhase, execPrefix, ignoreRulesCount }) => {
     const fixture = makeProtocolExecutable('refusal-first');
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
     const result = await new CodexProvider().setup({ name: 'coder' }).call('prompt', {
       cwd: '/tmp',
       openaiApiKey: 'test-api-key',
+      executionPhase,
       providerOptions: fakeProviderOptions('automation-review'),
       childProcessEnv: fakeChildProcessEnv(fixture.recordPath),
     });
@@ -581,13 +654,14 @@ describe('codex-spawn-guard', () => {
     const invocations = readProtocolInvocations(fixture.recordPath);
     expect(invocations).toHaveLength(2);
     for (const invocation of invocations) {
-      expect(invocation.args.slice(0, 3)).toEqual(['exec', '--profile', 'automation-review']);
+      expect(invocation.args.slice(0, execPrefix.length)).toEqual(execPrefix);
+      expect(invocation.args.filter((arg) => arg === '--ignore-rules')).toHaveLength(ignoreRulesCount);
       expect(invocation.marker).toBe('absent');
     }
     expect(invocations.every((invocation) => !invocation.args.includes('resume'))).toBe(true);
   });
 
-  it.skipIf(process.platform === 'win32')('keeps the profile across a real idle-timeout retry spawn', async () => {
+  it.skipIf(process.platform === 'win32').each(retryPhaseCases)('keeps the profile and rule-loading mode across a real idle-timeout retry spawn (Phase $executionPhase)', async ({ executionPhase, execPrefix, ignoreRulesCount }) => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const fixture = makeProtocolExecutable('timeout-first');
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
@@ -603,6 +677,7 @@ describe('codex-spawn-guard', () => {
       const resultPromise = trackCodexCall(new CodexProvider().setup({ name: 'coder' }).call('prompt', {
         cwd: '/tmp',
         openaiApiKey: 'test-api-key',
+        executionPhase,
         providerOptions: fakeProviderOptions('automation-review'),
         abortSignal: abortController.signal,
         onActivity: (event) => {
@@ -645,7 +720,8 @@ describe('codex-spawn-guard', () => {
       const invocations = readProtocolInvocations(fixture.recordPath);
       expect(invocations).toHaveLength(2);
       for (const invocation of invocations) {
-        expect(invocation.args.slice(0, 3)).toEqual(['exec', '--profile', 'automation-review']);
+        expect(invocation.args.slice(0, execPrefix.length)).toEqual(execPrefix);
+        expect(invocation.args.filter((arg) => arg === '--ignore-rules')).toHaveLength(ignoreRulesCount);
         expect(invocation.marker).toBe('absent');
       }
       expect(invocations[1]?.args).toEqual(expect.arrayContaining(['resume', 'thread-fake']));
