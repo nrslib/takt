@@ -14,11 +14,13 @@ const RESULTS_FILE = 'workflow-results.json';
 const OCCURRENCES_DIRECTORY = 'workflow-results';
 const scopes = z.record(z.string(), z.record(z.string(), z.unknown()));
 const snapshotSchema = z.object({ context: scopes, effect: scopes, structured: scopes }).strict();
+const occurrenceSchema = z.object({ step: z.string(), occurrence: z.number().int().positive() });
 const resultsSchema = z.object({
   version: z.literal(2),
   workflow: z.string(),
   workflow_ref: z.string(),
   latest: snapshotSchema.nullable(),
+  failed_occurrences: z.array(occurrenceSchema).optional(),
 }).strict();
 type Snapshot = z.infer<typeof snapshotSchema>;
 type ResultSelection = { step: string; occurrence?: number };
@@ -29,6 +31,8 @@ interface ChildResultResume {
 }
 
 export class WorkflowResultsStore {
+  private readonly failedOccurrences = new Map<string, { step: string; occurrence: number }>();
+
   constructor(
     private readonly contextDirectory: string,
     private readonly config: WorkflowConfig,
@@ -39,15 +43,27 @@ export class WorkflowResultsStore {
     const path = join(sourceContext, RESULTS_FILE);
     if (restore || inherit) {
       const saved = this.load(path);
-      if (saved !== undefined) {
-        if (resumeWorkflowMatches(saved, this.config)) {
+      let selected = saved;
+      if (restore) {
+        try {
+          const selectedPath = selectResultsPath(sourceContext, { step: this.state.currentStep, occurrence }, saved?.failed_occurrences);
+          selected = selectedPath === undefined ? undefined : selectedPath === path ? saved : this.load(selectedPath);
+        } catch (error) {
+          warn(`Failed to select workflow results at ${path}: ${getErrorMessage(error)}`);
+          selected = undefined;
+        }
+      }
+      const identity = saved ?? selected;
+      if (identity !== undefined) {
+        if (resumeWorkflowMatches(identity, this.config)) {
+          if (selected !== undefined && selected !== identity && !resumeWorkflowMatches(selected, this.config)) {
+            throw new Error(`Cannot resume workflow "${this.config.name}": saved results belong to "${selected.workflow}"`);
+          }
           if (inherit) {
-            inheritChildWorkflowResults(sourceContext, this.contextDirectory, selectChildResults(children));
+            const selections = selectChildResults(children);
+            if (selections !== undefined) inheritChildWorkflowResults(sourceContext, this.contextDirectory, selections);
           }
           if (restore) {
-            const directory = selectOccurrenceDirectory(sourceContext, { step: this.state.currentStep, occurrence });
-            // An existing directory with no readable snapshot is a failed save, not an unstarted occurrence.
-            const selected = directory === undefined ? saved : this.load(join(directory, RESULTS_FILE));
             const snapshot = selected?.latest;
             if (snapshot !== undefined && snapshot !== null) {
               for (const [scope, value] of Object.entries(snapshot.context)) this.state.systemContexts.set(scope, value);
@@ -56,7 +72,7 @@ export class WorkflowResultsStore {
             } else this.warnUnavailable(path);
           }
         } else if (restore) {
-          throw new Error(`Cannot resume workflow "${this.config.name}": saved results belong to "${saved.workflow}"`);
+          throw new Error(`Cannot resume workflow "${this.config.name}": saved results belong to "${identity.workflow}"`);
         }
       } else if (restore) this.warnUnavailable(path);
     }
@@ -101,6 +117,8 @@ export class WorkflowResultsStore {
       })) as Snapshot;
       for (const path of paths) this.write(path, latest);
     } catch (error) {
+      // A failed directory creation must remain distinguishable from an unstarted occurrence.
+      if (start !== undefined) this.failedOccurrences.set(JSON.stringify(start), start);
       // Publish an invalid snapshot, or remove the old artifact if writing itself failed.
       for (const path of paths) {
         try {
@@ -123,6 +141,8 @@ export class WorkflowResultsStore {
       workflow: this.config.name,
       workflow_ref: getWorkflowReference(this.config),
       latest,
+      ...(path === join(this.contextDirectory, RESULTS_FILE) && this.failedOccurrences.size > 0
+        ? { failed_occurrences: [...this.failedOccurrences.values()] } : {}),
     });
     if (existsSync(path) && readFileSync(path, 'utf8') === content) return;
     writeFileAtomic(path, content, 0o600);
@@ -133,21 +153,40 @@ function stepDirectory(context: string, step: string): string {
   return join(context, OCCURRENCES_DIRECTORY, `step-${encodeURIComponent(step)}`);
 }
 
-function selectOccurrenceDirectory(sourceContext: string, selection: ResultSelection): string | undefined {
+function selectResultsPath(
+  sourceContext: string,
+  selection: ResultSelection,
+  failures: readonly { step: string; occurrence: number }[] | undefined,
+): string | undefined {
   const directory = stepDirectory(sourceContext, selection.step);
-  if (!existsSync(directory)) return undefined;
-  const occurrence = selection.occurrence ?? Math.max(...readdirSync(directory).map(Number));
+  const failed = failures?.filter((entry) => entry.step === selection.step) ?? [];
+  let occurrence = selection.occurrence;
+  if (occurrence === undefined) {
+    occurrence = 0;
+    if (existsSync(directory)) {
+      for (const entry of readdirSync(directory)) occurrence = Math.max(occurrence, Number(entry));
+    }
+    for (const entry of failed) occurrence = Math.max(occurrence, entry.occurrence);
+  }
   const selected = join(directory, String(occurrence));
-  return existsSync(selected) ? selected : undefined;
+  // Failed saves never fall back to results from a different point in time.
+  if (failed.some((entry) => entry.occurrence === occurrence)) return undefined;
+  return join(existsSync(selected) ? selected : sourceContext, RESULTS_FILE);
 }
 
-function selectChildResults(resume: ChildResultResume | undefined): ReadonlyMap<string, ResultSelection> {
+function selectChildResults(resume: ChildResultResume | undefined): ReadonlyMap<string, ResultSelection> | undefined {
   const selections = new Map<string, ResultSelection>();
   if (resume?.source === undefined || resume.target === undefined) return selections;
   const source = resume.source;
-  const records = Object.entries(source.workflow_call_invocations).map(([identity, record]) => ({
-    identity: parseWorkflowCallInvocationIdentity(identity)!, record,
-  }));
+  const records = [];
+  for (const [id, record] of Object.entries(source.workflow_call_invocations)) {
+    const identity = parseWorkflowCallInvocationIdentity(id);
+    if (identity === undefined) {
+      warn('Cannot inherit child workflow results: invalid workflow call invocation ID');
+      return undefined;
+    }
+    records.push({ identity, record });
+  }
   let calls: readonly WorkflowExecutionCallIdentity[] = [];
   let namespace = '';
   for (const [depth, frame] of resume.target.stack.entries()) {
@@ -198,11 +237,15 @@ function copyWorkflowResults(sourceContext: string, targetContext: string, selec
   if (sourceContext === targetContext) return;
   try {
     const selection = selections.get(namespace);
-    const directory = selection === undefined ? undefined : selectOccurrenceDirectory(sourceContext, selection);
-    const sourcePath = join(directory ?? sourceContext, RESULTS_FILE);
+    const rootPath = join(sourceContext, RESULTS_FILE);
+    const root = existsSync(rootPath) ? resultsSchema.parse(JSON.parse(readFileSync(rootPath, 'utf8'))) : undefined;
+    const sourcePath = selection === undefined ? rootPath : selectResultsPath(sourceContext, selection, root?.failed_occurrences);
+    if (sourcePath === undefined) throw new Error(`Selected child workflow results were not saved at ${sourceContext}`);
     mkdirSync(targetContext, { recursive: true });
     if (existsSync(sourcePath)) {
-      writeFileAtomic(join(targetContext, RESULTS_FILE), readFileSync(sourcePath, 'utf8'), 0o600);
+      const selected = resultsSchema.parse(JSON.parse(readFileSync(sourcePath, 'utf8')));
+      delete selected.failed_occurrences;
+      writeFileAtomic(join(targetContext, RESULTS_FILE), JSON.stringify(selected), 0o600);
     }
     inheritChildWorkflowResults(sourceContext, targetContext, selections, namespace);
   } catch (error) {

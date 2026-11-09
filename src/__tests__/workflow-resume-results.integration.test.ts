@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ import * as atomicFile from '../shared/utils/atomic-file.js';
 import { ReportExecutionStore } from '../core/workflow/report-execution-store.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
+vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>() }));
 
 describe('workflow results across resume', () => {
   let project: string;
@@ -568,6 +570,51 @@ describe('workflow results across resume', () => {
     expect(executeEffect.mock.calls[1]?.[1]).toMatchObject({ pr: 123 });
   });
 
+  it('warns and continues without child results for an invalid public resumeInvocationSource ID', async () => {
+    const parent = normalizeWorkflowConfig({
+      name: 'parent', initial_step: 'delegate', max_steps: 10,
+      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, project);
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'read', max_steps: 10,
+      steps: [
+        { name: 'read', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'comment' }] },
+        { name: 'comment', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:read.pr.number}', body: 'done' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const resolveSystemInput = vi.fn(() => ({ number: 101 }));
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const options = { workflowCallResolver: () => child,
+      systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    expect((await original.run()).status).toBe('completed');
+    const checkpoint: WorkflowResumePoint = {
+      ...original.getResumePoint()!, stack: [
+        buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1),
+        buildWorkflowResumePointEntry(child, 'comment', 'system', 1),
+      ],
+    };
+    const record = Object.values(checkpoint.workflow_call_invocations)[0]!;
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      const resumed = createEngine(parent, {
+        ...options, reportDirName: 'resumed', resumePoint: checkpoint,
+        resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+        sharedRuntime: { startedAtMs: Date.now(), resumeInvocationSource: {
+          ...checkpoint, workflow_call_invocations: { invalid: record },
+        } },
+      });
+
+      expect(warning).toHaveBeenCalled();
+      expect((await resumed.run()).status).toBe('aborted');
+      expect(resolveSystemInput).toHaveBeenCalledOnce();
+      expect(executeEffect).toHaveBeenCalledOnce();
+    } finally { warning.mockRestore(); }
+  });
+
   it('restores child results after the parent process is killed during its first workflow call', async () => {
     const parent = normalizeWorkflowConfig({
       name: 'parent', initial_step: 'delegate', max_steps: 10,
@@ -999,6 +1046,115 @@ describe('workflow results across resume', () => {
       expect(warning).not.toHaveBeenCalled();
     } finally {
       write.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it.each([2, undefined])('keeps a failed directory creation distinct from an unstarted occurrence (%s)', (occurrence) => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    mkdirSync(source);
+    mkdirSync(target);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 1);
+    const failedDirectory = join(source, 'workflow-results', 'step-select', '2');
+    const makeDirectory = fs.mkdirSync;
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation((path, options) => {
+      if (path === failedDirectory) throw new Error('Directory unavailable');
+      return makeDirectory(path, options);
+    });
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      store.startStep('select', 2);
+      mkdir.mockRestore();
+      expect(existsSync(failedDirectory)).toBe(false);
+      state.systemContexts.set('select', { pr: { number: 202 } });
+      store.save();
+      state.systemContexts.set('select', { pr: { number: 303 } });
+      store.startStep('plan', 1);
+      warning.mockClear();
+
+      const resumed = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, resumed).initialize(source, true, false, occurrence);
+
+      expect(warning).toHaveBeenCalled();
+      expect(resumed.systemContexts.size).toBe(0);
+      expect(resumed.effectResults.size).toBe(0);
+      expect(resumed.structuredOutputs.size).toBe(0);
+      const unstarted = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, unstarted).initialize(source, true, false, 3);
+      expect(unstarted.systemContexts.get('select')).toEqual({ pr: { number: 303 } });
+    } finally {
+      mkdir.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it.each([false, true])('validates the selected occurrence without a root artifact (workflow changed: %s)', (renamed) => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    mkdirSync(source);
+    mkdirSync(target);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 1);
+    state.systemContexts.set('select', { pr: { number: 202 } });
+    store.save();
+    rmSync(join(source, 'workflow-results.json'));
+    const current = renamed ? { ...config, name: 'another-workflow' } : config;
+    const restored = createInitialState(current, { projectCwd: project, startStep: 'select' });
+    const restore = () => new WorkflowResultsStore(target, current, restored).initialize(source, true, false, 1);
+
+    if (renamed) {
+      expect(restore).toThrow();
+      expect(restored.systemContexts.size).toBe(0);
+    } else {
+      restore();
+      expect(restored.systemContexts.get('select')).toEqual({ pr: { number: 101 } });
+    }
+  });
+
+  it.each(['large-history', 'unreadable'] as const)('handles occurrence enumeration with %s', (scenario) => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    mkdirSync(source);
+    mkdirSync(target);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 200000);
+    state.systemContexts.set('select', { pr: { number: 202 } });
+    store.save();
+    const read = vi.spyOn(fs, 'readdirSync');
+    if (scenario === 'large-history') read.mockReturnValueOnce(
+      Array.from({ length: 200000 }, (_, index) => String(index + 1)) as unknown as ReturnType<typeof fs.readdirSync>,
+    );
+    else read.mockImplementationOnce(() => { throw new Error('Directory unreadable'); });
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      const restored = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, restored).initialize(source, true, false);
+
+      if (scenario === 'large-history') {
+        expect(restored.systemContexts.get('select')).toEqual({ pr: { number: 101 } });
+        expect(warning).not.toHaveBeenCalled();
+      } else {
+        expect(restored.systemContexts.size).toBe(0);
+        expect(restored.effectResults.size).toBe(0);
+        expect(restored.structuredOutputs.size).toBe(0);
+        expect(warning).toHaveBeenCalled();
+      }
+    } finally {
+      read.mockRestore();
       warning.mockRestore();
     }
   });
