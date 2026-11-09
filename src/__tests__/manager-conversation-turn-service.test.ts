@@ -586,7 +586,7 @@ it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not
   expect(f.resolve).not.toHaveBeenCalled();
 });
 
-it.each(['pending', 'running'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
+it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
   const f = fixture();
   const merging = { ...goalRecord(), status: 'awaiting_merge' };
   const waiting = { ...merging, id: randomUUID() };
