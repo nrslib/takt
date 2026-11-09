@@ -40,6 +40,7 @@ import { DynamicFacetSelectionStore } from '../dynamic-facets/dynamicFacetSelect
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
+import { saveWorkflowResults } from '../run/workflow-results.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
@@ -575,6 +576,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const systemStepExecutor = new SystemStepExecutor({
+    persistState: (state) => saveWorkflowResults(params.getRunPaths().contextAbs, params.config, state),
     abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,

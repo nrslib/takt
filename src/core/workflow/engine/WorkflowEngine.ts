@@ -1,6 +1,7 @@
 import { buildWorkflowPromptTree } from '../workflow-prompt-context.js';
 import { EventEmitter } from 'node:events';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { inheritWorkflowResults, restoreWorkflowResults, saveWorkflowResults } from '../run/workflow-results.js';
 import { ProviderNeutralStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
@@ -343,6 +344,19 @@ export class WorkflowEngine extends EventEmitter {
       );
     }
     this.state = createInitialState(this.config, this.options);
+    const shouldRestoreResults = this.state.currentStep !== this.config.initialStep || this.options.resumePoint !== undefined;
+    const sourceSlug = this.options.resumeSource?.sourceRunSlug;
+    const sourcePaths = sourceSlug === undefined ? runPaths : buildRunPathsFromRunsDirectory(
+      dirname(runPaths.runRootAbs), sourceSlug, this.options.runPathNamespace,
+    );
+    // An authored restart may reach a saved child later, even when the parent starts fresh.
+    if (this.resumeStackPrefix.length === 0 && sourceSlug !== undefined && (shouldRestoreResults || restartPoint !== undefined)) {
+      inheritWorkflowResults(sourcePaths.contextAbs, runPaths.contextAbs);
+    }
+    if (shouldRestoreResults) {
+      restoreWorkflowResults(sourcePaths.contextAbs, this.config, this.state);
+    }
+    saveWorkflowResults(runPaths.contextAbs, this.config, this.state);
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
       this.options.resumePoint,
@@ -405,6 +419,7 @@ export class WorkflowEngine extends EventEmitter {
     this.workflowCallRunner = services.workflowCallRunner;
     this.stepAbortSignalContext = services.stepAbortSignalContext;
     this.stepCoordinator = new WorkflowEngineStepCoordinator({
+      persistResults: () => saveWorkflowResults(this.runPaths.contextAbs, this.config, this.state),
       beginReportExecution: (step) => {
         const resume = this.reportExecutionResumePending && this.options.resumePoint !== undefined;
         this.reportExecutionResumePending = false;

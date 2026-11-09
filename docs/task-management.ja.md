@@ -315,6 +315,8 @@ PR を作成せず push だけを行うタスクでは、認証を修正して�
 
 端末の Resume 行は `Resume failed position: "review" (default)` のような短いラベルの直下に、経路の説明を薄い色で表示します。経路は root workflow を先頭、失敗 step を末尾とし、各呼び出しを `"呼び出し step" → "呼び出し先 workflow"` の組で表します。たとえば `"takt-default" > "develop" → "development-core" > "review"` となります。幅80列以上では説明を折り返して全経路を表示します。幅60列ではroot側を保持して説明だけを末尾から省略し、ラベルの失敗 step 名と既定印を表示します。Web UI のドロップダウンと `Selected start position: …` の確定ログには、ラベルと全経路の両方を残します。
 
+Retry・Requeue・Instruct で途中の step（`start_step` または保存した再開位置）から実行する場合、system context・effects の結果・AI の構造化出力を再開元 run から復元します。これらは継承・復元後の最初の step の実行前と、各 step の実行後に run context 内の `workflow-results.json` に保存されます。結果が空でも保存物を作成します。前段の入力取得や effects、AI step は自動で再実行しません。後続の step による最新状態の取得は通常どおり行います。子 workflow の namespace を含む保存結果全体を再開先へ引き継ぐため、子へ入る前に失敗しても次回の再開でその結果を利用できます。この保存物を持たない過去の run は、警告を出して従来どおり空の状態から途中再開します。保存されていない前段の結果を参照する場合は、その step で参照エラーになります。
+
 Requeue 後は新しい namespace で実行されるため、台帳を引き継がず白紙で開始します。
 
 `/go` の後、リトライ会話は更新された指示書を表示し、先頭かつ既定の **タスクにつむ** または **編集を続ける** を選択できます。タスクにつむを選ぶと対象タスクの指示書を更新して `pending` に戻しますが、その場ではワーカーを起動しません。Retry 会話では `/retry`、`/replay`、即時実行の選択肢は利用できません。変更せずに終了する場合は `/cancel` を使用します。

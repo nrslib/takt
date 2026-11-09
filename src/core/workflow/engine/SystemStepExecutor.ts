@@ -36,6 +36,7 @@ interface SystemStepExecutorDeps extends PrMergeOptions {
   ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
   readonly abortSignal?: AbortSignal;
+  readonly persistState?: (state: WorkflowState) => void;
   readonly createProviderStream?: (step: WorkflowStep, provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
 }
 
@@ -240,6 +241,7 @@ export class SystemStepExecutor {
       for (const effect of step.effects) {
         stepEffectResults[effect.type] = await this.executeEffect(step, effect, state, cwd);
         state.effectResults.set(step.name, { ...stepEffectResults });
+        this.deps.persistState?.(state);
       }
     }
 
