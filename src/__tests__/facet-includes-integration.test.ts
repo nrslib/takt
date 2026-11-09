@@ -72,19 +72,25 @@ describe('facet include expansion', () => {
     expect(grill).not.toContain('{{include:');
   });
 
-  it.each(['ja', 'en'] as const)('%s: manager provides its own question procedure without shared interview partials', (lang) => {
+  it.each(['ja', 'en'] as const)('%s: manager excludes shared interview partials and ignores their project overrides', (lang) => {
     const managerContext = { projectDir: tempDir, lang };
-    const manager = resolveRefToContent('manager', undefined, tempDir, 'instructions', managerContext);
-    const questionProcedure = manager?.split('\n\n').find(paragraph => paragraph.includes('takt_ask_goal_question'));
-    expect(questionProcedure).toBeDefined();
-    for (const field of ['body', 'options', 'recommendation', 'message']) {
-      expect(questionProcedure).toMatch(new RegExp(`\\b${field}\\b`));
+    const managerFacets = (['policies', 'instructions'] as const).map(kind =>
+      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
+    for (const facet of managerFacets) {
+      expect(facet).toBeDefined();
     }
+    const manager = managerFacets.join('\n\n');
+    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
+    mkdirSync(partialsDir, { recursive: true });
 
     for (const name of ['decision-question-priority', 'one-question-interview']) {
       const partial = readFileSync(fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/instructions/${name}.md`, import.meta.url)), 'utf8').trim();
       expect(manager).not.toContain(partial);
+      writeFileSync(join(partialsDir, `${name}.md`), `Project override for ${name}`);
     }
+    const managerWithOverrides = (['policies', 'instructions'] as const).map(kind =>
+      resolveRefToContent('manager', undefined, tempDir, kind, managerContext));
+    expect(managerWithOverrides).toEqual(managerFacets);
     expect(manager).not.toContain('{{include:');
   });
 

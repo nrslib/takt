@@ -14,6 +14,8 @@ import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 
 const log = createLogger('clone');
 const CLONE_FAILED_MESSAGE = 'Git clone failed';
+// Dissociation closes the graph before checkout can lazy-load commit trees on affected Git versions.
+const REFERENCE_CLONE_ARGS = ['-c', 'core.commitGraph=false', 'clone'] as const;
 export const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
 const ISOLATED_GIT_ENV = {
   GIT_CONFIG_COUNT: '1',
@@ -293,7 +295,7 @@ export function cloneAndIsolate(
 
   const fallbackCloneArgs = ['clone', ...commonArgs];
   const referenceCloneArgs = useReferenceClone
-    ? ['clone', '--reference', projectDir, '--dissociate', ...commonArgs]
+    ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
   try {
@@ -503,7 +505,7 @@ export async function cloneAndIsolateAbortable(
 
   const fallbackCloneArgs = ['clone', ...commonArgs];
   const referenceCloneArgs = useReferenceClone
-    ? ['clone', '--reference', projectDir, '--dissociate', ...commonArgs]
+    ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
   try {

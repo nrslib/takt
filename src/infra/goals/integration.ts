@@ -98,10 +98,11 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). Reuse the saved completion evidence and humanChecks; supply humanChecks only when it has not been saved.`,
-      'If the goal branch tip has advanced beyond the saved goalSha, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks.',
-      'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks. Update an existing PR\'s text separately.',
+      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). Reuse saved humanChecks; if none was saved, the supplied value is saved. When humanChecks is supplied, retain the saved summary; when omitted, the new summary is saved.`,
+      'Before resubmitting, inspect and verify the current goal branch tip. If it has advanced beyond the saved goalSha, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks.',
+      'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks.',
       includedGoalCompletionGuidance,
+      'If only reading or updating an existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
       'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
     ],
   };
@@ -187,15 +188,18 @@ export async function completeGoal(
       if (retryHumanChecks === undefined) {
         throw new Error('humanChecks is required to retry PR preparation. Provide humanChecks and call takt_complete_goal again.');
       }
+      const retryCompletion = humanChecks === undefined
+        ? { ...goal.completion, summary }
+        : goal.completion;
       const { pullRequest, failure, bodyFailure } = await prepareCompletionPullRequest(
-        cwd, goal, goal.completion, retryHumanChecks, language, signal,
+        cwd, goal, retryCompletion, retryHumanChecks, language, signal,
       );
       await store.update(goalId, (current) => {
         signal?.throwIfAborted();
         assertCompletionAllowed(current, goal);
         const completion = current.completion!.humanChecks === undefined
-          ? { ...current.completion!, humanChecks: retryHumanChecks }
-          : current.completion;
+          ? { ...retryCompletion, humanChecks: retryHumanChecks }
+          : retryCompletion;
         const updated = { ...current, completion,
           ...(bodyFailure === undefined && pullRequest !== undefined
             ? { pullRequest: current.pullRequest ?? pullRequest }
@@ -210,9 +214,6 @@ export async function completeGoal(
       return { status: current.status, completion: current.completion, goal: current,
         ...(bodyFailure === undefined ? {} : { pullRequestBodyError: bodyFailure }) };
     }
-    const current = store.getSync(goalId);
-    assertCompletionUnchanged(current, goal);
-    return { status: current.status, completion: current.completion, goal: current };
   }
   const changeSummary = await readGoalDiffSummary(cwd, targetSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
   const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);

@@ -8,17 +8,20 @@ import { accepted, harness, input, deferred } from './helpers/controlledDaemon.j
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime('2026-11-06T00:00:00Z'); });
 afterEach(() => vi.useRealTimers());
 
-async function fixture() {
+async function fixture(timestamps = new Map([['/project', Date.now()], ['/second', Date.now()]])) {
   const h = await harness();
   const target: ManagerPatrolTarget = { conversationId: 'conversation', repositoryDirectory: '/project',
     intervalSeconds: 10 };
   let goalIds: string[] = [randomUUID(), randomUUID()];
   let targets = [target];
   const errors = vi.fn();
-  const loop = startManagerPatrols({ targets: async () => targets, goals: async () => goalIds, ingress: h.dispatcher,
-    pending: (id) => h.dispatcher.hasPendingPatrol(id), now: Date.now, onError: errors });
+  const records = { async read(repository: string) { return timestamps.get(repository); },
+    async write(repository: string, lastQueued: number) { timestamps.set(repository, lastQueued); } };
+  const dependencies = { targets: async () => targets, goals: async () => goalIds, ingress: h.dispatcher,
+    records, pending: (id: string) => h.dispatcher.hasPendingPatrol(id), now: Date.now, onError: errors };
+  const loop = startManagerPatrols(dependencies);
   await loop.drain();
-  return { ...h, target, loop, errors, goalIds, setGoals(ids: string[]) { goalIds = ids; }, setTargets(value: ManagerPatrolTarget[]) { targets = value; },
+  return { ...h, target, loop, errors, goalIds, timestamps, setGoals(ids: string[]) { goalIds = ids; }, setTargets(value: ManagerPatrolTarget[]) { targets = value; },
     async close() { await loop.close(); await h.dispatcher.control({ kind: 'stop' }); } };
 }
 
@@ -185,17 +188,25 @@ it('keeps a running patrol when human input is rejected by storage or belongs to
   } finally { await f.close(); }
 });
 
-it('starts a fresh interval after daemon restart without replaying missed periods', async () => {
+it('queues one overdue patrol on restart without replaying missed periods', async () => {
   const f = await fixture();
-  await f.close();
-  vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
-  const restarted = await fixture();
   try {
-    expect(restarted.runner.calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(10000);
+    const previous = await f.runner.started(1);
+    await f.runner.finish(previous);
+    expect(f.timestamps.get('/project')).toBe(Date.now());
+  } finally { await f.close(); }
+  vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+  const restarted = await fixture(f.timestamps);
+  try {
+    expect([...restarted.store.records.values()].filter(({ event }) => event.event.kind === 'patrol')).toHaveLength(1);
+    const first = await restarted.runner.started(1);
+    expect(first.input.event.event).toMatchObject({ kind: 'patrol', repositoryDirectory: '/project' });
+    await restarted.runner.finish(first);
     await vi.advanceTimersByTimeAsync(9999);
-    expect(restarted.runner.calls).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1);
     expect(restarted.runner.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restarted.runner.calls).toHaveLength(2);
   } finally { await restarted.close(); }
 });
 

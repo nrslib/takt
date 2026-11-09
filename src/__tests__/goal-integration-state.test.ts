@@ -1086,8 +1086,7 @@ it('saves PR recovery instructions and the failure reason when a PR is unavailab
   const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(result).toMatchObject({ status: 'awaiting_merge', goal });
   expect(goal.pullRequest).toBeUndefined();
-  expect(goal.completion?.instructions.join('\n')).toContain('takt_merge_goal_pr');
-  expect(goal.completion?.instructions.join('\n')).not.toContain('git merge');
+  expect(goal.completion?.goalSha).toBe(sourceSha);
   expect(goal.workLog.at(-1)?.summary).toContain('origin unavailable');
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
   const completion = structuredClone(goal.completion);
@@ -1095,6 +1094,21 @@ it('saves PR recovery instructions and the failure reason when a PR is unavailab
   expect(goal.pullRequest).toMatchObject({ number: 1950 });
   expect(goal.completion).toEqual({ ...completion, summary: 'new evidence' });
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
+});
+
+it('does not pass saved human checks when resubmitting a different reviewed SHA', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Saved checks', 'ja');
+  const previous = structuredClone(goal);
+  const nextSha = 'c'.repeat(40);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? nextSha : targetSha);
+  const missingChecks = new Error('human checks are required');
+  vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(missingChecks);
+
+  await expect(completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja'))
+    .rejects.toBe(missingChecks);
+
+  expect(prepareGoalPullRequest).toHaveBeenLastCalledWith('/project', previous,
+    expect.objectContaining({ goalSha: nextSha }), undefined, 'ja', undefined, expect.any(Function));
 });
 
 it('refreshes the completion and notifies the first PR failure on a repeated completion request', async () => {
