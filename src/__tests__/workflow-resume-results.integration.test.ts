@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { WorkflowResultsStore } from '../core/workflow/run/workflow-results.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { buildWorkflowRestartPointEntry, buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
@@ -14,6 +16,8 @@ import type { SystemStepServices } from '../core/workflow/system/system-step-ser
 import { runAgent } from '../agents/runner.js';
 import { attachWorkflowOpaqueRef, buildBuiltinWorkflowRef } from '../shared/workflowConfigMetadata.js';
 import { LogManager } from '../shared/ui/LogManager.js';
+import * as atomicFile from '../shared/utils/atomic-file.js';
+import { ReportExecutionStore } from '../core/workflow/report-execution-store.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 
@@ -38,8 +42,10 @@ describe('workflow results across resume', () => {
   }
 
   it.each([
-    ['start_step', false], ['resume_point', false], ['start_step', true], ['resume_point', true],
-  ] as const)('%s restores all results without replay (reference changed: %s)', async (mode, referenceChanged) => {
+    ['start_step', false, 'retry'], ['resume_point', false, 'retry'],
+    ['start_step', true, 'retry'], ['resume_point', true, 'retry'],
+    ['start_step', false, 'instruct'],
+  ] as const)('%s restores all results without replay (reference changed: %s, operation: %s)', async (mode, referenceChanged, resumeMode) => {
     let number = 100;
     const resolveSystemInput = vi.fn(() => ({ number }));
     const executeEffect = vi.fn<SystemStepServices['executeEffect']>(async (effect) => effect.type === 'caccia'
@@ -85,7 +91,7 @@ describe('workflow results across resume', () => {
       : config;
     const resumed = createEngine(currentConfig, {
       reportDirName: 'resumed', startStep: 'consume', systemStepServicesFactory,
-      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+      resumeSource: { sourceRunSlug: 'original', resumeMode },
       ...(mode === 'resume_point' ? { resumePoint: checkpoint } : {}),
     });
     number = 200;
@@ -332,6 +338,207 @@ describe('workflow results across resume', () => {
     expect(executeEffect.mock.calls[2]?.[1]).toMatchObject({ body: 'saved-head' });
   });
 
+  it.each(['start_step', 'resume_point', 'restart_point'] as const)('%s restores the state before the selected step first started', async (mode) => {
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const config = normalizeWorkflowConfig({
+      name: 'reselect-issue', initial_step: 'begin', max_steps: 12,
+      steps: [
+        { name: 'begin', instruction: 'Begin', rules: [{ condition: 'when(true)', next: 'select' }] },
+        { name: 'select', mode: 'system',
+          system_inputs: [{ type: 'issue_selection', source: 'current_project', as: 'issue' }],
+          rules: [{ condition: 'when(context.select.issue.number == 101)', next: 'plan' },
+            { condition: 'when(true)', next: 'enqueue' }] },
+        { name: 'plan', instruction: 'Plan for Issue {context:select.issue.number}',
+          rules: [{ condition: 'when(true)', next: 'enqueue' }] },
+        { name: 'enqueue', mode: 'system', effects: [{ type: 'enqueue_task', mode: 'new', workflow: 'takt-default',
+          task: '{structured:plan.task_markdown}', issue_number: '{context:select.issue.number}' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const plan = config.steps[2]!;
+    if (plan.kind !== 'agent') throw new Error('Expected agent step');
+    plan.structuredOutput = {
+      schemaRef: 'inline-test', schema: { type: 'object', properties: { task_markdown: { type: 'string' } }, required: ['task_markdown'] },
+    };
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(),
+        structuredOutput: { task_markdown: 'Plan for Issue 101' } };
+    });
+    const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(config, options);
+    const failures = vi.fn();
+    original.on('workflow:abort', failures);
+    expect((await original.run()).status, JSON.stringify(failures.mock.calls)).toBe('completed');
+    const checkpoint = original.getResumePoint()!;
+    checkpoint.stack = [buildWorkflowResumePointEntry(config, 'select', 'system', 1)];
+    const resumed = createEngine(config, {
+      ...options, startStep: 'select', reportDirName: 'resumed',
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'requeue' },
+      ...(mode === 'resume_point' ? { resumePoint: checkpoint } : {}),
+      ...(mode === 'restart_point' ? {
+        sourceResumePoint: original.getResumePoint(),
+        restartPoint: { stack: [buildWorkflowRestartPointEntry(config, 'select', 'system')] },
+      } : {}),
+    });
+
+    expect((await resumed.run()).status).toBe('aborted');
+    expect(resumed.getState().systemContexts.get('select')).toEqual({ issue: { number: 202 } });
+    expect(executeEffect).toHaveBeenCalledOnce();
+    expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ issue_number: 101, task: 'Plan for Issue 101' });
+    expect(resumed.getState().structuredOutputs.has('plan')).toBe(false);
+    expect(resumed.getState().effectResults.has('enqueue')).toBe(false);
+    const retry = createEngine(config, {
+      ...options, startStep: 'enqueue', reportDirName: 'retry',
+      resumeSource: { sourceRunSlug: 'resumed', resumeMode: 'retry' },
+    });
+    expect(retry.getState().systemContexts.get('select')).toEqual({ issue: { number: 202 } });
+    expect((await retry.run()).status).toBe('aborted');
+    expect(executeEffect).toHaveBeenCalledOnce();
+  });
+
+  it.each(['bigint', 'circular', 'write'] as const)('continues normal execution when saving results fails (%s)', async (failure) => {
+    const value: Record<string, unknown> = { number: 123 };
+    if (failure === 'bigint') value.extra = 1n;
+    if (failure === 'circular') value.extra = value;
+    const resolveSystemInput = vi.fn(() => value);
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const config = normalizeWorkflowConfig({
+      name: 'save-failure', initial_step: 'read', max_steps: 3,
+      steps: [
+        { name: 'read', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'consume' }] },
+        { name: 'consume', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:read.pr.number}', body: 'done' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      const engine = createEngine(config, { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) });
+      if (failure === 'write') {
+        const path = join(project, '.takt', 'runs', 'original', 'context', 'workflow-results.json');
+        rmSync(path);
+        mkdirSync(path);
+      }
+      expect((await engine.run()).status).toBe('completed');
+      expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ pr: 123 });
+      expect(warning).toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('restores the full state before the latest visit even when the provider reuses its object', async () => {
+    const output = { task_markdown: 'Plan for Issue 101' };
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      if (vi.mocked(runAgent).mock.calls.length === 2) output.task_markdown = 'Plan for Issue 202';
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(), structuredOutput: output };
+    });
+    const resolveSystemInput = vi.fn()
+      .mockReturnValueOnce({ number: 101 }).mockReturnValueOnce({ number: 202 }).mockReturnValue({ number: 303 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const config = normalizeWorkflowConfig({
+      name: 'regenerated-results', initial_step: 'begin', max_steps: 8,
+      steps: [
+        { name: 'begin', mode: 'system', rules: [{ condition: 'when(true)', next: 'select' }] },
+        { name: 'select', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(context.select.pr.number == 303)', next: 'consume' },
+            { condition: 'when(true)', next: 'plan' }] },
+        { name: 'plan', instruction: 'Plan',
+          rules: [{ condition: 'when(context.select.pr.number == 101)', next: 'select' },
+            { condition: 'when(true)', next: 'COMPLETE' }] },
+        { name: 'consume', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:select.pr.number}',
+          body: '{structured:plan.task_markdown}' }], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const plan = config.steps[2]!;
+    if (plan.kind !== 'agent') throw new Error('Expected agent step');
+    plan.structuredOutput = {
+      schemaRef: 'inline-test', schema: { type: 'object', properties: { task_markdown: { type: 'string' } }, required: ['task_markdown'] },
+    };
+    const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    expect((await createEngine(config, options).run()).status).toBe('completed');
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    const resumed = createEngine(config, {
+      ...options, startStep: 'select', reportDirName: 'resumed',
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+
+    expect(resumed.getState().structuredOutputs.get('plan')).toEqual({ task_markdown: 'Plan for Issue 101' });
+    expect(resumed.getState().systemContexts.get('select')).toEqual({ pr: { number: 101 } });
+    expect((await resumed.run()).status).toBe('completed');
+    expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ pr: 303, body: 'Plan for Issue 101' });
+  });
+
+  it.each([false, true])('finishes report execution and preserves the step outcome when saving fails (step throws: %s)', async (stepThrows) => {
+    const stepError = new Error('agent interrupted');
+    const config = normalizeWorkflowConfig({
+      name: 'report-save-failure', initial_step: 'report', max_steps: 2,
+      steps: [{ name: 'report', instruction: 'Report', output_contracts: { report: [{ name: 'report.md', format: 'Report' }] },
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, project);
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, _instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: 'Report' });
+      const path = join(project, '.takt', 'runs', 'original', 'context', 'workflow-results.json');
+      rmSync(path);
+      mkdirSync(path);
+      if (stepThrows) throw stepError;
+      return { persona: 'report', status: 'done', content: 'done', timestamp: new Date() };
+    });
+    const finish = vi.spyOn(ReportExecutionStore.prototype, 'finish');
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      const engine = createEngine(config, {});
+      const outcome = engine.runSingleIteration();
+      if (stepThrows) await expect(outcome).rejects.toBe(stepError);
+      else expect((await outcome).isComplete).toBe(true);
+      expect(finish).toHaveBeenCalledWith(expect.any(String), !stepThrows);
+      expect(warning).toHaveBeenCalled();
+    } finally {
+      finish.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it('does not restore child results when the parent workflow name changes at the same reference', async () => {
+    const parent = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'old-parent', initial_step: 'delegate', max_steps: 10,
+      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child', rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, project), join(project, 'parent.yaml'));
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'read', max_steps: 10,
+      steps: [
+        { name: 'read', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'consume' }] },
+        { name: 'consume', instruction: 'Use PR {context:read.pr.number}',
+          rules: [{ condition: 'when(true)', next: 'comment' }] },
+        { name: 'comment', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:read.pr.number}', body: 'done' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const resolveSystemInput = vi.fn(() => ({ number: 101 }));
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const options = { workflowCallResolver: () => child, systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    expect((await original.run()).status).toBe('completed');
+    const renamed = attachWorkflowOpaqueRef({ ...parent, name: 'new-parent' }, join(project, 'parent.yaml'));
+    const resumed = createEngine(renamed, {
+      ...options, reportDirName: 'resumed',
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'instruct' },
+      sourceResumePoint: original.getResumePoint(),
+      restartPoint: { stack: [
+        buildWorkflowRestartPointEntry(renamed, 'delegate', 'workflow_call', 1),
+        buildWorkflowRestartPointEntry(child, 'consume', 'agent'),
+      ] },
+    });
+
+    expect((await resumed.run()).status).toBe('aborted');
+    expect(executeEffect).toHaveBeenCalledOnce();
+    expect(resolveSystemInput).toHaveBeenCalledOnce();
+  });
+
   it('restores contexts from arbitrary command inputs without running the command again', async () => {
     mkdirSync(join(project, '.takt'), { recursive: true });
     writeFileSync(join(project, '.takt', 'config.yaml'), 'workflow_system_commands:\n  custom_scripts: true\n');
@@ -410,7 +617,7 @@ describe('workflow results across resume', () => {
     expect(killed.signal, killed.stderr).toBe('SIGKILL');
     expect(existsSync(finallyPath)).toBe(false);
     expect(JSON.parse(readFileSync(join(project, '.takt', 'runs', 'original', 'context', 'workflow-results.json'), 'utf8')))
-      .toMatchObject({ context: {}, effect: {}, structured: {} });
+      .toMatchObject({ latest: { context: {}, effect: {}, structured: {} } });
     const resumePoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as WorkflowResumePoint;
     expect(resumePoint.stack.map((frame) => frame.step)).toEqual(['delegate', 'consume']);
     const resolveSystemInput = vi.fn();
@@ -429,6 +636,90 @@ describe('workflow results across resume', () => {
     expect(executeEffect).not.toHaveBeenCalled();
     expect(runAgent).toHaveBeenCalledOnce();
     expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('Saved child results: 123, child-head');
+  });
+
+  it.each([false, true])('keeps Issue 101 when resuming a child killed during an effect under parallel (nested: %s)', async (nested) => {
+    const parallel = normalizeWorkflowConfig({
+      name: 'parallel-parent', subworkflow: { callable: true }, initial_step: 'parallel', max_steps: 10,
+      steps: [{ name: 'parallel', parallel: [
+        { name: 'delegate', kind: 'workflow_call', call: 'child',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] },
+      ], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, project);
+    const parent = nested ? normalizeWorkflowConfig({
+      name: 'outer-parent', initial_step: 'outer-call', max_steps: 10,
+      steps: [{ name: 'outer-call', kind: 'workflow_call', call: 'parallel-parent',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, project) : parallel;
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'select', max_steps: 10,
+      steps: [{ name: 'select', mode: 'system',
+        system_inputs: [{ type: 'issue_selection', source: 'current_project', as: 'issue' }],
+        effects: [
+          { type: 'caccia', pr: '{context:select.issue.number}' },
+          { type: 'comment_pr', pr: '{context:select.issue.number}', body: 'selected' },
+        ], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, project);
+    const checkpointPath = join(project, 'checkpoint.json');
+    const selectedPath = join(project, 'selected.json');
+    const source = `
+      import { writeFileSync } from 'node:fs';
+      import { WorkflowEngine } from ${JSON.stringify(new URL('../core/workflow/engine/WorkflowEngine.ts', import.meta.url).href)};
+      import { readPreviousSelectedNumber, selectNextCandidate } from ${JSON.stringify(new URL('../infra/workflow/system/system-selection-helpers.ts', import.meta.url).href)};
+      const engine = new WorkflowEngine(${JSON.stringify(parent)}, process.cwd(), 'Resume workflow', {
+        projectCwd: process.cwd(), provider: 'mock', reportDirName: 'original',
+        workflowCallResolver: ({ step }) => step.call === 'parallel-parent' ? ${JSON.stringify(parallel)} : ${JSON.stringify(child)},
+        systemStepServicesFactory: () => ({
+          resolveSystemInput: (input, state, step) => selectNextCandidate(
+            [{ number: 101 }, { number: 202 }], readPreviousSelectedNumber(state, step, input.as)),
+          executeEffect: async (effect, payload) => {
+            if (effect.type === 'caccia') {
+              writeFileSync(${JSON.stringify(selectedPath)}, JSON.stringify(payload));
+              return { headSha: 'selected-head' };
+            }
+            writeFileSync(${JSON.stringify(checkpointPath)}, JSON.stringify(engine.getResumePoint()));
+            process.kill(process.pid, 'SIGKILL');
+          },
+        }),
+      });
+      await engine.run();
+    `;
+
+    const killed = spawnSync(process.execPath, [
+      '--import', createRequire(import.meta.url).resolve('tsx/esm'), '--input-type=module', '--eval', source,
+    ], {
+      cwd: project, encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL',
+      env: { ...process.env, NODE_OPTIONS: undefined },
+    });
+
+    expect(killed.error, killed.stderr).toBeUndefined();
+    expect(killed.signal, killed.stderr).toBe('SIGKILL');
+    expect(JSON.parse(readFileSync(selectedPath, 'utf8'))).toMatchObject({ pr: 101 });
+    const resumePoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as WorkflowResumePoint;
+    expect(resumePoint.stack.map((frame) => frame.step)).toEqual([
+      ...(nested ? ['outer-call'] : []), 'parallel', 'delegate', 'select',
+    ]);
+    const { readPreviousSelectedNumber, selectNextCandidate } = await import('../infra/workflow/system/system-selection-helpers.js');
+    const resolveSystemInput = vi.fn<SystemStepServices['resolveSystemInput']>((input, state, step) => {
+      if (state === undefined || step === undefined) throw new Error('Expected workflow state and step');
+      return selectNextCandidate([{ number: 101 }, { number: 202 }], readPreviousSelectedNumber(state, step, input.as));
+    });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const resumed = createEngine(parent, {
+      reportDirName: 'resumed', resumePoint,
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+      workflowCallResolver: ({ step }) => step.call === 'parallel-parent' ? parallel : child,
+      systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }),
+    });
+    const failures = vi.fn();
+    resumed.on('workflow:abort', failures);
+
+    expect((await resumed.run()).status, JSON.stringify(failures.mock.calls)).toBe('completed');
+    expect(resolveSystemInput).toHaveBeenCalledOnce();
+    expect(resolveSystemInput.mock.results[0]?.value).toEqual({ number: 101 });
+    expect(executeEffect.mock.calls.map(([, payload]) => payload)).toEqual([
+      { type: 'caccia', pr: 101 }, { type: 'comment_pr', pr: 101, body: 'selected' },
+    ]);
   });
 
   it.each([false, true])('restores child results through the initial parent step (reference changed: %s)', async (referenceChanged) => {
@@ -487,7 +778,7 @@ describe('workflow results across resume', () => {
     expect(runAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('inherits child results across a retry that fails before entering the child', async () => {
+  it.each(['before_child', 'workflow_call:start'] as const)('inherits child results across a retry that fails at %s', async (failurePoint) => {
     const parent = normalizeWorkflowConfig({
       name: 'parent', initial_step: 'before_child', max_steps: 20,
       steps: [
@@ -529,20 +820,34 @@ describe('workflow results across resume', () => {
       workflowCallResolver,
       systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }),
     };
-    const original = createEngine(parent, options);
+    const original = createEngine(parent, {
+      ...options,
+      ...(failurePoint === 'workflow_call:start' ? { resumePoint: {
+        version: 2, stack: [buildWorkflowResumePointEntry(parent, 'before_child', 'system', 1, new Map([['delegate', 1]]))],
+        iteration: 0, elapsed_ms: 0, workflow_call_invocations: {}, workflow_step_participations: {},
+      } as WorkflowResumePoint } : {}),
+    });
     expect((await original.run()).status).toBe('aborted');
 
     const interrupted = createEngine(parent, {
       ...options, reportDirName: 'interrupted',
       resumeSource: { sourceRunSlug: 'original', resumeMode: 'requeue' },
       sourceResumePoint: original.getResumePoint(),
-      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'before_child', 'system')] },
+      restartPoint: { stack: failurePoint === 'before_child'
+        ? [buildWorkflowRestartPointEntry(parent, 'before_child', 'system')]
+        : [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1),
+          buildWorkflowRestartPointEntry(child, 'consume', 'agent')],
+      },
     });
     workflowCallResolver.mockClear();
-    resolveSystemInput.mockImplementationOnce(() => { throw new Error('Parent unavailable'); });
+    if (failurePoint === 'before_child') {
+      resolveSystemInput.mockImplementationOnce(() => { throw new Error('Parent unavailable'); });
+    } else {
+      interrupted.on('workflow_call:start', () => { throw new Error('Call start interrupted'); });
+    }
     expect((await interrupted.run()).status).toBe('aborted');
     expect(workflowCallResolver).not.toHaveBeenCalled();
-    expect(interrupted.getState().systemContexts.size).toBe(0);
+    expect(interrupted.getState().systemContexts.size).toBe(failurePoint === 'before_child' ? 0 : 1);
 
     // The next retry must be self-contained in B even after A is removed.
     rmSync(join(project, '.takt', 'runs', 'original'), { recursive: true });
@@ -562,8 +867,500 @@ describe('workflow results across resume', () => {
     expect((await retry.run()).status, JSON.stringify(failures.mock.calls)).toBe('completed');
     expect(executeEffect.mock.calls.map(([effect]) => effect.type)).toEqual(['caccia', 'comment_pr', 'comment_pr']);
     expect(executeEffect.mock.calls[2]?.[1]).toMatchObject({ pr: 123, body: 'head=child-head: approved' });
-    expect(resolveSystemInput).toHaveBeenCalledTimes(3);
+    expect(resolveSystemInput).toHaveBeenCalledTimes(failurePoint === 'before_child' ? 3 : 2);
     expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  function loopConfig(skipPlanOnReselection = false): WorkflowConfig {
+    const config = normalizeWorkflowConfig({
+      name: 'snapshot-loop', initial_step: 'begin', max_steps: 20,
+      steps: [
+        { name: 'begin', mode: 'system', rules: [{ condition: 'when(true)', next: 'select' }] },
+        { name: 'select', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: skipPlanOnReselection
+            ? [{ condition: 'when(context.select.pr.number == 101)', next: 'plan' },
+              { condition: 'when(true)', next: 'enqueue' }]
+            : [{ condition: 'when(true)', next: 'plan' }] },
+        { name: 'plan', instruction: 'Plan {context:select.pr.number}',
+          rules: [{ condition: 'when(context.select.pr.number == 101)', next: 'select' },
+            { condition: 'when(true)', next: 'enqueue' }] },
+        { name: 'enqueue', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:select.pr.number}',
+          body: '{structured:plan.task}' }], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const plan = config.steps[2]!;
+    if (plan.kind !== 'agent') throw new Error('Expected agent step');
+    plan.structuredOutput = {
+      schemaRef: 'inline-test', schema: { type: 'object', properties: { task: { type: 'string' } }, required: ['task'] },
+    };
+    return config;
+  }
+
+  it.each(['bigint', 'circular', 'write'] as const)('R1 resumes with empty results after the latest loop save fails (%s)', async (failure) => {
+    const config = loopConfig();
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    let broken = false;
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      const output: Record<string, unknown> = { task: instruction.includes('Plan 202') ? 'Plan 202' : 'Plan 101' };
+      if (instruction.includes('Plan 202')) {
+        if (failure === 'bigint') output.extra = 1n;
+        if (failure === 'circular') output.extra = output;
+        broken = true;
+      }
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(), structuredOutput: output };
+    });
+    const write = atomicFile.writeFileAtomic;
+    const save = vi.spyOn(atomicFile, 'writeFileAtomic').mockImplementation((path, content, mode) => {
+      if (broken && failure === 'write' && path.endsWith('workflow-results.json')) throw new Error('disk unavailable');
+      write(path, content, mode);
+    });
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+      const original = createEngine(config, options);
+      for (let i = 0; i < 5; i++) await original.runSingleIteration();
+      const checkpoint = original.getResumePoint()!;
+      expect(checkpoint.stack[0]).toMatchObject({ step: 'enqueue', occurrence: 1 });
+      expect(executeEffect).not.toHaveBeenCalled();
+      save.mockRestore();
+      warning.mockClear();
+      const resumed = createEngine(config, {
+        ...options, reportDirName: 'resumed', startStep: 'enqueue', resumePoint: checkpoint,
+        resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+      });
+      expect(warning).toHaveBeenCalled();
+      expect(resumed.getState().systemContexts.size).toBe(0);
+      expect(resumed.getState().structuredOutputs.size).toBe(0);
+      expect((await resumed.run()).status).toBe('aborted');
+      expect(executeEffect).not.toHaveBeenCalled();
+    } finally {
+      save.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it('keeps written bytes per occurrence constant as history grows', () => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    mkdirSync(source);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    const write = vi.spyOn(atomicFile, 'writeFileAtomic');
+    try {
+      const bytes: number[] = [];
+      for (let occurrence = 1; occurrence <= 40; occurrence++) {
+        write.mockClear();
+        state.systemContexts.set('select', { pr: { number: String(occurrence).padStart(3, '0') } });
+        store.startStep('select', occurrence);
+        store.save();
+        bytes.push(write.mock.calls.reduce((total, [, content]) => total + Buffer.byteLength(content), 0));
+      }
+      expect(bytes[0]).toBeGreaterThan(0);
+      expect(new Set(bytes).size).toBe(1);
+      const restored = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      const target = join(project, 'target-context');
+      mkdirSync(target);
+      new WorkflowResultsStore(target, config, restored).initialize(source, true, true, 1);
+      expect(restored.systemContexts.get('select')).toEqual({ pr: { number: '001' } });
+      const latest = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, latest).initialize(target, true, false);
+      expect(latest.systemContexts.get('select')).toEqual({ pr: { number: '001' } });
+    } finally { write.mockRestore(); }
+  });
+
+  it('starts another resume with the empty state restored from a failed occurrence', () => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    const retry = join(project, 'retry-context');
+    for (const directory of [source, target, retry]) mkdirSync(directory);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 1);
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    const write = vi.spyOn(atomicFile, 'writeFileAtomic').mockImplementation(() => { throw new Error('disk unavailable'); });
+    try {
+      store.startStep('select', 2);
+      write.mockRestore();
+      state.systemContexts.set('select', { pr: { number: 202 } });
+      store.save();
+      const resumed = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, resumed).initialize(source, true, true, 2);
+      expect(resumed.systemContexts.size).toBe(0);
+      warning.mockClear();
+      const resumedAgain = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(retry, config, resumedAgain).initialize(target, true, false, 2);
+      expect(resumedAgain.systemContexts.size).toBe(0);
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it('does not substitute a newer valid state for a failed occurrence snapshot', () => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    mkdirSync(source);
+    mkdirSync(target);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 1);
+    state.structuredOutputs.set('plan', { task: 'Plan 101', extra: 1n });
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    try {
+      store.startStep('select', 2);
+      state.structuredOutputs.set('plan', { task: 'Plan 202' });
+      state.systemContexts.set('select', { pr: { number: 202 } });
+      store.save();
+      warning.mockClear();
+      const resumed = createInitialState(config, { projectCwd: project, startStep: 'select' });
+      new WorkflowResultsStore(target, config, resumed).initialize(source, true, false, 2);
+      expect(warning).toHaveBeenCalledOnce();
+      expect(resumed.systemContexts.size).toBe(0);
+      expect(resumed.effectResults.size).toBe(0);
+      expect(resumed.structuredOutputs.size).toBe(0);
+    } finally { warning.mockRestore(); }
+  });
+
+  it('R2 restores the full state before a failed second selection and supports selecting an earlier occurrence', async () => {
+    const config = loopConfig(true);
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 })
+      .mockImplementationOnce(() => { throw new Error('selection interrupted'); }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(), structuredOutput: { task: instruction.includes('Plan 202') ? 'Plan 202' : 'Plan 101' } };
+    });
+    const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(config, options);
+    await original.runSingleIteration();
+    await original.runSingleIteration();
+    await original.runSingleIteration();
+    const before = original.getState();
+    await expect(original.runSingleIteration()).rejects.toThrow();
+    const checkpoint = original.getResumePoint()!;
+    expect(checkpoint.stack[0]).toMatchObject({ step: 'select', occurrence: 2 });
+    const resumed = createEngine(config, {
+      ...options, reportDirName: 'resumed', startStep: 'select', resumePoint: checkpoint,
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    expect(resumed.getState().systemContexts).toEqual(before.systemContexts);
+    expect(resumed.getState().structuredOutputs).toEqual(before.structuredOutputs);
+    expect(resumed.getState().effectResults).toEqual(before.effectResults);
+    expect((await resumed.run()).status).toBe('completed');
+    expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ pr: 202, body: 'Plan 101' });
+    const earlier = createEngine(config, {
+      ...options, reportDirName: 'earlier', startStep: 'select',
+      resumePoint: { ...checkpoint, stack: [buildWorkflowResumePointEntry(config, 'select', 'system', 1)] },
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    expect(earlier.getState().systemContexts.get('begin')).toEqual({});
+    expect(earlier.getState().systemContexts.has('select')).toBe(false);
+    expect(earlier.getState().structuredOutputs.size).toBe(0);
+    expect((await earlier.run()).status).toBe('aborted');
+    expect(executeEffect).toHaveBeenCalledOnce();
+    expect(runAgent).toHaveBeenCalledOnce();
+  });
+
+  it('R4 restores the latest completed state when the checkpoint points to an unstarted second plan', async () => {
+    const config = loopConfig();
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(), structuredOutput: { task: instruction.includes('Plan 202') ? 'Plan 202' : 'Plan 101' } };
+    });
+    const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(config, options);
+    for (let i = 0; i < 4; i++) await original.runSingleIteration();
+    const checkpoint = original.getResumePoint()!;
+    expect(checkpoint.stack[0]).toMatchObject({ step: 'plan', occurrence: 2 });
+    const resumed = createEngine(config, {
+      ...options, reportDirName: 'resumed', startStep: 'plan', resumePoint: checkpoint,
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    expect(resumed.getState().systemContexts.get('select')).toEqual({ pr: { number: 202 } });
+    expect(resumed.getState().structuredOutputs.get('plan')).toEqual({ task: 'Plan 101' });
+    expect((await resumed.run()).status).toBe('completed');
+    expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ pr: 202, body: 'Plan 202' });
+    expect(resolveSystemInput).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['start_step', 'restart_point'] as const)('restores B’s latest selection when C resumes its unstarted plan after %s', async (mode) => {
+    const config = loopConfig();
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(),
+        structuredOutput: { task: instruction.includes('Plan 202') ? 'Plan 202' : 'Plan 101' } };
+    });
+    const options = { systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(config, options);
+    for (let i = 0; i < 3; i++) await original.runSingleIteration();
+    expect(original.getState().structuredOutputs.get('plan')).toEqual({ task: 'Plan 101' });
+
+    const intermediate = createEngine(config, {
+      ...options, reportDirName: 'intermediate', maxStepsOverride: 1,
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+      ...(mode === 'start_step' ? { startStep: 'select' } : {
+        sourceResumePoint: original.getResumePoint(),
+        restartPoint: { stack: [buildWorkflowRestartPointEntry(config, 'select', 'system')] },
+      }),
+    });
+    expect((await intermediate.run()).status).toBe('aborted');
+    const checkpoint = intermediate.getResumePoint()!;
+    expect(checkpoint.stack[0]).toMatchObject({ step: 'plan', occurrence: 1 });
+    expect(runAgent).toHaveBeenCalledOnce();
+    rmSync(join(project, '.takt', 'runs', 'original'), { recursive: true });
+
+    const resumed = createEngine(config, {
+      ...options, reportDirName: 'resumed', startStep: 'plan', resumePoint: checkpoint,
+      resumeSource: { sourceRunSlug: 'intermediate', resumeMode: 'requeue' },
+    });
+    expect(resumed.getState().systemContexts.get('select')).toEqual({ pr: { number: 202 } });
+    expect((await resumed.run()).status).toBe('completed');
+    expect(executeEffect.mock.calls.map(([, params]) => params)).toEqual([
+      { type: 'comment_pr', pr: 202, body: 'Plan 202' },
+    ]);
+    expect(resolveSystemInput).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps only the selected child state when a retry stops before entering that child', async () => {
+    const parent = normalizeWorkflowConfig({
+      name: 'parent', initial_step: 'delegate', max_steps: 20,
+      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'snapshot-loop',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+    }, project);
+    const child = normalizeWorkflowConfig({
+      name: 'snapshot-loop', subworkflow: { callable: true }, initial_step: 'select', max_steps: 20,
+      steps: [
+        { name: 'select', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'plan' }] },
+        { name: 'plan', instruction: 'Plan {context:select.pr.number}',
+          rules: [{ condition: 'when(context.select.pr.number == 101)', next: 'select' },
+            { condition: 'when(true)', next: 'observe' }] },
+        { name: 'observe', instruction: 'Saved plan: {structured:plan.task}',
+          rules: [{ condition: 'when(true)', next: 'enqueue' }] },
+        { name: 'enqueue', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:select.pr.number}',
+          body: '{structured:plan.task}' }], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const plan = child.steps[1]!;
+    if (plan.kind !== 'agent') throw new Error('Expected agent step');
+    plan.structuredOutput = {
+      schemaRef: 'inline-test', schema: { type: 'object', properties: { task: { type: 'string' } }, required: ['task'] },
+    };
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: '', userInstruction: instruction });
+      return { persona: 'plan', status: 'done', content: 'planned', timestamp: new Date(),
+        structuredOutput: { task: instruction.includes('Plan 202') ? 'Plan 202' : 'Plan 101' } };
+    });
+    const options = { workflowCallResolver: () => child,
+      systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    expect((await original.run()).status).toBe('completed');
+    expect(executeEffect.mock.calls[0]?.[1]).toMatchObject({ pr: 202, body: 'Plan 202' });
+
+    const interrupted = createEngine(parent, {
+      ...options, reportDirName: 'interrupted', sourceResumePoint: original.getResumePoint(),
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1),
+        buildWorkflowRestartPointEntry(child, 'plan', 'agent')] },
+    });
+    interrupted.on('workflow_call:start', () => { throw new Error('Call start interrupted'); });
+    expect((await interrupted.run()).status).toBe('aborted');
+    rmSync(join(project, '.takt', 'runs', 'original'), { recursive: true });
+    vi.mocked(runAgent).mockClear();
+    executeEffect.mockClear();
+
+    const resumed = createEngine(parent, {
+      ...options, reportDirName: 'resumed', sourceResumePoint: interrupted.getResumePoint(),
+      resumeSource: { sourceRunSlug: 'interrupted', resumeMode: 'retry' },
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1),
+        buildWorkflowRestartPointEntry(child, 'observe', 'agent')] },
+    });
+    expect((await resumed.run()).status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('Saved plan: Plan 101');
+    expect(executeEffect.mock.calls.map(([, params]) => params)).toEqual([
+      { type: 'comment_pr', pr: 202, body: 'Plan 101' },
+    ]);
+    expect(resolveSystemInput).toHaveBeenCalledTimes(2);
+  });
+
+  it('R4 restores the state of an unstarted call instance selected by restartPoint', async () => {
+    const parent = normalizeWorkflowConfig({
+      name: 'parent-call-loop', initial_step: 'select', max_steps: 20,
+      steps: [
+        { name: 'select', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'delegate' }] },
+        { name: 'delegate', kind: 'workflow_call', call: 'child', rules: [{ condition: 'COMPLETE', next: 'comment' }] },
+        { name: 'comment', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:select.pr.number}', body: 'done' }],
+          rules: [{ condition: 'when(context.select.pr.number == 101)', next: 'select' },
+            { condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'work', max_steps: 5,
+      steps: [{ name: 'work', instruction: 'Work', rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, project);
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 101 }).mockReturnValue({ number: 202 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockResolvedValue({ success: true });
+    const options = { workflowCallResolver: () => child, systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    for (let i = 0; i < 4; i++) await original.runSingleIteration();
+    const checkpoint = original.getResumePoint()!;
+    expect(checkpoint.stack[0]).toMatchObject({ step: 'delegate', occurrence: 2, call_instance: 2 });
+    const resumed = createEngine(parent, {
+      ...options, reportDirName: 'resumed', sourceResumePoint: checkpoint,
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1)] },
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    expect(resumed.getState().systemContexts.get('select')).toEqual({ pr: { number: 202 } });
+    const calls = vi.fn();
+    resumed.on('workflow_call:start', calls);
+    expect((await resumed.run()).status).toBe('completed');
+    expect(resumed.getResumePoint()?.workflow_call_invocations).toEqual(expect.objectContaining({
+      [Object.keys(checkpoint.workflow_call_invocations)[0]!]: expect.objectContaining({ call_instance: 2 }),
+    }));
+    expect(calls).toHaveBeenCalledOnce();
+    expect(resolveSystemInput).toHaveBeenCalledTimes(2);
+    expect(executeEffect.mock.calls.map(([, params]) => params)).toEqual([
+      { type: 'comment_pr', pr: 101, body: 'done' }, { type: 'comment_pr', pr: 202, body: 'done' },
+    ]);
+  });
+
+  it('R6-1 restores parent results when continuing inside its initial call after a loop', async () => {
+    const parent = normalizeWorkflowConfig({
+      name: 'initial-call-loop', initial_step: 'delegate', max_steps: 20,
+      steps: [
+        { name: 'delegate', kind: 'workflow_call', call: 'child', rules: [{ condition: 'COMPLETE', next: 'gate' }] },
+        { name: 'gate', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'visit' }],
+          rules: [{ condition: 'when(context.gate.visit.number == 1)', next: 'select' },
+            { condition: 'when(true)', next: 'consume' }] },
+        { name: 'select', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'prepare' }] },
+        { name: 'prepare', mode: 'system', effects: [{ type: 'caccia', pr: '{context:select.pr.number}' }],
+          rules: [{ condition: 'when(true)', next: 'plan' }] },
+        { name: 'plan', instruction: 'Plan', rules: [{ condition: 'when(true)', next: 'delegate' }] },
+        { name: 'consume', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:select.pr.number}',
+          body: 'head={effect:prepare.caccia.headSha}: {structured:plan.verdict}' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const plan = parent.steps.find((step) => step.name === 'plan')!;
+    if (plan.kind !== 'agent') throw new Error('Expected agent step');
+    plan.structuredOutput = { schemaRef: 'inline-test',
+      schema: { type: 'object', properties: { verdict: { type: 'string' } }, required: ['verdict'] } };
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'read', max_steps: 5,
+      steps: [
+        { name: 'read', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'work' }] },
+        { name: 'work', instruction: 'Child PR {context:read.pr.number}', rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const resolveSystemInput = vi.fn().mockReturnValueOnce({ number: 11 }).mockReturnValueOnce({ number: 1 })
+      .mockReturnValueOnce({ number: 101 }).mockReturnValueOnce({ number: 22 }).mockReturnValue({ number: 2 });
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>(async (effect) => effect.type === 'caccia'
+      ? { headSha: 'parent-head' } : { success: true });
+    const run = vi.mocked(runAgent).getMockImplementation()!;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (instruction.includes('Child PR 22')) throw new Error('child interrupted');
+      return run(persona, instruction, options);
+    });
+    const options = { workflowCallResolver: () => child, systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    expect((await original.run()).status).toBe('aborted');
+    const checkpoint = original.getResumePoint()!;
+    expect(checkpoint.stack.map(({ step, occurrence }) => ({ step, occurrence }))).toEqual([
+      { step: 'delegate', occurrence: 2 }, { step: 'work', occurrence: 1 },
+    ]);
+    vi.mocked(runAgent).mockImplementation(run);
+    const resumed = createEngine(parent, {
+      ...options, reportDirName: 'resumed', sourceResumePoint: checkpoint,
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1),
+        buildWorkflowRestartPointEntry(child, 'work', 'agent')] },
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    const failures = vi.fn();
+    resumed.on('workflow:abort', failures);
+    const state = await resumed.run();
+    expect(state.status, JSON.stringify(failures.mock.calls)).toBe('completed');
+    expect(vi.mocked(runAgent).mock.lastCall?.[1]).toContain('Child PR 22');
+    expect(resolveSystemInput).toHaveBeenCalledTimes(5);
+    expect(executeEffect.mock.calls.map(([, params]) => params)).toEqual([
+      { type: 'caccia', pr: 101 }, { type: 'comment_pr', pr: 101, body: 'head=parent-head: approved' },
+    ]);
+    const fresh = createEngine(parent, {
+      ...options, reportDirName: 'fresh', sourceResumePoint: checkpoint,
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1)] },
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    expect(fresh.getState().systemContexts.size).toBe(0);
+    expect(fresh.getState().effectResults.size).toBe(0);
+    expect(fresh.getState().structuredOutputs.size).toBe(0);
+  });
+
+  it('R3 does not copy a resumed child into a new call instance when the next call fails at start', async () => {
+    const parent = normalizeWorkflowConfig({
+      name: 'parent', initial_step: 'delegate', max_steps: 20,
+      steps: [{ name: 'delegate', kind: 'workflow_call', call: 'child',
+        rules: [{ condition: 'COMPLETE', next: 'delegate' }, { condition: 'ABORT', next: 'ABORT' }] }],
+    }, project);
+    const child = normalizeWorkflowConfig({
+      name: 'child', subworkflow: { callable: true }, initial_step: 'read', max_steps: 20,
+      steps: [
+        { name: 'read', mode: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          rules: [{ condition: 'when(true)', next: 'consume' }] },
+        { name: 'consume', instruction: 'Read {context:read.pr.number}',
+          rules: [{ condition: 'when(true)', next: 'comment' }] },
+        { name: 'comment', mode: 'system', effects: [{ type: 'comment_pr', pr: '{context:read.pr.number}', body: 'done' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ],
+    }, project);
+    const resolveSystemInput = vi.fn(() => ({ number: 101 }));
+    const executeEffect = vi.fn<SystemStepServices['executeEffect']>().mockRejectedValueOnce(new Error('child interrupted'))
+      .mockResolvedValue({ success: true });
+    const options = { workflowCallResolver: () => child, systemStepServicesFactory: () => ({ resolveSystemInput, executeEffect }) };
+    const original = createEngine(parent, options);
+    expect((await original.run()).status).toBe('aborted');
+    const resumed = createEngine(parent, {
+      ...options, reportDirName: 'resumed', resumePoint: original.getResumePoint(),
+      resumeSource: { sourceRunSlug: 'original', resumeMode: 'retry' },
+    });
+    let starts = 0;
+    resumed.on('workflow_call:start', () => { if (++starts === 2) throw new Error('next call interrupted'); });
+    expect((await resumed.run()).status).toBe('aborted');
+    expect(starts).toBe(2);
+    const checkpoint = resumed.getResumePoint()!;
+    expect(checkpoint.stack[0]).toMatchObject({ step: 'delegate', call_instance: 2 });
+    const retry = createEngine(parent, {
+      ...options, reportDirName: 'retry', sourceResumePoint: checkpoint,
+      restartPoint: { stack: [buildWorkflowRestartPointEntry(parent, 'delegate', 'workflow_call', 1),
+        buildWorkflowRestartPointEntry(child, 'consume', 'agent')] },
+      resumeSource: { sourceRunSlug: 'resumed', resumeMode: 'retry' },
+    });
+    const warning = vi.spyOn(LogManager.getInstance(), 'warn');
+    const failures = vi.fn();
+    retry.on('workflow:abort', failures);
+    try {
+      expect((await retry.run()).status).toBe('aborted');
+      expect(warning, JSON.stringify(failures.mock.calls)).toHaveBeenCalled();
+      expect(resolveSystemInput).toHaveBeenCalledOnce();
+      expect(executeEffect).toHaveBeenCalledTimes(2);
+    } finally { warning.mockRestore(); }
   });
 
   it.each(['ja', 'en'] as const)('%s merge-prepare resumes at review with saved identify context', async (language) => {
