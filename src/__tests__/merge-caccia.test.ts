@@ -44,7 +44,6 @@ import { createDefaultSystemStepServices } from '../infra/workflow/system/Defaul
 import { TaskRunner } from '../infra/task/index.js';
 import { TaskStore } from '../infra/task/store.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import * as goalGit from '../infra/goals/git-command.js';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
@@ -223,56 +222,6 @@ describe('Merge workflows own Caccia execution', () => {
       expect(existsSync(claimed.worktreePath!)).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
-  });
-
-  it.each([true, false] as const)('PR 状態取得中の中断を再確認し、merged=%s を反映する', async (merged) => {
-    const { goals, runner, claimed } = await claimGoalMergeTask('merge');
-    mocks.workflow.mockResolvedValueOnce({ success: true });
-    let statusSignal!: AbortSignal;
-    mocks.status.mockImplementationOnce((_prNumber: number, _cwd: string, options: { signal?: AbortSignal }) => {
-      statusSignal = options.signal!;
-      return new Promise((_resolve, reject) => {
-        statusSignal.addEventListener('abort', () => reject(statusSignal.reason), { once: true });
-      });
-    }).mockResolvedValueOnce({ merged, headSha });
-
-    const execution = executePersistedPrMergeTask(claimed, runner, project);
-    const settled = execution.then((result) => ({ ok: true as const, result }),
-      (error: unknown) => ({ ok: false as const, error }));
-    await vi.waitFor(() => expect(mocks.status).toHaveBeenCalledOnce());
-    await goals.update(goalId, (goal) => ({ ...goal, status: 'created' }));
-    await vi.waitFor(() => expect(statusSignal.aborted).toBe(true), { timeout: 3000 });
-
-    if (merged) {
-      expect(await settled).toMatchObject({ ok: true, result: { success: true, merged: true, outcome: 'merged' } });
-      const saved = new TaskStore(project).read().tasks.find((task) => task.name === claimed.name)!;
-      expect(saved).toMatchObject({ status: 'completed', completion: { success: true, mergeOutcome: 'merged' } });
-    } else {
-      const result = await settled;
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toMatchObject({ message: expect.stringMatching(/no longer awaiting_merge/u) });
-      const saved = new TaskStore(project).read().tasks.find((task) => task.name === claimed.name)!;
-      expect(saved).toMatchObject({ status: 'failed', completion: { success: false, mergeOutcome: 'unresolved' } });
-    }
-    expect(mocks.status).toHaveBeenCalledTimes(2);
-    expect(mocks.status.mock.calls[1]![2]).toBeUndefined();
-  });
-
-  it('マージ結果取得後のブランチ同期中に一時停止したら mergeOutcome を保って中断保存する', async () => {
-    const { goals, runner, claimed } = await claimGoalMergeTask('merge');
-    mocks.workflow.mockResolvedValueOnce({ success: true });
-    mocks.status.mockResolvedValueOnce({ merged: true, headSha });
-    vi.mocked(synchronizeGoalBranch).mockImplementationOnce(async () => {
-      await setGoalExecutionStatus(project, goalId, 'paused', new AbortController().signal);
-      return { status: 'unchanged', localSha: headSha };
-    });
-
-    await expect(executePersistedPrMergeTask(claimed, runner, project))
-      .resolves.toMatchObject({ success: false, merged: true, outcome: 'merged',
-        completion: { success: false, interrupted: true, mergeOutcome: 'merged' } });
-    expect(new TaskStore(project).read().tasks.find((task) => task.name === claimed.name))
-      .toMatchObject({ status: 'failed', completion: { success: false, interrupted: true, mergeOutcome: 'merged' } });
-    expect(goals.getSync(goalId).executionStatus).toBe('paused');
   });
 
   it('監視周期の前にゴールが戻っても完了前の確認で中断し失敗結果を保存する', async () => {

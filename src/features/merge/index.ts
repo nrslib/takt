@@ -4,7 +4,6 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { MergeSettings } from '../../core/models/config-types.js';
 import type { WorkflowPrListWhere } from '../../core/models/workflow-system-input-types.js';
-import type { PrStatus } from '../../core/workflow/system/pr-execution-context.js';
 import { matchesPrWhere } from '../../core/workflow/system/pr-matcher.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { getGitProvider } from '../../infra/git/index.js';
@@ -198,9 +197,9 @@ export async function executePersistedPrMergeTask(
     }
     if (!execution.ok) throw execution.error;
     const result = execution.result;
-    monitor?.check();
-    if (signal?.aborted && !(result.merged && signal.reason instanceof GoalNotAwaitingMergeError)) {
-      signal.throwIfAborted();
+    if (!result.merged) {
+      monitor?.check();
+      signal?.throwIfAborted();
     }
     const completion: GoalTaskResult = {
       success: result.success, interrupted: false,
@@ -256,8 +255,7 @@ export async function executePersistedPrMergeTask(
       try {
         const completion = saveFailure(error);
         if (error instanceof GoalPausedError && data.goal_id !== undefined) {
-          const merged = mergeOutcome === 'merged';
-          return { success: false, merged, outcome: merged ? 'merged' : 'unresolved', completion, runSlug };
+          return { success: false, merged: false, outcome: 'unresolved', completion, runSlug };
         }
       } catch (terminalError) {
         if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
@@ -433,19 +431,8 @@ async function runPrMergeWorkflow(
     skipWorktreeRuntimeProtection: true,
   }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
-  let status: PrStatus;
-  try {
-    status = await provider.fetchPrStatus(request.prNumber, request.projectCwd, { signal: request.abortSignal });
-  } catch (error) {
-    if (!request.abortSignal?.aborted) throw error;
-    try {
-      status = await provider.fetchPrStatus(request.prNumber, request.projectCwd);
-    } catch {
-      throw error;
-    }
-    if (!status.merged) throw error;
-  }
-  const { merged, headSha: publishedHeadSha } = status;
+  const { merged, headSha: publishedHeadSha } = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
+    { signal: request.abortSignal });
   return { success: result.success, merged, headSha: publishedHeadSha,
     ...(!result.success && result.reason !== undefined ? { failureReason: sanitizeSensitiveText(result.reason) } : {}),
     outcome: result.success ? (merged ? 'merged' : 'prepared') : 'unresolved' };

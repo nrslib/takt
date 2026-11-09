@@ -22,9 +22,7 @@ export class PrivateFileLockAcquisitionError extends Error {
 }
 
 export interface PrivateFileExclusiveAsyncOptions {
-  /** Set to null to wait until the lock is released or the signal aborts. */
-  timeoutMs?: number | null;
-  signal?: AbortSignal;
+  timeoutMs?: number;
   onWait?: () => void;
 }
 
@@ -40,24 +38,6 @@ interface AcquiredPrivateFileLock {
 
 function waitForLock(): void {
   Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_DELAY_MS);
-}
-
-function waitForLockAsync(signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  return new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    };
-    const timer = setTimeout(finish, LOCK_RETRY_DELAY_MS);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-    if (signal?.aborted) abort();
-  });
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -192,20 +172,13 @@ export async function runPrivateFileExclusiveAsync<Result>(
   options: PrivateFileExclusiveAsyncOptions = {},
 ): Promise<Result> {
   ensurePrivateDirectory(dirname(lockPath));
-  const timeoutMs = options.timeoutMs === undefined ? LOCK_TIMEOUT_MS : options.timeoutMs;
-  const deadline = timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+  const deadline = Date.now() + (options.timeoutMs ?? LOCK_TIMEOUT_MS);
   while (true) {
-    options.signal?.throwIfAborted();
     const acquired = tryAcquirePrivateFileLock(lockPath);
-    if (acquired !== undefined) {
-      return runWithAcquiredLockAsync(lockPath, acquired, () => {
-        options.signal?.throwIfAborted();
-        return action();
-      });
-    }
+    if (acquired !== undefined) return runWithAcquiredLockAsync(lockPath, acquired, action);
     assertLockDeadline(lockPath, deadline);
     options.onWait?.();
-    await waitForLockAsync(options.signal);
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
   }
 }
 

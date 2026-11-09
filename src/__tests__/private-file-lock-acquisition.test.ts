@@ -95,35 +95,6 @@ describe('private lock acquisition failures', () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  it('cancels an unbounded async lock wait without running the action', async () => {
-    vi.useFakeTimers();
-    try {
-      const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
-      write.mockImplementation(actual.writeNewPrivateFileWithMode);
-      const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
-      directories.push(directory);
-      const lock = join(directory, 'lock');
-      writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'current-holder' }));
-      const controller = new AbortController();
-      const reason = new Error('cancelled while waiting');
-      let waiting!: () => void;
-      const enteredWait = new Promise<void>((resolve) => { waiting = resolve; });
-      const action = vi.fn();
-      const operation = runPrivateFileExclusiveAsync(lock, action, {
-        timeoutMs: null, signal: controller.signal, onWait: waiting,
-      });
-      await enteredWait;
-      vi.setSystemTime(Date.now() + 20_000);
-      await vi.advanceTimersByTimeAsync(10);
-      expect(action).not.toHaveBeenCalled();
-      controller.abort(reason);
-      await expect(operation).rejects.toBe(reason);
-      expect(action).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('propagates permission failures while inspecting a contended lock', async () => {
     const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
     write.mockImplementation(actual.writeNewPrivateFileWithMode);
