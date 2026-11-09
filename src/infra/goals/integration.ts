@@ -176,7 +176,7 @@ export async function completeGoal(
 ): Promise<Record<string, unknown>> {
   return withGoalCompletionLock(cwd, goalId, () => completeGoalWhileLocked(
     cwd, goalId, expectedSha, summary, _mainMerge, signal, notifications, humanChecks, language,
-  ));
+  ), signal);
 }
 
 async function completeGoalWhileLocked(
