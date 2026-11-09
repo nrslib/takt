@@ -192,7 +192,7 @@ describe('Merge workflows own Caccia execution', () => {
     } finally { release(); await execution; }
   });
 
-  it('マージ成功後にゴールが completed になってもタスクを正常完了として保存する', async () => {
+  it.each(['completed', 'created'] as const)('マージ確定後にゴールが %s になってもタスクを正常完了として保存する', async (status) => {
     vi.useFakeTimers();
     try {
       const { goals, runner, claimed } = await claimGoalMergeTask('merge');
@@ -206,7 +206,7 @@ describe('Merge workflows own Caccia execution', () => {
         expect(await services.executeEffect({ type: 'merge_pr', pr: 123 }, { pr: 123 }, {} as WorkflowState))
           .toMatchObject({ success: true, failed: false });
         mocks.status.mockResolvedValue({ merged: true, headSha });
-        await goals.update(goalId, (goal) => ({ ...goal, status: 'completed',
+        await goals.update(goalId, (goal) => ({ ...goal, status,
           completion: { ...goal.completion!, targetSha: 'b'.repeat(40) } }));
         return { success: true };
       });
@@ -215,10 +215,11 @@ describe('Merge workflows own Caccia execution', () => {
         .toMatchObject({ success: true, merged: true, outcome: 'merged',
           completion: { success: true, workflowResult: 'completed', mergeOutcome: 'merged' } });
 
-      expect(goals.getSync(goalId).status).toBe('completed');
+      expect(goals.getSync(goalId).status).toBe(status);
       expect(new TaskStore(project).read().tasks.find((task) => task.name === claimed.name))
         .toMatchObject({ status: 'completed', completion: {
           success: true, workflowResult: 'completed', mergeOutcome: 'merged' } });
+      expect(existsSync(claimed.worktreePath!)).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
   });

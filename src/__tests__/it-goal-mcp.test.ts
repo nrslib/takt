@@ -2241,7 +2241,7 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect((await complete(client)).isError).toBeUndefined();
       const store = new GoalStore(cwd);
       const before = await store.get(goalId);
-      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, summary } });
+      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, summary, humanChecks } });
       expect(before.pullRequest).toBeUndefined();
       git(cwd, ['update-ref', 'refs/heads/main', sha]);
 
@@ -2250,10 +2250,10 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(await store.get(goalId)).toEqual(before);
 
       const correctedSummary = '実行済みの検証内容に合わせて完成根拠を訂正した。';
-      const result = await complete(client, { summary: correctedSummary });
+      const result = await complete(client, { summary: correctedSummary, humanChecks: undefined });
 
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
-      const completion = { goalSha: sha, summary: correctedSummary, targetSha: sha };
+      const completion = { goalSha: sha, summary: correctedSummary, targetSha: sha, humanChecks };
       expect(await store.get(goalId)).toMatchObject({ status: 'completed', completion });
       expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goal: { status: 'completed', completion } });
       expect(prs).toEqual([]);
@@ -2266,8 +2266,16 @@ describe('goal PR publication and merge through manager MCP', () => {
       const completion = tools.find(({ name }) => name === 'takt_complete_goal')!;
       expect(completion.description).toMatch(/(?:advanc|tip.*chang|new.*tip)/i);
       expect(completion.description).toMatch(/(?:review|recheck|re-check|verify)/i);
+      expect(completion.description).toMatch(/humanChecks is omitted[^.]*supplied summary is saved[^.]*pass the saved summary to retain it/i);
+      expect(completion.description).toMatch(/when humanChecks is supplied[^.]*saved summary is retained/i);
+      expect(completion.description).toMatch(/saved PR body update failed[^.]*supplied humanChecks value replaces/i);
       for (const input of ['expectedSha', 'summary', 'humanChecks']) expect(completion.description).toContain(input);
-      expect(completion.inputSchema.properties?.humanChecks).toMatchObject({ description: expect.stringMatching(/saved/i) });
+      expect(completion.inputSchema.properties?.humanChecks).toMatchObject({
+        description: expect.stringMatching(/without a saved PR[^.]*saved humanChecks take precedence/i),
+      });
+      expect(completion.inputSchema.properties?.humanChecks).toMatchObject({
+        description: expect.stringMatching(/saved PR body update failed[^.]*supplied value replaces saved humanChecks/i),
+      });
 
       const reopening = tools.find(({ name }) => name === 'takt_reopen_goal')!;
       expect(reopening.description).toMatch(/(?:includ|merg)/i);
@@ -2277,7 +2285,47 @@ describe('goal PR publication and merge through manager MCP', () => {
       for (const tool of [completion, reopening]) {
         expect(tool.description).toMatch(sameTipCorrection);
         expect(tool.description).toMatch(advancedTipCorrection);
+        expect(tool.description).toMatch(/awaiting_merge[^.]*same expectedSha[^.]*corrected summary[^.]*saved humanChecks/i);
+        expect(tool.description).toMatch(/completed[^.]*takt_complete_goal[^.]*existing record/i);
       }
+    });
+  });
+
+  it('serializes concurrent same-SHA completion requests through PR publication and evidence saving', async () => {
+    const originalPrepare = goalPr.prepareGoalPullRequest;
+    const prepare = vi.spyOn(goalPr, 'prepareGoalPullRequest');
+    let started!: () => void;
+    let release!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+    const firstGate = new Promise<void>((resolve) => { release = resolve; });
+    prepare.mockImplementation(async (root, goal, completion, checks, language, signal, assertCurrent) => {
+      if (prepare.mock.calls.length === 1) {
+        started();
+        await firstGate;
+      }
+      return originalPrepare(root, goal, completion, checks, language, signal, assertCurrent);
+    });
+
+    await withServer(cwd, 'manager', async (client) => {
+      const first = complete(client, { summary: '最初の証拠', humanChecks: '最初の確認手順' });
+      let second: ReturnType<typeof complete> | undefined;
+      try {
+        await firstStarted;
+        second = complete(client, { summary: '再試行の証拠', humanChecks: '再試行の確認手順' });
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        release();
+        await Promise.allSettled([first, ...(second === undefined ? [] : [second])]);
+      }
+
+      const results = await Promise.all([first, second!]);
+      for (const result of results) expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.completion).toMatchObject({ summary: '再試行の証拠', humanChecks: '再試行の確認手順' });
+      expect(prs[0]!.body).toBe(markedBody(['## 目的', objective, '## 変更', '- goal-result.txt',
+        '## 確かめたこと', '再試行の証拠', '## 人が確かめる手順', '再試行の確認手順'].join('\n\n')));
+      expect(githubPr.createPullRequest).toHaveBeenCalledOnce();
     });
   });
 

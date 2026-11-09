@@ -38,13 +38,13 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 
 通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映なら、PR 保存済みの同じ SHA の再申請で completion の summary と PR 本文を更新できます。PR 未保存で準備を再試行する場合、保存済み humanChecks を優先します。入力した値は未保存欄の補完にだけ使い、その場合は保存済み summary を維持します。humanChecks を省略すれば保存済み値を再利用し、入力 summary を保存できます。保存値も入力値もない場合は、PR 準備前にエラーになります。再申請前にゴールブランチ先端を確認して検証し、保存済み goalSha から進んでいれば新しい先端を確認し直し、その expectedSha、summary、humanChecks で再申請します。既存 PR 本文の読み取りや更新だけが失敗した場合、保存 PR は保持され pullRequestBodyError が返ります。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映なら、PR 保存済みの同じ SHA の再申請で completion の summary と PR 本文を更新できます。PR 未保存で準備を再試行する場合、保存済み humanChecks を優先します。入力した値は未保存欄の補完にだけ使い、その場合は保存済み summary を維持します。humanChecks を省略すれば保存済み値を再利用し、入力 summary を保存できます。保存値も入力値もない場合は、PR 準備前にエラーになります。既存 PR 本文の更新に失敗した場合は、次の再申請で入力した humanChecks に置き換えて PR 本文へ反映できます。再申請前にゴールブランチ先端を確認して検証し、保存済み goalSha から進んでいれば新しい先端を確認し直し、その expectedSha、summary、humanChecks で再申請します。既存 PR 本文の読み取りや更新だけが失敗した場合、保存 PR は保持され pullRequestBodyError が返ります。
 
 保存済みの完成記録を訂正・確認する方法は、申請済み SHA と現在のゴールブランチ先端に応じて選びます。
 
 - 再申請前にゴールブランチ先端を確認して検証します。先端が申請済み SHA から進んでいれば、新しい先端を確認し直し、新しい expectedSha、summary、humanChecks で takt_complete_goal に再申請します。申請済み SHA が取り込み先に反映済みの場合も同じです。
 - 先端が申請済み SHA のままで、その SHA が取り込み先に未反映の場合は、保存済みの根拠を訂正するために takt_reopen_goal に理由を渡して created へ戻し、確認済み expectedSha、訂正済み summary、humanChecks で takt_complete_goal に再申請します。
-- 申請済み SHA が取り込み先に反映済みで、現在のゴールブランチ先端も同じ SHA の場合は、同じ expectedSha と訂正済み summary で takt_complete_goal を呼び、根拠を訂正します。反映済み SHA に takt_reopen_goal は使いません。
+- awaiting_merge のゴールで、申請済み SHA が取り込み先に反映済みかつ現在のゴールブランチ先端も同じ場合は、同じ expectedSha、訂正済み summary、保存済み humanChecks で takt_complete_goal を呼び、根拠を訂正します。この方法は completed 後には使えず、takt_complete_goal は既存記録の summary を変更せず、takt_reopen_goal も completed を拒否します。反映済み SHA に takt_reopen_goal は使いません。
 - 申請済み SHA が取り込み先に反映済みで、根拠の訂正が不要な場合は、takt_check_goal_completion で完成を確認します。
 
 takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。

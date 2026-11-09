@@ -197,8 +197,10 @@ export async function executePersistedPrMergeTask(
     }
     if (!execution.ok) throw execution.error;
     const result = execution.result;
-    monitor?.check();
-    signal?.throwIfAborted();
+    if (!result.merged) {
+      monitor?.check();
+      signal?.throwIfAborted();
+    }
     const completion: GoalTaskResult = {
       success: result.success, interrupted: false,
       workflowResult: result.success ? 'completed' : 'aborted', mergeOutcome: result.outcome,
