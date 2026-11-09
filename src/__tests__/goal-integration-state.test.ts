@@ -29,10 +29,6 @@ vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStor
 vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: doubles.gitSync }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: doubles.environment }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync = doubles.getSync; list = doubles.list; update = doubles.update; } }));
-vi.mock('../infra/goals/execution-lock.js', async (original) => ({
-  ...await original<typeof import('../infra/goals/execution-lock.js')>(),
-  withGoalCompletionLock: async <Result>(_cwd: string, _goalId: string, action: () => Result | PromiseLike<Result>) => action(),
-}));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.tasks; } }));
 vi.mock('../infra/goals/merge-git.js', () => ({ mergeGoalBranch: doubles.merge, targetWorktrees: doubles.worktrees }));
 vi.mock('../infra/goals/git-command.js', async (original) => ({
@@ -1049,29 +1045,13 @@ it('distinguishes evidence correction from checking completion after the approve
 
   const instruction = goal.completion!.instructions.find((text) => /already.*(?:includ|merg)/i.test(text));
   expect(instruction).toBeDefined();
-  expect(instruction).toMatch(/awaiting_merge/i);
   expect(instruction).toMatch(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
-  expect(instruction).toMatch(/saved humanChecks/i);
-  expect(instruction).toMatch(/completed[^.]*takt_complete_goal[^.]*existing record/i);
   expect(instruction).toMatch(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
   expect(instruction).toMatch(sameTipCorrection);
   expect(instruction).toMatch(advancedTipCorrection);
   for (const input of ['takt_complete_goal', 'expectedSha', 'summary', 'takt_check_goal_completion']) {
     expect(instruction).toContain(input);
   }
-});
-
-it('does not change completed evidence when the correction path is called again', async () => {
-  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Saved checks', 'ja');
-  doubles.contentIncluded.mockResolvedValue(true);
-  await completeGoal('/project', goal.id, sourceSha, 'corrected evidence', 'approve', undefined, policy, undefined, 'ja');
-  const completed = structuredClone(goal);
-
-  const result = await completeGoal('/project', goal.id, sourceSha, 'another correction', 'approve', undefined, policy, undefined, 'ja');
-
-  expect(result).toEqual({ goal: completed });
-  expect(goal).toEqual(completed);
-  await expect(reopenGoal('/project', goal.id, 'correction after completion', undefined)).rejects.toThrow();
 });
 
 it.each(['configured', 'missing'] as const)('rejects a retry without saved or supplied human checks before publication with a %s origin', async (origin) => {

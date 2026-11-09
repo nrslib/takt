@@ -21,7 +21,6 @@ import { saveManagerEvent } from './events.js';
 import { synchronizeGoalBranch } from './branch-sync.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { readGoalPullRequestStatus } from './pull-request-status.js';
-import { withGoalCompletionLock } from './execution-lock.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -89,7 +88,7 @@ export async function integrateGoalTask(
     ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
-const includedGoalCompletionGuidance = 'For an awaiting_merge goal, correct evidence for an approved SHA already included in the target branch by calling takt_complete_goal with the same expectedSha, corrected summary, and saved humanChecks, but only if that SHA is still the current goal branch tip. This correction path does not work after the goal is completed: takt_complete_goal returns the existing record without updating its summary, and takt_reopen_goal rejects completed goals. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion.';
+const includedGoalCompletionGuidance = 'To correct evidence for an approved goal SHA already included in the target branch, use takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion.';
 
 function completionRecord(
   goal: Goal, expectedSha: string, targetBranch: string, summary: string,
@@ -174,17 +173,6 @@ export async function completeGoal(
   notifications: GoalNotificationPolicy,
   humanChecks: string | undefined, language: Language,
 ): Promise<Record<string, unknown>> {
-  return withGoalCompletionLock(cwd, goalId, () => completeGoalWhileLocked(
-    cwd, goalId, expectedSha, summary, _mainMerge, signal, notifications, humanChecks, language,
-  ));
-}
-
-async function completeGoalWhileLocked(
-  cwd: string, goalId: string, expectedSha: string, summary: string,
-  _mainMerge: 'auto' | 'approve', signal: AbortSignal | undefined,
-  notifications: GoalNotificationPolicy,
-  humanChecks: string | undefined, language: Language,
-): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   await synchronizeGoalBranch(cwd, goal.branch, signal);
@@ -228,12 +216,7 @@ async function completeGoalWhileLocked(
     }
   }
   const changeSummary = await readGoalDiffSummary(cwd, targetSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
-  const savedHumanChecks = goal.completion?.goalSha === expectedSha ? goal.completion.humanChecks : undefined;
-  const correctedHumanChecks = humanChecks ?? savedHumanChecks;
-  const completion = {
-    ...completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []),
-    ...(correctedHumanChecks === undefined ? {} : { humanChecks: correctedHumanChecks }),
-  };
+  const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);
   const result = included ? { status: 'merged' as const, sha: targetSha } : undefined;
   if (result?.status === 'merged') {
     const saved = await store.update(goalId, (current) => {
