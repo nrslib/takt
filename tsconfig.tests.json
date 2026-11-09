@@ -142,6 +142,8 @@
     "src/__tests__/daemon-lint.test.ts",
     "src/__tests__/daemon-lock.test.ts",
     "src/__tests__/daemon-manager-patrol.integration.test.ts",
+    "src/__tests__/daemon-manager-patrol.test.ts",
+    "src/__tests__/daemon-patrol-records.test.ts",
     "src/__tests__/daemon-process-protocol.test.ts",
     "src/__tests__/daemon-reachability.integration.test.ts",
     "src/__tests__/daemon-retired-watch-events.integration.test.ts",
