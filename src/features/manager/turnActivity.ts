@@ -1,5 +1,6 @@
 import { ConversationActivitySchema, MAX_CONVERSATION_TEXT_BYTES, MAX_TOOL_DESCRIPTION_LENGTH, type ConversationActivity } from '../../shared/types/conversation-activity.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { toSingleLineText } from '../tui/displayText.js';
 
@@ -37,7 +38,7 @@ export function createTurnActivityReporter(report: (activity: ConversationActivi
         flush();
         const rawDescription = event.data.tool === 'Bash' ? event.data.input.description : undefined;
         const description = typeof rawDescription === 'string'
-          ? toSingleLineText(rawDescription.replace(/[\r\u2028\u2029]/gu, ' ')).replace(/\s+/gu, ' ')
+          ? sanitizeSensitiveText(toSingleLineText(rawDescription.replace(/[\r\u2028\u2029]/gu, ' ')).replace(/\s+/gu, ' '))
             .slice(0, MAX_TOOL_DESCRIPTION_LENGTH).replace(/[\uD800-\uDBFF]$/u, '') : '';
         const activity = { kind: 'tool' as const, tool: event.data.tool, ...(description === '' ? {} : { description }) };
         const parsed = ConversationActivitySchema.safeParse(activity);

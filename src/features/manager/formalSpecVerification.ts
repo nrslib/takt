@@ -48,7 +48,8 @@ export async function verifyManagerConversation(
   const prompt = buildFormalSpecGenerationPrompt(ctx.lang, input.recovery?.context);
   let generated: AgentResponse;
   try {
-    generated = await callWithManagerSessionRecovery(generator, { resume: prompt, fresh: prompt }, options, input.recovery?.invalidateSession);
+    generated = await callWithManagerSessionRecovery(generator, { resume: prompt, fresh: prompt }, options,
+      input.recovery?.invalidateSession, reporter.discard);
   } finally {
     if (!input.abortSignal.aborted) reporter.flush();
   }

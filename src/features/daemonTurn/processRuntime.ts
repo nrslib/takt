@@ -40,6 +40,7 @@ export function createTurnProcessRuntime(input: {
   let pendingActivity: { turn: TurnIdentity; activity: ConversationActivity } | undefined;
   let sendingActivity = false;
   let activityUnavailable = false;
+  let progressUnavailable = false;
   const progressQueue: Array<{ turn: TurnIdentity; message: ConversationProgress; signal: AbortSignal }> = [];
   let flushingProgress = false;
   let progressCompletion = Promise.resolve();
@@ -88,9 +89,10 @@ export function createTurnProcessRuntime(input: {
           progressQueue.shift();
         }
       }
-    } catch (error) {
+    } catch {
+      // 途中表示の送信失敗は、実行結果の確定に影響させない。
+      progressUnavailable = true;
       progressQueue.length = 0;
-      throw error;
     } finally { flushingProgress = false; }
   };
   const rejectRequests = (error: unknown): void => {
@@ -151,6 +153,7 @@ export function createTurnProcessRuntime(input: {
           const current = { turn: message.input.turn, controller, completion: Promise.resolve(), outcome: undefined as TurnOutcome | undefined };
           active = current;
           activityUnavailable = false;
+          progressUnavailable = false;
           progressCompletion = Promise.resolve();
           current.completion = Promise.resolve().then(async () => {
             let outcome: TurnOutcome;
@@ -158,7 +161,7 @@ export function createTurnProcessRuntime(input: {
               outcome = await business!.execute(message.input, { signal: controller.signal,
                 request: (value) => request(current.turn, value),
                 progress: (value) => {
-                  if (controller.signal.aborted || current.outcome !== undefined) return;
+                  if (controller.signal.aborted || current.outcome !== undefined || progressUnavailable) return;
                   if (typeof value !== 'string' && value.kind !== 'turn_text') {
                     if (activityUnavailable) return;
                     pendingActivity = { turn: current.turn, activity: value };
@@ -168,20 +171,18 @@ export function createTurnProcessRuntime(input: {
                   const message = typeof value === 'string' ? truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value
                     : { kind: value.kind, message: truncateUtf8(value.message, MAX_PROCESS_PROGRESS_BYTES).value };
                   if (progressQueue.length >= MAX_PROCESS_PENDING_REQUESTS) {
-                    input.onFatal(new Error('Process progress capacity exceeded'));
+                    progressUnavailable = true;
                     return;
                   }
                   progressQueue.push({ turn: current.turn, message, signal: controller.signal });
                   if (!flushingProgress) {
                     progressCompletion = flushProgress();
-                    void progressCompletion.catch(input.onFatal);
                   }
                 } });
             } catch {
               outcome = controller.signal.aborted ? { kind: 'interrupted' } : { kind: 'failed', message: 'Turn execution failed' };
             }
-            try { await progressCompletion; }
-            catch { outcome = { kind: 'failed', message: 'Turn progress delivery failed' }; }
+            await progressCompletion;
             if (controller.signal.aborted && outcome.kind !== 'interrupted') outcome = { kind: 'interrupted' };
             current.outcome = outcome;
             pendingActivity = undefined;

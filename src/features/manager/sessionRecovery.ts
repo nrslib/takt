@@ -7,6 +7,7 @@ export async function callWithManagerSessionRecovery(
   prompts: { resume: string; fresh: string },
   options: ProviderCallOptions,
   invalidateSession: (() => Promise<void>) | undefined,
+  beforeRetry?: () => void,
 ) {
   let sessionId = options.sessionId;
   let usedTools = false;
@@ -38,6 +39,7 @@ export async function callWithManagerSessionRecovery(
     sessionId = undefined;
     if (!rejectedResume) await invalidateSession?.();
     // Both recovery causes share this single retry; tool side effects are never replayed.
+    beforeRetry?.();
     return call(prompts.fresh);
   }
 }

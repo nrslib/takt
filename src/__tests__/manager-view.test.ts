@@ -101,6 +101,16 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     expect(entries()).toEqual([]);
   });
 
+  it('redacts sensitive values in tool descriptions shown in the running status', async () => {
+    const { app, client } = mount(lang);
+    const operationId = randomUUID();
+    client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 1 } } });
+    client.output({ kind: 'activity', operationId, generation: 1,
+      activity: { kind: 'tool', tool: 'Bash', description: 'Inspect sk-abcdefgh1234' } });
+    await waitFor(() => expect(app.lastFrame()).toContain('[REDACTED]'));
+    expect(app.lastFrame()).not.toContain('sk-abcdefgh1234');
+  });
+
   it('advances elapsed time on the same screen across activity and refresh updates and resets it for the next turn', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
     vi.setSystemTime(new Date('2026-11-08T00:00:00Z'));

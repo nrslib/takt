@@ -118,6 +118,20 @@ it('bounds Bash descriptions and removes terminal controls and Unicode line sepa
     description: ('コード を 読む 次 行' + 'あ'.repeat(300)).slice(0, 256) });
 });
 
+it('redacts sensitive values in Bash descriptions before truncating them', async () => {
+  const { call, executor, input } = fixture();
+  const onActivity = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {
+      description: `${'a'.repeat(245)} sk-abcdefgh1234`,
+    } } });
+    return success;
+  });
+  await executor.execute({ ...input, onActivity });
+  expect(onActivity).toHaveBeenCalledExactlyOnceWith({ kind: 'tool', tool: 'Bash',
+    description: `${'a'.repeat(245)} [REDACTED]` });
+});
+
 it('updates same-name Bash descriptions and restores the remaining parallel tool description', async () => {
   const { call, executor, input } = fixture();
   const onActivity = vi.fn();
@@ -276,6 +290,23 @@ it('reports provider output on both the initial call and the overflow retry', as
   const turnInput = { ...input, onProviderOutput };
   expect(await executor.execute(turnInput)).toMatchObject({ message: 'reply' });
   expect(onProviderOutput).toHaveBeenCalledTimes(2);
+});
+
+it('discards text from a failed attempt before publishing text from the retry', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '初回の文' } });
+    throw new Error('Prompt is too long');
+  });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '再試行の文' } });
+    expect(onText).not.toHaveBeenCalled();
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
+    return success;
+  });
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply' });
+  expect(onText).toHaveBeenCalledExactlyOnceWith('再試行の文');
 });
 
 it('propagates cancellation to the provider without retrying the aborted turn', async () => {

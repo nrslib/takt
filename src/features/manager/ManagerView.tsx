@@ -102,7 +102,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [running?.operationId, running?.generation]);
   const currentActivity = snapshot.connection === 'connected' && running?.operationId === activity?.operationId
     && running?.generation === activity?.generation ? activity?.value : undefined;
-  const activityLabel = currentActivity?.kind === 'tool' ? toSingleLineText(currentActivity.description ?? currentActivity.tool)
+  const activityLabel = currentActivity?.kind === 'tool' ? sanitizeSensitiveText(toSingleLineText(currentActivity.description ?? currentActivity.tool))
     : currentActivity === undefined ? undefined
     : getLabel(currentActivity.kind === 'thinking' ? 'tui.ui.extendedThinking'
       : currentActivity.kind === 'responding' ? 'tui.ui.responding' : 'tui.ui.thinking', lang);

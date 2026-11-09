@@ -95,7 +95,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
                 } catch { return; }
               }
             },
-          }, input.patrol ? undefined : input.recovery?.invalidateSession);
+          }, input.patrol ? undefined : input.recovery?.invalidateSession, reporter.discard);
           signal.throwIfAborted();
           return { ...parseManagerResponse(response, plan.ctx.providerType),
             sessionId: response.sessionId, assignment };

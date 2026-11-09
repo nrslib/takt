@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createTurnProcessRuntime, type TurnIo } from '../features/daemonTurn/processRuntime.js';
 import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_REQUESTS, type TurnProcessMessage } from '../core/daemon/processProtocol.js';
 import { deferred, turnStart } from './helpers/daemon-turn.js';
+import { goalInput } from './helpers/goal-fixtures.js';
 import type { TurnOutcome, TurnStart } from '../core/daemon/messages.js';
 
 function fixture(execute = vi.fn(async (_input: TurnStart, _io: TurnIo): Promise<TurnOutcome> => ({ kind: 'completed', result: { kind: 'reply', message: 'done' } }))) {
@@ -59,7 +60,7 @@ it.each([false, true])('keeps intermediate text ordered behind a slow send and s
   } finally { release.resolve(); finish.resolve(); await f.runtime.disconnect(); }
 });
 
-it('bounds queued text behind a blocked transport and reports capacity exhaustion', async () => {
+it('bounds queued text behind a blocked transport and drops overflow without interrupting the turn', async () => {
   const entered = deferred<void>();
   const release = deferred<void>();
   const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
@@ -78,11 +79,15 @@ it('bounds queued text behind a blocked transport and reports capacity exhaustio
   await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
   try {
     await entered.promise;
-    expect(f.onFatal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: 'Process progress capacity exceeded' }));
+    expect(f.onFatal).not.toHaveBeenCalled();
     expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(1);
     release.resolve();
-    await done;
+    expect(await done).toMatchObject({ outcome: { kind: 'completed', result: { message: 'done' } } });
     expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(MAX_PROCESS_PENDING_REQUESTS);
+    expect(f.messages.filter((message) => message.kind === 'turn_progress')
+      .map((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
+        && message.message.kind === 'turn_text' ? message.message.message : ''))
+      .toEqual(Array.from({ length: MAX_PROCESS_PENDING_REQUESTS }, (_, index) => String(index)));
   } finally { release.resolve(); await f.runtime.disconnect(); }
 });
 
@@ -107,12 +112,16 @@ it('sends typed activity through the existing progress transport before the fina
   await f.runtime.disconnect();
 });
 
-it('fails a rejected text delivery without sending the queued block and allows the next turn to complete', async () => {
+it('keeps a completed result and change when text delivery fails, then allows the next turn to complete', async () => {
   const failed = new Error('text transport failed');
-  const execute = vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+  const execute = vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
     io.progress({ kind: 'turn_text', message: 'first' });
     io.progress({ kind: 'turn_text', message: 'queued' });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' }, change: {
+      operationId: input.turn.operationId, expectedVersion: 0,
+      session: { provider: 'claude', model: null, sessionId: 'saved-session' },
+      proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: '/repository', summary: goalInput() } },
+    } };
   });
   const f = fixture(execute);
   await f.initialize();
@@ -120,8 +129,11 @@ it('fails a rejected text delivery without sending the queued block and allows t
   const input = turnStart();
   const done = f.wait('turn_finished');
   await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
-  expect(await done).toMatchObject({ outcome: { kind: 'failed' } });
-  expect(f.onFatal).toHaveBeenCalledExactlyOnceWith(failed);
+  expect(await done).toMatchObject({ outcome: { kind: 'completed', result: { message: 'done' }, change: {
+    session: { sessionId: 'saved-session' },
+    proposal: { pending: { summary: { objective: 'ローカルのゴールを管理する' } } },
+  } } });
+  expect(f.onFatal).not.toHaveBeenCalled();
   expect(f.messages.filter((message) => message.kind === 'turn_progress')).toEqual([]);
   await f.runtime.receive({ ...f.envelope, kind: 'result_committed', turn: input.turn });
   execute.mockResolvedValueOnce({ kind: 'completed', result: { kind: 'reply', message: 'next' } });
