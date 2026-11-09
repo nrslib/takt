@@ -159,7 +159,7 @@ export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({
 });
 export const completeGoalInputSchema = goalWriteInputSchema.extend({
   expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
-  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR.'),
+  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR unless retrying the same SHA with saved humanChecks. Same-SHA PR preparation retries reuse saved humanChecks; a supplied value is saved only when humanChecks was missing. Review an advanced goal tip again and provide new humanChecks with its new expectedSha and summary.'),
 });
 export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
   prNumber: z.number().int().safe().positive().describe('Saved goal PR number.'),

@@ -19,6 +19,9 @@ import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workf
 import { executeTaskWorkflow } from '../features/tasks/execute/taskWorkflowExecution.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { isRealPathInside } from '../shared/utils/pathBoundary.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { GoalAbortMonitor } from '../features/tasks/execute/goalAbortMonitor.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 vi.mock('../infra/workflow/system/system-sync-effects.js', () => ({
   syncWithRootEffect: vi.fn(), resolveConflictsWithAiEffect: vi.fn(),
@@ -156,7 +159,7 @@ describe('Builtin PR merge workflow execution', () => {
     expect(review.parallel).toBeUndefined();
   });
 
-  function harness(name: string, scenario: Scenario = {}, language = 'ja') {
+  function harness(name: string, scenario: Scenario = {}, language = 'ja', abortSignal?: AbortSignal) {
     if (language !== 'ja' && language !== 'en') throw new Error(`Unsupported test language: ${language}`);
     const simple = name === 'merge-review-fix-simple' || name === 'merge-prepare';
     const actualReview = simple || scenario.fullInitialReview === true;
@@ -394,6 +397,7 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const engineOptions: ConstructorParameters<typeof WorkflowEngine>[3] = {
       provider: 'mock', language, projectCwd: project, reportDirName: 'merge-workflow-report',
+      abortSignal,
       selectorProvider: { provider: 'mock', model: 'mock' },
       selectorGitCommandRunner: { isInsideWorkTree: async () => false,
         run: async () => ({ output: Buffer.from(''), bytes: 0 }) },
@@ -465,6 +469,59 @@ describe('Builtin PR merge workflow execution', () => {
       },
       finishCi: () => { ciFinished = true; } };
   }
+
+  it.each(['created', 'awaiting_merge'] as const)('同じマージ実行のCI待機中にゴールが %s なら最新状態に従って停止または続行する', async (status) => {
+    const controller = new AbortController();
+    const h = harness('merge-review-fix-simple', { ciRunning: true }, 'ja', controller.signal);
+    const goals = new GoalStore(project);
+    await goals.create({ ...goalRecord(), status: 'awaiting_merge',
+      completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+        summary: 'verified', instructions: [], humanChecks: 'Read the result',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0,
+          files: [], truncated: false, totalsTruncated: false } } });
+    const monitor = new GoalAbortMonitor(project, goalId, controller,
+      { taskName: 'merge-pr-123', executionId: 'merge-execution' }, { requireAwaitingMerge: true });
+    const started: string[] = [];
+    h.engine.on('step:start', (step: WorkflowStep) => started.push(step.name));
+    const ciWait = nextStepStart(h.engine, 'wait_ci');
+    const running = h.engine.run();
+    try {
+      await ciWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.engine.getState().status).toBe('running');
+      expect(h.engine.getState().systemContexts.get('wait_ci')?.status)
+        .toMatchObject({ ci: { finished: false } });
+      expect(controller.signal.aborted).toBe(false);
+      const stepsBeforeChange = [...started];
+      const effectsBeforeChange = [...h.calls];
+
+      if (status === 'created') await goals.update(goalId, (goal) => ({ ...goal, status }));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(controller.signal.aborted).toBe(status === 'created');
+      if (status === 'created') {
+        expect((await running).status).toBe('aborted');
+        expect(controller.signal.reason.message).toContain('awaiting_merge');
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(started).toEqual(stepsBeforeChange);
+        expect(h.calls).toEqual(effectsBeforeChange);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'merge_pr')).toEqual([]);
+        expect(h.comments).toEqual([]);
+      } else {
+        expect(h.engine.getState().status).toBe('running');
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect((await running).status).toBe('completed');
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+        expect(h.failures).toEqual([]);
+      }
+    } finally {
+      controller.abort(new Error('Test cleanup'));
+      monitor.stop();
+      await running;
+    }
+  });
 
   describe.each((['ja', 'en'] as const).flatMap((language) =>
     ['merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),

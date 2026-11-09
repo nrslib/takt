@@ -40,6 +40,8 @@ import * as processRunner from '../shared/utils/spawn.js';
 import * as goalNotifications from '../features/manager/notifications.js';
 
 const prStatus = vi.hoisted(() => ({ command: vi.fn() }));
+const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goal branch tip/i;
+const advancedTipCorrection = /(?:if|when)[^.]*tip[^.]*advanced[^.]*review[^.]*new expectedSha[^.]*summary[^.]*humanChecks/i;
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: prStatus.command }));
 beforeEach(() => {
   prStatus.command.mockReset().mockRejectedValue(new Error('GitHub fake is unavailable'));
@@ -1040,6 +1042,8 @@ describe('local goal integration and inspection through manager MCP', () => {
         files: [{ path: 'result.txt', additions: 1, deletions: 0 }, { path: 'src/a.ts', additions: 2, deletions: 1 }],
         truncated: false, totalsTruncated: false,
       });
+      expect(completion.instructions.join('\n')).toContain('takt_merge_goal_pr');
+      expect(completion.instructions.join('\n')).not.toContain('git merge');
       expect(completion.goalSha).toBe(sha);
       expect(git(cwd, ['symbolic-ref', 'HEAD'])).toBe(originalBranch);
       expect(git(directory, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
@@ -2067,7 +2071,7 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
-  it('recovers PR identity with current evidence and preserves existing notifications', async () => {
+  it('recovers PR identity and saves missing human checks without replacing other evidence or notifications', async () => {
     seedPr();
     await saveWaitingGoal();
     await withServer(cwd, 'manager', async (client) => {
@@ -2077,14 +2081,207 @@ describe('goal PR publication and merge through manager MCP', () => {
       const result = await complete(client);
 
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
-      expect(await store.get(goalId)).toMatchObject({ pullRequest, completion: { summary, humanChecks, goalSha: sha } });
+      expect(await store.get(goalId)).toMatchObject({ pullRequest, completion: { ...before.completion, humanChecks } });
       expect((await store.get(goalId)).notifications).toEqual(before.notifications);
       expect(prs).toHaveLength(1);
       expect(githubPr.createPullRequest).not.toHaveBeenCalled();
     });
   });
 
-  it.each(['push', 'PR creation'] as const)('saves completion evidence after %s failure and recovers the PR on retry', async (failure) => {
+  it('retries PR preparation with saved human checks instead of replacing them with new input', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+      const store = new GoalStore(cwd);
+      const before = await store.get(goalId);
+      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { humanChecks } });
+      expect(before.pullRequest).toBeUndefined();
+      expect(prs).toEqual([]);
+
+      const result = await complete(client, { summary: '再試行で差し替えてはいけない根拠', humanChecks: '別の確認手順' });
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(prs).toHaveLength(1);
+      expect(prs[0]!.body).toBe(markedBody(['## 目的', objective, '## 変更', '- goal-result.txt',
+        '## 確かめたこと', summary, '## 人が確かめる手順', humanChecks].join('\n\n')));
+      expect(await store.get(goalId)).toMatchObject({ pullRequest, completion: before.completion });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+        completion: before.completion, goal: { completion: before.completion },
+      });
+    });
+  });
+
+  it('uses and persists supplied human checks when retrying an approval without saved checks', async () => {
+    await saveWaitingGoal();
+    const store = new GoalStore(cwd);
+    const before = await store.get(goalId);
+    expect(before.completion?.humanChecks).toBeUndefined();
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await complete(client, { summary: '再試行で差し替えてはいけない根拠' });
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(prs).toHaveLength(1);
+      expect(prs[0]!.body).toBe(markedBody(['## 目的', objective, '## 変更', '- goal-result.txt',
+        '## 確かめたこと', summary, '## 人が確かめる手順', humanChecks].join('\n\n')));
+      const completion = { ...before.completion, humanChecks };
+      expect(await store.get(goalId)).toMatchObject({ status: 'awaiting_merge', pullRequest, completion });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ completion, goal: { completion } });
+    });
+  });
+
+  it('rejects a PR preparation retry without saved or supplied human checks', async () => {
+    await saveWaitingGoal();
+    const store = new GoalStore(cwd);
+    const before = await store.get(goalId);
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await complete(client, { humanChecks: undefined });
+
+      expect(result.isError).toBe(true);
+      expect(firstTextContent(result.content)).toContain('humanChecks');
+      expect(prs).toEqual([]);
+      expect(githubPr.createPullRequest).not.toHaveBeenCalled();
+      expect(await store.get(goalId)).toEqual(before);
+    });
+  });
+
+  it('resubmits new completion evidence after an external goal branch advance on the same connection', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+      const store = new GoalStore(cwd);
+      const before = await store.get(goalId);
+      const previousSha = sha;
+      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: previousSha, summary, humanChecks } });
+      expect(before.pullRequest).toBeUndefined();
+
+      const blob = git(remote, ['hash-object', '-w', '--stdin'], 'reviewed goal result\n');
+      const tree = git(remote, ['mktree'], `100644 blob ${blob}\tgoal-result.txt\n`);
+      sha = git(remote, ['commit-tree', tree, '-p', previousSha, '-m', 'Address goal review']);
+      git(remote, ['update-ref', `refs/heads/${branch}`, sha, previousSha]);
+      expect(git(cwd, ['rev-parse', branch])).toBe(previousSha);
+
+      const newSummary = '更新した先端で受け入れ条件を確認し直した。';
+      const newChecks = '更新後の検証結果を画面で確認する。';
+      const result = await complete(client, { summary: newSummary, humanChecks: newChecks });
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(git(cwd, ['rev-parse', branch])).toBe(sha);
+      const completion = { goalSha: sha, summary: newSummary, humanChecks: newChecks };
+      const saved = await store.get(goalId);
+      expect(saved).toMatchObject({ status: 'awaiting_merge', pullRequest, completion });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ completion, goal: { completion } });
+      expect(prs).toHaveLength(1);
+      expect(prs[0]!.body).toBe(markedBody(['## 目的', objective, '## 変更', '- goal-result.txt',
+        '## 確かめたこと', newSummary, '## 人が確かめる手順', newChecks].join('\n\n')));
+      expect(git(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(sha);
+
+      const stale = await complete(client, { expectedSha: previousSha });
+      expect(stale.isError).toBe(true);
+      expect(await store.get(goalId)).toEqual(saved);
+      expect(prs).toHaveLength(1);
+    });
+  });
+
+  it('resubmits reviewed evidence after the approved SHA is included and the goal tip advances on the same connection', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      const initial = await complete(client);
+      expect(initial.isError, firstTextContent(initial.content)).toBeUndefined();
+      const store = new GoalStore(cwd);
+      const before = await store.get(goalId);
+      const approvedSha = sha;
+      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: approvedSha } });
+      expect(before.pullRequest).toBeUndefined();
+      const instruction = before.completion!.instructions.find((text) => /already.*included/i.test(text));
+      expect(instruction).toMatch(sameTipCorrection);
+      expect(instruction).toMatch(advancedTipCorrection);
+      expect(JSON.parse(firstTextContent(initial.content)).completion.instructions).toEqual(before.completion!.instructions);
+
+      git(cwd, ['update-ref', 'refs/heads/main', approvedSha]);
+      const blob = git(remote, ['hash-object', '-w', '--stdin'], 'reviewed additional goal result\n');
+      const tree = git(remote, ['mktree'], `100644 blob ${blob}\tgoal-result.txt\n`);
+      sha = git(remote, ['commit-tree', tree, '-p', approvedSha, '-m', 'Review changes after inclusion']);
+      git(remote, ['update-ref', `refs/heads/${branch}`, sha, approvedSha]);
+      git(cwd, ['fetch', '--no-tags', 'origin', branch]);
+      git(cwd, ['update-ref', `refs/heads/${branch}`, sha, approvedSha]);
+      expect(await isGoalContentIncluded(cwd, approvedSha, approvedSha, undefined)).toBe(true);
+      expect(await isGoalContentIncluded(cwd, sha, approvedSha, undefined)).toBe(false);
+
+      const reopened = await client.callTool({ name: 'takt_reopen_goal', arguments: { cwd, goalId, reason: '根拠を訂正する' } });
+      expect(reopened.isError).toBe(true);
+      expect(firstTextContent(reopened.content)).toMatch(sameTipCorrection);
+      expect(firstTextContent(reopened.content)).toMatch(advancedTipCorrection);
+      expect(firstTextContent(reopened.content)).toContain('takt_check_goal_completion');
+      expect(await store.get(goalId)).toEqual(before);
+
+      const correctedEvidence = { summary: '取り込み後の追加変更を含めて完成根拠を確認し直した。', humanChecks: '追加変更の検証結果を確認する。' };
+      const stale = await complete(client, { ...correctedEvidence, expectedSha: approvedSha });
+      expect(stale.isError).toBe(true);
+      expect(await store.get(goalId)).toEqual(before);
+      expect(prs).toEqual([]);
+      expect(githubPr.createPullRequest).toHaveBeenCalledTimes(1);
+
+      const result = await complete(client, { ...correctedEvidence, expectedSha: sha });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const completion = { goalSha: sha, ...correctedEvidence };
+      const saved = await store.get(goalId);
+      expect(saved).toMatchObject({ status: 'awaiting_merge', pullRequest, completion });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ completion, goal: { completion } });
+      expect(prs).toHaveLength(1);
+      expect(prs[0]!.body).toBe(markedBody(['## 目的', objective, '## 変更', '- goal-result.txt',
+        '## 確かめたこと', correctedEvidence.summary, '## 人が確かめる手順', correctedEvidence.humanChecks].join('\n\n')));
+      expect(git(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(sha);
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(approvedSha);
+    });
+  });
+
+  it('corrects the summary for the same approved SHA after inclusion in the target on the same connection', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+      const store = new GoalStore(cwd);
+      const before = await store.get(goalId);
+      expect(before).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, summary } });
+      expect(before.pullRequest).toBeUndefined();
+      git(cwd, ['update-ref', 'refs/heads/main', sha]);
+
+      const reopened = await client.callTool({ name: 'takt_reopen_goal', arguments: { cwd, goalId, reason: '根拠を訂正する' } });
+      expect(reopened.isError).toBe(true);
+      expect(await store.get(goalId)).toEqual(before);
+
+      const correctedSummary = '実行済みの検証内容に合わせて完成根拠を訂正した。';
+      const result = await complete(client, { summary: correctedSummary });
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const completion = { goalSha: sha, summary: correctedSummary, targetSha: sha };
+      expect(await store.get(goalId)).toMatchObject({ status: 'completed', completion });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goal: { status: 'completed', completion } });
+      expect(prs).toEqual([]);
+    });
+  });
+
+  it('publishes completion and reopen tool guidance for resubmission and included evidence correction', async () => {
+    await withServer(cwd, 'manager', async (client) => {
+      const tools = (await client.listTools()).tools;
+      const completion = tools.find(({ name }) => name === 'takt_complete_goal')!;
+      expect(completion.description).toMatch(/(?:advanc|tip.*chang|new.*tip)/i);
+      expect(completion.description).toMatch(/(?:review|recheck|re-check|verify)/i);
+      for (const input of ['expectedSha', 'summary', 'humanChecks']) expect(completion.description).toContain(input);
+      expect(completion.inputSchema.properties?.humanChecks).toMatchObject({ description: expect.stringMatching(/saved/i) });
+
+      const reopening = tools.find(({ name }) => name === 'takt_reopen_goal')!;
+      expect(reopening.description).toMatch(/(?:includ|merg)/i);
+      expect(reopening.description).toMatch(/(?:correct|revis|updat)/i);
+      expect(reopening.description).toContain('takt_complete_goal');
+      expect(reopening.description).toContain('takt_check_goal_completion');
+      for (const tool of [completion, reopening]) {
+        expect(tool.description).toMatch(sameTipCorrection);
+        expect(tool.description).toMatch(advancedTipCorrection);
+      }
+    });
+  });
+
+  it.each(['push', 'PR creation'] as const)('saves local merge instructions after %s failure and recovers the PR on retry', async (failure) => {
     if (failure === 'push') git(cwd, ['remote', 'set-url', '--push', 'origin', join(cwd, 'missing-origin.git')]);
     else vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
     await withServer(cwd, 'manager', async (client) => {
