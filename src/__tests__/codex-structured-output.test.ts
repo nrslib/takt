@@ -140,6 +140,21 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
   });
 
+  it.each(['takt', 'codex'] as const)('keeps isolated structured calls read-only and offline with network requested (control=%s)', async (permissionControl) => {
+    mockEvents = [
+      { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+      { type: 'turn.completed' },
+    ];
+    const result = await new CodexProvider().setupIsolatedStructured({ name: 'selector' }).call('Choose', {
+      cwd: '/tmp', executionPhase: 1, edit: false, permissionMode: 'full', outputSchema: { type: 'object' },
+      providerOptions: { codex: { permissionControl, networkAccess: true } },
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', networkAccessEnabled: false, approvalPolicy: 'never' });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+  });
+
   it.each([
     { permissionControl: 'takt', sessionId: undefined },
     { permissionControl: 'codex', sessionId: undefined },

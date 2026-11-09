@@ -370,23 +370,24 @@ describe('codex-spawn-guard', () => {
     options: Partial<ProviderCallOptions>;
     ignoreRules: boolean;
     isolated?: boolean;
+    readOnlyNetwork?: boolean;
   }> = [
     { name: 'default writable', options: { permissionMode: 'full' }, ignoreRules: true },
     { name: 'explicit TAKT writable', options: { edit: true, providerOptions: { codex: { permissionControl: 'takt', networkAccess: true } } }, ignoreRules: true },
-    { name: 'edit=false with network', options: { edit: false, permissionMode: 'full', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
-    { name: 'readonly with network', options: { permissionMode: 'readonly', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
+    { name: 'edit=false with network', options: { edit: false, permissionMode: 'full', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true, readOnlyNetwork: true },
+    { name: 'readonly with network', options: { permissionMode: 'readonly', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true, readOnlyNetwork: true },
     { name: 'delegated edit=false', options: { edit: false, providerOptions: { codex: { permissionControl: 'codex', networkAccess: true } } }, ignoreRules: false },
     { name: 'delegated readonly', options: { permissionMode: 'readonly', providerOptions: { codex: { permissionControl: 'codex' } } }, ignoreRules: false },
     { name: 'TAKT Phase 2', options: { executionPhase: 2, providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
     { name: 'delegated Phase 2 with profile', options: { executionPhase: 2, providerOptions: fakeProviderOptions('automation-review') }, ignoreRules: true },
     { name: 'MCP-only', options: { mcpOnlySideEffects: [], providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true },
-    { name: 'isolated structured', options: {}, ignoreRules: true, isolated: true },
-    { name: 'delegated isolated structured', options: { providerOptions: fakeProviderOptions('automation-review') }, ignoreRules: false, isolated: true },
+    { name: 'isolated structured', options: { edit: false, permissionMode: 'full', providerOptions: { codex: { networkAccess: true } } }, ignoreRules: true, isolated: true },
+    { name: 'delegated isolated structured', options: { edit: false, providerOptions: { codex: { permissionControl: 'codex', configProfile: 'automation-review', networkAccess: true } } }, ignoreRules: true, isolated: true },
   ];
 
   it.skipIf(process.platform === 'win32').each(permissionCases.flatMap((entry) =>
     [undefined, 'thread-resume'].map((sessionId) => ({ ...entry, sessionId })),
-  ))('passes resolved rule loading through Provider and SDK to exec ($name, session=$sessionId)', async ({ options, ignoreRules, isolated, sessionId }) => {
+  ))('passes resolved rule loading through Provider and SDK to exec ($name, session=$sessionId)', async ({ options, ignoreRules, isolated, readOnlyNetwork, sessionId }) => {
     const fixture = makeProtocolExecutable('success');
     vi.stubEnv('TAKT_CODEX_CLI_PATH', fixture.executablePath);
     const provider = new CodexProvider();
@@ -403,6 +404,20 @@ describe('codex-spawn-guard', () => {
     expect(args[0]).toBe('exec');
     expect(args.filter((arg) => arg === '--ignore-rules')).toHaveLength(ignoreRules ? 1 : 0);
     if (ignoreRules) expect(args[1]).toBe('--ignore-rules');
+    const configOverrides = args.flatMap((arg, index) => arg === '--config' ? args.slice(index + 1, index + 2) : []);
+    if (readOnlyNetwork) {
+      expect(configOverrides).toEqual(expect.arrayContaining([
+        'default_permissions="takt-readonly-network"',
+        'permissions.takt-readonly-network.extends=":read-only"',
+        'permissions.takt-readonly-network.network.enabled=true',
+      ]));
+      expect(args).not.toContain('--sandbox');
+    }
+    if (isolated) {
+      const sandboxIndex = args.indexOf('--sandbox');
+      expect(args.slice(sandboxIndex, sandboxIndex + 2)).toEqual(['--sandbox', 'read-only']);
+      expect(configOverrides).toContain('sandbox_workspace_write.network_access=false');
+    }
     const profile = options.providerOptions?.codex?.configProfile;
     if (profile !== undefined) {
       const profileIndex = args.indexOf('--profile');
@@ -563,13 +578,19 @@ describe('codex-spawn-guard', () => {
     const invocations = readProtocolInvocations(fixture.recordPath);
     expect(invocations).toHaveLength(3);
     for (const invocation of invocations) {
-      expect(invocation.args.slice(0, 3)).toEqual(['exec', '--profile', 'automation-review']);
+      const profileIndex = invocation.args.indexOf('--profile');
+      expect(invocation.args.slice(profileIndex, profileIndex + 2)).toEqual(['--profile', 'automation-review']);
       expect(invocation.marker).toBe('absent');
-      expect(invocation.args).not.toContain('--sandbox');
-      expect(invocation.args).not.toContain('--config=sandbox_workspace_write.network_access=false');
       expect(invocation.args).toContain('approval_policy="never"');
     }
+    for (const invocation of invocations.slice(0, 2)) {
+      expect(invocation.args.slice(0, 3)).toEqual(['exec', '--profile', 'automation-review']);
+      expect(invocation.args).not.toContain('--sandbox');
+      expect(invocation.args).not.toContain('sandbox_workspace_write.network_access=false');
+    }
     expect(invocations[1]?.args).toEqual(expect.arrayContaining(['resume', 'thread-resume']));
+    expect(invocations[2]?.args.slice(0, 4)).toEqual(['exec', '--ignore-rules', '--profile', 'automation-review']);
+    expect(invocations[2]?.args).toContain('sandbox_workspace_write.network_access=false');
     expect(invocations[2]?.args).toContain('--output-schema');
   });
 

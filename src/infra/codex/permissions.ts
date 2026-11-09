@@ -21,7 +21,7 @@ function resolvePermissionPolicy(options: CodexCallOptions): CodexPermissionPoli
   if (options.mcpOnlySideEffects) {
     return { control: 'takt', permissionMode: 'readonly', networkAccess: false, sideEffects: 'mcp-only' };
   }
-  if (options.executionPhase === 2) {
+  if (options.executionPhase === 2 || options.internalAgentIsolation === 'strict-readonly') {
     return { control: 'takt', permissionMode: 'readonly', networkAccess: false, sideEffects: 'standard' };
   }
   if (options.permissionControl === 'codex') {

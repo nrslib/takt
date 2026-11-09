@@ -995,9 +995,9 @@ workflow YAML では provider と model を指定できません。runtime profi
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
 
-TAKT が Codex の権限を管理する場合、明示した `edit: false` は解決済みの permission mode にかかわらず Phase 1 の書き込みを禁止します。`network_access: true` なら通信を許可する読み取り専用の権限プロファイルを渡し、それ以外は `read-only` sandbox を使います。`permission_control: codex` では `edit: false` でも書き込み可否と通信可否を Codex 側の設定に委ねます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。Phase 2 は常に `read-only` sandbox を使います。共通の権限解決とほかの provider の動作は変わりません。詳細は [Codex の permission control](./configuration.ja.md#codex-の-permission-control-permission_control) を参照してください。
+TAKT が Codex の権限を管理する場合、明示した `edit: false` は解決済みの permission mode にかかわらず Phase 1 の書き込みを禁止します。`network_access: true` なら通信を許可する読み取り専用の権限プロファイルを渡し、それ以外は `read-only` sandbox を使います。`permission_control: codex` では `edit: false` でも書き込み可否と通信可否を Codex 側の設定に委ねます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は権限の委譲時も常に `read-only` sandbox を使い、通信を禁止します。共通の権限解決とほかの provider の動作は変わりません。詳細は [Codex の permission control](./configuration.ja.md#codex-の-permission-control-permission_control) を参照してください。
 
-TAKT が権限を管理する Codex 呼び出しは、書き込み可能な step と新規・再開セッションにも `--ignore-rules` を渡します。利用者・プロジェクトの execpolicy `.rules` によるサンドボックスの制限回避を防ぐためです。権限を Codex に委譲した呼び出しはルールを維持しますが、Phase 2 は常にルールを無効にして書き込みと通信を禁止します。Phase 2 で選択した `config_profile` は `--ignore-rules` と併せて適用されます。
+TAKT が権限を管理する Codex 呼び出しは、書き込み可能な step と新規・再開セッションにも `--ignore-rules` を渡します。利用者・プロジェクトの execpolicy `.rules` によるサンドボックスの制限回避を防ぐためです。権限を Codex に委譲した呼び出しはルールを維持しますが、Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常にルールを無効にして書き込みと通信を禁止します。Phase 2 とこれらの内部呼び出しで選択した `config_profile` は `--ignore-rules` と併せて適用されます。
 
 ## Workflow レベルの設定
 
