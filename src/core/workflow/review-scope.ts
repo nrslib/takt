@@ -5,7 +5,7 @@
  *
  * 次の和集合である。レビューが走る時点でタスクの変更が既にブランチへ
  * コミット済みの構成では HEAD との差分が空になり、コミット済み範囲を
- * 含めないとレビュアーから変更が見えない。これは PR / ブランチレビュー、
+ * 含めないとレビュアーから変更が見えない。これはブランチレビュー、
  * エージェント自身がコミットするワークフロー、ベンチのチェックポイント
  * コミット、worktree クローンの自動コミット後の再レビューで発生する。
  * - base コミット..HEAD のコミット済み変更
@@ -14,19 +14,20 @@
  *
  * この作業ツリー計算はレビュー対象の一貫した範囲を決めるために共有する。
  *
- * ## PR diff range の合成（指示注入側だけの拡張）
+ * ## PR スコープ（指示注入側だけの拡張）
  *
- * prContext を持つ実行では、上の作業ツリー計算に PR の diff range
- * `base...head` を **加えた和集合** をレビュアーへ提示する。`--pr` は
+ * prContext を持つ実行では、PR の diff range `base...head` と未コミット変更・
+ * 未追跡ファイルの和集合を提示する。推定 base からのコミット済み変更を足すと、
+ * 同期で取り込んだ base 側の変更まで含まれるため、PR の明示 base を使う。
+ * PR の head ブランチ上では現在の HEAD、それ以外では headDiffRef を使う。`--pr` は
  * 「PR のレビューコメントを取り込んで修正する」フローであり、同じ実行の中で
  * 作業ツリーが変更される。かつ headDiffRef はコミット済みしか映さず
  * auto-commit はワークフロー完了後なので、PR diff range だけでは
  * 修正→再レビューのループでレビュアーが修正前の姿を渡される。
  *
- * この合成はレビュアー指示への注入だけの拡張である。snapshot.ts は
+ * この計算はレビュアー指示への注入だけの拡張である。snapshot.ts は
  * cwd の作業ツリーを記録するため prContext を受け取らず、ローカルに
- * materialize されていない PR 側のパスは含めない。したがって不変条件は
- * 「作業ツリー計算が両者で同一」であって「最終集合が同一」ではない。
+ * materialize されていない PR 側のパスは含めない。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -34,7 +35,12 @@ import { statSync } from 'node:fs';
 import type { Language } from '../models/types.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { escapeTemplateChars } from '#faceted-prompting';
-import { toCloneBaseRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
+import {
+  toCloneBaseRef,
+  toLocalBranchRef,
+  toPullRequestBaseRef,
+  toRemoteTrackingBranchRef,
+} from '../../shared/utils/gitBranchValidation.js';
 import { resolveMergeBase } from '../../infra/task/branchBaseCandidateResolver.js';
 import { resolveBranchEntryPointFromReflog } from '../../infra/task/branchEntryPointResolver.js';
 import { detectDefaultBranch } from '../../infra/task/branchList.js';
@@ -73,7 +79,7 @@ export type ReviewScopeSource =
     readonly prNumber: number;
     /** ローカルに materialize された PR の diff range。未 materialize なら undefined。 */
     readonly diffRange?: ReviewScopeDiffRange;
-    /** cwd の作業ツリー計算が paths へ寄与したか（この実行のローカル変更の有無）。 */
+    /** 未コミット変更・未追跡ファイルが paths へ寄与したか。 */
     readonly includesWorkingTree: boolean;
     readonly baseRange: ReviewScopeBaseRange;
   };
@@ -91,7 +97,7 @@ export interface TaskReviewScopeInput {
   readonly cwd: string;
   /** 境界で一度だけ解決した base。 */
   readonly baseRange: ReviewScopeBaseRange;
-  /** PR 由来の実行のみ設定される。作業ツリー計算に PR の diff range を加える。 */
+  /** PR 由来の実行のみ設定される。PR の累積差分と未コミット変更・未追跡を対象とする。 */
   readonly prContext?: PullRequestContext;
   /**
    * 同一瞬間に読んだ untracked を共有するための注入口。snapshot.ts は
@@ -300,7 +306,7 @@ function readUntrackedPaths(cwd: string): string[] {
   );
 }
 
-function collectWorkingTreePaths(
+function collectUncommittedPaths(
   cwd: string,
   baseRange: ReviewScopeBaseRange,
   untracked: readonly string[],
@@ -313,6 +319,15 @@ function collectWorkingTreePaths(
     runGit(cwd, ['diff', '--name-only', '-z', 'HEAD', '--']),
     'git diff --name-only HEAD',
   );
+  return sortedUnique([...workingTree, ...untracked]);
+}
+
+function collectWorkingTreePaths(
+  cwd: string,
+  baseRange: ReviewScopeBaseRange,
+  untracked: readonly string[],
+): string[] {
+  const workingTree = collectUncommittedPaths(cwd, baseRange, untracked);
   const committed = baseRange.kind === 'branch_base'
     ? parseNulPaths(
       runGit(cwd, ['diff', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--']),
@@ -320,24 +335,41 @@ function collectWorkingTreePaths(
     )
     : [];
 
-  return sortedUnique([...committed, ...workingTree, ...untracked]);
+  return sortedUnique([...committed, ...workingTree]);
+}
+
+function resolvePullRequestBranchRef(
+  cwd: string,
+  branch: string,
+  role: 'base' | 'head',
+): string | undefined {
+  const candidates = role === 'base'
+    ? [toRemoteTrackingBranchRef(branch), toLocalBranchRef(branch)]
+    : [toLocalBranchRef(branch), toRemoteTrackingBranchRef(branch)];
+  return candidates.find((ref) => refExists(cwd, ref));
 }
 
 function materializedDiffRange(
   cwd: string,
   prContext: PullRequestContext,
 ): ReviewScopeDiffRange | undefined {
-  const { baseDiffRef, headDiffRef } = prContext;
+  // --skip-git は diff ref を作らないため、PR が明示したブランチの既存 ref だけを使う。
+  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBranchRef(cwd, prContext.baseBranch, 'base');
+  const headDiffRef = prContext.headDiffRef ?? resolvePullRequestBranchRef(cwd, prContext.headBranch, 'head');
   if (baseDiffRef === undefined || headDiffRef === undefined) {
     return undefined;
   }
-  return refExists(cwd, baseDiffRef) && refExists(cwd, headDiffRef)
-    ? { baseDiffRef, headDiffRef }
-    : undefined;
+  if (!refExists(cwd, baseDiffRef) || !refExists(cwd, headDiffRef)) {
+    return undefined;
+  }
+  return {
+    baseDiffRef,
+    headDiffRef: getCurrentBranch(cwd) === prContext.headBranch ? 'HEAD' : headDiffRef,
+  };
 }
 
 /**
- * PR の diff range と、この実行のローカル変更（作業ツリー計算）の和集合。
+ * PR の累積差分と、未コミット変更・未追跡ファイルの和集合。
  * `--pr` は修正を伴うフローなので、同じ実行で作られた変更も対象に含める。
  */
 function collectPullRequestScope(
@@ -379,10 +411,11 @@ export function collectTaskReviewScope(input: TaskReviewScopeInput): TaskReviewS
     return { kind: 'not_a_git_repository' };
   }
   const untracked = input.untracked ?? readUntrackedPaths(input.cwd);
-  const workingTreePaths = collectWorkingTreePaths(input.cwd, input.baseRange, untracked);
   if (input.prContext !== undefined) {
+    const workingTreePaths = collectUncommittedPaths(input.cwd, input.baseRange, untracked);
     return collectPullRequestScope(input.cwd, input.prContext, input.baseRange, workingTreePaths);
   }
+  const workingTreePaths = collectWorkingTreePaths(input.cwd, input.baseRange, untracked);
   return {
     kind: 'collected',
     paths: workingTreePaths,
@@ -472,16 +505,10 @@ function buildSourceVars(source: ReviewScopeSource): ReviewScopeTemplateVars {
     return buildBaseRangeVars(source.baseRange);
   }
   const prNumber = String(source.prNumber);
-  // base 内訳は PR 経路でも必ず出す。ローカル分は作業ツリー計算そのものなので、
-  // base が unresolved ならコミット済み変更が抜けている事実を非 PR 経路と同じく
-  // 開示しなければならない。
-  const baseRangeVars = buildBaseRangeVars(source.baseRange);
   if (source.diffRange === undefined) {
-    // 算出範囲の文言自体が「ローカル変更のみ」と述べるので内訳行は重複になる。
-    return { ...baseRangeVars, isPullRequestWithoutDiffRange: true, prNumber };
+    return { isPullRequestWithoutDiffRange: true, prNumber };
   }
   return {
-    ...baseRangeVars,
     isPullRequest: true,
     prNumber,
     diffRange: escapeTemplateChars(

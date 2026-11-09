@@ -10,9 +10,8 @@
   builder: renderTaskReviewScope (src/core/workflow/review-scope.ts)
 
   The base-range detail (isBranchBase / isBaseBranchHead / isNoCommits /
-  isBaseUnresolved) is emitted on the PR path too: the local part of a PR-derived
-  scope is the working-tree computation, so an unresolved base — meaning committed
-  changes are missing from the list — must be disclosed there as well.
+  isBaseUnresolved) is only used on the non-PR path. The committed range on the
+  PR path follows the explicit diff range.
 -->
 {{#if hasPaths}}Files changed by this task, computed by TAKT — {{totalCount}} total:
 
@@ -23,11 +22,11 @@
 {{/if}}{{#if notRepository}}TAKT could not compute the changed files: the working directory is not a Git repository.
 {{/if}}{{#if notComputed}}TAKT did not compute the changed files in this execution context.
 {{/if}}{{#if isPullRequest}}
-Coverage: the diff range `{{diffRange}}` of PR #{{prNumber}} plus the local changes of this run.
+Coverage: the cumulative diff `{{diffRange}}` from the explicit base to head of PR #{{prNumber}}, plus uncommitted changes and untracked files. When diff refs are unspecified, existing refs are resolved from the PR Context branch names: the base checks the origin tracking ref (`refs/remotes/origin/<base>`) before the local branch, while the head checks the local branch before the origin tracking ref. The current HEAD is used on the PR head branch; otherwise, the resolved head ref is used. Changes belonging only to the synced base are excluded.
 {{/if}}{{#if isPullRequestWithoutDiffRange}}
-Coverage: the local changes of this run only. The review target is PR #{{prNumber}}, but its diff range is not available locally, so it could not be listed.
-{{/if}}{{#if includesWorkingTree}}Local changes made during this run are included in the list above.
-{{/if}}{{#if noWorkingTreeChange}}This run added no local changes, so the review target is the PR-side diff only.
+Coverage: uncommitted changes and untracked files only. The review target is PR #{{prNumber}}, but its base/head refs could not be resolved locally, so the cumulative diff could not be listed.
+{{/if}}{{#if includesWorkingTree}}Uncommitted changes and untracked files are included in the list above.
+{{/if}}{{#if noWorkingTreeChange}}There are no uncommitted changes or untracked files, so the review target is the cumulative PR diff only.
 {{/if}}{{#if isBranchBase}}
 Local change coverage: commits since base commit `{{baseCommit}}`, uncommitted changes, and untracked files.
 {{/if}}{{#if isBaseBranchHead}}
