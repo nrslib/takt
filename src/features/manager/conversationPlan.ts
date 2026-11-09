@@ -12,6 +12,8 @@ import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/task
 import { loadFormalSpecVerifierConstraints } from '../interactive/formalSpecPrompts.js';
 import { renderTemplate } from '../../shared/prompts/index.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveManagerWorkflowSelection } from './workflowSelection.js';
+import { warn } from '../../shared/ui/index.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -62,6 +64,12 @@ export function createManagerConversationPlan(
     }));
   const specificationSettings = Array.isArray(specificationConfiguration) ? specificationConfiguration : [specificationConfiguration];
   const managerConfig = resolveManagerConfig(cwd, resolved.provider);
+  for (const repositoryDirectory of input.repositoryDirectories ?? [cwd]) {
+    const config = repositoryDirectory === cwd ? managerConfig : resolveManagerConfig(repositoryDirectory);
+    for (const name of resolveManagerWorkflowSelection(repositoryDirectory, config, lang).missingWorkflows) {
+      warn(`Manager workflow not found: ${name}; ignored in ${repositoryDirectory}. Check manager.workflows / manager.default_workflow in config.yaml.`);
+    }
+  }
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
   const instruction = instructionSource === undefined ? undefined
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);

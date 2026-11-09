@@ -478,6 +478,7 @@
     "src/__tests__/manager-turn-failure-notification.test.ts",
     "src/__tests__/manager-turn-response.test.ts",
     "src/__tests__/manager-view.test.ts",
+    "src/__tests__/manager-workflow-selection.test.ts",
     "src/__tests__/mcp-enqueue-draft-pr.integration.test.ts",
     "src/__tests__/mcp-entrypoint.integration.test.ts",
     "src/__tests__/mcp-entrypoint.test.ts",

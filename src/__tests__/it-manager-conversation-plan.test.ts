@@ -28,6 +28,7 @@ import * as providers from '../infra/providers/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
+import * as ui from '../shared/ui/index.js';
 
 const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
@@ -61,6 +62,29 @@ describe('manager conversation configuration and provider boundary', () => {
   });
 
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); invalidateGlobalConfigCache(); rmSync(cwd, { recursive: true, force: true }); });
+
+  it.each(['project', 'global'] as const)('preserves manager workflows through %s configuration load and save', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, 'config.yaml');
+    for (const workflows of [['default', { simple: 'Small changes' }], 'all']) {
+      writeFileSync(path, `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: default\n`);
+      invalidateGlobalConfigCache();
+      if (scope === 'project') saveProjectConfig(cwd, loadProjectConfig(cwd));
+      else saveGlobalConfig(loadGlobalConfig());
+      invalidateGlobalConfigCache();
+      expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { workflows, default_workflow: 'default' } });
+      expect(resolveManagerConfig(cwd)).toMatchObject({ workflows, defaultWorkflow: 'default' });
+    }
+  });
+
+  it('warns about unavailable manager workflows while creating the conversation plan', () => {
+    saveProjectConfig(cwd, { provider: 'mock', manager: { workflows: ['missing-manager-workflow', 'simple'] } });
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-workflow'));
+  });
 
   it.each([
     ['legacy configuration', false, {}, 'mock'],

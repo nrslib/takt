@@ -40,6 +40,9 @@ import {
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
+import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
@@ -130,6 +133,11 @@ export function createTaktMcpServer(
   options: TaktMcpServerOptions = {},
 ): McpServer {
   const operationDeps = buildMcpOperationDependencies(deps, options);
+  const workflowDeps = (cwd: string, currentDeps: McpOperationDependencies): McpOperationDependencies =>
+    options.toolSet === 'manager' ? {
+      ...currentDeps,
+      managerWorkflows: resolveManagerWorkflowSelection(cwd, resolveManagerConfig(cwd), resolveConfigValue(cwd, 'language')).workflows,
+    } : currentDeps;
   const globalConfigDirectory = getGlobalConfigDir();
   let managerIdentity: ManagerAssignmentIdentity = options.managerAssignment ?? { kind: 'repository', repositoryDirectory: operationDeps.allowedProjectRoot! };
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
@@ -215,7 +223,7 @@ export function createTaktMcpServer(
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
-  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps)));
+  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), workflowDeps(projectInput(input, deps).cwd, deps))));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',
     description: 'Choose a candidate with takt_list_workflows, then read its steps here to confirm what the task will do. Accepts a workflow name, scope reference or path. Returns description, step names, descriptions, kinds, wait, system_inputs, effects, rules and resolved workflow_call targets. Follow a target with its getInput to preserve parent context and arguments. Responses fit 64 KiB, with explicit truncation; use offset/limit for steps.',
@@ -273,7 +281,7 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained. Workflow names, scope references and paths are accepted. autoPr and shouldPublishBranchToOrigin default to false and may be specified on submission. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), workflowDeps(projectInput(input, deps).cwd, deps), turnSignal(extra.signal)), false));
     server.registerTool('takt_requeue_goal_task', {
       title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
       inputSchema: requeueGoalTaskInputSchema,

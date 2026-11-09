@@ -494,6 +494,23 @@ workflow_system_commands:
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## manager 的任务 workflow
+
+在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中设置 `manager.workflows`，指定 manager 创建开发任务时可选的 workflow。项目值替换整个全局列表。元素可以是名称字符串，或仅含一对 `{ 名称: 使用说明 }` 的对象，与 `workflow_categories.workflows` 的写法一致。
+
+```yaml
+manager:
+  workflows:
+    - default: 常规功能开发和缺陷修复，从计划到审查。
+    - simple: 只需修改一两个文件的小任务。
+    - takt-default
+  default_workflow: default
+```
+
+两层都省略时，默认只允许 `default` 和 `simple`，并根据 `language` 提供日文或英文的使用说明。显式的纯名称元素不补充说明。`manager.default_workflow` 即使不在列表中也可选。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
+
+manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.workflow` / `merge-prepare`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
+
 ## manager 工具权限
 
 在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中配置：

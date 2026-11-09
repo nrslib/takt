@@ -734,7 +734,7 @@ describe('manager questions, answers and notifications through production bounda
   function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve', completedOnly = false): void {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'language: en', 'branch_name_strategy: romaji', 'manager:',
-      '  auto_run: false', `  main_merge: ${mode}`,
+      '  auto_run: false', '  workflows: [safe]', `  main_merge: ${mode}`,
       ...((disabled === undefined && !completedOnly) ? [] : ['  notifications:',
         ...(disabled === undefined ? [] : [`    ${disabled}: false`]),
         ...(completedOnly ? ['    awaiting_merge: false'] : [])]),
