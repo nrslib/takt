@@ -164,7 +164,9 @@ function selectResultsPath(
   if (occurrence === undefined) {
     occurrence = 0;
     if (existsSync(directory)) {
-      for (const entry of readdirSync(directory)) occurrence = Math.max(occurrence, Number(entry));
+      for (const entry of readdirSync(directory)) {
+        if (/^[1-9]\d*$/.test(entry)) occurrence = Math.max(occurrence, Number(entry));
+      }
     }
     for (const entry of failed) occurrence = Math.max(occurrence, entry.occurrence);
   }
@@ -220,7 +222,7 @@ function inheritChildWorkflowResults(source: string, target: string, selections:
     const children = join(source, 'subworkflows');
     if (!existsSync(children)) return;
     for (const entry of readdirSync(children, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() || parseWorkflowCallNamespaceSegment(entry.name) === undefined) continue;
       const childNamespace = join(namespace, 'subworkflows', entry.name);
       copyWorkflowResults(join(children, entry.name), join(target, 'subworkflows', entry.name), selections, childNamespace);
     }

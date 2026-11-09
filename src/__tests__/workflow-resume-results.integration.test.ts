@@ -9,7 +9,7 @@ import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.j
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
-import { WorkflowResultsStore } from '../core/workflow/run/workflow-results.js';
+import { inheritWorkflowResults, WorkflowResultsStore } from '../core/workflow/run/workflow-results.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { buildWorkflowRestartPointEntry, buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
@@ -19,6 +19,7 @@ import { attachWorkflowOpaqueRef, buildBuiltinWorkflowRef } from '../shared/work
 import { LogManager } from '../shared/ui/LogManager.js';
 import * as atomicFile from '../shared/utils/atomic-file.js';
 import { ReportExecutionStore } from '../core/workflow/report-execution-store.js';
+import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>() }));
@@ -1119,6 +1120,51 @@ describe('workflow results across resume', () => {
       restore();
       expect(restored.systemContexts.get('select')).toEqual({ pr: { number: 101 } });
     }
+  });
+
+  it.each(['.DS_Store', 'notes', '03', '3.5', '3e2', 'Infinity'])('ignores %s when selecting the latest occurrence', (entry) => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    mkdirSync(source);
+    mkdirSync(target);
+    const state = createInitialState(config, { projectCwd: project, startStep: 'select' });
+    const store = new WorkflowResultsStore(source, config, state);
+    store.initialize(source, false, false);
+    state.systemContexts.set('select', { pr: { number: 101 } });
+    store.startStep('select', 1);
+    state.systemContexts.set('select', { pr: { number: 202 } });
+    store.startStep('select', 2);
+    state.systemContexts.set('select', { pr: { number: 303 } });
+    store.save();
+    const unrelatedPath = join(source, 'workflow-results', 'step-select', entry);
+    if (entry === '.DS_Store') writeFileSync(unrelatedPath, 'metadata');
+    else mkdirSync(unrelatedPath);
+    const restored = createInitialState(config, { projectCwd: project, startStep: 'select' });
+
+    new WorkflowResultsStore(target, config, restored).initialize(source, true, false);
+
+    expect(restored.systemContexts.get('select')).toEqual({ pr: { number: 202 } });
+  });
+
+  it('inherits only child results with saved workflow call namespace names', () => {
+    const config = loopConfig();
+    const source = join(project, 'source-context');
+    const target = join(project, 'target-context');
+    const namespace = buildWorkflowCallNamespaceSegment('delegate', config.name, 1);
+    for (const entry of [namespace, '.DS_Store', 'notes']) {
+      const directory = join(source, 'subworkflows', entry);
+      mkdirSync(directory, { recursive: true });
+      const state = createInitialState(config, { projectCwd: project });
+      state.systemContexts.set('select', { pr: { number: 101 } });
+      new WorkflowResultsStore(directory, config, state).save();
+    }
+
+    inheritWorkflowResults(source, target);
+
+    expect(fs.readdirSync(join(target, 'subworkflows'))).toEqual([namespace]);
+    expect(JSON.parse(readFileSync(join(target, 'subworkflows', namespace, 'workflow-results.json'), 'utf8')))
+      .toMatchObject({ latest: { context: { select: { pr: { number: 101 } } } } });
   });
 
   it.each(['large-history', 'unreadable'] as const)('handles occurrence enumeration with %s', (scenario) => {
