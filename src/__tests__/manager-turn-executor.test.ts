@@ -147,27 +147,35 @@ it('does not split a surrogate pair when bounding a Bash description', async () 
   expect(onActivity).toHaveBeenCalledExactlyOnceWith({ kind: 'tool', tool: 'Bash', description: 'a'.repeat(255) });
 });
 
-it('flushes text chunks once before tool activity and flushes the final block before returning the structured reply', async () => {
+it.each(['Bash', 'StructuredOutput'])('publishes text closed by %s and discards the final block', async (tool) => {
   const { call, executor, input } = fixture();
-  const observed: unknown[] = [];
-  const onText = vi.fn((message: string) => { observed.push(message); });
+  const onText = vi.fn<(message: string) => void>();
   call.mockImplementationOnce(async (_prompt, options) => {
     options.onStream!({ type: 'text', data: { text: 'コードを' } });
     options.onStream!({ type: 'text', data: { text: '読みます。' } });
     expect(onText).not.toHaveBeenCalled();
-    options.onStream!({ type: 'tool_use', data: { id: 'bash', tool: 'Bash', input: {} } });
-    expect(observed).toEqual(['コードを読みます。', { kind: 'tool', tool: 'Bash' }]);
-    options.onStream!({ type: 'tool_result', data: { id: 'bash', content: '', isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool, input: {} } });
+    expect(onText).toHaveBeenCalledExactlyOnceWith('コードを読みます。');
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: '', isError: false } });
     options.onStream!({ type: 'text', data: { text: '調べがつきました。' } });
+    options.onStream!({ type: 'text', data: { text: JSON.stringify(success.structuredOutput) } });
     return success;
   });
-  const turnInput = { ...input, onText, onActivity: (activity: unknown) => {
-    if (typeof activity === 'object' && activity !== null && 'kind' in activity && activity.kind === 'tool') observed.push(activity);
-  } };
-  const result = await executor.execute(turnInput);
-  observed.push(result.message);
-  expect(observed).toEqual(['コードを読みます。', { kind: 'tool', tool: 'Bash' }, '調べがつきました。', 'reply']);
-  expect(onText).toHaveBeenCalledTimes(2);
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply', summary: null,
+    sessionId: success.sessionId, assignment: input.assignment });
+  expect(onText).toHaveBeenCalledExactlyOnceWith('コードを読みます。');
+});
+
+it('discards all streamed text when no tool closes a block', async () => {
+  const { call, executor, input } = fixture();
+  const onText = vi.fn<(message: string) => void>();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '最終返答の前置きです。' } });
+    options.onStream!({ type: 'text', data: { text: JSON.stringify(success.structuredOutput) } });
+    return success;
+  });
+  expect(await executor.execute({ ...input, onText })).toMatchObject({ message: 'reply' });
+  expect(onText).not.toHaveBeenCalled();
 });
 
 it('does not publish whitespace-only text blocks', async () => {
@@ -190,6 +198,7 @@ it('truncates a text block at the progress byte limit without breaking UTF-8', a
   call.mockImplementationOnce(async (_prompt, options) => {
     options.onStream!({ type: 'text', data: { text: 'あ'.repeat(6000) } });
     options.onStream!({ type: 'text', data: { text: '後続' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'bounded', tool: 'Read', input: {} } });
     return success;
   });
   const turnInput = { ...input, onText };
@@ -424,10 +433,11 @@ function mcpFixture() {
   return { call, input, invalidateSession, executor, prepared, prepare, checkCall };
 }
 
-it('releases prepared MCP when the final text observer throws', async () => {
+it('releases prepared MCP when a tool text observer throws', async () => {
   const { call, input, executor, prepared } = mcpFixture();
   call.mockImplementationOnce(async (_prompt, options) => {
     options.onStream!({ type: 'text', data: { text: '終了前の本文' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
     return success;
   });
   await expect(executor.execute({ ...input, onText() { throw new Error('observer failed'); } })).rejects.toThrow('observer failed');

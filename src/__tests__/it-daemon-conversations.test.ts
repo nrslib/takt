@@ -126,9 +126,8 @@ it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the 
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 10000 });
     const frame = await reconnected.frame();
     expect(frame).not.toContain('見回りの予定のコードを読む');
-    expect(frame).toContain('調べがつきました。');
-    expect(frame.indexOf('調べがつきました。')).toBeLessThan(frame.indexOf('Activity completed'));
-    expect(frame.split('調べがつきました。')).toHaveLength(2);
+    expect(frame).not.toContain('調べがつきました。');
+    expect(frame.split('Activity completed')).toHaveLength(2);
     expect(frame).not.toContain(getLabel('tui.ui.extendedThinking', lang));
     expect(frame).not.toContain('private-');
     const saved = JSON.stringify(await fixture.state());

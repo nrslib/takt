@@ -73,6 +73,34 @@ it('flushes generation and interpretation text separately and suppresses interpr
   expect(onText).toHaveBeenCalledExactlyOnceWith('仕様を作成します。');
   expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(verification);
 });
+it.each([false, true])('publishes only tool-closed interpretation text (withTool=%s)', async (withTool) => {
+  const f = fixture();
+  const messages: string[] = [];
+  const structuredOutput = { message: '検証結果', summary: null };
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '仕様を作成します。' } });
+    return { ...success, content: 'generated specification' };
+  });
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    expect(messages).toEqual(['仕様を作成します。']);
+    options.onStream!({ type: 'text', data: { text: '検証ログを読みます。' } });
+    if (withTool) {
+      options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: {} } });
+      expect(messages).toEqual(['仕様を作成します。', '検証ログを読みます。']);
+      options.onStream!({ type: 'tool_result', data: { id: 'read', content: '', isError: false } });
+    }
+    options.onStream!({ type: 'text', data: { text: '解釈しました。' } });
+    options.onStream!({ type: 'text', data: { text: JSON.stringify(structuredOutput) } });
+    return { ...success, content: '', structuredOutput };
+  });
+  const result = await f.executor.execute({ ...f.input, onText: (text) => messages.push(text) });
+  expect(messages).toEqual(withTool ? ['仕様を作成します。', '検証ログを読みます。'] : ['仕様を作成します。']);
+  expect(result).toMatchObject({ message: '検証結果', summary: null, assignment: f.input.assignment });
+  expect(runFormalSpecVerification).toHaveBeenCalledExactlyOnceWith('generated specification', '/repo', {
+    abortSignal: f.input.abortSignal, modelCheckTimeoutSeconds: 42,
+  });
+  expect(cleanupFormalSpecVerificationArtifacts).toHaveBeenCalledExactlyOnceWith(verification);
+});
 it('uses the interactive checker and returns its result to the same read-only manager session', async () => {
   const f = fixture();
   f.call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```\n```alloy\nsig CSV {}\n```', sessionId: 'generated' });

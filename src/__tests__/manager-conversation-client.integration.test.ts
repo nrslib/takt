@@ -117,7 +117,8 @@ it('refreshes the human merge wait classification through IPC when finishing wor
   }
 });
 
-it('delivers Bash descriptions and ordered text through daemon IPC without saving transient output or sending it to Slack', async () => {
+it.each([false, true])('delivers Bash descriptions and ordered text through IPC with final JSON streamed=%s without saving transient output or sending it to Slack', async (streamFinal) => {
+  const prose = 'コードを読んでいるところです。';
   const useTool = deferred<void>();
   const respond = deferred<void>();
   const finish = deferred<void>();
@@ -125,8 +126,8 @@ it('delivers Bash descriptions and ordered text through daemon IPC without savin
     options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
     options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
     await useTool.promise;
-    options.onStream!({ type: 'text', data: { text: 'コードを読んで' } });
-    options.onStream!({ type: 'text', data: { text: 'いるところです。' } });
+    options.onStream!({ type: 'text', data: { text: prose.slice(0, 7) } });
+    options.onStream!({ type: 'text', data: { text: prose.slice(7) } });
     options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'Bash', input: {
       description: '見回りの予定のコードを読む', command: 'private-input-marker', timeout: 1000,
     } } });
@@ -134,8 +135,11 @@ it('delivers Bash descriptions and ordered text through daemon IPC without savin
     options.onStream!({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
     options.onStream!({ type: 'text', data: { text: '調べがつきました。' } });
     await finish.promise;
-    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
-      structuredOutput: { message: 'Final activity reply', summary: null } };
+    const structuredOutput = { message: 'Final activity reply', summary: null };
+    if (streamFinal) options.onStream!({ type: 'text', data: { text: JSON.stringify(structuredOutput) } });
+    return { persona: 'manager', status: 'done',
+      content: `${prose}\n調べがつきました。\n${JSON.stringify(structuredOutput)}`,
+      timestamp: new Date(), structuredOutput };
   });
   const executor = createManagerTurnExecutor(repository, {
     ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup: () => ({ call }) }) },
@@ -166,9 +170,9 @@ it('delivers Bash descriptions and ordered text through daemon IPC without savin
     expect(activityRow).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 見回りの予定のコードを読む.*\b\d+s\b/u);
     expect(measureWidth(activityRow)).toBeLessThanOrEqual(80);
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
-      { role: 'assistant', content: 'コードを読んでいるところです。' }]);
+      { role: 'assistant', content: prose }]);
     const beforeTool = outputs.mock.calls.map(([output]) => output);
-    const beforeIndex = beforeTool.findIndex((output) => output.message === 'コードを読んでいるところです。');
+    const beforeIndex = beforeTool.findIndex((output) => output.message === prose);
     expect(beforeIndex).toBeGreaterThanOrEqual(0);
     expect(beforeIndex).toBeLessThan(beforeTool.findIndex((output) => output.kind === 'activity' && output.activity.kind === 'tool'));
     // A periodic snapshot must not clear the active tool from the same running turn.
@@ -189,22 +193,26 @@ it('delivers Bash descriptions and ordered text through daemon IPC without savin
     ]);
     expect(activities().at(-1).activity).toEqual({ kind: 'responding' });
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
-      { role: 'assistant', content: 'コードを読んでいるところです。' },
-      { role: 'assistant', content: '調べがつきました。' }, { role: 'assistant', content: 'Final activity reply' }]);
+      { role: 'assistant', content: prose },
+      { role: 'assistant', content: 'Final activity reply' }]);
     const delivered = outputs.mock.calls.map(([output]) => output);
+    expect(delivered.filter((output) => output.kind === 'turn_text').map((output) => output.message)).toEqual([
+      prose,
+    ]);
+    expect(delivered.filter((output) => output.kind === 'result')).toHaveLength(1);
     const finalIndex = delivered.findIndex((output) => output.kind === 'result' && output.result.message === 'Final activity reply');
-    const textIndex = delivered.findIndex((output) => output.message === '調べがつきました。');
+    const textIndex = delivered.findIndex((output) => output.message === prose);
     expect(textIndex).toBeGreaterThanOrEqual(0);
     expect(textIndex).toBeLessThan(finalIndex);
     const transientKinds = new Set(delivered.filter((output) =>
-      ['コードを読んでいるところです。', '調べがつきました。'].includes(output.message)).map((output) => output.kind));
+      [prose, '調べがつきました。'].includes(output.message)).map((output) => output.kind));
     const slackOutputs = slack.deliver.mock.calls.map((args) => args[1]);
     expect(slackOutputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'Final activity reply' } }));
     for (const output of slackOutputs) {
       expect(output).not.toMatchObject({ kind: 'activity' });
       expect(transientKinds.has(output.kind)).toBe(false);
       const json = JSON.stringify(output);
-      for (const transient of ['見回りの予定のコードを読む', 'コードを読んでいるところです。', '調べがつきました。']) expect(json).not.toContain(transient);
+      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
     }
     const read = await fixture.dispatcher.snapshot(client.getSnapshot().state!.conversationId);
     const items = [];
@@ -212,7 +220,7 @@ it('delivers Bash descriptions and ordered text through daemon IPC without savin
     read.cancel();
     for (const persisted of [writes.mock.calls, savedResults.mock.calls, items, client.getSnapshot()]) {
       const json = JSON.stringify(persisted);
-      for (const transient of ['見回りの予定のコードを読む', 'コードを読んでいるところです。', '調べがつきました。']) expect(json).not.toContain(transient);
+      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
       expect(json).not.toContain('private-');
       expect(json).not.toContain('"activity"');
     }

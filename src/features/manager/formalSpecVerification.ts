@@ -67,15 +67,18 @@ export async function verifyManagerConversation(
       plan.strategy.systemPrompt,
       buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
     ].join('\n\n') });
-    interpreted = await interpreter.call(buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang), {
-      ...options, sessionId: generated.sessionId,
-      allowedTools: ['Read'], allowReadonlyFileRead: true,
-      readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
-      outputSchema: getManagerOutputSchema(ctx.providerType),
-    });
+    try {
+      interpreted = await interpreter.call(buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang), {
+        ...options, sessionId: generated.sessionId,
+        allowedTools: ['Read'], allowReadonlyFileRead: true,
+        readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
+        outputSchema: getManagerOutputSchema(ctx.providerType),
+      });
+    } finally {
+      reporter.discard();
+    }
     assertSuccess(interpreted);
     input.abortSignal.throwIfAborted();
-    reporter.flush();
     const output = parseManagerResponse(interpreted, ctx.providerType);
     return { ...unchanged, sessionId: interpreted.sessionId ?? generated.sessionId,
       message: [output.message, retained].filter(Boolean).join('\n\n') };
@@ -86,8 +89,5 @@ export async function verifyManagerConversation(
         verificationResult,
         retained,
       ].filter(Boolean).join('\n\n') };
-  } finally {
-    try { if (!input.abortSignal.aborted) reporter.flush(); }
-    finally { cleanupFormalSpecVerificationArtifacts(verification); }
-  }
+  } finally { cleanupFormalSpecVerificationArtifacts(verification); }
 }

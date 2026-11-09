@@ -9,11 +9,14 @@ export function createTurnActivityReporter(report: (activity: ConversationActivi
   let text = '';
   let textBytes = 0;
   let textTruncated = false;
-  const flush = (): void => {
-    const message = text;
+  const discard = (): void => {
     text = '';
     textBytes = 0;
     textTruncated = false;
+  };
+  const flush = (): void => {
+    const message = text;
+    discard();
     if (message.trim() !== '') reportText(message);
   };
   const onStream = (event: StreamEvent): void => {
@@ -60,5 +63,5 @@ export function createTurnActivityReporter(report: (activity: ConversationActivi
     current = next;
     report(next);
   };
-  return { onStream, flush };
+  return { onStream, flush, discard };
 }

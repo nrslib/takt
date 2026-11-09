@@ -100,8 +100,8 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           return { ...parseManagerResponse(response, plan.ctx.providerType),
             sessionId: response.sessionId, assignment };
         } finally {
-          try { if (!signal.aborted) reporter.flush(); }
-          finally { await prepared?.dispose(); }
+          reporter.discard();
+          await prepared?.dispose();
         }
       };
       return input.recovery === undefined ? run() : withoutDiagnosticLogging(run);
