@@ -39,16 +39,31 @@ it('passes the current attachment provider and model overrides to plan resolutio
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it.each(['model', 'prompt', 'mcp', 'language'] as const)('replaces setup and invalidates its context key when %s changes', async (change) => {
+it.each(['model', 'prompt', 'mcp', 'language', 'permission'] as const)('replaces setup and invalidates its context key when %s changes', async (change) => {
   const first = await runtime.resolve(assignment, signal);
   if (change === 'model') plan.ctx.model = 'model-B';
   if (change === 'prompt') plan.strategy.systemPrompt = 'manager-B';
   if (change === 'mcp') plan.ctx.mcpServers = { extra: { command: 'node', args: ['server.js'] } };
   if (change === 'language') plan.ctx.lang = 'ja';
+  if (change === 'permission') plan.ctx.aiReviewPermissions = true;
   const second = await runtime.resolve(assignment, signal);
   expect(second.contextKey).not.toBe(first.contextKey); expect(second.executor).not.toBe(first.executor);
   expect(doubles.dispose).toHaveBeenCalledOnce();
   expect(doubles.dispose.mock.invocationCallOrder[0]).toBeLessThan(doubles.connect.mock.invocationCallOrder[1]!);
+});
+
+it.each([true, false])('passes resolved AI permission review to preflight (%s)', async (aiReviewPermissions) => {
+  plan.ctx.aiReviewPermissions = aiReviewPermissions;
+  await runtime.resolve(assignment, signal);
+  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'full', aiReviewPermissions }));
+});
+
+it.each([
+  { repositories: ['/first', '/second'], cwd: '/first' },
+  { repositories: [], cwd: '/config/workspaces/workspace-1' },
+])('uses the workspace manager cwd for configuration: %j', async ({ repositories, cwd }) => {
+  await runtime.resolve({ kind: 'workspace', workspaceId: 'workspace-1', name: 'workspace', repositoryDirectories: repositories }, signal);
+  expect(doubles.plan).toHaveBeenCalledWith(cwd, { repositoryDirectories: repositories });
 });
 
 it('disposes MCP after failed preflight and permits another preparation', async () => {

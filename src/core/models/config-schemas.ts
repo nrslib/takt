@@ -151,9 +151,13 @@ export const WorkflowCategoryOverlaySchema = z.object({
   others_category_name: z.string().min(1).optional(),
 }).strict();
 
+const ManagerPermissionSchema = z.enum(['auto', 'full']);
+
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
+    permission: ManagerPermissionSchema.optional(),
+    provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
     default_workflow: z.string().trim().min(1).optional(),
     // Deprecated: accepted for existing configuration files and ignored.

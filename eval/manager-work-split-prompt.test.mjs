@@ -27,10 +27,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 140 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 148 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 140);
+  assert.equal(suite.tests.length, 148);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -86,6 +86,27 @@ test('question expectations match choice, information and operation scenarios in
   for (const lang of ['ja', 'en']) {
     for (const { vars } of suite.tests.filter(({ vars }) => vars.lang === lang)) {
       assert.equal(loadManagerCase(vars.case, lang).expectedQuestionType, expectations[vars.case]);
+    }
+  }
+});
+
+test('permission review denials remain current-turn tool results rather than human messages', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction']) {
+      const raw = parse(readFileSync(new URL(`./cases/manager-work-split/${caseId}.yaml`, import.meta.url), 'utf8'))[lang];
+      const denied = raw.readResults.find(({ tool }) => tool === 'Bash');
+      const fixture = loadManagerCase(caseId, lang);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      const label = lang === 'ja' ? 'このターンで既に読んだ結果' : 'Results already read this turn';
+      const results = JSON.parse(prompt.split(`${label}:\n`)[1].split('\n\n')[0]);
+      assert.deepEqual(results.find(({ tool }) => tool === 'Bash'), denied);
+      const user = prompt.split('USER:\n')[1].split('\n\n')[0];
+      assert.ok(!user.includes(denied.result));
+      assert.ok(!buildManagerSystemPrompt(fixture).includes(denied.result));
+      assert.equal(fixture.previousTurns, undefined);
+      assert.equal(fixture.turn, caseId === 'permission-denial-instruction' ? 'conversation' : 'event');
+      if (fixture.turn === 'conversation') assert.equal(user, raw.user);
+      else assert.deepEqual(JSON.parse(user), JSON.parse(buildManagerEventInput(raw.cwd, raw.event)));
     }
   }
 });
@@ -435,6 +456,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
+    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',

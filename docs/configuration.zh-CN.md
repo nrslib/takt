@@ -494,6 +494,37 @@ workflow_system_commands:
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## manager 工具权限
+
+在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中配置：
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` 接受 `auto`（默认）或 `full`。`manager.provider_permissions`
+将 provider 名映射到相同的值，默认为空。此例仅对 Claude 启用 AI 权限审核，其他 provider 使用完整权限。
+
+解析顺序：project 的 provider 覆盖 → global 的 provider 覆盖 → project 的 `permission` →
+global 的 `permission` → `auto`。按 manager turn 实际解析的 provider 查找。
+`claude` 和 `claude-sdk` 互为别名；同一层中同时配置时，精确匹配的键优先。
+仓库 manager 使用该仓库的配置。workspace manager 使用第一个已注册仓库的配置，
+尚无仓库时使用 workspace 专用目录，与 `auto_run` 等现有 manager 设置一致。
+
+- **Claude（`claude` / `claude-sdk`）**：`auto` 使用 SDK `permissionMode: auto`，
+  不绕过权限检查，分类器允许或拒绝工具调用。`full` 保持 `bypassPermissions`。
+- **Codex**：`auto` 使用 `workspace-write`、`approvalPolicy: on-request` 和
+  `approvals_reviewer = "auto_review"`。为 `gh` 等命令启用网络访问。
+  AI 审核权限扩展请求，即使无人值守也可批准。`full` 保持 `danger-full-access` 和 `approvalPolicy: never`。
+- **其他 provider**：没有此 AI 权限审核机制，`auto` 与 `full` 行为相同。
+
+manager MCP 工具保留现有审批允许列表，两种模式下均可免确认使用。
+AI 拒绝的操作作为工具结果返回 manager。TAKT 不会自动将拒绝转换为人工询问。
+这些设置仅适用于 manager turn，不改变 workflow step 或 run 的权限。
+
 ## 通过 Slack 与 manager 对话
 
 在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」操作；旧版本提案的按钮无效。

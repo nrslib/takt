@@ -503,6 +503,45 @@ Set project `.takt/config.yaml` `manager.main_merge` to `approve` (default) or `
 
 `until: prepare` uses `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
 
+## Manager tool permissions
+
+Set these in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` accepts `auto` (default) or `full`. `manager.provider_permissions`
+maps provider names to the same values and defaults to an empty map. The example
+uses AI review for Claude and full permissions for other providers.
+
+Resolution order is project provider override → global provider override → project
+`permission` → global `permission` → `auto`. Lookup uses the provider actually
+resolved for the manager turn. `claude` and `claude-sdk` are aliases; within one
+scope, an exact provider key wins if both are present. Repository managers use
+their repository configuration. Workspace managers use the first registered
+repository's configuration, or their workspace directory when no repository is
+registered, matching other manager settings such as `auto_run`.
+
+- **Claude (`claude` / `claude-sdk`)**: `auto` uses SDK `permissionMode: auto`
+  without permission bypass. The classifier allows or denies tool calls.
+  `full` uses `bypassPermissions` as before.
+- **Codex**: `auto` uses `workspace-write`, `approvalPolicy: on-request`, and
+  `approvals_reviewer = "auto_review"`. Network access is enabled for commands
+  such as `gh`. AI review can approve escalation requests without a person
+  present. `full` retains `danger-full-access` and `approvalPolicy: never`.
+- **Other providers**: `auto` behaves like `full` because they do not provide
+  this AI permission review mechanism.
+
+Manager MCP tools retain their existing approval allowlists and can be used
+without confirmation in either mode. Operations denied by AI review are returned
+to the manager as tool results. TAKT does not automatically turn these denials
+into human questions. These settings apply to manager turns only; workflow step
+and run permissions are unchanged.
+
 ## Slack conversations with manager
 
 In a conversation thread, send `/make-goal` to create a proposal. Use **Register goal** or **Return to conversation without registering**; buttons on an outdated proposal no longer work.

@@ -260,8 +260,8 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     ['gpt-6.1-terra', 'medium'],
     ['claude-opus-5', undefined],
   ]);
-  assert.equal(config.tests.length, 140);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 70);
+  assert.equal(config.tests.length, 148);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 74);
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
@@ -272,6 +272,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
     'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
+    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',

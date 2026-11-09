@@ -499,6 +499,42 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `until: prepare` は `merge-prepare` を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
 
+## manager のツール権限
+
+プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` に設定します。
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` は `auto`（既定）または `full` を指定します。
+`manager.provider_permissions` はプロバイダ名から同じ値への対応表で、既定は空です。
+この例では Claude だけ AI による権限審査を使い、他は全権限で実行します。
+
+解決順は project の該当プロバイダ設定 → global の該当プロバイダ設定 → project の
+`permission` → global の `permission` → `auto` です。manager のターンで実際に解決された
+プロバイダ名を使います。`claude` と `claude-sdk` は同一視し、同じ階層に両方あれば実際の
+プロバイダ名と一致するキーを優先します。リポジトリ担当はそのリポジトリの設定を使います。
+workspace 担当は登録済みリポジトリの先頭、未登録なら workspace 専用ディレクトリの設定を
+使い、`auto_run` など既存の manager 設定と同じ規則で解決します。
+
+- **Claude（`claude` / `claude-sdk`）**: `auto` は SDK の `permissionMode: auto` を使い、
+  権限チェックを迂回しません。分類器がツール呼び出しを許可・拒否します。
+  `full` は従来どおり `bypassPermissions` です。
+- **Codex**: `auto` は `workspace-write`、`approvalPolicy: on-request`、
+  `approvals_reviewer = "auto_review"` を使います。`gh` などのためネットワークを有効にし、
+  権限拡張の要求を AI が審査します。人がいない実行でも承認できます。
+  `full` は従来どおり `danger-full-access` と `approvalPolicy: never` です。
+- **その他のプロバイダ**: この AI 審査の仕組みがないため、`auto` も `full` と同じ動作です。
+
+manager の MCP ツールは既存の承認許可リストを維持し、どちらのモードでも確認なしで使えます。
+AI 審査が拒否した操作は、ツール結果として manager に返ります。TAKT が拒否から人への質問を
+機械的に作ることはありません。対象は manager のターンだけで、workflow の step や run の
+権限は変更しません。
+
 ## Slack で manager と会話する
 
 会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録する」または「登録せずに会話に戻る」で操作でき、古い版のボタンは使えません。

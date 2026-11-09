@@ -32,6 +32,13 @@ describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
 });
 
 describe('SdkOptionsBuilder.build() — bypass permission opt-in', () => {
+  it('delegates manager permissions to AI without enabling bypass or removing allowed MCP tools', () => {
+    const allowedTools = ['mcp__takt__takt_get_goal'];
+    const options = buildSdkOptions({ cwd: '/tmp/test', permissionMode: 'full', aiReviewPermissions: true, allowedTools });
+    expect(options.permissionMode).toBe('auto');
+    expect(options).not.toHaveProperty('allowDangerouslySkipPermissions');
+    expect(options.allowedTools).toEqual(allowedTools);
+  });
   it.each<Partial<ClaudeSpawnOptions>>([
     { permissionMode: 'full' },
     { bypassPermissions: true },

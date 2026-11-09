@@ -56,6 +56,7 @@ export class ClaudeClient {
       systemPrompt: options.systemPrompt,
       agents: options.agents,
       permissionMode: options.permissionMode,
+      aiReviewPermissions: options.aiReviewPermissions,
       onStream: options.onStream,
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,

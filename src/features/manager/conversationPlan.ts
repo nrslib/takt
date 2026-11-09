@@ -19,6 +19,7 @@ export interface ManagerConversationContext {
   model: string | undefined;
   lang: 'ja' | 'en';
   providerOptions?: StepProviderOptions;
+  aiReviewPermissions?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
 }
 
@@ -60,7 +61,7 @@ export function createManagerConversationPlan(
       repositoryDirectory, ...resolveFormalSpecConfigurationWithoutPrompt(repositoryDirectory),
     }));
   const specificationSettings = Array.isArray(specificationConfiguration) ? specificationConfiguration : [specificationConfiguration];
-  const managerConfig = resolveManagerConfig(cwd);
+  const managerConfig = resolveManagerConfig(cwd, resolved.provider);
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
   const instruction = instructionSource === undefined ? undefined
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
@@ -70,6 +71,7 @@ export function createManagerConversationPlan(
       provider,
       providerType: resolved.provider, model: resolved.model, lang,
       providerOptions: configured, mcpServers: servers,
+      aiReviewPermissions: managerConfig.permission === 'auto',
     },
     strategy: {
       systemPrompt: [

@@ -33,8 +33,8 @@ export const managerWriteSchemas = {
 };
 
 const replayConstraint = {
-  ja: '評価用のテキスト再生です。この再生ではツールを呼べません。「このターンで既に読んだ結果」を読み取りツールの結果として扱ってください。本番の応答（message / summary）を response に入れ、このターンで呼ぶ書き込みツールを順に、本番と同じ引数で calls に列挙した JSON だけを返してください。形は {"response":{"message":"...","summary":null},"calls":[{"tool":"takt_enqueue_goal_task","arguments":{...}}]} です。履歴にないツールの結果を作らないでください。これは再生の出力形式であり、作業への追加要件ではありません。',
-  en: 'This is a text-only evaluation replay. Tools cannot be called. Treat "Results already read this turn" as reading-tool results. Put the production response (message / summary) in response, and list this turn\'s writing-tool calls in order in calls, with the same arguments as production. Return JSON only: {"response":{"message":"...","summary":null},"calls":[{"tool":"takt_enqueue_goal_task","arguments":{...}}]}. Do not invent tool results absent from the history. This is the replay output format and adds no work requirement.',
+  ja: '評価用のテキスト再生です。この再生ではツールを呼べません。「このターンで既に読んだ結果」をツールの結果として扱ってください。本番の応答（message / summary）を response に入れ、このターンで呼ぶ書き込みツールを順に、本番と同じ引数で calls に列挙した JSON だけを返してください。形は {"response":{"message":"...","summary":null},"calls":[{"tool":"takt_enqueue_goal_task","arguments":{...}}]} です。履歴にないツールの結果を作らないでください。これは再生の出力形式であり、作業への追加要件ではありません。',
+  en: 'This is a text-only evaluation replay. Tools cannot be called. Treat "Results already read this turn" as tool results. Put the production response (message / summary) in response, and list this turn\'s writing-tool calls in order in calls, with the same arguments as production. Return JSON only: {"response":{"message":"...","summary":null},"calls":[{"tool":"takt_enqueue_goal_task","arguments":{...}}]}. Do not invent tool results absent from the history. This is the replay output format and adds no work requirement.',
 };
 
 export function loadManagerCase(caseId, lang) {
