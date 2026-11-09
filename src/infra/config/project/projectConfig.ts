@@ -192,7 +192,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     caccia,
     merge,
     assistant: normalizeAssistantConfig(assistant),
-    manager: manager === undefined ? undefined : { patrolInterval: manager.patrol_interval, autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications,
+    manager: manager === undefined ? undefined : { permission: manager.permission, providerPermissions: manager.provider_permissions, patrolInterval: manager.patrol_interval, autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications,
       slack: manager.slack === undefined ? undefined : { channelId: manager.slack.channel_id, allowedUserIds: manager.slack.allowed_user_ids } },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -326,7 +326,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.caccia;
   delete savePayload.manager;
   if (config.manager !== undefined) {
-    savePayload.manager = { patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications,
+    savePayload.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications,
       slack: config.manager.slack === undefined ? undefined : { channel_id: config.manager.slack.channelId, allowed_user_ids: config.manager.slack.allowedUserIds } };
   }
   delete savePayload.merge;

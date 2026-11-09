@@ -236,6 +236,7 @@ export class GlobalConfigManager {
         },
       },
       manager: parsed.manager === undefined ? undefined : {
+        permission: parsed.manager.permission, providerPermissions: parsed.manager.provider_permissions,
         patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
       },
       merge: parsed.merge,

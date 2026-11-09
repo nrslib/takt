@@ -377,9 +377,6 @@ export class CodexClient {
       workingDirectory: options.cwd,
       skipGitRepoCheck: true,
       ...sessionConfig.permissionThreadOptions,
-      // TAKT runs Codex non-interactively — there is no human to approve escalations.
-      // Force `never` so Codex cannot wait for an approval that no caller can provide.
-      approvalPolicy: 'never' as const,
     };
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];

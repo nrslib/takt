@@ -1,0 +1,170 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 商品 CSV エクスポートとその利用案内を完成させる
+    outOfScope: []
+    acceptanceCriteria:
+      - 既存仕様どおりの商品 CSV を出力する。
+      - 既存仕様と確認済みの実装に沿った利用案内を作成する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog-export
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-11-01T01:00:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/verification/catalog-release.md
+      result: 商品 CSV の実装はゴール先端 cccccccccccccccccccccccccccccccccccccccc に取り込み済み。ローカルの docs/catalog-csv-contract.md で列名・引用符・文字コードが規定され、同じ先端でその契約を検証するテストとビルドが通過済み。残りはその資料に基づく利用案内の作成。外部の CSV 解説サイトは補助参考であり、仕様や利用案内の根拠には不要。
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 資料の作成とレビューを行う。
+    - tool: takt_get_workflow
+      arguments:
+        cwd: /workspace/project
+        workflow: default
+      result:
+        name: default
+        path: /workspace/project/.takt/workflows/default.yaml
+        description: 資料の作成とレビューを行う。
+        initialStep: write
+        steps:
+          - name: write
+            description: 既存仕様と確認済みの実装に沿って資料を作成し、レビューの指摘があれば修正する。
+            kind: agent
+            rules:
+              - condition:
+                  kind: semantic
+                  label: COMPLETE
+                next: review
+          - name: review
+            description: 資料が既存仕様と確認済みの実装に一致しているかレビューする。
+            kind: agent
+            rules:
+              - condition:
+                  kind: semantic
+                  label: APPROVED
+                next: COMPLETE
+              - condition:
+                  kind: semantic
+                  label: NEEDS_FIX
+                next: write
+        collection: steps
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: curl --head https://reference.example.test/csv-guide
+      result: "自動権限審査で補助参考サイトへの HEAD リクエストを拒否しました。理由: この外部ドメインへのネットワークアクセスは許可されていません。リクエストは送信されていません。"
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Complete catalog CSV export and its usage guide
+    outOfScope: []
+    acceptanceCriteria:
+      - Export catalog CSV according to the existing contract.
+      - Write the usage guide from the existing contract and verified implementation.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog-export
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: patrol
+    repositoryDirectory: /workspace/project
+    goalIds:
+      - 650e8400-e29b-41d4-a716-446655440000
+  snapshotAt: 2026-11-01T01:00:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/verification/catalog-release.md
+      result: Catalog CSV implementation is integrated at goal tip cccccccccccccccccccccccccccccccccccccccc. Local docs/catalog-csv-contract.md defines columns, quoting and encoding; tests of that contract and the build passed at the same tip. The remaining work is writing the usage guide from those materials. The external CSV explainer is supplementary and is unnecessary as evidence for the contract or guide.
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Write and review documentation.
+    - tool: takt_get_workflow
+      arguments:
+        cwd: /workspace/project
+        workflow: default
+      result:
+        name: default
+        path: /workspace/project/.takt/workflows/default.yaml
+        description: Write and review documentation.
+        initialStep: write
+        steps:
+          - name: write
+            description: Write documentation from the existing contract and verified implementation, and address review findings.
+            kind: agent
+            rules:
+              - condition:
+                  kind: semantic
+                  label: COMPLETE
+                next: review
+          - name: review
+            description: Review the documentation for consistency with the existing contract and verified implementation.
+            kind: agent
+            rules:
+              - condition:
+                  kind: semantic
+                  label: APPROVED
+                next: COMPLETE
+              - condition:
+                  kind: semantic
+                  label: NEEDS_FIX
+                next: write
+        collection: steps
+        totalCount: 2
+        returnedCount: 2
+        omittedCount: 0
+        offset: 0
+        nextOffset: null
+        truncated: false
+    - tool: Bash
+      arguments:
+        command: curl --head https://reference.example.test/csv-guide
+      result: "Automatic permission review denied the HEAD request to the supplementary reference site. Reason: network access to this external domain is not permitted. The request was not sent."

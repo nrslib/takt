@@ -338,6 +338,39 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(() => loadProjectConfig(cwd)).toThrow();
   });
 
+  it.each(['project', 'global'] as const)('loads and saves manager permissions at the %s scope', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    const path = join(directory, 'config.yaml');
+    writeFileSync(path, 'provider: mock\nmanager:\n  permission: full\n  provider_permissions:\n    claude: auto\n    codex: full\n');
+    invalidateGlobalConfigCache();
+    const loaded = scope === 'project' ? loadProjectConfig(cwd) : loadGlobalConfig();
+    expect(loaded.manager).toMatchObject({ permission: 'full', providerPermissions: { claude: 'auto', codex: 'full' } });
+    if (scope === 'project') saveProjectConfig(cwd, loaded);
+    else saveGlobalConfig({ ...loadGlobalConfig(), manager: loaded.manager });
+    invalidateGlobalConfigCache();
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { permission: 'full', provider_permissions: { claude: 'auto', codex: 'full' } } });
+    expect(createManagerConversationPlan(cwd, { provider: 'claude-sdk' }).ctx.aiReviewPermissions).toBe(true);
+    expect(createManagerConversationPlan(cwd, { provider: 'codex' }).ctx.aiReviewPermissions).toBe(false);
+    expect(createManagerConversationPlan(cwd, { provider: 'opencode', model: 'test/model' }).ctx.aiReviewPermissions).toBe(false);
+  });
+
+  it.each(['project', 'global'] as const)('rejects invalid manager permissions when loading %s config', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    for (const setting of ['permission: edit', 'provider_permissions: { codex: never }']) {
+      writeFileSync(join(directory, 'config.yaml'), `provider: mock\nmanager:\n  ${setting}\n`);
+      invalidateGlobalConfigCache();
+      expect(() => scope === 'project' ? loadProjectConfig(cwd) : loadGlobalConfig()).toThrow();
+    }
+  });
+
+  it('defaults manager permission to AI review after resolving the actual provider override', () => {
+    saveProjectConfig(cwd, { provider: 'mock', manager: { permission: 'full', providerPermissions: { 'claude-sdk': 'auto' } } });
+    expect(createManagerConversationPlan(cwd, { provider: 'claude' }).ctx.aiReviewPermissions).toBe(true);
+    expect(createManagerConversationPlan(cwd, {}).ctx.aiReviewPermissions).toBe(false);
+    saveProjectConfig(cwd, { provider: 'codex' });
+    expect(createManagerConversationPlan(cwd, {}).ctx.aiReviewPermissions).toBe(true);
+  });
+
   it.each([
     { supportsStructuredOutput: false, supportedMcpTransports: new Set(['stdio'] as const) },
     { supportsStructuredOutput: true, supportedMcpTransports: new Set(['http'] as const) },
@@ -357,7 +390,11 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
   });
 
-  it.each([false, true])('starts Codex manager with full permissions and user MCP (extra server: %s)', async (hasAmbientServer) => {
+  it.each([
+    { hasAmbientServer: false, permission: 'auto' }, { hasAmbientServer: true, permission: 'auto' },
+    { hasAmbientServer: false, permission: 'full' }, { hasAmbientServer: true, permission: 'full' },
+  ] as const)('starts Codex manager with $permission permissions and user MCP (extra server: $hasAmbientServer)', async ({ hasAmbientServer, permission }) => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { permission } });
     const codexHome = join(cwd, 'codex-home');
     mkdirSync(codexHome);
     const configPath = join(codexHome, 'config.toml');
@@ -396,8 +433,11 @@ describe('manager conversation configuration and provider boundary', () => {
       const browser = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>).browser!;
       expect(browser.tools).toBeUndefined();
       expect(browser.default_tools_approval_mode).toBeUndefined();
-      expect(codex.startThread.mock.calls[0]![0]).toMatchObject({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' });
-      expect(codex.startThread.mock.calls[0]![0].networkAccessEnabled).toBeUndefined();
+      expect(codex.startThread.mock.calls[0]![0]).toMatchObject(permission === 'auto'
+        ? { sandboxMode: 'workspace-write', approvalPolicy: 'on-request', networkAccessEnabled: true }
+        : { sandboxMode: 'danger-full-access', approvalPolicy: 'never' });
+      if (permission === 'full') expect(codex.startThread.mock.calls[0]![0].networkAccessEnabled).toBeUndefined();
+      expect(sdkOptions.config?.approvals_reviewer).toBe(permission === 'auto' ? 'auto_review' : undefined);
       expect(codex.startThread.mock.calls[0]![0].webSearchMode).toBeUndefined();
       expect(runCodexMcpList).not.toHaveBeenCalled();
     }
@@ -430,7 +470,10 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(optionsResolved?.codex).toMatchObject(expected);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('passes owned HTTP headers without a manager permission hook through the %s SDK adapter', async (provider) => {
+  it.each((['claude', 'claude-sdk'] as const).flatMap((provider) =>
+    (['auto', 'full'] as const).map((permission) => ({ provider, permission }))))(
+    'passes $permission permission and owned HTTP headers through the $provider SDK adapter', async ({ provider, permission }) => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { permission } });
     vi.mocked(callClaudeCustom).mockResolvedValue({
       persona: 'manager', status: 'done', timestamp: new Date(), content: JSON.stringify({ message: '確認', summary: null }),
     });
@@ -445,7 +488,9 @@ describe('manager conversation configuration and provider boundary', () => {
     {
       expect((await executeTurn(session, { text: '確認' }, assignment)).message).toBeTypeOf('string');
       const options = buildSdkOptions(vi.mocked(callClaudeCustom).mock.calls[0]![3]);
-      expect(options.permissionMode).toBe('bypassPermissions');
+      expect(options.permissionMode).toBe(permission === 'auto' ? 'auto' : 'bypassPermissions');
+      if (permission === 'auto') expect(options).not.toHaveProperty('allowDangerouslySkipPermissions');
+      else expect(options.allowDangerouslySkipPermissions).toBe(true);
       expect(options.mcpServers).toEqual(servers);
       expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
       expect(options.allowedTools).toEqual([

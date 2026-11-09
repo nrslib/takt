@@ -72,6 +72,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           }, {
             cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
+            aiReviewPermissions: plan.ctx.aiReviewPermissions,
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
               && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
               ? { allowedTools: managerToolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`) }

@@ -266,7 +266,7 @@ const EXECUTION_OVERRIDES = {
   },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で日英66ケース（再生62・SDK実行4）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で日英74ケース（再生70・SDK実行4）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・権限審査拒否後の判断を比較する明示選択の評価',
   },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',

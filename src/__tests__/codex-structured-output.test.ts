@@ -129,30 +129,32 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(config).not.toHaveProperty('sandbox_workspace_write');
   });
 
-  it.each(['takt', 'codex'] as const)('keeps Phase 2 read-only with network requested (control=%s)', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('keeps Phase 2 read-only with network and AI review requested (control=%s)', async (permissionControl) => {
     mockEvents = [{ type: 'turn.completed' }];
     expect((await new CodexProvider().setup({ name: 'reporter' }).call('Report', {
-      cwd: '/tmp', executionPhase: 2, edit: false, permissionMode: 'full',
+      cwd: '/tmp', executionPhase: 2, edit: false, permissionMode: 'full', aiReviewPermissions: true,
       providerOptions: { codex: { permissionControl, networkAccess: true } },
     })).status).toBe('done');
     expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', networkAccessEnabled: false, approvalPolicy: 'never' });
     expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
     expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('approvals_reviewer');
   });
 
-  it.each(['takt', 'codex'] as const)('keeps isolated structured calls read-only and offline with network requested (control=%s)', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('keeps isolated structured calls read-only and offline with network and AI review requested (control=%s)', async (permissionControl) => {
     mockEvents = [
       { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
       { type: 'turn.completed' },
     ];
     const result = await new CodexProvider().setupIsolatedStructured({ name: 'selector' }).call('Choose', {
-      cwd: '/tmp', executionPhase: 1, edit: false, permissionMode: 'full', outputSchema: { type: 'object' },
+      cwd: '/tmp', executionPhase: 1, edit: false, permissionMode: 'full', outputSchema: { type: 'object' }, aiReviewPermissions: true,
       providerOptions: { codex: { permissionControl, networkAccess: true } },
     });
     expect(result.status).toBe('done');
     expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', networkAccessEnabled: false, approvalPolicy: 'never' });
     expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
     expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('approvals_reviewer');
   });
 
   it.each([
@@ -306,7 +308,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     const options: CodexCallOptions = {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
       executionPhase: 1, edit: false,
-      permissionMode: 'full', networkAccess: true, fastMode: true,
+      permissionMode: 'full', networkAccess: true, fastMode: true, aiReviewPermissions: true,
       skills: { repo: true, user: true }, model: 'test-model', reasoningEffort: 'high',
       childProcessEnv: { CODEX_HOME: '/temporary/codex-home' }, abortSignal: controller.signal,
       preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node', args: ['unused.js'] } } } },
@@ -321,6 +323,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(listInput.env).toEqual(lastCodexConstructorOptions?.env);
     expect(lastCodexConstructorOptions?.codexPathOverride).toBe(listInput.executablePath);
     expect(lastThreadOptions).toMatchObject({ workingDirectory: '/tmp', sandboxMode: 'read-only', networkAccessEnabled: false, webSearchMode: 'disabled', approvalPolicy: 'never' });
+    expect(listInput.configOverrides.filter((override) => override.startsWith('approvals_reviewer='))).toEqual([]);
     expect(listInput.configOverrides.some((override) => /^(default_permissions|permissions)\./.test(override) || override.startsWith('default_permissions='))).toBe(false);
     expect(listInput.configOverrides).toEqual(expect.arrayContaining([
       'model="test-model"', 'model_reasoning_effort="high"', 'features.fast_mode=true',

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { interpolateMcpEnv, McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
+import { CODEX_SPAWN_OPTIONS, type CodexSpawnEnvironment } from '../infra/codex/types.js';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -168,6 +169,40 @@ describe('CodexClient retry', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
     tempRoots.clear();
+  });
+
+  it.each([undefined, false, true].flatMap((aiReviewPermissions) =>
+    (['takt', 'codex'] as const).map((permissionControl) => ({ aiReviewPermissions, permissionControl })),
+  ))('configures AI permission review only when requested (auto=$aiReviewPermissions, control=$permissionControl)', async ({ aiReviewPermissions, permissionControl }) => {
+    runPlans = Array.from({ length: 2 }, () => ({ type: 'events' as const, events: [
+      { type: 'thread.started', thread_id: 'thread-permissions' },
+      { type: 'turn.completed' },
+    ] }));
+    const client = new CodexClient();
+    for (const sessionId of [undefined, 'thread-permissions']) {
+      const result = await client.call('manager', 'continue', {
+        cwd: projectDirectory, permissionMode: 'full', aiReviewPermissions, sessionId,
+        networkAccess: false, permissionControl,
+      });
+      expect(result.status).toBe('done');
+    }
+    for (const options of [startThreadCalls[0], resumeThreadCalls[0]?.options]) {
+      expect(options?.approvalPolicy).toBe(aiReviewPermissions ? 'on-request' : 'never');
+      if (aiReviewPermissions) {
+        expect(options).toMatchObject({ sandboxMode: 'workspace-write', networkAccessEnabled: true });
+      } else if (permissionControl === 'codex') {
+        expect(options).not.toHaveProperty('sandboxMode');
+        expect(options).not.toHaveProperty('networkAccessEnabled');
+      } else {
+        expect(options).toMatchObject({ sandboxMode: 'danger-full-access', networkAccessEnabled: false });
+      }
+    }
+    for (const options of codexConstructorCalls) {
+      if (aiReviewPermissions) expect(options?.config).toHaveProperty('approvals_reviewer', 'auto_review');
+      else expect(options?.config).not.toHaveProperty('approvals_reviewer');
+      expect((options?.env as CodexSpawnEnvironment)[CODEX_SPAWN_OPTIONS]?.execArgs)
+        .toEqual(aiReviewPermissions || permissionControl === 'takt' ? ['--ignore-rules'] : []);
+    }
   });
 
   it.each(['turn.failed', 'error', 'exception'] as const)('classifies a confirmed resume rejection from %s through both provider entrances', async (source) => {

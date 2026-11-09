@@ -53,6 +53,8 @@ export interface ProviderCallOptions {
   preparedMcp?: PreparedProviderMcp;
   maxTurns?: number;
   permissionMode?: PermissionMode;
+  /** Delegate permission decisions to the provider's AI reviewer, when supported. */
+  aiReviewPermissions?: boolean;
   edit?: boolean;
   providerOptions?: StepProviderOptions;
   onStream?: StreamCallback;
