@@ -41,6 +41,10 @@ export interface PrMergeTaskInput {
 
 export class TaskClaimLockAcquisitionError extends Error {}
 
+function formatGoalList(items: readonly string[]): string {
+  return items.map((item) => `- ${item.replace(/\r?\n/g, '\n  ')}`).join('\n');
+}
+
 export class TaskLifecycleService {
   constructor(
     private readonly projectDir: string,
@@ -74,8 +78,11 @@ export class TaskLifecycleService {
       `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`,
       ...(goal === undefined ? [] : [
         `Goal: ${goal.objective}`,
-        `Constraints:\n${goal.constraints.map((constraint) => `- ${constraint}`).join('\n')}`,
-        `Acceptance criteria:\n${goal.acceptanceCriteria.map((criterion) => `- ${criterion}`).join('\n')}`,
+        ...(goal.outOfScope.length === 0 ? [] : [
+          `Out of scope:\n${formatGoalList(goal.outOfScope)}`,
+        ]),
+        `Constraints:\n${formatGoalList(goal.constraints)}`,
+        `Acceptance criteria:\n${formatGoalList(goal.acceptanceCriteria)}`,
         ...Object.entries(goal.specifications ?? {}).map(([notation, text]) =>
           formatCodeBlock(text, notation)),
       ]),
