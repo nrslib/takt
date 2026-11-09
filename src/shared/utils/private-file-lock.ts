@@ -42,14 +42,14 @@ function waitForLock(): void {
   Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_DELAY_MS);
 }
 
-function waitForLockAsync(signal?: AbortSignal): Promise<void> {
+function waitForLockAsync(signal?: AbortSignal, timeoutMs = LOCK_RETRY_DELAY_MS): Promise<void> {
   signal?.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
     const finish = () => {
       signal?.removeEventListener('abort', abort);
       resolve();
     };
-    const timer = setTimeout(finish, LOCK_RETRY_DELAY_MS);
+    const timer = setTimeout(finish, timeoutMs);
     const abort = () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
@@ -194,8 +194,10 @@ export async function runPrivateFileExclusiveAsync<Result>(
   ensurePrivateDirectory(dirname(lockPath));
   const timeoutMs = options.timeoutMs === undefined ? LOCK_TIMEOUT_MS : options.timeoutMs;
   const deadline = timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+  let waited = false;
   while (true) {
     options.signal?.throwIfAborted();
+    if (waited) assertLockDeadline(lockPath, deadline);
     const acquired = tryAcquirePrivateFileLock(lockPath);
     if (acquired !== undefined) {
       return runWithAcquiredLockAsync(lockPath, acquired, () => {
@@ -205,7 +207,8 @@ export async function runPrivateFileExclusiveAsync<Result>(
     }
     assertLockDeadline(lockPath, deadline);
     options.onWait?.();
-    await waitForLockAsync(options.signal);
+    await waitForLockAsync(options.signal, Math.min(LOCK_RETRY_DELAY_MS, deadline - Date.now()));
+    waited = true;
   }
 }
 

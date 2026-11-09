@@ -7,11 +7,11 @@ export function withGoalExecutionLock<Result>(cwd: string, action: () => Result)
   return runPrivateFileExclusive(join(cwd, '.takt', 'goal-execution.lock'), action);
 }
 
-/** Serialize completion publication and evidence updates; publication has no fixed deadline. */
+/** Serialize completion publication and evidence updates; only lock acquisition has a deadline. */
 export function withGoalCompletionLock<Result>(
   cwd: string, goalId: string, action: () => Result | PromiseLike<Result>, signal?: AbortSignal,
 ): Promise<Result> {
   const id = GoalIdSchema.parse(goalId);
   return runPrivateFileExclusiveAsync(join(cwd, '.takt', 'goal-completion-locks', `${id}.lock`), action,
-    { timeoutMs: null, signal });
+    { signal });
 }

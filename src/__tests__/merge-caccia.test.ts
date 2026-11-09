@@ -47,7 +47,7 @@ import { GoalStore } from '../infra/goals/store.js';
 import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import * as goalGit from '../infra/goals/git-command.js';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
-import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalNotAwaitingMergeError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 const headSha = 'a'.repeat(40);
@@ -255,7 +255,55 @@ describe('Merge workflows own Caccia execution', () => {
       expect(saved).toMatchObject({ status: 'failed', completion: { success: false, mergeOutcome: 'unresolved' } });
     }
     expect(mocks.status).toHaveBeenCalledTimes(2);
-    expect(mocks.status.mock.calls[1]![2]).toBeUndefined();
+    expect(mocks.status.mock.calls[1]![2]).toEqual({ timeoutMs: 1_000 });
+  });
+
+  it('bounds PR status recovery after cancellation and rethrows the original error if recovery fails', async () => {
+    const controller = new AbortController();
+    const originalError = new GoalNotAwaitingMergeError(goalId, 'created');
+    const recoveryError = new Error('status service unavailable');
+    mocks.workflow.mockImplementationOnce(async () => {
+      controller.abort(originalError);
+      return { success: true };
+    });
+    mocks.status.mockImplementationOnce(async (_prNumber: number, _cwd: string, options?: { signal?: AbortSignal }) => {
+      expect(options?.signal?.aborted).toBe(true);
+      throw originalError;
+    }).mockImplementationOnce(async (_prNumber: number, _cwd: string, options?: { timeoutMs?: number }) => {
+      expect(options).toEqual({ timeoutMs: 1_000 });
+      throw recoveryError;
+    });
+
+    await expect(executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'custom-merge',
+      settings: resolveMergeSettings(undefined), abortSignal: controller.signal })).rejects.toBe(originalError);
+    expect(mocks.status).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves a goal status change when the merge workflow fails after the PR is merged', async () => {
+    const { goals, runner, claimed } = await claimGoalMergeTask('merge');
+    let signal!: AbortSignal;
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      signal = request.abortSignal!;
+      await goals.update(goalId, (goal) => ({ ...goal, status: 'created' }));
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 3000 });
+      return { success: false, reason: 'workflow failed after merge' };
+    });
+    mocks.status.mockImplementation(async (_prNumber: number, _cwd: string, options?: { signal?: AbortSignal }) => {
+      if (options?.signal?.aborted) throw options.signal.reason;
+      return { merged: true, headSha };
+    });
+
+    await expect(executePersistedPrMergeTask(claimed, runner, project)).rejects.toMatchObject({
+      name: 'GoalNotAwaitingMergeError', message: expect.stringContaining('created'),
+    });
+
+    const saved = new TaskStore(project).read().tasks.find((task) => task.name === claimed.name)!;
+    expect(saved).toMatchObject({ status: 'failed', completion: {
+      success: false, workflowResult: 'aborted', failureReason: saved.failure!.error,
+    } });
+    expect(saved.failure!.error).toContain('workflow failed after merge');
+    expect(saved.failure!.error).toContain('no longer awaiting_merge');
+    expect(mocks.status).toHaveBeenCalledTimes(2);
   });
 
   it('マージ結果取得後のブランチ同期中に一時停止したら mergeOutcome を保って中断保存する', async () => {
