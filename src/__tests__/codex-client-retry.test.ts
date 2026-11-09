@@ -308,7 +308,7 @@ describe('CodexClient retry', () => {
       ] }];
       const onStream = vi.fn();
       const pending = new CodexClient().call('coder', 'original prompt', {
-        cwd: '/tmp', model: 'gpt-5.4', permissionMode: 'readonly',
+        cwd: '/tmp', model: 'gpt-5.4', permissionMode: 'readonly', networkAccess: true,
         outputSchema: { type: 'object' }, onStream,
       });
       await vi.advanceTimersByTimeAsync(999);
@@ -324,7 +324,16 @@ describe('CodexClient retry', () => {
       expect(runPlanIndex).toBe(3);
       expect(runStreamedInputs).toEqual(['original prompt', 'original prompt', 'original prompt']);
       for (const options of [...startThreadCalls, ...resumeThreadCalls.map((call) => call.options)]) {
-        expect(options).toMatchObject({ model: 'gpt-5.4', sandboxMode: 'read-only' });
+        expect(options).toMatchObject({ model: 'gpt-5.4' });
+        expect(options).not.toHaveProperty('sandboxMode');
+        expect(options).not.toHaveProperty('networkAccessEnabled');
+      }
+      expect(codexConstructorCalls).toHaveLength(3);
+      for (const options of codexConstructorCalls) {
+        expect(options?.config).toMatchObject({
+          default_permissions: 'takt-readonly-network',
+          permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
+        });
       }
       const terminal = onStream.mock.calls.filter(([event]) => event.type === 'result');
       expect(terminal).toHaveLength(1);

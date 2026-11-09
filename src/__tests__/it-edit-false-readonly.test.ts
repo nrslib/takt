@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { ThreadOptions, TurnOptions } from '@openai/codex-sdk';
+import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { ClaudeCallOptions } from '../infra/claude/types.js';
 import type { OpenCodeCallOptions } from '../infra/opencode/types.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
@@ -21,8 +21,9 @@ import { cleanupWorkflowEngine } from './engine-test-helpers.js';
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: () => ({}) }));
 
-const { threads, turns } = vi.hoisted(() => ({
+const { threads, turns, configs } = vi.hoisted(() => ({
   threads: [] as ThreadOptions[],
+  configs: [] as CodexOptions[],
   turns: [] as Array<{ threadOptions: ThreadOptions; schemaProperties: Record<string, unknown>; resumed: boolean }>,
 }));
 const { claudeCall, openCodeCall, spawnProcess } = vi.hoisted(() => ({
@@ -70,6 +71,9 @@ vi.mock('@openai/codex-sdk', () => {
   }
   return {
     Codex: class {
+      constructor(options: CodexOptions) {
+        configs.push(options);
+      }
       startThread(options: ThreadOptions) {
         return createThread(options);
       }
@@ -87,6 +91,7 @@ describe('edit=false Phase 1 permission wiring', () => {
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'takt-edit-false-'));
     threads.length = 0;
+    configs.length = 0;
     turns.length = 0;
     vi.clearAllMocks();
     claudeCall.mockResolvedValue({ status: 'done', content: 'Reviewed', persona: 'reviewer', timestamp: new Date() });
@@ -120,10 +125,28 @@ describe('edit=false Phase 1 permission wiring', () => {
     name: 'review', personaDisplayName: 'reviewer', instruction: 'Review', passPreviousResponse: false, edit: false,
   };
 
-  it.each(['takt', 'codex'] as const)('passes read-only to the SDK with permission_control=%s', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('respects edit=false permission control at the SDK (control=%s)', async (permissionControl) => {
     const options = builder({ providerOptions: { codex: { permissionControl } } }).buildAgentOptions(reviewStep);
     expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
-    expect(threads).toEqual([expect.objectContaining({ sandboxMode: 'read-only' })]);
+    expect(threads).toHaveLength(1);
+    expect(threads[0]?.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
+  });
+
+  it.each(['takt', 'codex'] as const)('passes edit=false with network access through the engine options (control=%s)', async (permissionControl) => {
+    const options = builder({ providerOptions: { codex: { permissionControl, networkAccess: true } } }).buildAgentOptions(reviewStep);
+    expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).not.toHaveProperty('sandboxMode');
+    expect(threads[0]).not.toHaveProperty('networkAccessEnabled');
+    if (permissionControl === 'takt') {
+      expect(configs[0]?.config).toMatchObject({
+        default_permissions: 'takt-readonly-network',
+        permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
+      });
+    } else {
+      expect(configs[0]?.config).not.toHaveProperty('default_permissions');
+      expect(configs[0]?.config).not.toHaveProperty('permissions');
+    }
   });
 
   it.each([
@@ -151,17 +174,17 @@ describe('edit=false Phase 1 permission wiring', () => {
   it.each([
     { edit: false, partEdit: undefined },
     { edit: true, partEdit: false },
-  ])('keeps team leader parts readonly (edit=$edit, partEdit=$partEdit)', async ({ edit, partEdit }) => {
+  ])('delegates team leader part permissions (edit=$edit, partEdit=$partEdit)', async ({ edit, partEdit }) => {
     const partStep = createPartStep({
       name: 'review', personaDisplayName: 'reviewer', instruction: 'Review', passPreviousResponse: false, edit,
       teamLeader: { maxConcurrency: 1, timeoutMs: 1000, partEdit },
     }, { id: 'p1', title: 'Review', instruction: 'Review' });
     const options = builder({ providerOptions: { codex: { permissionControl: 'codex' } } }).buildAgentOptions(partStep);
     await runAgent(undefined, 'Review', options);
-    expect(threads[0]?.sandboxMode).toBe('read-only');
+    expect(threads[0]).not.toHaveProperty('sandboxMode');
   });
 
-  it.each(['takt', 'codex'] as const)('keeps the loop monitor judge readonly with permission_control=%s', async (permissionControl) => {
+  it.each(['takt', 'codex'] as const)('respects loop monitor permission_control=%s', async (permissionControl) => {
     const workflow = normalizeWorkflowConfig({
       name: 'monitor', max_steps: 5, initial_step: 'review',
       steps: [
@@ -182,12 +205,12 @@ describe('edit=false Phase 1 permission wiring', () => {
     const judgeTurns = turns.filter((turn) => Object.hasOwn(turn.schemaProperties, 'content'));
     expect(judgeTurns).toHaveLength(1);
     expect(judgeTurns[0]?.resumed).toBe(false);
-    expect(judgeTurns[0]?.threadOptions.sandboxMode).toBe('read-only');
+    expect(judgeTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
   });
 
   it.each([
     { edit: false, permissionControl: 'takt', sandbox: 'read-only' },
-    { edit: false, permissionControl: 'codex', sandbox: 'read-only' },
+    { edit: false, permissionControl: 'codex', sandbox: undefined },
     { edit: true, permissionControl: 'takt', sandbox: 'workspace-write' },
     { edit: true, permissionControl: 'codex', sandbox: undefined },
     { edit: undefined, permissionControl: 'takt', sandbox: 'workspace-write' },
@@ -256,7 +279,7 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(args.some((arg) => arg.startsWith('--additional-mcp-config=@'))).toBe(withMcp);
   });
 
-  it('keeps parallel sub-steps and workflow_call child steps readonly', async () => {
+  it('delegates parallel sub-step and workflow_call child step permissions', async () => {
     const child: WorkflowConfig = normalizeWorkflowConfig({
       name: 'child', subworkflow: { callable: true }, initial_step: 'child-review',
       steps: [{ name: 'child-review', edit: false, instruction: 'Review', rules: [{ condition: 'done', next: 'COMPLETE' }] }],
@@ -277,6 +300,6 @@ describe('edit=false Phase 1 permission wiring', () => {
     const state = await engine.run();
     expect(state.status, abortReasons.join('\n')).toBe('completed');
     expect(threads).toHaveLength(2);
-    expect(threads.every((thread) => thread.sandboxMode === 'read-only')).toBe(true);
+    for (const thread of threads) expect(thread).not.toHaveProperty('sandboxMode');
   });
 });

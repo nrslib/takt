@@ -235,10 +235,12 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       { name: 'name.with.dots', enabled: true }, { name: 'unrelated', enabled: true },
     ]);
     const managerConfig = { mcp_servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['never-started.js'] } } };
-    const isolated = await prepareCodexMcpIsolation({
+    const options = {
       cwd, mcpOnlySideEffects: true,
       preparedMcp: { dispose: async () => {}, config: managerConfig },
-    }, managerConfig, env);
+    };
+    const session = buildCodexSessionConfig(options);
+    const isolated = await prepareCodexMcpIsolation(options, session.config, env);
     expect(isolated.codexPathOverride).toBe(runtime.executablePath);
     const after = JSON.parse(await runCodexMcpList({
       executablePath: isolated.codexPathOverride, cwd, env: isolated.env, configOverrides: isolated.configOverrides,
@@ -259,9 +261,11 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     const managerConfig = { mcp_servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node' } } };
     const listed = JSON.parse(await runCodexMcpList({ executablePath: resolveCodexSdkCli(undefined).executablePath, cwd, env, configOverrides: [] })) as { name: string; enabled: boolean }[];
     expect(listed).toContainEqual(expect.objectContaining({ name: TAKT_MANAGER_MCP_SERVER_NAME, enabled: false }));
-    await expect(prepareCodexMcpIsolation({
+    const options = {
       cwd, mcpOnlySideEffects: true, preparedMcp: { dispose: async () => {}, config: managerConfig },
-    }, managerConfig, env)).rejects.toThrow(/conflicts/);
+    };
+    const session = buildCodexSessionConfig(options);
+    await expect(prepareCodexMcpIsolation(options, session.config, env)).rejects.toThrow(/conflicts/);
     expect(readFileSync(join(cwd, 'config.toml'), 'utf8')).toBe(config);
   }, 30_000);
 
