@@ -109,13 +109,13 @@ compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 
 ## テストレイヤーと実行ゲート
 
-TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、軽い IT、重い IT、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく重い IT である。
+TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、light IT（`npm run test:it` で回るテスト）、heavy IT（`npm run test:it:heavy` で回るテスト）、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく heavy IT である。
 
 | レイヤー | 境界 | 標準ゲート |
 |---------|------|-----------|
 | unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・workflow engine を使わない | `npm test` |
-| 軽い IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
-| 重い IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
+| light IT | 実 filesystem・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
+| heavy IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
 | E2E | 利用者が使う CLI などの公開入口からアプリケーション全体を実行し、利用者から見える結果を観測する | provider 別 E2E gate |
 
 ### 開発時の実行順
@@ -123,12 +123,14 @@ TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で un
 | 状態 | 実行 |
 |------|------|
 | 実装中 | unit gate を反復する |
-| 実装完了時 | unit gate の後に軽い IT gate を実行する |
+| 実装完了時 | unit gate の後に light IT gate を実行する |
 | IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体実行する |
-| 重い IT を追加・変更した | 全重い IT を待たず、変更したファイルを target 指定で自分で実行する |
-| Pull Request / release | 軽い IT と重い IT の全件を実行する |
+| heavy IT を追加・変更した | 変更したファイルを `npm test -- <test-file>` で対象指定し、自分で実行する |
+| PR CI / release の確認 | light IT と heavy IT の全件を実行する |
 
-PR CI は重い IT を1 runner 内で1 workerで動かし、heavy parallel を独立 runner の6シャードへ分割し、serial group ごとに別 runnerへ分離する。heavy parallel のテストは `mkdtemp` で隔離され、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わない。取り合いを避けられないテストは serial group に分類される。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。重い IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での全重い IT だけに初回検証を委ねない。`npm run check:release` は unit、軽い IT、重い IT、E2E を順に実行する。
+ユーザーが明示的に指示した場合を除き、heavy IT の全件（`npm run test:it:heavy`）をローカルで実行してはならない。ローカルでは、追加・変更した heavy IT、または今回の変更を直接検証する heavy IT だけを `npm test -- <test-file>` で対象指定して実行する。それ以外の heavy IT は実行しない。
+
+PR CI は heavy IT を1 runner 内で1 workerで動かし、heavy parallel を独立 runner の6シャードへ分割し、serial group ごとに別 runnerへ分離する。heavy parallel のテストは `mkdtemp` で隔離され、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わない。取り合いを避けられないテストは serial group に分類される。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。heavy IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での heavy IT の全件実行だけに初回検証を委ねない。`npm run check:release` は unit、light IT、heavy IT、E2E を順に実行する。
 
 ### Mock プロバイダー
 

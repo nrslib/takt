@@ -2,44 +2,47 @@
 
 TAKT のテストを実境界に従って分類し、開発速度と完了証拠を両立する。
 
+light IT は `npm run test:it` で回るテスト、heavy IT は `npm run test:it:heavy` で回るテストを指す。
+
 ## 原則
 
 | 原則 | 基準 |
 |------|------|
 | 実境界で分類 | ファイル名や所要時間ではなく、実際に通る依存境界でレイヤーを決める |
 | unit を開発ループに限定 | 実装中の反復確認は高速な unit gate を使う |
-| 軽い IT で完了確認 | 実装完了時に軽い IT gate を実行する |
-| 変更した重い IT は自己検証 | 追加・変更した重い IT は対象指定で担当者が実行する |
-| 無関係な重い IT を実行しない | 追加・変更した、または変更契約を直接検証する重い IT だけを対象指定する |
+| light IT で完了確認 | 実装完了時に light IT gate を実行する |
+| 変更した heavy IT は自己検証 | 追加・変更した heavy IT は `npm test -- <test-file>` で対象指定し、担当者が実行する |
+| 無関係な heavy IT を実行しない | 追加・変更した heavy IT、または今回の変更を直接検証する heavy IT 以外は実行しない。実行する場合は `npm test -- <test-file>` で対象指定する |
 | 分類契約を個別確認 | IT を追加・変更したら分類契約テストを単体実行する |
-| 全重い IT は PR gate | 変更外を含む全重い IT は Pull Request で確認する |
-| PR へ初回実行を委ねない | PR gate は変更した重い IT の対象実行を代替しない |
+| heavy IT の全件は PR / release gate | 変更外を含む heavy IT の全件は PR CI と release の確認で実行する |
+| heavy IT の全件をローカルで実行しない | heavy IT の全件（`npm run test:it:heavy`）のローカル実行は REJECT。ユーザーが明示的に指示した場合だけ実行する |
+| PR へ初回実行を委ねない | PR gate は変更した heavy IT の対象実行を代替しない |
 | 実行結果を証拠化 | 開始したコマンドではなく、完了結果と終了状態を報告する |
 
 ## レイヤー分類
 
-TAKT ナレッジの unit、軽い IT、重い IT、E2E の境界定義を正本とする。分類に迷う場合は、対象が実際に通る call chain と副作用を確認する。
+TAKT ナレッジの unit、light IT、heavy IT、E2E の境界定義を正本とする。分類に迷う場合は、対象が実際に通る call chain と副作用を確認する。
 
 | 基準 | 判定 |
 |------|------|
 | 直接依存を test double に置き換えた個別ロジック | unit |
-| 実 filesystem、bounded storage、複数コンポーネント結合 | 軽い IT |
-| 実 child process、Git、完全な workflow engine、計測済み高負荷処理 | 重い IT |
+| 実 filesystem、bounded storage、複数コンポーネント結合 | light IT |
+| 実 child process、Git、完全な workflow engine、計測済み高負荷処理 | heavy IT |
 | 利用者の公開入口から全体を実行し、利用者可視の結果を観測 | E2E |
-| 実 process を使うが内部 client から偽 CLI を呼ぶ | 重い IT。E2E ではない |
+| 実 process を使うが内部 client から偽 CLI を呼ぶ | heavy IT。E2E ではない |
 | 遅いという理由だけでレイヤーを変更 | REJECT |
 
 ## 開発中の検証
 
-実装中は unit gate を反復し、実装がまとまった時点で軽い IT gate を実行する。全重い IT のローカル反復は通常の完了条件にしない。
+実装中は unit gate を反復し、実装がまとまった時点で light IT gate を実行する。ユーザーが明示的に指示した場合を除き、heavy IT の全件（`npm run test:it:heavy`）をローカルで実行してはならない。
 
 | 状態 | 必須の確認 |
 |------|-----------|
-| プロダクションコードのみ変更 | 変更対象の unit と完了時の軽い IT |
+| プロダクションコードのみ変更 | 変更対象の unit と完了時の light IT |
 | unit を追加・変更 | 対象 unit と unit gate |
-| 軽い IT を追加・変更 | 対象 IT と軽い IT gate |
-| 重い IT を追加・変更 | 分類契約テストの単体実行と、変更した重い IT の対象実行 |
-| テスト分類・runner を変更 | unit、軽い IT、重い IT の排他性と routing 契約 |
+| light IT を追加・変更 | 対象 IT と light IT gate |
+| heavy IT を追加・変更 | 分類契約テストの単体実行と、変更した heavy IT の対象実行 |
+| テスト分類・runner を変更 | unit、light IT、heavy IT の排他性と routing 契約 |
 
 IT を追加・変更した場合は、全 gate を待たずに分類契約テストを単体実行する。
 
@@ -47,21 +50,21 @@ IT を追加・変更した場合は、全 gate を待たずに分類契約テ�
 npm test -- src/__tests__/releaseVerificationWiring.test.ts
 ```
 
-## 重い IT の扱い
+## heavy IT の扱い
 
-重い IT の全件実行は PR の責務だが、変更したテストが一度も成功していない状態で PR へ渡してはならない。
+heavy IT の全件実行は PR CI と release の確認で行うが、変更したテストが一度も成功していない状態で PR へ渡してはならない。ローカルでは、追加・変更した heavy IT、または今回の変更を直接検証する heavy IT だけを `npm test -- <test-file>` で対象指定して実行する。
 
 | 基準 | 判定 |
 |------|------|
-| 変更した重い IT を対象指定で完了まで実行 | OK |
-| 関連する既存の重い IT をリスクに応じて対象実行 | OK |
-| 変更契約を直接検証しない重い IT を実行 | 不要。実行しない |
-| 全重い IT をローカルで毎回実行 | 不要。明示要求がある場合のみ |
-| PR の全件実行だけを変更した重い IT の初回確認にする | REJECT |
+| 追加・変更した heavy IT を `npm test -- <test-file>` で対象指定して完了まで実行 | OK |
+| 今回の変更を直接検証する既存の heavy IT を `npm test -- <test-file>` で対象指定して実行 | OK |
+| 追加・変更した heavy IT、または今回の変更を直接検証する heavy IT 以外の heavy IT を実行 | REJECT。実行しない |
+| heavy IT の全件（`npm run test:it:heavy`）をローカルで実行 | REJECT。ユーザーが明示的に指示した場合だけ実行する |
+| PR の全件実行だけを変更した heavy IT の初回確認にする | REJECT |
 | timeout 延長だけで停止・競合・無限ループを解決した扱いにする | REJECT |
-| 重いテストを unit gate から除外しただけで分類先へ接続しない | REJECT |
+| heavy IT を unit gate から除外しただけで分類先へ接続しない | REJECT |
 
-PR CI では重い IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードとし、serial group ごとの runner に分離する。
+PR CI では heavy IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードとし、serial group ごとの runner に分離する。
 
 heavy parallel に入れるテストは、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わないよう、`mkdtemp` で隔離する。取り合いを避けられないテストは serial group に入れる。
 
@@ -82,25 +85,25 @@ child process の起動・完了、または親 process から独立する寿命
 | 子 process の失敗 | 開始失敗と、開始後の非0終了・module 読み込み失敗を区別して観測する |
 | 今回変更した process または資源寿命に関わる終端経路 | その経路で実在する失敗・中断・キャンセル・強制終了を区別し、要求に関わる終端結果、child と descendant の終了、一時リソースの cleanup を確認する。未実行の適用経路と cleanup を実行できない経路は明記する |
 
-実 child process を通る確認は重い IT に分類する。すべての組み合わせを作らず、今回変更した責務と直接影響する実行形態から、正常完了・待機上限・開始後失敗・適用される中断・キャンセル・強制終了を区別できる最小のケースを選ぶ。今回の変更が直接影響しない寿命や資源の終端は追加の必須ケースにしない。対象経路をローカルで実行できない場合は省略せず記録する。
+実 child process を通る確認は heavy IT に分類する。すべての組み合わせを作らず、今回変更した責務と直接影響する実行形態から、正常完了・待機上限・開始後失敗・適用される中断・キャンセル・強制終了を区別できる最小のケースを選ぶ。今回の変更が直接影響しない寿命や資源の終端は追加の必須ケースにしない。対象経路をローカルで実行できない場合は省略せず記録する。
 
 ## 完了証拠
 
-報告には、実行した gate または対象テスト、完了結果、未実行の全重い IT が PR gate で実行されることを区別して記録する。
+報告には、実行した gate または対象テスト、完了結果、heavy IT の全件実行を PR gate に委ねることを区別して記録する。
 
 | 証拠 | 判定 |
 |------|------|
-| unit と軽い IT の成功結果 | 通常の実装完了証拠 |
-| 追加・変更した重い IT の対象成功結果 | 重い IT 変更の必須証拠 |
+| unit と light IT の成功結果 | 通常の実装完了証拠 |
+| 追加・変更した heavy IT の対象成功結果 | heavy IT 変更の必須証拠 |
 | コマンドを開始した事実だけ | 不十分 |
-| PR で実行予定という記述だけ | 変更した重い IT の証拠として不十分 |
+| PR で実行予定という記述だけ | 変更した heavy IT の証拠として不十分 |
 | 失敗をフレークと推測しただけ | 不十分。再現条件と直接原因の調査が必要 |
 
 ## 禁止事項
 
 - **速度基準だけの分類** - 遅い unit と実境界を通る IT を混同する
 - **未接続の除外** - どの gate からも実行されないテストを作る
-- **変更テストの未実行** - 自分で追加・変更した重い IT の初回実行を PR に委ねる
+- **変更テストの未実行** - 自分で追加・変更した heavy IT の初回実行を PR に委ねる
 - **分類契約の未確認** - IT の追加・変更後に分類契約テストを単体実行しない
 - **heavy parallel の共有パス競合** - テストを隔離せず、リポジトリ内のファイルや一時パスを取り合う
 - **完了前の成功報告** - 実行中、timeout、worker 通信エラーを成功として扱う

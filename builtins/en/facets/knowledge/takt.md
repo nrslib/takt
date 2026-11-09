@@ -109,13 +109,13 @@ Same-named facets are overridden by higher-priority layers. Customize builtins b
 
 ## Test Layers and Execution Gates
 
-TAKT classifies unit, light integration, heavy integration, and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy integration rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
+TAKT classifies unit, light IT (tests run by `npm run test:it`), heavy IT (tests run by `npm run test:it:heavy`), and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy IT rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
 
 | Layer | Boundary | Standard Gate |
 |-------|----------|---------------|
 | Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, or workflow engine | `npm test` |
-| Light integration | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
-| Heavy integration | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
+| light IT | Real filesystem, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
+| heavy IT | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
 | E2E | Runs the application from a user-facing entry point such as the CLI and observes user-visible results | Provider-specific E2E gate |
 
 ### Development Execution Order
@@ -123,12 +123,14 @@ TAKT classifies unit, light integration, heavy integration, and E2E tests by the
 | State | Execution |
 |-------|-----------|
 | During implementation | Repeat the unit gate |
-| After implementation | Run the light integration gate after the unit gate |
+| After implementation | Run the light IT gate after the unit gate |
 | Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
-| Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
-| Pull request or release | Run the complete light and heavy integration suites |
+| Added or changed a heavy IT test | Run the changed file yourself as a target with `npm test -- <test-file>` |
+| PR CI or release verification | Run the complete light IT and heavy IT suites |
 
-Pull-request CI runs heavy integration with one worker per runner, splits heavy parallel integration across six isolated shard runners, and isolates each serial group on its own runner. Heavy parallel tests use `mkdtemp` for isolation and do not contend on shared paths such as repository files, fixed `/tmp` paths, or directory listings directly under `tmpdir()`. Tests whose contention cannot be avoided belong to a serial group. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, and E2E in order.
+Do not run the full heavy IT suite (`npm run test:it:heavy`) locally unless explicitly instructed by the user. For local heavy IT execution, run only tests added or changed, or tests that directly verify the current change, as targets with `npm test -- <test-file>`. Do not run any other heavy IT.
+
+Pull-request CI runs heavy IT with one worker per runner, splits heavy parallel across six isolated shard runners, and isolates each serial group on its own runner. Heavy parallel tests use `mkdtemp` for isolation and do not contend on shared paths such as repository files, fixed `/tmp` paths, or directory listings directly under `tmpdir()`. Tests whose contention cannot be avoided belong to a serial group. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy IT test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light IT, heavy IT, and E2E in order.
 
 ### Mock Provider
 
