@@ -763,6 +763,7 @@
     "src/__tests__/workflow-prompt-tree.test.ts",
     "src/__tests__/workflow-reference.test.ts",
     "src/__tests__/workflow-resume-continuation.test.ts",
+    "src/__tests__/workflow-resume-results.integration.test.ts",
     "src/__tests__/workflow-resume-root.test.ts",
     "src/__tests__/workflow-run-lifecycle-boundary.test.ts",
     "src/__tests__/workflow-run-loop-command-gates.test.ts",
