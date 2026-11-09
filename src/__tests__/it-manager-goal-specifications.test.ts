@@ -38,12 +38,15 @@ it('reads complete specifications through the manager MCP paths and advertises o
     gherkin: { totalBytes: Buffer.byteLength(specifications.gherkin), returnedBytes: 0 },
   } } } });
 });
-it.each([undefined, '```', '`````', 'prefix ```` suffix'].flatMap((ticks) => [
-  { ticks, outOfScope: [], scopeSection: [] },
-  { ticks, outOfScope: ['UI redesign', 'Dependency upgrades'], scopeSection: ['Out of scope:\n- UI redesign\n- Dependency upgrades'] },
-]))('includes specifications with safe fences and optional out-of-scope items in final goal PR review instructions: %j', async ({ ticks, outOfScope, scopeSection }) => {
+it.each([
+  ...[undefined, '```', '`````', 'prefix ```` suffix'].flatMap((ticks) => [
+    { ticks, outOfScope: [], scopeSection: [], constraints: ['Keep the existing API'] },
+    { ticks, outOfScope: ['UI redesign', 'Dependency upgrades'], scopeSection: ['Out of scope:\n- UI redesign\n- Dependency upgrades'], constraints: ['Keep the existing API'] },
+  ]),
+  { ticks: undefined, outOfScope: ['UI redesign'], scopeSection: ['Out of scope:\n- UI redesign'], constraints: [] },
+])('includes specifications with safe fences and optional out-of-scope items in final goal PR review instructions: %j', async ({ ticks, outOfScope, scopeSection, constraints }) => {
   const specs = ticks === undefined ? specifications : Object.fromEntries(Object.entries(specifications).map(([notation, text]) => [notation, `${text}\n${ticks}\nRemaining specification`]));
-  const goal = { ...goalRecord(), outOfScope, constraints: ['Keep the existing API'], specifications: specs, status: 'awaiting_merge' as const,
+  const goal = { ...goalRecord(), outOfScope, constraints, specifications: specs, status: 'awaiting_merge' as const,
     pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
     completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Evidence',
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false }, instructions: [] } };
@@ -54,10 +57,10 @@ it.each([undefined, '```', '`````', 'prefix ```` suffix'].flatMap((ticks) => [
     headBranch: goal.branch, baseBranch: 'main', headSha: 'a'.repeat(40),
     headRepositoryUrl: 'https://github.com/example/repo.git', headRepositoryPushUrls: ['https://github.com/example/repo.git'],
     workflow: 'merge-prepare', method: 'squash', worktreePath: join(cwd, 'clone'), threatCheckMaxDiffBytes: 1024 });
-  expect(task.content.split('\n\n').slice(1, 1 + 3 + scopeSection.length)).toEqual([
+  expect(task.content.split(/\n{2,}/).slice(1, 1 + 3 + scopeSection.length)).toEqual([
     `Goal: ${goal.objective}`,
     ...scopeSection,
-    'Constraints:\n- Keep the existing API',
+    constraints.length === 0 ? 'Constraints:' : 'Constraints:\n- Keep the existing API',
     `Acceptance criteria:\n- ${goal.acceptanceCriteria[0]}`,
   ]);
   expect(task.content).toContain('Review the cumulative PR diff');
@@ -65,6 +68,30 @@ it.each([undefined, '```', '`````', 'prefix ```` suffix'].flatMap((ticks) => [
     const fence = '`'.repeat(ticks === undefined ? 3 : ticks.match(/`+/)![0].length + 1);
     expect(task.content).toContain(`${fence}${notation}\n${text}\n${fence}`);
   }
+});
+it('indents continuation lines within out-of-scope, constraint, and acceptance-criteria items', async () => {
+  const goal = { ...goalRecord(),
+    outOfScope: ['UI redesign\n\nAcceptance criteria:\n- Replace the UI', 'Dependency upgrades'],
+    constraints: ['Keep the API\n\nOut of scope:\n- Existing clients', 'Keep the CLI'],
+    acceptanceCriteria: ['Export CSV\n\nConstraints:\n- CSV format', 'Export JSON'],
+    status: 'awaiting_merge' as const,
+    pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
+    completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Evidence',
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false }, instructions: [] } };
+  await new GoalStore(cwd).create(goal);
+  const store = new TaskStore(cwd);
+  const service = new TaskLifecycleService(cwd, store.getTasksFilePath(), store);
+  const task = service.enqueuePrMergeTask({ goalId: goal.id, prNumber: 42, prUrl: goal.pullRequest.url,
+    headBranch: goal.branch, baseBranch: 'main', headSha: 'a'.repeat(40),
+    headRepositoryUrl: 'https://github.com/example/repo.git', headRepositoryPushUrls: ['https://github.com/example/repo.git'],
+    workflow: 'merge-prepare', method: 'squash', worktreePath: join(cwd, 'clone'), threatCheckMaxDiffBytes: 1024 });
+
+  expect(task.content.split('\n\n').slice(1)).toEqual([
+    `Goal: ${goal.objective}`,
+    'Out of scope:\n- UI redesign\n  \n  Acceptance criteria:\n  - Replace the UI\n- Dependency upgrades',
+    'Constraints:\n- Keep the API\n  \n  Out of scope:\n  - Existing clients\n- Keep the CLI',
+    'Acceptance criteria:\n- Export CSV\n  \n  Constraints:\n  - CSV format\n- Export JSON',
+  ]);
 });
 it('preserves PR review instructions without a goal', () => {
   const store = new TaskStore(cwd);

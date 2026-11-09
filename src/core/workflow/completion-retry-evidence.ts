@@ -134,7 +134,7 @@ function collectReviewScopeDiff(
     if (diff !== undefined) sections.push(diff);
   }
   if (scope.source.includesWorkingTree && scope.source.baseRange.kind !== 'no_commits') {
-    const diff = collectWorkingTreeDiff(cwd, scope.source.baseRange, paths);
+    const diff = collectDiffText(cwd, 'HEAD', paths);
     if (diff !== undefined) sections.push(diff);
   }
   return sections.length === 0 ? undefined : sections.join('\n\n');

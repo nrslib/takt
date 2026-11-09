@@ -413,15 +413,23 @@ describe('pull request derived scope', () => {
     expect(resolve()).toMatchObject({ paths: expectedPaths, source: { includesWorkingTree: false } });
   });
 
-  it('resolves the PR head branch without diff refs when reviewing from another branch', () => {
+  it.each(['detached', 'renamed'])('keeps committed fixes in scope without diff refs on a %s checkout', (checkout) => {
     git(repo, 'update-ref', 'refs/remotes/origin/feature', git(repo, 'rev-parse', 'main'));
-    git(repo, 'checkout', '--quiet', '-b', 'other');
-    writeFileSync(join(repo, 'other-only.ts'), 'export const otherOnly = 1;\n');
-    commitAll(repo, 'unrelated local commit');
+    git(repo, 'checkout', '--quiet', ...(checkout === 'detached'
+      ? ['--detach', 'feature'] : ['-b', 'review-fixes', 'feature']));
+    const resolve = createTaskReviewScopeResolver({
+      getCwd: () => repo,
+      getPrContext: () => prContext(false),
+    });
+    expect(resolve()).toMatchObject({ paths: ['pr-change.ts'] });
 
-    expect(collectWithPr(false)).toMatchObject({
-      paths: ['pr-change.ts'],
-      source: { diffRange: { baseDiffRef: 'refs/heads/main', headDiffRef: headRef } },
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    unlinkSync(join(repo, 'pr-change.ts'));
+    commitAll(repo, 'commit review fix');
+
+    expect(resolve()).toMatchObject({
+      paths: ['committed-fix.ts'],
+      source: { diffRange: { baseDiffRef: 'refs/heads/main', headDiffRef: 'HEAD' }, includesWorkingTree: false },
     });
   });
 

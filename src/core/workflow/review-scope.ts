@@ -19,7 +19,8 @@
  * prContext を持つ実行では、PR の diff range `base...head` と未コミット変更・
  * 未追跡ファイルの和集合を提示する。推定 base からのコミット済み変更を足すと、
  * 同期で取り込んだ base 側の変更まで含まれるため、PR の明示 base を使う。
- * PR の head ブランチ上では現在の HEAD、それ以外では headDiffRef を使う。`--pr` は
+ * diff ref がなければ現在の HEAD、指定があれば PR の head ブランチ上では現在の HEAD、
+ * それ以外では headDiffRef を使う。`--pr` は
  * 「PR のレビューコメントを取り込んで修正する」フローであり、同じ実行の中で
  * 作業ツリーが変更される。かつ headDiffRef はコミット済みしか映さず
  * auto-commit はワークフロー完了後なので、PR diff range だけでは
@@ -338,14 +339,11 @@ function collectWorkingTreePaths(
   return sortedUnique([...committed, ...workingTree]);
 }
 
-function resolvePullRequestBranchRef(
+function resolvePullRequestBaseBranchRef(
   cwd: string,
   branch: string,
-  role: 'base' | 'head',
 ): string | undefined {
-  const candidates = role === 'base'
-    ? [toRemoteTrackingBranchRef(branch), toLocalBranchRef(branch)]
-    : [toLocalBranchRef(branch), toRemoteTrackingBranchRef(branch)];
+  const candidates = [toRemoteTrackingBranchRef(branch), toLocalBranchRef(branch)];
   return candidates.find((ref) => refExists(cwd, ref));
 }
 
@@ -353,10 +351,10 @@ function materializedDiffRange(
   cwd: string,
   prContext: PullRequestContext,
 ): ReviewScopeDiffRange | undefined {
-  // --skip-git は diff ref を作らないため、PR が明示したブランチの既存 ref だけを使う。
-  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBranchRef(cwd, prContext.baseBranch, 'base');
-  const headDiffRef = prContext.headDiffRef ?? resolvePullRequestBranchRef(cwd, prContext.headBranch, 'head');
-  if (baseDiffRef === undefined || headDiffRef === undefined) {
+  // --skip-git では detached HEAD や別名ブランチにコミットした修正も対象にする。
+  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBaseBranchRef(cwd, prContext.baseBranch);
+  const headDiffRef = prContext.headDiffRef ?? 'HEAD';
+  if (baseDiffRef === undefined) {
     return undefined;
   }
   if (!refExists(cwd, baseDiffRef) || !refExists(cwd, headDiffRef)) {

@@ -21,7 +21,7 @@
 {{/if}}{{#if notRepository}}TAKT は変更対象ファイルを算出できませんでした。作業ディレクトリが Git リポジトリではありません。
 {{/if}}{{#if notComputed}}TAKT はこの実行コンテキストで変更対象ファイルを算出していません。
 {{/if}}{{#if isPullRequest}}
-算出範囲: PR #{{prNumber}} の明示 base から head までの累積差分 `{{diffRange}}` と、未コミット変更・未追跡ファイル。diff ref の指定がなければ、PR Context のブランチ名から、base は origin の追跡 ref（`refs/remotes/origin/<base>`）、ローカルブランチの順、head はローカルブランチ、origin の追跡 ref の順で既存 ref を解決します。PR の head ブランチ上では現在の HEAD、それ以外では解決した head ref を使います。同期で取り込んだ base 側だけの変更は含めません。
+算出範囲: PR #{{prNumber}} の明示 base から head までの累積差分 `{{diffRange}}` と、未コミット変更・未追跡ファイル。diff ref の指定がなければ、PR Context の base ブランチ名から origin の追跡 ref（`refs/remotes/origin/<base>`）、ローカルブランチの順で既存 ref を解決し、head は現在の HEAD を使います。diff ref の指定があれば、PR の head ブランチ上では現在の HEAD、それ以外では指定された head ref を使います。同期で取り込んだ base 側だけの変更は含めません。
 {{/if}}{{#if isPullRequestWithoutDiffRange}}
 算出範囲: 未コミット変更と未追跡ファイルのみ。レビュー対象は PR #{{prNumber}} ですが、PR の base/head 参照をローカルで解決できないため累積差分を一覧に含められませんでした。
 {{/if}}{{#if includesWorkingTree}}未コミット変更と未追跡ファイルも上の一覧に含まれています。
