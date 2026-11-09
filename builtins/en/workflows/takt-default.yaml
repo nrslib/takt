@@ -63,6 +63,7 @@ steps:
         - takt
       testing_knowledge:
         - takt
+        - takt-test-execution
         - architecture
         - unit-testing
         - e2e-testing

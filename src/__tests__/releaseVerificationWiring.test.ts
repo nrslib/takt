@@ -934,6 +934,16 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
     },
     {
+      target: 'src/__tests__/caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
+    },
+    {
+      target: 'caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
+    },
+    {
       target: 'src/__tests__/it-list-filtered-delete.test.ts',
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
