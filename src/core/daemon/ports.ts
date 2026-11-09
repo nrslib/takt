@@ -47,7 +47,7 @@ export interface TurnQueues {
 export interface ConversationOwner {
   inquiry(notice: import('./messages.js').InquiryNotice): Promise<void>;
   apply(result: TurnResult): Promise<void>;
-  progress(turn: TurnIdentity, message: ConversationProgress): Promise<void>;
+  progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void>;
   // 実行中ターンの識別情報は、それを所有する dispatcher が付ける。
   snapshot(conversationId: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>>;
 }

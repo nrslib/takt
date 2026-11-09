@@ -4,7 +4,7 @@ import type { ConversationActor, ConversationAssignment, ConversationRecord, Por
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
-import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
+import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -23,7 +23,7 @@ export interface ConversationState {
   revision: number;
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
-  running: { operationId: string; kind: string; generation?: number } | null;
+  running: { operationId: string; kind: string; generation?: number; startedAt?: number } | null;
   interrupted: boolean;
   queuedMessageCount?: number;
 }
@@ -55,6 +55,7 @@ export type OperationResult =
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
   | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
+  | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
@@ -62,7 +63,7 @@ export type PortOutput =
   | { kind: 'inquiry'; target: QuestionTarget; question: GoalQuestion }
   | { kind: 'result'; operationId: string; result: OperationResult };
 export interface ConversationDelivery {
-  deliver(conversationId: string, output: PortOutput, version: OutputVersion): Promise<
+  deliver(conversationId: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal): Promise<
     { kind: 'delivered' } | { kind: 'unavailable'; reason: string }>;
 }
 export interface ConversationOpen {

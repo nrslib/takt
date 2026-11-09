@@ -145,7 +145,8 @@ export function createDaemonConversationInput(options: {
     connectedPorts(id: string): string[] {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },
-    async deliver(id: string, output: PortOutput, version: OutputVersion): Promise<void> {
+    async deliver(id: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal): Promise<void> {
+      if (signal?.aborted) return;
       if (output.kind === 'activity') {
         const previous = activities.get(id);
         if (previous !== undefined && previous.version.stateSequence > version.stateSequence) return;
@@ -171,6 +172,11 @@ export function createDaemonConversationInput(options: {
       }
       const value = output;
       await Promise.all(recipients.map(async (attachment) => {
+        if (signal?.aborted) return;
+        if (value.kind === 'turn_text') {
+          if (attachment.input.binding.port === 'tui') await attachment.delivery.deliver(id, value, version, signal);
+          return;
+        }
         if (value.kind === 'activity') {
           if (attachment.input.binding.port !== 'tui') return;
           attachment.activitySequence = version.stateSequence;
@@ -193,8 +199,12 @@ function screenSnapshot(snapshot: ConversationSnapshot) {
   return { ...snapshot, items: (async function* () {
     for await (const item of items) {
       if (item.kind !== 'state') { yield item; continue; }
+      const running = item.state.running;
+      const startedAt = running?.operationId === snapshot.operationId && running?.generation === snapshot.generation
+        ? running?.startedAt : undefined;
       yield { ...item, state: { ...item.state, queuedMessageCount: snapshot.queuedMessageCount, running: snapshot.operationId === null || snapshot.generation === null ? null
-        : { operationId: snapshot.operationId, kind: 'turn', generation: snapshot.generation } } };
+        : { operationId: snapshot.operationId, kind: 'turn', generation: snapshot.generation,
+          ...(startedAt === undefined ? {} : { startedAt }) } } };
     }
   })() };
 }

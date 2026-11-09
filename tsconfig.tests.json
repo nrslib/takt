@@ -721,6 +721,7 @@
     "src/__tests__/tui-run.test.ts",
     "src/__tests__/tui-slash-completion.test.ts",
     "src/__tests__/tui-status-line.test.tsx",
+    "src/__tests__/tui-status-text.test.ts",
     "src/__tests__/tui-task-conversation.test.ts",
     "src/__tests__/tui-terminal-ownership.test.ts",
     "src/__tests__/undeliveredMessages.test.ts",

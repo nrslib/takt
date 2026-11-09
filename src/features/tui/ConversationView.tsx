@@ -1,5 +1,6 @@
 import { Box, Text, useInput, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
+import { formatElapsedTime, truncateStatusText } from './statusText.js';
 import {
   useCallback,
   useEffect,
@@ -145,21 +146,6 @@ interface Activity {
   readonly tools: readonly ToolActivity[];
 }
 
-function truncateStatusText(text: string, columns: number): string {
-  if (columns <= 0) return '';
-  if (stringWidth(text) <= columns) return text;
-  const graphemes = segmentGraphemes(text);
-  let result = '';
-  let width = stringWidth('…');
-  for (const grapheme of graphemes) {
-    const nextWidth = width + stringWidth(grapheme);
-    if (nextWidth > columns) break;
-    result += grapheme;
-    width = nextWidth;
-  }
-  return `${result}…`;
-}
-
 /** `/go` asks the session for a task instruction rather than for a reply. */
 function isInstructionRequest(text: string): boolean {
   const trimmed = text.trimStart();
@@ -288,9 +274,7 @@ export function ConversationView({
   const slashCompletion = useSlashCompletion(allCompletions);
   const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
-  const elapsed = elapsedSeconds < 60
-    ? `${elapsedSeconds}s`
-    : `${Math.floor(elapsedSeconds / 60)}m${String(elapsedSeconds % 60).padStart(2, '0')}s`;
+  const elapsed = formatElapsedTime(elapsedSeconds);
   const activeTool = activity.kind === 'tool' ? activity.tools.at(-1) : undefined;
   const activityLabel = activeTool !== undefined ? activeTool.name
     : activity.kind === 'thinking' ? ui.extendedThinking
