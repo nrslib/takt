@@ -14,7 +14,6 @@ Inspect TAKT tests, runners, scripts, and CI wiring from their actual dependency
 | Chooses a test layer only from speed or file name | REJECT |
 | Removes a heavy integration test from the unit gate without routing it elsewhere | REJECT |
 | Tests in heavy parallel integration contend on shared paths | REJECT |
-| Runs heavy parallel integration locally with half the CPUs (rounded down, minimum 1, capped at 4 workers) and serial groups sequentially | OK |
 | Keeps heavy integration at one worker per runner in pull-request CI, with six isolated shard runners for heavy parallel integration and a separate runner for each serial group | OK |
 | A recorded result for a changed heavy integration test is supplied | Treat it as evidence only to the extent that the target command, completion state, and result match |
 | No recorded result for a test or gate is supplied | Unverified; absence alone is not a finding |

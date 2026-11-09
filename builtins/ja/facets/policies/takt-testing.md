@@ -61,13 +61,12 @@ npm test -- src/__tests__/releaseVerificationWiring.test.ts
 | timeout 延長だけで停止・競合・無限ループを解決した扱いにする | REJECT |
 | 重いテストを unit gate から除外しただけで分類先へ接続しない | REJECT |
 
-PR CI では重い IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードとし、serial group ごとの runner に分離する。ローカルの全件実行では heavy parallel を CPU の半分（切り捨て、最小1、上限4）workerで同時に動かし、serial group は順番に動かす。
+PR CI では重い IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードとし、serial group ごとの runner に分離する。
 
 heavy parallel に入れるテストは、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わないよう、`mkdtemp` で隔離する。取り合いを避けられないテストは serial group に入れる。
 
 | 実行方式 | 判定 |
 |---------|------|
-| ローカルで heavy parallel を CPU の半分（切り捨て、最小1、上限4）workerで同時実行し、serial group は順番に実行 | OK |
 | PR CIで独立 runnerへシャード分割 | OK |
 | heavy parallel に入れたテストが共有パスを取り合う | REJECT |
 
