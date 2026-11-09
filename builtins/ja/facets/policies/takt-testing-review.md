@@ -13,8 +13,9 @@ TAKT の test、runner、script、CI 配線を実際の依存境界と観測可�
 | 実 process を使うが内部 client から偽 CLI を呼ぶ | 重い IT。E2E ではない |
 | 速度やファイル名だけで test layer を決める | REJECT |
 | 重い IT を unit gate から除外したまま分類先へ接続しない | REJECT |
-| 重い IT を同一 runner の複数 worker で並列実行する | REJECT |
-| PR CI で重い IT を独立 runner へ分割する | OK |
+| heavy parallel に入れたテストが共有パスを取り合う | REJECT |
+| ローカルで heavy parallel を CPU の半分（切り捨て、最小1、上限4）workerで同時実行し、serial group は順番に実行 | OK |
+| PR CI で重い IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードと serial group ごとの runner に分離する | OK |
 | 変更した重い IT の記録済み結果が提供されている | 対象 command、完了状態、結果が一致する範囲で証跡として扱う |
 | test や gate の記録済み結果が提供されていない | 未確認。欠如だけを finding にしない |
 

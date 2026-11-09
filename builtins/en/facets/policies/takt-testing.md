@@ -59,13 +59,15 @@ The pull request owns full heavy integration execution, but work must not be han
 | Timeout increase alone is treated as resolving a hang, contention, or infinite loop | REJECT |
 | A heavy test is removed from unit without being connected to another gate | REJECT |
 
-Keep heavy integration at one worker per runner. Full local execution is serial; pull-request CI scales out across six isolated shard runners and separate runners for each serial group instead of adding workers within one runner.
+Pull-request CI keeps heavy integration at one worker per runner, splits heavy parallel integration across six isolated shard runners, and uses a separate runner for each serial group. Full local execution runs heavy parallel integration with half the available CPUs (rounded down, minimum 1, capped at 4 workers), while serial groups run sequentially.
+
+Tests in heavy parallel integration must use `mkdtemp` to isolate resources so they do not contend on shared paths such as repository files, fixed `/tmp` paths, or directory listings directly under `tmpdir()`. Put tests whose contention cannot be avoided in a serial group.
 
 | Execution Mode | Judgment |
 |----------------|----------|
-| Full local execution with one worker | OK |
+| Full local execution runs heavy parallel integration with half the CPUs (rounded down, minimum 1, capped at 4 workers) and serial groups sequentially | OK |
 | Pull-request CI shards across isolated runners | OK |
-| More workers within one runner for acceleration | REJECT; reintroduces process, Git, and synchronous I/O contention |
+| Tests in heavy parallel integration contend on shared paths | REJECT |
 
 ## Process and Asynchronous Verification
 
@@ -99,6 +101,6 @@ Reports distinguish completed unit and light integration results, targeted chang
 - **Unrouted exclusion** - Creates a test that no gate executes
 - **Unexecuted changed test** - Delegates first execution of an added or changed heavy integration test to PR
 - **Unverified classification contract** - Omits the standalone classification contract test after adding or changing an integration test
-- **Heavy integration parallelism within one runner** - Adds workers that contend on processes, Git, and synchronous I/O
+- **Shared-path contention in heavy parallel integration** - Leaves tests without isolation so they contend on repository files or temporary paths
 - **Premature success report** - Treats running commands, timeouts, or worker communication errors as success
 - **Classification-documentation drift** - Lets runners, development guidance, and TAKT knowledge describe different execution orders

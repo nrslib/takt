@@ -63,7 +63,6 @@ describe('parallel test runner configuration', () => {
     });
     expect(heavyParallelIntegrationConfig).toMatchObject({
       test: {
-        maxWorkers: 1,
         include: heavyParallelItTestGlobs,
         exclude: heavyParallelItTestExcludes,
       },

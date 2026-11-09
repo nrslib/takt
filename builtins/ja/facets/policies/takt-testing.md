@@ -61,13 +61,15 @@ npm test -- src/__tests__/releaseVerificationWiring.test.ts
 | timeout 延長だけで停止・競合・無限ループを解決した扱いにする | REJECT |
 | 重いテストを unit gate から除外しただけで分類先へ接続しない | REJECT |
 
-重い IT は1 runner 内で1 workerに固定する。ローカルの全件実行は直列とし、PR CI では worker を増やさず、独立 runner の6シャードと serial group ごとの runner に分離する。
+PR CI では重い IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードとし、serial group ごとの runner に分離する。ローカルの全件実行では heavy parallel を CPU の半分（切り捨て、最小1、上限4）workerで同時に動かし、serial group は順番に動かす。
+
+heavy parallel に入れるテストは、リポジトリ内のファイル、固定の `/tmp` パス、`tmpdir()` 直下の列挙などの共有パスを取り合わないよう、`mkdtemp` で隔離する。取り合いを避けられないテストは serial group に入れる。
 
 | 実行方式 | 判定 |
 |---------|------|
-| ローカルで1 workerの全件実行 | OK |
+| ローカルで heavy parallel を CPU の半分（切り捨て、最小1、上限4）workerで同時実行し、serial group は順番に実行 | OK |
 | PR CIで独立 runnerへシャード分割 | OK |
-| 同一 runner内の worker増加で高速化 | REJECT。process・Git・同期I/Oの競合を再発させる |
+| heavy parallel に入れたテストが共有パスを取り合う | REJECT |
 
 ## process・非同期処理の検証
 
@@ -101,6 +103,6 @@ child process の起動・完了、または親 process から独立する寿命
 - **未接続の除外** - どの gate からも実行されないテストを作る
 - **変更テストの未実行** - 自分で追加・変更した重い IT の初回実行を PR に委ねる
 - **分類契約の未確認** - IT の追加・変更後に分類契約テストを単体実行しない
-- **重い IT の同一 runner 内並列化** - worker 数を増やして process・Git・同期I/Oを競合させる
+- **heavy parallel の共有パス競合** - テストを隔離せず、リポジトリ内のファイルや一時パスを取り合う
 - **完了前の成功報告** - 実行中、timeout、worker 通信エラーを成功として扱う
 - **分類と文書の不一致** - runner、開発ガイド、TAKT ナレッジが異なる実行順を示す
