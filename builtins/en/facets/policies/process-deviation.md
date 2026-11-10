@@ -1,17 +1,9 @@
-# Past process deviations
+<!-- policy-priority -->
+Past deviations: record only; no fail/incomplete/replan/stop iff irreversible by rework, no artifact/external effects, current code verified as specified, and stopped. Else repair/revert/recover; keep checks. Deviation alone cannot return code. Exclude other-code/config proof. Judge boundary violations normally.
+<!-- /policy-priority -->
 
-Judge current artifacts and evidence that acceptance criteria are met.
+# Process deviations
 
-- For past departures from work instructions (commands, check scope, assignments, order), record only facts and the absence of effects if all hold:
-  - Rework cannot undo it.
-  - No result remains in artifacts or external state (sent/published content, external data, costs).
-  - Acceptance evidence comes from current code checked under specified conditions.
-  - The departure has stopped.
-- If all four hold, do not fail, mark incomplete, replan, or stop work for it.
-- Otherwise, judge normally.
-  - Revert or repair remaining artifact changes (out-of-scope edits, unrequested dependencies, deleted tests).
-  - Recover or confirm remaining external effects.
-  - Do not return code solely for departing from work instructions.
-  - Exclude evidence from other versions or configurations.
-  - Keep necessary verification as remaining work.
-- Judge boundary violations (confidentiality, external operations, permissions, etc.) normally, not as work-process issues.
+Judge current artifacts.
+
+Record past work deviations/effect absence only when: irreversible by rework; no artifact/external effects remain; current-code evidence under specified conditions; deviation stopped. Then no failure/incompletion/replanning/stop for it. Else repair/revert artifacts, recover/check external effects, retain needed checks; deviation alone cannot justify code return. Exclude other-version/config evidence. Judge confidentiality/external-operation/permission violations normally.

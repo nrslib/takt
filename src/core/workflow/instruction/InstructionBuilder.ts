@@ -27,6 +27,26 @@ import { renderWorkflowWideRules } from './workflow-wide-rules.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
+function prioritizePolicyContent(content: string): string {
+  const priorities = new Set<string>();
+  const remainder = content.replace(/<!-- policy-priority -->\s*([\s\S]*?)\s*<!-- \/policy-priority -->/g,
+    (match: string, priority: string, offset: number) => {
+      priorities.add(priority);
+      // 部分抽出した表の残りにも列の意味を残す。
+      const tableHeader = priority.match(/^(\|[^\n]+\|\r?\n\|[\s:|-]+\|)\r?\n/)?.[1];
+      if (tableHeader && /^[ \t]*\r?\n\|/.test(content.slice(offset + match.length))) {
+        return tableHeader;
+      }
+      return '';
+    });
+  if (priorities.size === 0) return content;
+  const leading = [...priorities].join('\n\n');
+  if (leading.length > CONTEXT_MAX_CHARS) {
+    throw new Error(`Policy priority content exceeds ${CONTEXT_MAX_CHARS} characters (${leading.length})`);
+  }
+  return `${leading}\n\n${remainder.trim()}`;
+}
+
 export function prepareReferenceContent(
   content: string,
   sourcePath: string | undefined,
@@ -225,7 +245,7 @@ export class InstructionBuilder {
     const hasPolicy = !!(policyStrings && policyStrings.length > 0);
     const policyJoined = hasPolicy && policyStrings ? policyStrings.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
-      ? prepareReferenceContent(policyJoined, this.context.policySourcePath, language)
+      ? prepareReferenceContent(prioritizePolicyContent(policyJoined), this.context.policySourcePath, language)
       : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)

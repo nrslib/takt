@@ -1,6 +1,8 @@
 # Coding Policy
 
-Prioritize correctness over speed, and code accuracy over ease of implementation.
+<!-- policy-priority -->
+Correctness before speed/ease.
+<!-- /policy-priority -->
 
 ## Principles
 

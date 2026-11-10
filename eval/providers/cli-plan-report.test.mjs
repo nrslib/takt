@@ -88,3 +88,31 @@ test('suite prepares both phases and wires one report case for every provider', 
     assert.ok(reportPrompt.includes(contract));
   }
 });
+
+
+test('prompt-specific fixture and report template reach both phases in one session', async () => {
+  const observed = [];
+  const config = { cli: 'codex', model: 'test-model', working_dir: 'fixtures/default', report_prompt: 'prompts/default.md' };
+  const promptConfig = { working_dir: '.work/selected', report_prompt: 'prompts/selected.md', required_snapshots: ['policy.md'] };
+  const provider = new CliPlanReportProvider({ config }, {
+    prepareWorkingDirectory: effective => {
+      observed.push(effective);
+      return { sourceDirectory: '/selected', cwd: '/isolated', cleanup() {} };
+    },
+    createCliReviewSession: (effective, options) => {
+      observed.push({ effective, options });
+      return { run: async prompt => prompt === 'analysis request' ? 'actual analysis' : prompt };
+    },
+    readPrompt: path => {
+      assert.ok(path.endsWith('/prompts/selected.md'));
+      return '{{previous_response}} /selected';
+    },
+  });
+  const result = await provider.callApi('analysis request', {
+    prompt: { config: promptConfig }, vars: { task: 'task', output_phase: 'phase2' },
+  });
+  assert.deepEqual(observed, [{ ...config, ...promptConfig }, {
+    effective: { ...config, ...promptConfig }, options: { cwd: '/isolated', abortSignal: undefined },
+  }]);
+  assert.deepEqual(result, { output: 'actual analysis /isolated', metadata: { phase1_response: 'actual analysis' } });
+});

@@ -36,6 +36,59 @@ describe('InstructionBuilder reference content', () => {
     expect(result).toContain('/tmp/reference.md');
   });
 
+  it.each(['en', 'ja'] as const)('reserves policy space for decisions across a merged runtime snapshot (%s)', (language) => {
+    const contents = [
+      '<!-- policy-priority -->FIRST-DECISION<!-- /policy-priority -->\n' + 'a'.repeat(2_100),
+      '<!-- policy-priority -->LAST-DECISION<!-- /policy-priority -->\n'
+        + '<!-- policy-priority -->FIRST-DECISION<!-- /policy-priority -->\nTAIL-DETAIL',
+    ];
+    const step = makeStep({ policyContents: contents.map(content => ({ content, sourcePath: '/original.md' })) });
+    const context = makeInstructionContext({ language, policySourcePath: '/snapshot.md' });
+    const direct = new InstructionBuilder(step, context).build();
+    const snapshot = new InstructionBuilder(step, {
+      ...context,
+      policyContents: [{ content: contents.join('\n\n---\n\n'), sourcePath: '/snapshot.md' }],
+    }).build();
+
+    expect(snapshot).toBe(direct);
+    expect(snapshot).toContain('FIRST-DECISION\n\nLAST-DECISION\n\n');
+    expect(snapshot.split('FIRST-DECISION')).toHaveLength(2);
+    expect(snapshot).not.toContain('policy-priority');
+    expect(snapshot).not.toContain('TAIL-DETAIL');
+    expect(snapshot).toContain('/snapshot.md');
+  });
+
+  it('keeps unmarked policies in their original order', () => {
+    const content = 'LEGACY-HEAD\n' + 'x'.repeat(2_100) + 'LEGACY-TAIL';
+    const prompt = new InstructionBuilder(makeStep({ policyContents: [{ content }] }), makeInstructionContext()).build();
+    expect(prompt).toContain(content.slice(0, 2_000));
+    expect(prompt).not.toContain('LEGACY-TAIL');
+  });
+
+  it.each(['\n', '\r\n'])('preserves headers and continuous rows when extracting part of a table (%j)', (newline) => {
+    const header = '| Condition | Decision |\n|-----------|----------|';
+    const selected = '| Priority condition | REJECT |';
+    const remaining = '| Remaining condition | OK |\n| Last condition | OK |';
+    const content = `# Policy\n\n<!-- policy-priority -->\n${header}\n${selected}\n<!-- /policy-priority -->\n${remaining}\n\nAfter table.`.replaceAll('\n', newline);
+    const prompt = new InstructionBuilder(makeStep({ policyContents: [{ content }] }), makeInstructionContext()).build().replaceAll('\r\n', '\n');
+
+    expect(prompt).toContain(`${header}\n${selected}\n\n# Policy`);
+    expect(prompt).toContain(`# Policy\n\n${header}\n${remaining}\n\nAfter table.`);
+    expect(prompt.split(selected)).toHaveLength(2);
+    expect(prompt).not.toContain('policy-priority');
+  });
+
+  it.each([2_000, 2_001])('enforces the combined priority budget at %i characters', (length) => {
+    const first = 'A'.repeat(998);
+    const second = 'B'.repeat(length - first.length - 2);
+    const step = makeStep({ policyContents: [first, second].map(content => ({
+      content: `<!-- policy-priority -->${content}<!-- /policy-priority -->`,
+    })) });
+    const build = () => new InstructionBuilder(step, makeInstructionContext()).build();
+    if (length === 2_000) expect(build()).toContain(`${first}\n\n${second}`);
+    else expect(build).toThrow(/Policy priority content exceeds 2000/);
+  });
+
   it('omits source metadata when a previous response is not truncated', () => {
     const result = preparePreviousResponseContent('完了内容', '/tmp/response.md', false, 'ja');
 

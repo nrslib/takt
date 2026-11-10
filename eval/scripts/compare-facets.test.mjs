@@ -241,6 +241,52 @@ test('an added facet is absent for red and present for green', (t) => {
   assert.equal(readFileSync(join(fixture.directory, added), 'utf8'), 'new facet\n');
 });
 
+test('compares added policies and shared steps together against a pinned main revision in both languages', (t) => {
+  const fixture = setup(t);
+  const main = execFileSync('git', ['rev-parse', 'main'], { cwd: repo, encoding: 'utf8' }).trim();
+  const red = {};
+  const green = {};
+  for (const lang of ['ja', 'en']) {
+    const policy = `builtins/${lang}/facets/policies/pe-test-only-repair-strategy.md`;
+    assert.equal(execFileSync('git', ['ls-tree', main, '--', policy], { cwd: repo, encoding: 'utf8' }), '');
+    red[policy] = null;
+    green[policy] = `candidate policy ${lang}\n`;
+    for (const name of ['peer-review-adjudication', 'peer-review-fix-plan', 'peer-review-fix', 'peer-review-fix-verifier', 'peer-review-final-gate']) {
+      const step = `builtins/${lang}/steps/${name}.yaml`;
+      red[step] = execFileSync('git', ['show', `${main}:${step}`], { cwd: repo, encoding: 'utf8' });
+      green[step] = `name: ${name}\npolicies:\n  - pe-test-only-repair-strategy\n`;
+    }
+  }
+  const files = Object.keys(green);
+  for (const file of files) {
+    mkdirSync(dirname(join(fixture.directory, file)), { recursive: true });
+    writeFileSync(join(fixture.directory, file), green[file]);
+  }
+  writeFileSync(join(fixture.directory, 'eval/scripts/run-evals.mjs'), `
+    import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+    const args = process.argv.slice(2);
+    const files = ${JSON.stringify(files)};
+    const contents = Object.fromEntries(files.map((file) => [file, existsSync(file) ? readFileSync(file, 'utf8') : null]));
+    writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify(contents));
+  `);
+
+  const result = fixture.run(['--base', main, ...files.flatMap((file) => ['--facet', file])]);
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = fixture.manifest();
+  assert.equal(manifest.base, main);
+  assert.deepEqual(manifest.runs.map((run) => run.phase), ['red', 'green']);
+  for (const run of manifest.runs) {
+    const expected = run.phase === 'red' ? red : green;
+    assert.deepEqual(JSON.parse(readFileSync(run.resultFile, 'utf8')), expected);
+    for (const file of files) {
+      const snapshot = join(fixture.directory, '.tmp/result/facets', run.phase, file);
+      if (expected[file] === null) assert.equal(existsSync(snapshot), false);
+      else assert.equal(readFileSync(snapshot, 'utf8'), expected[file]);
+    }
+  }
+  for (const file of files) assert.equal(readFileSync(join(fixture.directory, file), 'utf8'), green[file]);
+});
+
 test('a deleted facet exists only in red and remains deleted after comparison', (t) => {
   const fixture = setup(t);
   const deleted = 'builtins/en/facets/personas/coder.md';

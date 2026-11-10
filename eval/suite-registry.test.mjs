@@ -289,3 +289,23 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     }
   }
 });
+
+
+test('repair strategy history targets accompany both existing stage suites', () => {
+  for (const name of ['review-adjudication', 'fix-plan-bounded-proof']) {
+    const [suite] = selectPromptEvalSuites({ names: [name] });
+    assert.deepEqual(promptEvalPrepareTargets([suite]), [name, 'repair-strategy']);
+    assert.equal(suite.execution.defaultEligible, false);
+    assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
+    const config = parse(readFileSync(new URL(suite.config, import.meta.url), 'utf8'));
+    assert.equal(config.tests.length, name === 'review-adjudication' ? 27 : 25);
+    assert.equal(config.providers.length, 3);
+    for (const caseId of ['k1', 'r1', 'i1', 'f1', 'p1', 'm1']) {
+      for (const label of [caseId, `${caseId}-en`]) {
+        assert.equal(config.prompts.filter(prompt => prompt.label === label).length, 1);
+        assert.deepEqual(config.tests.filter(test => test.prompts.includes(label)).map(test => test.vars.output_phase), ['phase1', 'phase2']);
+      }
+    }
+    assert.equal(config.evaluateOptions.repeat ?? 1, name === 'review-adjudication' ? 1 : 3);
+  }
+});

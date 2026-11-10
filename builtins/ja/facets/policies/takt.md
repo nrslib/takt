@@ -16,9 +16,11 @@ TAKTに関する独立した判定を一つの正本で行う。
 
 ### プロバイダー統合
 
+<!-- policy-priority -->
 | 基準 | 判定 |
 |------|------|
 | SDK 固有のエラーハンドリングが Provider 外に漏れている | REJECT |
+<!-- /policy-priority -->
 | AgentResponse.error にエラーを伝播していない | REJECT |
 | プロバイダー間でセッションキーが衝突する | REJECT |
 | セッションキー形式 `{persona}:{provider}` | OK |

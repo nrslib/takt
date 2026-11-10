@@ -102,16 +102,21 @@ test('prepared adjudication exposes its complete core criterion before the inlin
   for (const language of ['ja', 'en']) {
     const policy = readFileSync(join(repoRoot, `builtins/${language}/facets/policies/review-adjudication.md`), 'utf8');
     const orderHeading = language === 'ja' ? '## 判定の順序' : '## Decision Order';
-    const criteriaHeading = language === 'ja' ? '## 判断基準' : '## Decision Criteria';
-    const order = policy.slice(policy.indexOf(orderHeading), policy.indexOf(criteriaHeading)).trim();
-    const criterion = policy.split('\n').filter((line) => line.startsWith('|'))[2];
-    assert.ok(criterion);
-    assert.ok(policy.indexOf(criterion) + criterion.length <= 2000);
-    assert.ok(policy.indexOf(order) + order.length <= 2000);
+    const orderStart = policy.indexOf(orderHeading);
+    assert.ok(orderStart >= 0);
+    const order = policy.slice(orderStart, policy.indexOf('{{include:', orderStart)).trim();
+    const priority = policy.match(/<!-- policy-priority -->\s*([\s\S]*?)\s*<!-- \/policy-priority -->/)?.[1];
+    assert.ok(priority);
+    assert.ok(priority.length <= 2000);
+    assert.match(priority, language === 'ja'
+      ? /現在の修正と必要な環境内検証が完了.*根拠ある未充足条件を外部でしか観測できない場合だけ外部確認待ち/
+      : /Await grounded external-only criteria only after current repairs\/necessary local checks pass/);
     if (language === 'ja') {
       assert.ok(snapshot.includes(order));
-      assert.ok(prompt.includes(order), 'decision order must survive actual prompt truncation');
-      assert.ok(prompt.includes(criterion), 'the core decision row must survive actual prompt truncation');
+      const end = prompt.lastIndexOf('\n...（以下省略）...');
+      assert.ok(end >= 2000);
+      const excerpt = prompt.slice(end - 2000, end);
+      assert.ok(excerpt.includes(priority), 'the complete external-confirmation criterion must survive actual prompt truncation');
     }
   }
 });
@@ -159,11 +164,14 @@ console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture-probe' 
             ? readFileSync(resolve(base, value.slice(7)), 'utf8') : value,
         ])),
       }));
+      const selectedLabels = new Set(tests.flatMap(testcase => testcase.prompts ?? []));
+      const selectedPrompts = tests.some(testcase => testcase.prompts === undefined)
+        ? prompts : prompts.filter(prompt => selectedLabels.has(prompt.label));
       const provider = { ...suite.providers[0], id: `file://${join(evalDir, 'providers/cli-review.mjs')}`,
         config: { ...suite.providers[0].config, cli: 'codex', model: 'gpt-6-sol', reasoning_effort: 'low' } };
       const config = join(directory, `suite-${index}.yaml`);
       const resultPath = join(directory, `result-${index}.json`);
-      writeFileSync(config, stringify({ prompts, providers: [provider], tests,
+      writeFileSync(config, stringify({ prompts: selectedPrompts, providers: [provider], tests,
         evaluateOptions: { maxConcurrency: 1 } }));
       const evaluation = spawnSync(process.execPath, [
         'node_modules/promptfoo/dist/src/entrypoint.js', 'eval', '-c', config,
@@ -173,7 +181,7 @@ console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture-probe' 
         PROMPTFOO_DISABLE_TELEMETRY: '1', PROMPTFOO_DISABLE_UPDATE: '1' } });
       const results = JSON.parse(readFileSync(resultPath, 'utf8')).results.results;
       assert.equal(evaluation.status, 0, JSON.stringify(results.map(result => result.response)));
-      assert.equal(results.length, prompts.length);
+      assert.equal(results.length, selectedPrompts.length);
       for (const result of results) {
         assert.equal(result.response.error, undefined);
         const observed = JSON.parse(result.response.output);

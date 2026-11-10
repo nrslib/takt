@@ -41,14 +41,16 @@ function expandedPolicy(language, name) {
   }).body;
 }
 
-function firstTableDataRow(policy) {
-  const lines = policy.split('\n');
-  const separator = lines.findIndex(line => /^\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(line));
-  assert.ok(separator > 0, 'policy must have a table header and separator');
-  assert.match(lines[separator - 1], /^\|.+\|$/);
-  const row = lines[separator + 1];
-  assert.match(row, /^\|.+\|$/);
-  return row;
+function priorityContent(policy) {
+  const match = policy.match(/<!-- policy-priority -->\s*([\s\S]*?)\s*<!-- \/policy-priority -->/);
+  assert.ok(match, 'policy must declare its inline decision priority');
+  return match[1];
+}
+
+function assertPremiseDecision(excerpt, language) {
+  assert.match(excerpt, language === 'ja'
+    ? /範囲外の前提だけなら必要以上の拡張.*範囲内の違反は判断/
+    : /Out-of-scope premises alone: expansion; judge in-scope breaches/);
 }
 
 test('suite binds all 17 prompts, tasks, snapshots and fixtures to its own cases', () => {
@@ -197,12 +199,11 @@ test('process policy comes first once, only in the selected Japanese and English
   }
 });
 
-test('prepared prompts carry the new instructions, inline adjudication row and complete process policy once', () => {
+test('prepared prompts carry the instructions, inline premise decision and complete process decision once', () => {
   execFileSync(process.execPath, [
     'eval/scripts/prepare.mjs', ...cases.map(id => `${suiteName}-${id}`),
   ], { cwd: repoRoot });
-  const processPolicy = read('builtins/ja/facets/policies/process-deviation.md').trim();
-  const adjudicationRow = firstTableDataRow(expandedPolicy('ja', 'review-adjudication'));
+  const processPolicy = priorityContent(read('builtins/ja/facets/policies/process-deviation.md'));
   const adjudicationProcedure = read('builtins/ja/facets/instructions/adjudicate-review-findings.md')
     .split('\n\n').find(paragraph => paragraph.startsWith('指摘を修正対象にする前'));
   const reviewProcedure = read('builtins/ja/facets/partials/instructions/review-path-check.md')
@@ -228,7 +229,7 @@ test('prepared prompts carry the new instructions, inline adjudication row and c
         const start = prompt.indexOf('# レビュー指摘の裁定');
         assert.ok(start >= 0, id);
         const excerpt = prompt.slice(start, prompt.indexOf('...（以下省略）...', start));
-        assert.ok(excerpt.includes(adjudicationRow), id);
+        assertPremiseDecision(excerpt, 'ja');
         assert.ok(prompt.includes(adjudicationProcedure), id);
       } else {
         assert.ok(prompt.includes(verificationProcedure), id);
@@ -237,7 +238,7 @@ test('prepared prompts carry the new instructions, inline adjudication row and c
   }
 });
 
-test('resolved Japanese and English steps put process policy first once and keep the adjudication premise row inside the production 2000 character excerpt', t => {
+test('resolved Japanese and English steps retain process and premise decisions inside the production 2000 character excerpt', t => {
   const root = temporaryDirectory(t);
   for (const language of ['ja', 'en']) {
     const project = join(root, language);
@@ -245,7 +246,7 @@ test('resolved Japanese and English steps put process policy first once and keep
     fs.writeFileSync(join(project, '.takt/config.yaml'), `language: ${language}\n`);
     const processPolicy = read(`builtins/${language}/facets/policies/process-deviation.md`);
     const adjudicationPolicy = expandedPolicy(language, 'review-adjudication');
-    const adjudicationRow = firstTableDataRow(adjudicationPolicy);
+    const processDecision = priorityContent(processPolicy);
     const procedure = read(`builtins/${language}/facets/instructions/verify-fix.md`).split('\n\n')
       .find(paragraph => paragraph.startsWith(language === 'ja'
         ? '指示された作業の進め方' : 'If you find a past action'));
@@ -294,7 +295,7 @@ test('resolved Japanese and English steps put process policy first once and keep
           currentStepIndex: index, reportDir: join(project, 'reports'), language,
           policySourcePath: join(project, 'policies.md'),
         }).prepare();
-        assert.equal(prepared.text.split(processPolicy).length, 2,
+        assert.equal(prepared.text.split(processDecision).length, 2,
           `${language}/${name}/${stepName}`);
         if (['fix-verifier', 'verification-replan', 'final-gate'].includes(stepName)) {
           assert.ok(prepared.text.includes(procedure), `${language}/${name}/${stepName}`);
@@ -302,11 +303,13 @@ test('resolved Japanese and English steps put process policy first once and keep
         if (stepName === 'review-adjudication') {
           assert.ok(step.policyContents.some(({ content }) => content === adjudicationPolicy),
             `${language}/${name}/${stepName}`);
-          const excerpt = combined.slice(0, 2000);
           const omittedMarker = language === 'ja' ? '...（以下省略）...' : '...TRUNCATED...';
+          const end = prepared.text.lastIndexOf(`\n${omittedMarker}`);
+          assert.ok(end >= 2000);
+          const excerpt = prepared.text.slice(end - 2000, end);
           assert.ok(combined.length > 2000, `${language}/${name}/${stepName}`);
-          assert.ok(prepared.text.includes(`${excerpt}\n${omittedMarker}`), `${language}/${name}/${stepName}`);
-          assert.ok(excerpt.includes(adjudicationRow), `${language}/${name}/${stepName}`);
+          assert.ok(excerpt.includes(processDecision), `${language}/${name}/${stepName}`);
+          assertPremiseDecision(excerpt, language);
         }
       }
     }

@@ -16,6 +16,11 @@
 |------------|------------------|--------------------|-------|----------------|----------|---------------------|-----------------|
 | {Reuse the existing ID when present} | {All finding IDs and report names} | {Externally observable condition} | {Verified cause} | {Actual paths from the defining source through consumers to observable results} | {file:line or reproduction evidence; the item establishing applicability of inputs and states and the location of supporting documentation, code, or records} | {Conditions that establish resolution when all hold} | {Required changes and explicitly excluded separate problems} |
 
+## Repair History
+| Problem ID | Earlier Method and Assumptions | Resolved Conditions and Verification | Current Counterexample and Scope Evidence | Shared Cause and Remaining Assumption | Why Earlier Verification Missed It | Fixed-Version References |
+|------------|--------------------------------|--------------------------------------|------------------------------------------|---------------------------------------|------------------------------------|--------------------------|
+| {Target ID, or N/A and reason} | {Earlier method and required assumptions} | {Checked inputs, paths, and results} | {New failure condition and requirement/code basis} | {Confirmed mechanism or unresolved hypotheses} | {Conditions not observed} | {Fixed paths and locations for the plan, repair, and verification from the same execution; note missing records} |
+
 ## Decision for Each Finding
 | Finding ID / Source | Technical Check | Treatment in This Task | Problem ID | Reason and Evidence |
 |---------------------|-----------------|------------------------|------------|---------------------|

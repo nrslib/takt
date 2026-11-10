@@ -32,6 +32,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
 import { PHASE_AWARENESS_TARGET, preparePhaseAwareness } from './prepare-phase-awareness.mjs';
 import { ADJUDICATOR_TARGETS, buildAdjudicatorFixture } from '../adjudicator-no-fix-cases.mjs';
+import { REPAIR_STRATEGY_TARGET } from '../repair-strategy-cases.mjs';
+import { prepareRepairStrategy } from './prepare-repair-strategy.mjs';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
@@ -1005,6 +1007,7 @@ const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
 export const PREPARE_TARGET_IDS = Object.freeze([
   ...TARGETS.map(({ id }) => id),
   ARTIFACT_HANDOFF_TARGET,
+  REPAIR_STRATEGY_TARGET,
   PHASE_AWARENESS_TARGET,
   ...MERGE_CI_TARGETS,
 ]);
@@ -1205,6 +1208,7 @@ async function main() {
       throw new Error(`Unknown target "${id}". Available: ${PREPARE_TARGET_IDS.join(', ')}`);
     }
   }
+  if (requested.includes(REPAIR_STRATEGY_TARGET)) await prepareRepairStrategy();
   if (requested.includes(PHASE_AWARENESS_TARGET)) preparePhaseAwareness();
   if (requested.includes(ARTIFACT_HANDOFF_TARGET)) {
     execFileSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
