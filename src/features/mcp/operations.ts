@@ -221,7 +221,7 @@ export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: strin
   const root = fs.realpathSync(allowedProjectRoot);
   const target = fs.realpathSync(cwd);
   const relative = path.relative(root, target);
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+  if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
     return;
   }
 

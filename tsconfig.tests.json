@@ -155,6 +155,7 @@
     "src/__tests__/daemon-turn-process.integration.test.ts",
     "src/__tests__/daemon-turn-queues.test.ts",
     "src/__tests__/daemon-turn-tool-scope.test.ts",
+    "src/__tests__/daemon-wait-command.integration.test.ts",
     "src/__tests__/daemon-watch-goal-reader.test.ts",
     "src/__tests__/daemon-watch-goals.integration.test.ts",
     "src/__tests__/daemon-watchers.test.ts",

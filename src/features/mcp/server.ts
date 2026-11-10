@@ -1,3 +1,6 @@
+import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
+import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
+import { jsonResult } from './response.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -96,7 +99,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
   'takt_remove_goal_task',
-  'takt_stop_goal_task',
+  'takt_stop_goal_task', 'takt_wait_command',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
   'takt_merge_goal_pr',
@@ -111,6 +114,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
 import type { TurnToolScope } from '../daemonTurn/toolScope.js';
 
 export interface TaktMcpServerOptions {
+  requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   turnScope?: TurnToolScope;
   managerAssignment?: ManagerAssignmentIdentity;
   allowedProjectRoot?: string;
@@ -192,6 +196,19 @@ export function createTaktMcpServer(
     catch (error) { return errorResult('Workspace operation failed', error); }
   };
   const workspaceRetrieval = 'Responses fit 64 KiB, with explicit truncation. Managers can read the current workspace with takt_list_tasks view workspace and offset/limit (1-50), or path name or repositoryDirectories.N (saved index) and textOffset/maxBytes for text. cwd must be absolute and does not select the workspace.';
+  const requestDaemon = options.requestDaemon;
+  if (options.toolSet === 'manager' && requestDaemon !== undefined) {
+    server.registerTool('takt_wait_command', {
+      title: 'Wait for an external state change',
+      description: 'Register a one-line shell command that waits, such as gh run watch --exit-status or gh pr checks --watch. Use only waiting commands; do not use state-changing operations. The daemon runs it directly without auto AI permission review. Returns a registration id immediately; completion arrives as a wait_command_completed event, so you may end the turn after registering. cwd must be an absolute directory inside an assigned repository. Optional goalId must belong to that repository and be active; pausing or aborting it stops the command. timeoutSeconds defaults to 3600 and is at most 86400. Completion includes status, exit code, duration and the last 16 KiB of combined stdout/stderr. The daemon allows 32 running or awaiting-delivery registrations in total; at capacity, registration fails until completion delivery frees a slot. Daemon shutdown stops requests and their child processes and, when possible, delivers a cancelled completion event to the requesting conversation. Registrations are not rerun on restart. Check state during startup patrol and register again if needed.',
+      inputSchema: WaitCommandInputSchema,
+    }, (input) => operation(input.cwd, 'Wait command registration failed', async () => {
+      const reply = await requestDaemon({ kind: 'wait_command', ...input });
+      if (reply.kind === 'error') throw new Error(reply.message);
+      if (reply.kind !== 'wait_command_registered') throw new Error('Unexpected wait command reply');
+      return jsonResult({ id: reply.id });
+    }, false));
+  }
   if (options.toolSet === 'manager') {
     const connection = options.goalExecutionConnection;
     if (connection !== undefined) {

@@ -970,7 +970,7 @@ describe('manager questions, answers and notifications through production bounda
   it('exposes the manager question and notification tools while preserving the read-only tool set', async () => {
     const added = ['takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
     const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-    expect(names).toEqual([...TAKT_MCP_MANAGER_TOOL_NAMES].sort());
+    expect(names).toEqual(TAKT_MCP_MANAGER_TOOL_NAMES.filter((name) => name !== 'takt_wait_command').sort());
     expect(names).toEqual(expect.arrayContaining(added));
     const server = createTaktMcpServer({}, { toolSet: 'read-only', allowedProjectRoot: cwd });
     const reader = new Client({ name: 'question-read-only-test', version: '1.0.0' });

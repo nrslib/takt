@@ -63,13 +63,15 @@ function requireProcessId(pid: number | undefined): number {
   return pid;
 }
 
-function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
+function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
   try {
     process.kill(-pid, signal);
+    return true;
   } catch (error) {
     if (!isProcessMissing(error)) {
       throw error;
     }
+    return false;
   }
 }
 
@@ -161,11 +163,11 @@ async function waitForPosixProcessGroupExit(pid: number): Promise<void> {
   }
 }
 
-async function terminatePosixProcessTree(targetPid: number | undefined): Promise<void> {
+export async function terminatePosixProcessTree(targetPid: number | undefined): Promise<boolean> {
   const pid = requireProcessId(targetPid);
   let terminationError: unknown;
   try {
-    signalPosixProcessGroup(pid, 'SIGTERM');
+    if (!signalPosixProcessGroup(pid, 'SIGTERM')) return false;
   } catch (error) {
     terminationError = error;
   }
@@ -181,12 +183,12 @@ async function terminatePosixProcessTree(targetPid: number | undefined): Promise
     terminationError ??= error;
   }
   if (terminationError !== undefined) throw terminationError;
+  return true;
 }
 
-function terminateProcessTree(pid: number | undefined): Promise<void> {
-  return process.platform === 'win32'
-    ? forceTerminateWindowsProcess(pid)
-    : terminatePosixProcessTree(pid);
+async function terminateProcessTree(pid: number | undefined): Promise<void> {
+  if (process.platform === 'win32') await forceTerminateWindowsProcess(pid);
+  else await terminatePosixProcessTree(pid);
 }
 
 function abortReason(signal: AbortSignal): unknown {

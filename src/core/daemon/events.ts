@@ -1,3 +1,4 @@
+import type { WaitCommandCompleted } from './waitCommand.js';
 import type { ConversationActor } from '../../infra/conversations/schema.js';
 import type { GoalQuestion, GoalTaskResult } from '../../infra/goals/schema.js';
 import type { ConversationCommand } from '../../features/manager/conversationPort.js';
@@ -32,6 +33,7 @@ export type WatchObservation = {
 
 /** F/C/E が作り、A が優先度を決め、D が同じ会話の文脈で処理する。 */
 export type TurnEvent =
+  | WaitCommandCompleted
   // 接続ごとの指定を発言に固定する。session の provider/model は上書き指定の代用にしない。
   | { kind: 'human_command'; command: HumanCommand; speaker: ConversationActor; agentOverrides?: AssistantCliOverrides }
   | { kind: 'inquiry_answer'; command: Extract<ConversationCommand, { kind: 'answer_question' }> }
@@ -47,6 +49,7 @@ export function eventGoalReference(event: TurnEvent): { repositoryDirectory: str
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
     case 'goal_pr_failed': case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
+    case 'wait_command_completed': return { repositoryDirectory: event.repositoryDirectory };
     case 'patrol': return { repositoryDirectory: event.repositoryDirectory };
     case 'watch_observation': {
       const observation = event.observation;

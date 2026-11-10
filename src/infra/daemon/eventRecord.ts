@@ -1,3 +1,4 @@
+import { WaitCommandCompletedSchema } from '../../core/daemon/waitCommand.js';
 import { z } from 'zod/v4';
 import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
 import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
@@ -31,6 +32,7 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
 ]);
 const event = z.discriminatedUnion('kind', [
+  WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),

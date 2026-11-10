@@ -1,12 +1,18 @@
+import { realpath, stat } from 'node:fs/promises';
+import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
+import { isAbsolute, relative, sep } from 'node:path';
+import type { DaemonWaitCommands } from './waitCommands.js';
 import type { DaemonIngress, DaemonStateOwner } from '../../core/daemon/ports.js';
 import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
 import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { hasCode } from '../../infra/daemon/privateFile.js';
 
 export function createDaemonStateRequests(options: {
   conversations: DaemonConversations;
+  waitCommands?: DaemonWaitCommands;
   ingress: Pick<DaemonIngress, 'accept'>;
   connectedPorts(id: string): readonly string[];
 }): DaemonStateOwner {
@@ -16,6 +22,32 @@ export function createDaemonStateRequests(options: {
     signal.throwIfAborted();
     if (request.kind === 'save_conversation') return conversations.store.save(turn, request.change, signal);
     const source = await conversations.store.read(turn.conversationId);
+    if (request.kind === 'wait_command') {
+      const owner = source?.state.assignment;
+      if (owner === undefined || owner.kind === 'daemon' || turn.conversationId !== conversationId(owner)
+        || !await conversations.routing.permits(owner, turn.conversationId)) return forbidden();
+      if (options.waitCommands === undefined) throw new Error('Wait commands are unavailable');
+      const input = WaitCommandInputSchema.parse({ command: request.command, description: request.description, cwd: request.cwd,
+        timeoutSeconds: request.timeoutSeconds, ...(request.goalId === undefined ? {} : { goalId: request.goalId }) });
+      const assignment = await conversations.routing.display(owner);
+      if (assignment.kind === 'daemon') return forbidden();
+      const cwd = await realpath(input.cwd);
+      let repositoryDirectory: string | undefined;
+      for (const directory of assignment.repositoryDirectories) {
+        let root: string;
+        try { root = await realpath(directory); }
+        catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
+        const path = relative(root, cwd);
+        if (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)) {
+          repositoryDirectory = directory;
+          break;
+        }
+      }
+      if (repositoryDirectory === undefined) return forbidden();
+      if (!(await stat(cwd)).isDirectory()) throw new Error('cwd must be a directory');
+      const id = await options.waitCommands.register(turn.conversationId, repositoryDirectory, { ...input, cwd }, signal);
+      return { kind: 'wait_command_registered', id };
+    }
     if (request.kind === 'publish_workspace_inquiry_answer') {
       const owner = source?.state.assignment;
       if (owner?.kind !== 'workspace' || turn.conversationId !== conversationId(owner)
