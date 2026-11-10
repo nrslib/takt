@@ -153,6 +153,13 @@ export const WorkflowCategoryOverlaySchema = z.object({
 
 const ManagerPermissionSchema = z.enum(['auto', 'full']);
 
+const ManagerWorkflowEntrySchema = z.union([
+  z.string().trim().min(1),
+  z.record(z.string(), z.string()).refine((entry) => Object.keys(entry).length === 1, {
+    message: 'A manager workflow entry must contain exactly one name and description pair',
+  }).pipe(z.record(z.string().trim().min(1), z.string())),
+]);
+
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
@@ -160,6 +167,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
     default_workflow: z.string().trim().min(1).optional(),
+    workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
     // Deprecated: accepted for existing configuration files and ignored.
     sensitive_paths: z.unknown().optional(),
     notifications: z.object({

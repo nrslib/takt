@@ -38,6 +38,7 @@ import * as githubPr from '../infra/github/pr.js';
 import type { CreatePrOptions } from '../infra/git/types.js';
 import * as processRunner from '../shared/utils/spawn.js';
 import * as goalNotifications from '../features/manager/notifications.js';
+import { saveProjectConfig, loadProjectConfig } from '../infra/config/project/projectConfig.js';
 
 const prStatus = vi.hoisted(() => ({ command: vi.fn() }));
 const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goal branch tip/i;
@@ -78,7 +79,7 @@ describe('manager goal task enqueue', () => {
     mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', 'base_branch: release',
-      'manager:', '  auto_run: false',
+      'manager:', '  workflows: all', '  auto_run: false',
     ].join('\n'));
     goalBranch = (await registerFixtureGoal(cwd)).branch;
     const goalCommit = git(cwd, ['commit-tree', 'main^{tree}', '-p', 'main', '-m', 'goal progress']);
@@ -117,6 +118,94 @@ describe('manager goal task enqueue', () => {
       name: enqueueTool, arguments: { cwd, goalId, purpose, task, workflow: 'safe', ...extra },
     });
   }
+
+  it('lists only configured manager workflows with usage descriptions and the additional default', async () => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: {
+      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'], defaultWorkflow: 'simple',
+    } });
+    await withEnqueue(async (client) => {
+      const result = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content)).workflows).toEqual([
+        { name: 'safe', description: 'fixture safe', usageDescription: 'Use for input validation' },
+        expect.objectContaining({ name: 'simple' }),
+      ]);
+      expect((await enqueue(client)).isError).toBeUndefined();
+      expect((await enqueue(client, { workflow: 'simple', workKey: 'default-work' })).isError).toBeUndefined();
+    });
+  });
+
+  it('rejects disallowed manager submissions without saving tasks and explains how to configure candidates', async () => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: ['simple'] } });
+    await withEnqueue(async (client) => {
+      const result = await enqueue(client);
+      expect(result.isError).toBe(true);
+      const reason = firstTextContent(result.content);
+      for (const value of ['safe', 'simple', 'manager.workflows', 'project .takt/config.yaml', 'global .takt/config.yaml', 'TAKT_CONFIG_DIR']) expect(reason).toContain(value);
+      expect(pendingTasks()).toEqual([]);
+      expect(savedGoalWork()).toEqual([]);
+    });
+  });
+
+  it('keeps non-manager MCP submissions and listings unrestricted', async () => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: [] } });
+    for (const toolSet of [undefined, 'all'] as const) await withServer(cwd, toolSet, async (client) => {
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(JSON.parse(firstTextContent(listed.content)).workflows.map((entry: { name: string }) => entry.name)).toContain('safe');
+      expect((await enqueue(client, { workKey: toolSet ?? 'default-tool-set' })).isError).toBeUndefined();
+    });
+  });
+
+  it('returns existing work after its workflow is removed from the manager allowlist', async () => {
+    await withEnqueue(async (client) => {
+      const first = await enqueue(client, { workKey: 'validation' });
+      expect(first.isError).toBeUndefined();
+      const created = JSON.parse(firstTextContent(first.content));
+      saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: ['simple'] } });
+
+      const repeated = await enqueue(client, { workKey: 'validation' });
+
+      expect(repeated.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: created.taskName, workflow: 'safe' });
+      expect((await enqueue(client, { workKey: 'new-validation' })).isError).toBe(true);
+      expect(savedGoalWork()).toEqual([{ taskName: created.taskName, purpose }]);
+    });
+  });
+
+  it.each(['project', 'global'] as const)('reflects %s configuration file edits in listings and submissions on the same manager connection', async (scope) => {
+    const configPath = scope === 'project' ? join(cwd, '.takt', 'config.yaml') : join(getGlobalConfigDir(), 'config.yaml');
+    if (scope === 'global') {
+      saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false } });
+    }
+    writeFileSync(configPath, [
+      'provider: mock', 'language: en', 'manager:', '  workflows: all', '  auto_run: false',
+    ].join('\n'));
+    await withEnqueue(async (client) => {
+      const initial = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(JSON.parse(firstTextContent(initial.content)).workflows.map((entry: { name: string }) => entry.name)).toContain('safe');
+      expect((await enqueue(client, { workKey: 'before-edit' })).isError).toBeUndefined();
+
+      writeFileSync(configPath, [
+        'provider: mock', 'language: ja',
+        'manager:', '  auto_run: false',
+      ].join('\n'));
+      const updated = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      const workflows = JSON.parse(firstTextContent(updated.content)).workflows as Array<{ name: string; usageDescription: string }>;
+      expect(workflows.map(({ name }) => name)).toEqual(['default', 'simple']);
+      expect(workflows.every(({ usageDescription }) => /[\u3040-\u30ff\u4e00-\u9fff]/u.test(usageDescription))).toBe(true);
+      expect((await enqueue(client, { workKey: 'after-edit' })).isError).toBe(true);
+      expect((await enqueue(client, { workflow: 'simple', workKey: 'allowed-after-edit' })).isError).toBeUndefined();
+
+      writeFileSync(configPath, [
+        'provider: mock', 'language: en',
+        'manager:', '  auto_run: false',
+      ].join('\n'));
+      const next = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      const nextWorkflows = JSON.parse(firstTextContent(next.content)).workflows as Array<{ name: string; usageDescription: string }>;
+      expect(nextWorkflows.map(({ name }) => name)).toEqual(['default', 'simple']);
+      expect(nextWorkflows.map(({ usageDescription }) => usageDescription)).not.toEqual(workflows.map(({ usageDescription }) => usageDescription));
+    });
+  });
 
   function pendingTasks() {
     return new TaskRunner(cwd).listPendingTaskItems();
@@ -266,6 +355,7 @@ describe('manager goal task enqueue', () => {
   });
 
   it('accepts a PR effect in a workflow_call target before enqueue', async () => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: ['parent'] } });
     writeWorkflow('child', [
       '  - name: work', '    kind: system', '    effects:',
       '      - type: close_pr', '        pr: 1',
@@ -680,7 +770,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   function configure(mode: 'auto' | 'approve' | undefined, target?: string) {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),
-      'manager:', '  auto_run: false', ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
+      'manager:', '  workflows: all', '  auto_run: false', ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
     ].join('\n'));
   }
 
@@ -1366,7 +1456,7 @@ describe('manager instructions to running goal work', () => {
     for (const root of [cwd, outside]) {
       initializeRepository(root);
       mkdirSync(join(root, '.takt', 'workflows'), { recursive: true });
-      writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  auto_run: false\n');
+      writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  workflows: [safe]\n  auto_run: false\n');
       writeFileSync(join(root, '.takt', 'workflows', 'safe.yaml'), [
         'name: safe', 'max_steps: 2', 'initial_step: work', 'steps:',
         '  - name: work', '    persona: coder', '    instruction: Implement validation',
@@ -2368,6 +2458,7 @@ describe('goal PR publication and merge through manager MCP', () => {
   });
 
   it.each(['prepare', 'merge'] as const)('enqueues %s immediately without launching takt merge', async (until) => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: [] } });
     const spawn = vi.spyOn(processRunner, 'spawnManagedProcess');
     await withMerge(async (client) => {
       const result = await merge(client, { until });
@@ -2518,7 +2609,7 @@ describe('task integration status through MCP with real Git', () => {
 
 async function withServer<T>(
   cwd: string,
-  toolSet: 'all' | 'read-only' | 'manager',
+  toolSet: TaktMcpToolSet | undefined,
   action: (client: Client) => Promise<T>,
 ): Promise<T> {
   const client = new Client({ name: 'goal-test-client', version: '1.0.0' });

@@ -40,6 +40,13 @@ import {
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
+import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
+import { withConfigSnapshot } from '../../infra/config/configSnapshot.js';
+import { loadProjectConfig, loadProjectConfigTraceState } from '../../infra/config/project/projectConfig.js';
+import { invalidateGlobalConfigCache, loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
+import { loadGlobalConfigTraceState } from '../../infra/config/global/globalConfigCore.js';
 import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
@@ -130,6 +137,14 @@ export function createTaktMcpServer(
   options: TaktMcpServerOptions = {},
 ): McpServer {
   const operationDeps = buildMcpOperationDependencies(deps, options);
+  const withWorkflowConfig = <T>(cwd: string, action: () => T): T => {
+    invalidateGlobalConfigCache();
+    const snapshot = {
+      projectDir: cwd, project: loadProjectConfig(cwd), global: loadGlobalConfig(),
+      projectTrace: loadProjectConfigTraceState(cwd), globalTrace: loadGlobalConfigTraceState(),
+    };
+    return withConfigSnapshot(snapshot, action);
+  };
   const globalConfigDirectory = getGlobalConfigDir();
   let managerIdentity: ManagerAssignmentIdentity = options.managerAssignment ?? { kind: 'repository', repositoryDirectory: operationDeps.allowedProjectRoot! };
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
@@ -138,7 +153,7 @@ export function createTaktMcpServer(
   const withTurn = (action: () => Promise<CallToolResult>): Promise<CallToolResult> => options.turnScope === undefined
     ? action() : options.turnScope.run(action);
   const turnSignal = (signal: AbortSignal): AbortSignal => options.turnScope === undefined ? signal : options.turnScope.signal(signal);
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, configScope?: 'workflow'): Promise<CallToolResult> => {
     try { return await withTurn(async () => {
       const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
       const currentDeps = assignment !== undefined
@@ -146,13 +161,23 @@ export function createTaktMcpServer(
         : operationDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
-      try { return await action(currentDeps, assignment); }
-      finally {
-        if (launchAfterOperation && operationDeps.readOnly !== true) {
-          const { ensureManagerRun } = await import('../manager/autoRun.js');
-          await ensureManagerRun(projectCwd);
+      const useWorkflowConfig = configScope === 'workflow' && options.toolSet === 'manager';
+      const execute = async (): Promise<CallToolResult> => {
+        try {
+          const deps = useWorkflowConfig ? {
+            ...currentDeps,
+            managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,
+          } : currentDeps;
+          return await action(deps, assignment);
         }
-      }
+        finally {
+          if (launchAfterOperation && operationDeps.readOnly !== true) {
+            const { ensureManagerRun } = await import('../manager/autoRun.js');
+            await ensureManagerRun(projectCwd);
+          }
+        }
+      };
+      return useWorkflowConfig ? withWorkflowConfig(projectCwd, execute) : execute();
     }); } catch (error) { return errorResult(errorContext, error); }
   };
   const server = new McpServer({
@@ -215,7 +240,7 @@ export function createTaktMcpServer(
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
-  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps)));
+  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, 'workflow'));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',
     description: 'Choose a candidate with takt_list_workflows, then read its steps here to confirm what the task will do. Accepts a workflow name, scope reference or path. Returns description, step names, descriptions, kinds, wait, system_inputs, effects, rules and resolved workflow_call targets. Follow a target with its getInput to preserve parent context and arguments. Responses fit 64 KiB, with explicit truncation; use offset/limit for steps.',
@@ -273,7 +298,7 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained. Workflow names, scope references and paths are accepted. autoPr and shouldPublishBranchToOrigin default to false and may be specified on submission. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false, 'workflow'));
     server.registerTool('takt_requeue_goal_task', {
       title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
       inputSchema: requeueGoalTaskInputSchema,
