@@ -13,6 +13,7 @@ import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-si
 import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
+import * as turnFailureNotification from '../features/manager/turnFailureNotification.js';
 import { conversationDaemon } from './helpers/conversation-daemon.js';
 import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
 import { receiveInboxChange } from '../features/daemon/inbox.js';
@@ -588,12 +589,14 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     const originalSetup = MockProvider.prototype.setup;
     const started: string[] = [];
     const processed: TurnEvent[] = [];
+    const failures = vi.spyOn(turnFailureNotification, 'notifyManagerTurnFailure');
     vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'run-fixture', version: '1' }), servers: {}, dispose: async () => {} });
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = originalSetup.call(this, config);
       return { call: async (prompt, options) => {
         if (config.name === 'manager') {
-          const payload = prompt.split('\n\n').find((part) => part.startsWith('{\"event\":'));
+          expect(options.cwd).toBe(cwd);
+          const payload = prompt.split('\n').map((line) => line.trim()).find((line) => line.startsWith('{\"event\":'));
           if (payload === undefined) throw new Error('Manager event payload was not sent');
           processed.push((JSON.parse(payload) as { event: TurnEvent }).event);
           return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'Retry result inspected', summary: null }, sessionId: 'run-manager' };
@@ -642,6 +645,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         path: record.filePath, generation: record.event.createdAt, value: record.event, removed: false }, files, daemon.conversations, daemon.dispatcher);
       await done.promise; await daemon.dispatcher.drain();
     } finally { await daemon.close(); }
+    expect(failures.mock.calls.map(([, , error]) => error)).toEqual([]);
     expect(outcomes).toEqual(saved.map(() => expect.objectContaining({ kind: 'completed', result: { kind: 'reply', message: 'Retry result inspected' } })));
     expect(processed.map((event) => event.kind)).toEqual(['goal_registered', 'task_completed']);
     const event = processed.find((event) => event.kind === 'task_completed');

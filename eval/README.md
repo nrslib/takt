@@ -1809,10 +1809,11 @@ origin を省略し、本文から補わない。JS は発信元の到達、Y �
 fixture はその scenario が参照するものだけをコピーする。別 suite の scenario・fixture・assert はコピーしない。
 全 suite 共通の runner と registry は main のものを使い、green から上書きしない。
 準備スクリプトは worktree を追加するため、新しい空きパスを指定する。
+green の worktree 内（サブディレクトリでも可）から実行する。
 
 ```bash
-GREEN=/Users/nrs/work/git/takt3-worktrees/mgr-context
-RED=/private/tmp/takt-manager-turn-context-red
+GREEN=$(git rev-parse --show-toplevel)
+RED="${TMPDIR:-/tmp}/takt-manager-turn-context-red"
 MAIN_SHA=$(git -C "$GREEN" rev-parse origin/main)
 node "$GREEN/eval/scripts/prepare-manager-turn-context-red.mjs" "$MAIN_SHA" "$RED"
 npm --prefix "$RED" ci

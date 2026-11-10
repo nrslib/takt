@@ -155,7 +155,11 @@ function expectGoalMemory(memory: string, goal: Goal): void {
 
 function expectConversationInput(prompt: string, text: string, goal: Goal): void {
   const [conversation, context] = prompt.split('\n\nBusiness context (not approval): ');
-  expect(conversation).toBe(text);
+  const parts = conversation!.split('\n\n');
+  const body = parts.pop()!;
+  expect(parts[0]).toMatch(/^## /u);
+  expect(parts.slice(1).join('\n\n').trim()).not.toBe('');
+  expect(JSON.parse(body)).toEqual({ speaker: { namespace: 'local', id: 'operator' }, text });
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), goal);
 }
 
@@ -622,6 +626,7 @@ it.each([
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(submit).toHaveBeenCalledOnce();
+  expect(submit.mock.calls[0]![0]).toEqual({ kind: 'message', text });
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
   expectConversationInput(call.mock.calls[0]![0], text, saved);
@@ -860,6 +865,7 @@ it.each([
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(submit).toHaveBeenCalledOnce();
+  expect(submit.mock.calls[0]![0]).toEqual({ kind: 'message', text });
   const submission = await submit.mock.results[0]!.value;
   if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
   expectConversationInput(call.mock.calls[0]![0], text, saved);
