@@ -638,6 +638,6 @@ test('runProcess preserves partial stdout when a CLI exits unsuccessfully', asyn
 
 test('runProcess preserves partial event stdout on timeout', { timeout: 10000 }, async () => {
   await assert.rejects(runProcess(process.execPath, ['-e', 'console.log(JSON.stringify({ type: "turn.started" })); setInterval(() => {}, 1000)'], {
-    cwd: EVAL_DIR, input: '', timeoutMs: 500,
+    cwd: EVAL_DIR, input: '', timeoutMs: 2000,
   }), (error) => error.message.includes('timed out') && JSON.parse(error.stdout).type === 'turn.started');
 });

@@ -20,6 +20,8 @@ export const ConversationAssignmentSchema = z.union([
   ManagerConversationAssignmentSchema, z.object({ kind: z.literal('daemon') }).strict(),
 ]);
 export const ConversationActorSchema = z.object({ namespace: nonempty, id: nonempty }).strict();
+export const DirectorMessageOriginSchema = z.enum(['director', 'human']);
+export type DirectorMessageOrigin = z.infer<typeof DirectorMessageOriginSchema>;
 const directorConversationId = ConversationIdSchema.refine((id) => id === conversationId({ kind: 'daemon' }));
 export const ConversationAgentOverridesSchema = z.object({
   provider: z.enum(PROVIDER_TYPES).optional(), model: nonempty.optional(),
@@ -60,6 +62,7 @@ export const ConversationRecordSchema = z.object({
   assignment: ConversationAssignmentSchema,
   counterpart: ConversationActorSchema, lastSpeaker: ConversationActorSchema.nullable(),
   provider: nonempty, model: z.string().nullable(), sessionId: nonempty.nullable(),
+  contextKey: nonempty.max(128).optional(),
   agentOverrides: ConversationAgentOverridesSchema.optional(),
   interruptedMessage: z.string().nullable().optional(),
   bindings: z.array(PortBindingSchema), revision,

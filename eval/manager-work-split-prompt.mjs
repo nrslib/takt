@@ -5,15 +5,17 @@ import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
-import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
+import { EventInputSchema } from '../dist/infra/daemon/eventRecord.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../dist/features/interactive/taskInstructionFormat.js';
 import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
-import { renderTemplate } from '../dist/shared/prompts/index.js';
+const production = await import(process.env.TAKT_EVAL_MANAGER_PROMPT_MODULE ?? '../dist/features/manager/conversationPrompt.js');
 import { managerStateReads } from './manager-work-split-reads.mjs';
 import * as schemas from '../dist/features/mcp/schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRemovalSchemas.js';
+import { stopGoalTaskInputSchema } from '../dist/features/mcp/goalTaskStopSchemas.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const managerWriteSchemas = {
@@ -21,6 +23,7 @@ export const managerWriteSchemas = {
   takt_requeue_goal_task: requeueGoalTaskInputSchema,
   takt_retry_goal_task: retryGoalTaskInputSchema,
   takt_remove_goal_task: removeGoalTaskInputSchema,
+  takt_stop_goal_task: stopGoalTaskInputSchema,
   takt_merge_goal_task: schemas.mergeGoalTaskInputSchema,
   takt_complete_goal: schemas.completeGoalInputSchema,
   takt_merge_goal_pr: schemas.mergeGoalPrInputSchema,
@@ -48,7 +51,7 @@ export function loadManagerCase(caseId, lang) {
     current = JSON.parse(JSON.stringify(fixture).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g,
       (timestamp) => new Date(Date.parse(timestamp) + offset).toISOString()));
   }
-  if (current.turn === 'event') current.readResults = managerStateReads(current);
+  if (current.goal !== undefined && current.tasks !== undefined && current.execution !== true) current.readResults = managerStateReads(current);
   return current;
 }
 
@@ -70,18 +73,14 @@ export function buildManagerSystemPrompt(fixture) {
       throw new Error('Manager facets are missing');
     }
     const specificationConfiguration = resolveFormalSpecConfigurationWithoutPrompt(projectDir);
-    return [
-      persona.trim(), policy.trim(), knowledge.trim(), renderTemplate(instruction.trim(), {
-        formalSpec: specificationConfiguration.mode,
-        formalSpecCommentsEnabled: specificationConfiguration.mode && specificationConfiguration.comments,
-        formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang),
-      }),
-      `Formal specification configuration: ${JSON.stringify(specificationConfiguration)}`,
-      `Repository: ${JSON.stringify(fixture.cwd)}`,
-      `Default workflow: ${JSON.stringify(fixture.defaultWorkflow)}`,
-      `Repository manager.main_merge: ${JSON.stringify(fixture.mainMerge)}`,
-      ...(process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY === '1' ? [] : [`Concurrency limit: ${fixture.concurrency}`]),
-    ].join('\n\n');
+    const system = production.buildManagerSystemPrompt({
+      lang: fixture.lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang), repository: fixture.cwd,
+      defaultWorkflow: fixture.defaultWorkflow, mainMerge: fixture.mainMerge, concurrency: fixture.concurrency,
+    });
+    // Retain the older concurrency comparison as an eval-only transformation.
+    return process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY === '1'
+      ? system.replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?$/, '') : system;
   } finally {
     if (priorConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
     else process.env.TAKT_CONFIG_DIR = priorConfigDir;
@@ -103,26 +102,57 @@ export function resolveManagerEvalFacet(facetType, envKey, context, root) {
     : resolveRefToContent('manager', { manager: source }, context.projectDir, facetType, context);
 }
 
-export function buildManagerEventInput(cwd, saved) {
-  const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
-  return buildManagerEventPrompt(event);
+export function buildManagerEventInput(cwd, saved, lang = 'en', question) {
+  const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved
+    : saved.kind === 'director_message' ? EventInputSchema.shape.event.parse(saved)
+      : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
+  return production.buildManagerTurnPrompt({ lang, event, question });
 }
 
 export default function buildManagerWorkSplitPrompt({ vars }) {
   const fixture = loadManagerCase(vars.case, vars.lang);
   if (fixture.execution === true) return JSON.stringify({ case: vars.case, lang: fixture.lang, user: fixture.user });
   const system = buildManagerSystemPrompt(fixture);
-  const user = fixture.turn === 'event'
-    ? buildManagerEventInput(fixture.cwd, fixture.event)
-    : fixture.user;
+  const user = buildManagerCurrentInput(fixture);
   if (typeof user !== 'string' || user.length === 0) throw new Error('Missing turn input');
   const tools = Object.fromEntries(Object.entries(managerWriteSchemas).map(([name, schema]) => [name,
     toJSONSchema(schema, { unrepresentable: 'any', io: 'input' }),
   ]));
   const history = fixture.previousTurns === undefined ? ''
-    : `PREVIOUS TURNS:\n${JSON.stringify(fixture.previousTurns.map(({ event, response }) => ({
-      input: buildManagerEventInput(fixture.cwd, event), response,
-    })))}\n\n`;
+    : `PREVIOUS TURNS:\n${JSON.stringify(buildManagerHistory(fixture))}\n\n`;
   const label = fixture.lang === 'ja' ? 'このターンで既に読んだ結果' : 'Results already read this turn';
   return `SYSTEM:\n${system}\n\n${history}TOOLS:\n${JSON.stringify(tools)}\n\nUSER:\n${user}\n\n${label}:\n${JSON.stringify(fixture.readResults)}\n\n${replayConstraint[fixture.lang]}`;
+}
+
+export function buildManagerCurrentInput(fixture) {
+  if (fixture.turn === 'event') {
+    const question = fixture.event.kind === 'answer'
+      ? [fixture.goal, ...(fixture.additionalGoals ?? [])].find((goal) => goal?.id === fixture.event.goalId)?.questions?.find(({ id }) => id === fixture.event.questionId)?.body : undefined;
+    return buildManagerEventInput(fixture.cwd, fixture.event, fixture.lang, question);
+  }
+  if (fixture.turn === 'tool_result') return JSON.stringify(fixture.input);
+  return production.buildManagerTurnPrompt({ lang: fixture.lang, event: {
+    kind: 'human_command', speaker: { namespace: 'tui', id: 'eval-person' },
+    command: { kind: 'message', text: fixture.user },
+  } });
+}
+
+export function buildManagerHistory(fixture) {
+  return fixture.previousTurns.map((entry) => {
+    if (entry.source === undefined) return {
+      input: buildManagerEventInput(fixture.cwd, entry.event, fixture.lang), response: entry.response,
+    };
+    switch (entry.source) {
+      case 'human': return { source: entry.source, role: 'user', content: production.buildManagerTurnPrompt({
+        lang: fixture.lang, event: { kind: 'human_command', speaker: entry.speaker,
+          command: { kind: 'message', text: entry.text } },
+      }) };
+      case 'event': return { source: entry.source, role: 'user', content: buildManagerEventInput(fixture.cwd, entry.event, fixture.lang) };
+      case 'manager': return { source: entry.source, role: 'assistant', content: entry.response };
+      case 'tool_call': return { ...entry, role: 'assistant' };
+      case 'tool_result': return { ...entry, role: 'tool' };
+      case 'environment_notice': return { ...entry, role: 'user' };
+      default: throw new Error(`Unknown history source: ${entry.source}`);
+    }
+  });
 }

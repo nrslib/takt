@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { TurnStart } from '../../core/daemon/messages.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 
+export function humanTurnText(prompt: string): string {
+  const body: { text: string } = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
+  return body.text;
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;

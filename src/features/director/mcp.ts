@@ -11,6 +11,7 @@ import { getGoalInputSchema, listGoalsInputSchema } from '../mcp/schemas.js';
 import { jsonResult, pagedResult } from '../mcp/response.js';
 import { listDirectorManagers, resolveDirectorManager } from './managers.js';
 import { directorNotificationTargetSchema, resolveDirectorNotificationSubject } from './notificationTarget.js';
+import { DirectorMessageOriginSchema, type DirectorMessageOrigin } from '../../infra/conversations/schema.js';
 
 export const DIRECTOR_MCP_SERVER_NAME = 'takt_director';
 export const DIRECTOR_TOOL_NAMES = [
@@ -19,7 +20,7 @@ export const DIRECTOR_TOOL_NAMES = [
 export const DIRECTOR_TOOL_ALLOWLIST = DIRECTOR_TOOL_NAMES.map((name) => `mcp__${DIRECTOR_MCP_SERVER_NAME}__${name}`);
 
 export interface DirectorStateActions {
-  tellManager(managerId: string, text: string): Promise<Record<string, unknown>>;
+  tellManager(managerId: string, text: string, origin: DirectorMessageOrigin): Promise<Record<string, unknown>>;
   notifyHuman(message: string, subject?: DirectorNotificationSubject): Promise<{ id: string; message: string }>;
 }
 
@@ -63,10 +64,10 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
       result.errors.length > 0, { errors: result.errors.map(({ repositoryDirectory, goalId }) => ({ repositoryDirectory, goalId })) });
   }));
   server.registerTool('takt_tell_manager', { description: 'Save a message for a manager through daemon IPC and return accepted with operationId and managerId immediately. Saved messages are processed in order. Replies, failures, and interruptions appear later as director notifications with the same operationId. Acceptance does not mean a requested merge succeeded. Never automatically resend an accepted message.',
-    inputSchema: z.object({ managerId, text: z.string().min(1) }).strict() }, guarded(async (value: { managerId: string; text: string }) => {
+    inputSchema: z.object({ managerId, text: z.string().min(1), origin: DirectorMessageOriginSchema.describe('Use director for your own request. Use human only to relay an instruction received from a person; put that instruction in text and keep your own requests separate.') }).strict() }, guarded(async (value: { managerId: string; text: string; origin: DirectorMessageOrigin }) => {
     await resolveDirectorManager(configDirectory, value.managerId);
     signal.throwIfAborted();
-    return jsonResult(await actions.tellManager(value.managerId, value.text));
+    return jsonResult(await actions.tellManager(value.managerId, value.text, value.origin));
   }));
   server.registerTool('takt_notify_human', { description: 'Save a director notification and show it in the director conversation. New notifications from this turn are grouped into one post when director Slack is configured.',
     inputSchema: z.object({ message: z.string().min(1), target: directorNotificationTargetSchema.optional() }).strict() },

@@ -402,6 +402,19 @@ ja:
         workflows:
           - name: default
             description: Implementation and review
+    - tool: Bash
+      arguments:
+        command: git -C /tmp/catalog-final-check rev-parse HEAD
+      result: |
+        cccccccccccccccccccccccccccccccccccccccc
+    - tool: Bash
+      arguments:
+        command: npm --prefix /tmp/catalog-final-check test -- tests/admin-api.test.ts
+      result: "Environment: Linux, Node.js 22.22.0. Working location: /tmp/catalog-final-check (temporary detached worktree). HEAD: cccccccccccccccccccccccccccccccccccccccc. tests/admin-api.test.ts: ping requestId logging, users empty page, next page and final page passed. Exit code: 0."
+    - tool: Bash
+      arguments:
+        command: npm --prefix /tmp/catalog-final-check run build
+      result: "Environment: Linux, Node.js 22.22.0. Working location: /tmp/catalog-final-check. HEAD: cccccccccccccccccccccccccccccccccccccccc. Build passed. Exit code: 0. No files changed during verification."
   runArtifacts:
     - directory: /workspace/project
       meta:
@@ -853,6 +866,19 @@ en:
         workflows:
           - name: default
             description: Implementation and review
+    - tool: Bash
+      arguments:
+        command: git -C /tmp/catalog-final-check rev-parse HEAD
+      result: |
+        cccccccccccccccccccccccccccccccccccccccc
+    - tool: Bash
+      arguments:
+        command: npm --prefix /tmp/catalog-final-check test -- tests/admin-api.test.ts
+      result: "Environment: Linux, Node.js 22.22.0. Working location: /tmp/catalog-final-check (temporary detached worktree). HEAD: cccccccccccccccccccccccccccccccccccccccc. tests/admin-api.test.ts: ping requestId logging, users empty page, next page and final page passed. Exit code: 0."
+    - tool: Bash
+      arguments:
+        command: npm --prefix /tmp/catalog-final-check run build
+      result: "Environment: Linux, Node.js 22.22.0. Working location: /tmp/catalog-final-check. HEAD: cccccccccccccccccccccccccccccccccccccccc. Build passed. Exit code: 0. No files changed during verification."
   runArtifacts:
     - directory: /workspace/project
       meta:

@@ -8,7 +8,8 @@ const payload = (result) => JSON.parse(result.content[0].text);
 
 export function managerStateReads(fixture) {
   const goals = [fixture.goal, ...(fixture.additionalGoals ?? [])].map((goal) => GoalSchema.parse(goal));
-  const reads = fixture.readResults.filter(({ tool }) => !['takt_get_goal', 'takt_list_tasks'].includes(tool)).map((read) => {
+  const reads = fixture.readResults.filter(({ tool, arguments: args }) => !['takt_get_goal', 'takt_list_tasks'].includes(tool)
+    && !(tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`)).map((read) => {
     if (read.tool === 'takt_list_standalone_inquiries') {
       const inquiries = read.result.inquiries.map((inquiry) => ({
         ...inquiry, kind: inquiry.kind ?? 'question', createdAt: inquiry.createdAt ?? null,

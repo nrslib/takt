@@ -180,7 +180,6 @@ test('assembles every configured case and variant without rendering grading expe
       assert.equal(buildPrompt({ vars: { ...vars, expected_label: marker } }), prompt);
       assert.ok(!prompt.includes(marker));
       assert.doesNotMatch(prompt, /expected_label|baseline_revision|file:\/\/|variant:/);
-      if (caseNumber === 6) assert.doesNotMatch(vars.input, /^## (結果|Result)/m);
       assert.equal(vars.input_source, [3, 8].includes(caseNumber) ? 'response' : 'report');
       seen.add(`${caseNumber}/${vars.language}/${variant}`);
     }

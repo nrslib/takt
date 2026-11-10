@@ -85,7 +85,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     };
   }
   if (config.manager !== undefined) {
-    raw.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
+    raw.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, workflows: config.manager.workflows, notifications: config.manager.notifications };
   }
   const rawMerge = denormalizeMergeConfig(config.merge);
   if (rawMerge !== undefined) raw.merge = rawMerge;

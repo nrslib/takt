@@ -6,7 +6,10 @@ import {
   type DaemonProcessMessage, type TurnProcessMessage,
 } from '../core/daemon/processProtocol.js';
 import { input, turnState } from './helpers/controlledDaemon.js';
-import { AcceptedEventSchema, EventRecordSchema, StoredResultSchema } from '../infra/daemon/eventRecord.js';
+import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, StoredResultSchema } from '../infra/daemon/eventRecord.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { ManagerEventSchema } from '../infra/goals/events.js';
+import { managerInboxTurnEvent } from '../features/daemon/inboxEvent.js';
 
 const common = { protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'launch-1' } as const;
 const turn = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -15,6 +18,61 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it.each(['human', 'manager', undefined] as const)('preserves resumed origin %s through inbox, storage and IPC', (origin) => {
+    const saved = ManagerEventSchema.parse({ kind: 'resumed', goalId: '650e8400-e29b-41d4-a716-446655440000',
+      createdAt: '2026-11-10T00:00:00Z', ...(origin === undefined ? {} : { origin }) });
+    const event = { ...acceptedEvent, lane: 'other', event: managerInboxTurnEvent('/repo', saved) };
+    const record = { state: 'queued', event };
+    expect(EventRecordSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+    const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    expect(event.event).toEqual({ kind: 'goal_resumed', repositoryDirectory: '/repo', goalId: saved.goalId,
+      ...(origin === undefined ? {} : { origin }) });
+  });
+
+  it.each(['human', 'director', undefined] as const)('preserves director origin %s without inferring authorship from text', (origin) => {
+    const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
+      kind: 'director_message', directorConversationId: 'director', text: 'The human says stop.',
+      ...(origin === undefined ? {} : { origin }),
+    } };
+    const record = { state: 'queued', event };
+    expect(EventRecordSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+    const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+  });
+
+  it('requires a known origin for a new director state request', () => {
+    const value = { kind: 'accept_director_message', eventId: 'new', requestId: 'new', conversationId: 'target',
+      occurredAt: '2026-11-10T00:00:00Z', text: 'message' };
+    for (const origin of [undefined, 'unknown', 'manager']) {
+      expect(() => parseTurnProcessMessage({ ...request, request: { ...value, origin } }, common.launchId)).toThrow();
+    }
+    for (const origin of ['human', 'director']) {
+      const message = { ...request, request: { ...value, origin } };
+      expect(parseTurnProcessMessage(message, common.launchId)).toEqual(message);
+    }
+  });
+
+  it('preserves the session context key in start_turn, save_conversation and turn results through JSON', () => {
+    const state = turnState();
+    const session = { ...state.session, contextKey: 'system-prompt-fingerprint' };
+    const start: DaemonProcessMessage = { ...common, kind: 'start_turn', input: {
+      event: acceptedEvent, turn, state: { ...state, session },
+    } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(start)), common.launchId)).toEqual(start);
+    const savedChange = { ...change, session };
+    const save: TurnProcessMessage = { ...request, request: { kind: 'save_conversation', change: savedChange } };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(save)), common.launchId)).toEqual(save);
+    for (const outcome of [
+      { kind: 'completed', result: { kind: 'reply', message: 'done' }, change: savedChange },
+      { kind: 'failed', message: 'failed', change: savedChange },
+      { kind: 'interrupted', change: savedChange },
+    ] as const) {
+      const finished: TurnProcessMessage = { ...common, kind: 'turn_finished', turn, outcome };
+      expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(finished)), common.launchId)).toEqual(finished);
+    }
+  });
+
   it('accepts bounded intermediate text and rejects extra fields and UTF-8 overflow', () => {
     const value = { ...common, kind: 'turn_progress', turn,
       message: { kind: 'turn_text', message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) } };
@@ -45,6 +103,7 @@ describe('daemon turn process protocol', () => {
   it('transfers a standalone answer through the existing director message event shape', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
       kind: 'director_message', directorConversationId: 'director', text: 'A person answered a standalone inquiry.',
+      inquiryAnswer: { questionId: 'question-1', question: 'Which format?', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' } },
     } };
     const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
     expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
@@ -62,9 +121,34 @@ describe('daemon turn process protocol', () => {
       const record = EventRecordSchema.parse({ state: 'queued', event: {
         ...acceptedEvent, lane: 'other', event,
       } });
-      expect(record.state === 'queued' && record.event.event.kind).toBe('director_message');
+      expect(record.event.event).toMatchObject({ kind: 'director_message', inquiryAnswer: { questionId: event.questionId, answer: event.answer } });
     }
   });
+
+  it.each(['queued', 'running', 'settling', 'settled'] as const)(
+    'migrates a producer-identified legacy answer only when reading a %s record', (state) => {
+      const workspaceId = '650e8400-e29b-41d4-a716-446655440001';
+      const inquiryAnswer = { questionId: '650e8400-e29b-41d4-a716-446655440002',
+        answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-06T00:00:00Z' } };
+      const eventId = `workspace-answer-${workspaceId}-${inquiryAnswer.questionId}`;
+      const saved = { ...acceptedEvent, eventId, requestId: eventId,
+        conversationId: conversationId({ kind: 'workspace', workspaceId }), source: 'director', lane: 'other',
+        occurredAt: inquiryAnswer.answer.answeredAt, event: { kind: 'director_message',
+          directorConversationId: conversationId({ kind: 'daemon' }),
+          text: `A person answered a standalone inquiry. ${JSON.stringify(inquiryAnswer)}` } };
+      const identity = { ...turn, conversationId: saved.conversationId };
+      const record = { state, event: saved,
+        ...(state === 'running' ? { turn: identity } : {}),
+        ...(['settling', 'settled'].includes(state) ? { result: { ...identity, event: saved, outcome: { kind: 'interrupted' } } } : {}) };
+      expect(EventRecordWriteSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+      const restored = EventRecordSchema.parse(JSON.parse(JSON.stringify(record)));
+      const normalized = { ...saved, event: { ...saved.event, inquiryAnswer } };
+      expect(restored.event).toEqual(normalized);
+      if (restored.state === 'settling' || restored.state === 'settled') expect(restored.result.event).toEqual(normalized);
+      const authored = { ...saved, event: { ...saved.event, origin: 'director' } };
+      expect(EventRecordSchema.parse({ state: 'queued', event: authored }).event).toEqual(authored);
+    },
+  );
 
   it('limits workspace answer publication to a question ID', () => {
     const publication = { kind: 'publish_workspace_inquiry_answer', questionId: '650e8400-e29b-41d4-a716-446655440001' };
@@ -134,7 +218,7 @@ describe('daemon turn process protocol', () => {
   });
 
   it.each([
-    { kind: 'accept_director_message', eventId: 'event-2', requestId: 'admission-1', conversationId: 'target', occurredAt: '2026-11-03T00:00:00Z', text: 'message' },
+    { kind: 'accept_director_message', eventId: 'event-2', requestId: 'admission-1', conversationId: 'target', occurredAt: '2026-11-03T00:00:00Z', text: 'message', origin: 'human' },
     { kind: 'notify_director', notificationId: 'notice-1', message: 'notice', subject: { key: 'goal', state: 'done' } },
     { kind: 'get_delivery', conversationId: 'target' },
   ])('accepts the limited state operation $kind', (stateRequest) => {

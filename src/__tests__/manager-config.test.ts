@@ -6,6 +6,28 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
+it.each([
+  { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
+  { global: ['default'], project: ['simple'], expected: ['simple'] },
+  { global: 'all', project: [], expected: [] },
+  { global: ['default'], project: 'all', expected: 'all' },
+])('replaces the global manager workflow selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { workflows: global } });
+  doubles.project.mockReturnValue({ manager: { workflows: project } });
+  expect(resolveManagerConfig('/project').workflows).toEqual(expected);
+});
+it.each(['all', [], ['default', { simple: 'Small changes' }, 'takt-default']])('accepts manager workflows %j at both scopes', (workflows) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { workflows } }).manager?.workflows).toEqual(workflows);
+  }
+});
+it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ default: 'one', simple: 'two' }], [{ default: 1 }]])(
+  'rejects malformed manager workflows %j at both scopes', (workflows) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { workflows } }).success).toBe(false);
+    }
+  },
+);
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
 });
