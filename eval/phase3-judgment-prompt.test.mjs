@@ -166,6 +166,8 @@ test('rejects missing or malformed input, baseline revisions, and ambiguous rule
 });
 
 test('assembles every configured case and variant without rendering grading expectations', () => {
+  assert.ok(Array.isArray(suite.tests) && suite.tests.length > 0);
+  assert.ok(Array.isArray(suite.defaultTest.vars.variant) && suite.defaultTest.vars.variant.length > 0);
   const seen = new Set();
   for (const testCase of suite.tests) {
     const caseNumber = Number(testCase.description.split(' ')[0]);
@@ -185,6 +187,36 @@ test('assembles every configured case and variant without rendering grading expe
     }
   }
   assert.equal(seen.size, suite.tests.length * suite.defaultTest.vars.variant.length);
+});
+
+test('binds every case to providers isolated in its corresponding fixture', () => {
+  const fixtures = { 2: 'refund', 3: 'ingestion', 4: 'config', 5: 'refund', 7: 'signup', 8: 'inventory' };
+  for (const testCase of suite.tests) {
+    const caseNumber = Number(testCase.description.split(' ')[0]);
+    const fixture = fixtures[caseNumber];
+    assert.ok(fixture, `Missing fixture for ${testCase.description}`);
+    assert.ok(Array.isArray(testCase.providers) && testCase.providers.length > 0);
+    for (const label of testCase.providers) {
+      const provider = suite.providers.find((entry) => entry.label === label);
+      assert.ok(provider, `Unresolved provider: ${label}`);
+      const { config } = provider;
+      const expectedDirectory = resolve(evalDir, 'fixtures/phase3-judgment', fixture);
+      switch (provider.id) {
+        case 'openai:codex-sdk':
+          assert.equal(resolve(suiteDir, config.working_dir), expectedDirectory);
+          assert.equal(config.sandbox_mode, 'read-only');
+          assert.equal(config.approval_policy, 'never');
+          break;
+        case 'file://../../providers/cli-review.mjs':
+          assert.equal(config.cli, 'claude');
+          assert.equal(resolve(evalDir, config.working_dir), expectedDirectory);
+          assert.equal(config.isolate_working_dir, true);
+          break;
+        default:
+          assert.fail(`Unexpected provider: ${provider.id}`);
+      }
+    }
+  }
 });
 
 for (const fixture of ['tool-refusal', 'refund', 'ingestion', 'config', 'signup', 'inventory']) {
