@@ -69,7 +69,7 @@ ja:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-policy.md
-      result: 公開 API と保存形式は維持する。在庫ファイルの数量は10進の数値文字列。保存完了後に成功を返し、商品名は入力どおりの文字として表示する。
+      result: 公開 API と保存形式は維持する。在庫ファイルの数量は0〜1000000の10進非負整数文字列で、取込は1回1000行まで。小数・負数・指数表記と上限超過は取込時に拒否する。保存完了後に成功を返し、商品名は入力どおりの文字として表示する。
     - tool: Read
       arguments:
         file_path: /workspace/project/.takt/worktrees/warehouse-inventory/source-evidence.txt
@@ -80,7 +80,18 @@ ja:
           v1 / save.ts:31: repository.save(totals); return { status: 'saved' };
           v2 / view.ts:14: nameCell.innerHTML = product.name;
         現在の修正後 v3（fix-01〜03 を反映）の抜粋:
-        docs/inventory.md:4-8: 数量は10進数文字列で取り込み、商品別合計を保存する。保存完了後に成功を返す。商品名には記号を含められる。
+        docs/inventory.md:4-8: 数量は0〜1000000の10進非負整数文字列で取り込み、1回1000行までの商品別合計を保存する。小数・負数・指数表記と上限超過は取込時に拒否する。保存完了後に成功を返す。商品名には記号を含められる。
+        src/inventory/input.ts:8-15（v0〜v3）:
+          function readRows(rows: { quantity: string }[]) {
+            if (rows.length > 1000 || rows.some(({ quantity }) =>
+              !/^(0|[1-9][0-9]*)$/.test(quantity) || Number(quantity) > 1000000)) {
+              throw new Error('Invalid inventory input');
+            }
+            return rows;
+          }
+        src/inventory/import.ts:12-13（v0〜v3）:
+          const rows = readRows(input);
+          const totals = aggregate(rows);
         src/inventory/sum.ts:20（v3）:
           return rows.reduce((total, row) => total + Number(row.quantity), 0);
         src/inventory/save.ts:31（v3）:
@@ -887,7 +898,7 @@ en:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-policy.md
-      result: Preserve the public API and storage format. Inventory quantities are decimal numeric strings. Report success after storage completes and display product names as their original text.
+      result: Preserve the public API and storage format. Inventory quantities are base-10 nonnegative integer strings from 0 to 1000000, with at most 1000 rows per import. Fractions, negative numbers, exponent notation and values above these limits are rejected on import. Report success after storage completes and display product names as their original text.
     - tool: Read
       arguments:
         file_path: /workspace/project/.takt/worktrees/warehouse-inventory/source-evidence.txt
@@ -898,7 +909,18 @@ en:
           v1 / save.ts:31: repository.save(totals); return { status: 'saved' };
           v2 / view.ts:14: nameCell.innerHTML = product.name;
         Current repaired v3 excerpts (fix-01 through 03 applied):
-        docs/inventory.md:4-8: Import quantities as decimal numeric strings and save per-product totals. Report success after storage completes. Product names may include symbols.
+        docs/inventory.md:4-8: Import quantities as base-10 nonnegative integer strings from 0 to 1000000, with at most 1000 rows per import, and save per-product totals. Reject fractions, negative numbers, exponent notation and values above these limits on import. Report success after storage completes. Product names may include symbols.
+        src/inventory/input.ts:8-15 (v0–v3):
+          function readRows(rows: { quantity: string }[]) {
+            if (rows.length > 1000 || rows.some(({ quantity }) =>
+              !/^(0|[1-9][0-9]*)$/.test(quantity) || Number(quantity) > 1000000)) {
+              throw new Error('Invalid inventory input');
+            }
+            return rows;
+          }
+        src/inventory/import.ts:12-13 (v0–v3):
+          const rows = readRows(input);
+          const totals = aggregate(rows);
         src/inventory/sum.ts:20 (v3):
           return rows.reduce((total, row) => total + Number(row.quantity), 0);
         src/inventory/save.ts:31 (v3):

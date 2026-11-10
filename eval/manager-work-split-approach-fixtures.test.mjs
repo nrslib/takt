@@ -10,6 +10,33 @@ const codeExcerpt = (content) => content.split('\n')
   .filter((line) => line.startsWith('  ')).map((line) => line.slice(2)).join('\n');
 
 for (const lang of ['ja', 'en']) {
+  test(`${lang}: independent repairs aggregate every accepted quantity exactly`, () => {
+    const fixture = loadManagerCase('independent-causal-repairs', lang);
+    const source = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read'
+      && args.file_path.endsWith('/source-evidence.txt')).result;
+    function excerptFor(path) {
+      const lines = source.split('\n');
+      const start = lines.findIndex((line) => line.startsWith(`${path}:`));
+      assert.ok(start >= 0, `Missing executable evidence: ${path}`);
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith('  '));
+      return codeExcerpt(lines.slice(start + 1, end < 0 ? undefined : end).join('\n'));
+    }
+    const context = {};
+    const code = `${excerptFor('src/inventory/input.ts')}
+      function aggregate(rows) { ${excerptFor('src/inventory/sum.ts')} }
+      function importInventory(input) { ${excerptFor('src/inventory/import.ts')} return totals; }`;
+    runInNewContext(transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText, context);
+
+    assert.equal(context.importInventory([{ quantity: '2' }, { quantity: '3' }]), 5);
+    assert.equal(context.importInventory([{ quantity: '0' }]), 0);
+    assert.equal(context.importInventory([]), 0);
+    assert.equal(context.importInventory(Array.from({ length: 1000 }, () => ({ quantity: '1000000' }))), 1000000000);
+    for (const quantity of ['0.1', '0.2', '1.5', '-1', '1e3', '', 'NaN', 'Infinity', '1000001', '9007199254740993']) {
+      assert.throws(() => context.importInventory([{ quantity }]), { name: 'Error' });
+    }
+    assert.throws(() => context.importInventory(Array.from({ length: 1001 }, () => ({ quantity: '1' }))), { name: 'Error' });
+  });
+
   test(`${lang}: preview history resolves each local finding but still reuses request identity`, () => {
     const fixture = loadManagerCase('preview-request-identity-growth', lang);
     const reports = fixture.runArtifacts[0].reports;
