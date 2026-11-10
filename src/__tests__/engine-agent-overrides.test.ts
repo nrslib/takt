@@ -5,7 +5,10 @@
  * to AgentRunner without reusing CLI override fields.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -43,9 +46,16 @@ import {
 } from './engine-test-helpers.js';
 
 describe('WorkflowEngine agent overrides', () => {
+  let projectDir: string;
+
   beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-engine-agent-overrides-'));
     vi.resetAllMocks();
     applyDefaultMocks();
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
   });
 
   it('ignores workflow step provider/model and passes engine-level values to AgentRunner', async () => {
@@ -66,8 +76,8 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'override task', {
+      projectCwd: projectDir,
       provider: 'codex',
       model: 'cli-model',
     });
@@ -97,8 +107,8 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'override task', {
+      projectCwd: projectDir,
       provider: 'codex',
       model: 'cli-model',
     });
@@ -130,7 +140,7 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'step task', { projectCwd: '/tmp/project' });
+    const engine = new WorkflowEngine(config, projectDir, 'step task', { projectCwd: projectDir });
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
@@ -157,8 +167,8 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'child env task', {
+      projectCwd: projectDir,
       childProcessEnv,
     });
 
@@ -184,8 +194,8 @@ describe('WorkflowEngine agent overrides', () => {
     ]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
 
-    const engine = new WorkflowEngine(config, '/tmp/project', 'failure directory task', {
-      projectCwd: '/tmp/project',
+    const engine = new WorkflowEngine(config, projectDir, 'failure directory task', {
+      projectCwd: projectDir,
     });
 
     await engine.run();
@@ -193,7 +203,7 @@ describe('WorkflowEngine agent overrides', () => {
     const options = vi.mocked(runAgent).mock.calls[0][2];
     expect(options).toHaveProperty(
       'failureDir',
-      '/tmp/project/.takt/runs/test-report-dir/failures',
+      join(projectDir, '.takt', 'runs', 'test-report-dir', 'failures'),
     );
   });
 });

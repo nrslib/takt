@@ -30,7 +30,7 @@ import {
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
-import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
+import heavyParallelIntegrationConfig, { resolveHeavyItMaxWorkers } from '../../vitest.config.it.heavy.parallel.js';
 import lightIntegrationConfig, { resolveLightItMaxWorkers } from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
@@ -746,6 +746,29 @@ describe('release verification wiring', () => {
     );
   });
 
+  it.each([
+    { cpuCount: 1, isCi: false, expected: 1 },
+    { cpuCount: 2, isCi: false, expected: 1 },
+    { cpuCount: 3, isCi: false, expected: 1 },
+    { cpuCount: 4, isCi: false, expected: 2 },
+    { cpuCount: 8, isCi: false, expected: 4 },
+    { cpuCount: 10, isCi: false, expected: 4 },
+    { cpuCount: 16, isCi: false, expected: 4 },
+    { cpuCount: 10, isCi: true, expected: 1 },
+  ])('should run heavy integration with $expected worker(s) on $cpuCount CPUs (CI: $isCi)', ({
+    cpuCount,
+    isCi,
+    expected,
+  }) => {
+    expect(resolveHeavyItMaxWorkers(cpuCount, isCi)).toBe(expected);
+  });
+
+  it('should apply the local or CI worker limit to the heavy integration gate', () => {
+    expect(heavyParallelIntegrationConfig.test?.maxWorkers).toBe(
+      resolveHeavyItMaxWorkers(availableParallelism(), Boolean(process.env.CI)),
+    );
+  });
+
   it('should route the measured slow integration suites to the sharded heavy gate', () => {
     const movedFiles = [
       'src/__tests__/deepseek-harness-error-mapping.test.ts',
@@ -909,6 +932,16 @@ describe('release verification wiring', () => {
       target: 'companion-diff-runtime.integration.test.ts',
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
+    },
+    {
+      target: 'src/__tests__/caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
+    },
+    {
+      target: 'caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
     },
     {
       target: 'src/__tests__/it-list-filtered-delete.test.ts',
