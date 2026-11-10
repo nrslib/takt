@@ -241,19 +241,18 @@ test('an added facet is absent for red and present for green', (t) => {
   assert.equal(readFileSync(join(fixture.directory, added), 'utf8'), 'new facet\n');
 });
 
-test('compares added policies and shared steps together against a pinned main revision in both languages', (t) => {
+test('compares added policies and shared steps together against a pinned HEAD revision in both languages', (t) => {
   const fixture = setup(t);
-  const main = execFileSync('git', ['rev-parse', 'main'], { cwd: repo, encoding: 'utf8' }).trim();
   const red = {};
   const green = {};
   for (const lang of ['ja', 'en']) {
     const policy = `builtins/${lang}/facets/policies/pe-test-only-repair-strategy.md`;
-    assert.equal(execFileSync('git', ['ls-tree', main, '--', policy], { cwd: repo, encoding: 'utf8' }), '');
+    assert.equal(execFileSync('git', ['ls-tree', revision, '--', policy], { cwd: repo, encoding: 'utf8' }), '');
     red[policy] = null;
     green[policy] = `candidate policy ${lang}\n`;
     for (const name of ['peer-review-adjudication', 'peer-review-fix-plan', 'peer-review-fix', 'peer-review-fix-verifier', 'peer-review-final-gate']) {
       const step = `builtins/${lang}/steps/${name}.yaml`;
-      red[step] = execFileSync('git', ['show', `${main}:${step}`], { cwd: repo, encoding: 'utf8' });
+      red[step] = execFileSync('git', ['show', `${revision}:${step}`], { cwd: repo, encoding: 'utf8' });
       green[step] = `name: ${name}\npolicies:\n  - pe-test-only-repair-strategy\n`;
     }
   }
@@ -270,10 +269,10 @@ test('compares added policies and shared steps together against a pinned main re
     writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify(contents));
   `);
 
-  const result = fixture.run(['--base', main, ...files.flatMap((file) => ['--facet', file])]);
+  const result = fixture.run(files.flatMap((file) => ['--facet', file]));
   assert.equal(result.status, 0, result.stderr);
   const manifest = fixture.manifest();
-  assert.equal(manifest.base, main);
+  assert.equal(manifest.base, revision);
   assert.deepEqual(manifest.runs.map((run) => run.phase), ['red', 'green']);
   for (const run of manifest.runs) {
     const expected = run.phase === 'red' ? red : green;

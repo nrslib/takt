@@ -4,7 +4,7 @@ Separate validity/repair need. Repair requirement/acceptance breaches, change re
 
 ## Decision Criteria
 
-For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, use the normal rows, including violations of the original requirement or acceptance criteria and regressions.
+For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, follow the opening guidance to judge violations of the original requirement or acceptance criteria, regressions, and similar issues.
 
 | Situation | Treatment |
 |-----------|-----------|
