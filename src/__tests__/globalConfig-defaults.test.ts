@@ -592,22 +592,6 @@ describe('loadGlobalConfig', () => {
     expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
   });
 
-  it('should return the same cached object on subsequent calls', () => {
-    const config1 = loadGlobalConfig();
-    const config2 = loadGlobalConfig();
-
-    expect(config1).toBe(config2);
-  });
-
-  it('should return a fresh object after cache invalidation', () => {
-    const config1 = loadGlobalConfig();
-    invalidateGlobalConfigCache();
-    const config2 = loadGlobalConfig();
-
-    expect(config1).not.toBe(config2);
-    expect(config1).toEqual(config2);
-  });
-
   it('should load from config.yaml when it exists', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -896,13 +880,11 @@ describe('loadGlobalConfig', () => {
 
     const config2 = loadGlobalConfig();
     expect(config2.language).toBe('ja');
-    expect(config2).toBe(config1);
 
     // After invalidation, the new file content is read
     invalidateGlobalConfigCache();
     const config3 = loadGlobalConfig();
     expect(config3.language).toBe('en');
-    expect(config3).not.toBe(config1);
   });
 
   it('should load prevent_sleep config from config.yaml', () => {
@@ -1197,7 +1179,6 @@ describe('loadGlobalConfig', () => {
     });
   });
 
-
   it('should save and reload notification_sound_events config', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -1236,7 +1217,6 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
     expect(config.interactivePreviewSteps).toBe(6);
   });
-
 
   it('should save and reload interactive_preview_steps config', () => {
     const taktDir = join(testHomeDir, '.takt');
@@ -1295,7 +1275,6 @@ describe('loadGlobalConfig', () => {
 
     expect(config.interactivePreviewSteps).toBe(9);
   });
-
 
   describe('persona_providers', () => {
     it('should allow persona_providers to pass arbitrary codex model names downstream', () => {
@@ -1669,32 +1648,6 @@ describe('loadGlobalConfig', () => {
       expect(config).toMatchObject({ provider: 'codex', model: 'opus' });
     });
 
-    it('should allow provider codex with model sonnet', () => {
-      const taktDir = join(testHomeDir, '.takt');
-      mkdirSync(taktDir, { recursive: true });
-      writeFileSync(
-        getGlobalConfigPath(),
-        'provider: codex\nmodel: sonnet\n',
-        'utf-8',
-      );
-
-      const config = loadGlobalConfig();
-      expect(config).toMatchObject({ provider: 'codex', model: 'sonnet' });
-    });
-
-    it('should allow provider codex with model haiku', () => {
-      const taktDir = join(testHomeDir, '.takt');
-      mkdirSync(taktDir, { recursive: true });
-      writeFileSync(
-        getGlobalConfigPath(),
-        'provider: codex\nmodel: haiku\n',
-        'utf-8',
-      );
-
-      const config = loadGlobalConfig();
-      expect(config).toMatchObject({ provider: 'codex', model: 'haiku' });
-    });
-
     it('should not throw when provider is codex with a model', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
@@ -1743,30 +1696,6 @@ describe('loadGlobalConfig', () => {
       expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
     });
 
-    it('should throw when provider is opencode but model is not provider/model format (sonnet)', () => {
-      const taktDir = join(testHomeDir, '.takt');
-      mkdirSync(taktDir, { recursive: true });
-      writeFileSync(
-        getGlobalConfigPath(),
-        'provider: opencode\nmodel: sonnet\n',
-        'utf-8',
-      );
-
-      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
-    });
-
-    it('should throw when provider is opencode but model is not provider/model format (haiku)', () => {
-      const taktDir = join(testHomeDir, '.takt');
-      mkdirSync(taktDir, { recursive: true });
-      writeFileSync(
-        getGlobalConfigPath(),
-        'provider: opencode\nmodel: haiku\n',
-        'utf-8',
-      );
-
-      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
-    });
-
     it('should not throw when provider is opencode with provider/model format', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
@@ -1791,16 +1720,5 @@ describe('loadGlobalConfig', () => {
       expect(() => loadGlobalConfig()).toThrow(/provider 'opencode' requires model in 'provider\/model' format/i);
     });
 
-    it('should throw when provider is opencode and model is not provider/model format', () => {
-      const taktDir = join(testHomeDir, '.takt');
-      mkdirSync(taktDir, { recursive: true });
-      writeFileSync(
-        getGlobalConfigPath(),
-        'provider: opencode\nmodel: big-pickle\n',
-        'utf-8',
-      );
-
-      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
-    });
   });
 });

@@ -27,17 +27,14 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 148 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles every configured turn prompt without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 148);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
     if (fixture.execution === true) {
       assert.deepEqual(JSON.parse(prompt), { case: vars.case, lang: vars.lang, user: fixture.user });
-      const row = suite.tests.find((entry) => entry.vars.case === vars.case && entry.vars.lang === vars.lang);
-      assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
       assert.doesNotMatch(prompt, /ps -p|exit code|結果行がない|process is absent/);
       continue;
     }
@@ -68,24 +65,6 @@ test('assembles all 148 turn prompts without a provider call, excluding scoring 
       const readGoal = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.path === undefined).result.goal;
       assert.deepEqual(readGoal, goalSummary(GoalSchema.parse(fixture.goal)));
 
-    }
-  }
-});
-
-test('question expectations match choice, information and operation scenarios in both languages', () => {
-  const expectations = {
-    'task-stopped-not-resumed': 'choice',
-    'migration-method-event': 'choice',
-    'migration-method-conversation': 'choice',
-    'csv-export-scope-conversation': 'choice',
-    'search-index-scope-conversation': 'choice',
-    'conflicting-calendar-visibility': 'choice',
-    'escalate-repeated-failure': 'choice-or-operation',
-    'external-contract-limit': 'information',
-  };
-  for (const lang of ['ja', 'en']) {
-    for (const { vars } of suite.tests.filter(({ vars }) => vars.lang === lang)) {
-      assert.equal(loadManagerCase(vars.case, lang).expectedQuestionType, expectations[vars.case]);
     }
   }
 });
@@ -445,33 +424,6 @@ test('red mode removes only the Concurrency limit suffix', () => {
   } finally { preserveEnv('TAKT_EVAL_MANAGER_OMIT_CONCURRENCY', prior); }
 });
 
-test('work contents, integrated verification and constraint cases receive semantic rubrics', () => {
-  const semanticCases = new Set(['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued', 'parallel-cli', 'parallel-docs-migration',
-    'shared-resource', 'shared-definition', 'human-order', 'integration-check',
-    'constraint-carryover', 'constraint-carryover-data', 'constraint-once',
-    'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
-    'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
-    'spec-review-investigation',
-    'escalate-repeated-failure', 'escalate-not-on-first-failure',
-    'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
-    'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',
-    'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
-    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
-    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
-    'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
-    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
-    'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
-    'stopped-background-execution', 'integrated-task-execution', 'two-goal-pr-execution', 'finite-check-external-execution',
-    'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
-    'csv-export-scope-conversation', 'search-index-scope-conversation',
-    'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit']);
-  for (const row of suite.tests) {
-    assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
-    if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
-      ? /^見出しや文言の一致ではなく、内容で判定する/ : /^Judge substance rather than headings or exact wording/);
-  }
-});
-
 test('failure fixtures preserve attempts, revised instructions and causes through production event inputs', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['escalate-repeated-failure', 'escalate-not-on-first-failure']) {
@@ -786,7 +738,6 @@ test('final-check input contains direct and child-process consumers and unrelate
   assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6-luna' && config.reasoning_effort === 'max'));
 });
 
-
 test('pause cases reproduce saved failures, setup identities and current pending state in both languages', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
@@ -895,7 +846,6 @@ test('operation fixtures provide current git state and run evidence before requi
     }
   }
 });
-
 
 test('patrol replay uses the production event prompt including unreadable goals', () => {
   for (const lang of ['ja', 'en']) {

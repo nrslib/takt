@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CLAUDE_EDIT_TOOL_NAMES,
   keepsAllowedToolWithoutEdit,
   splitClaudeAllowedToolSpecs,
 } from '../infra/providers/allowed-tool-edit-policy.js';
@@ -145,15 +144,6 @@ describe('allowed-tool-edit-policy', () => {
       ['powershell'],
       [{ name: 'powershell', source: 'builtin' }],
     )).toEqual(['powershell']);
-  });
-
-  it('should export Claude edit tool names for provider policy checks', () => {
-    expect(CLAUDE_EDIT_TOOL_NAMES).toEqual(new Set([
-      'edit',
-      'write',
-      'apply_patch',
-      'patch',
-    ]));
   });
 
   it('should keep non-edit tools and remove edit tools from Claude allowed tools', () => {

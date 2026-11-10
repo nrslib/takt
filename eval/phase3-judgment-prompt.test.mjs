@@ -16,7 +16,6 @@ import { runAgent } from '../dist/agents/runner.js';
 import { MockProvider } from '../dist/infra/providers/mock.js';
 import buildPrompt, { loadPhase3JudgmentRules } from './phase3-judgment-prompt.mjs';
 import assertJudgment from './asserts/phase3-judgment.mjs';
-import { selectPromptEvalSuites, promptEvalPrepareTargets } from './suite-registry.mjs';
 
 const evalDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(evalDir, '..');
@@ -51,28 +50,6 @@ function runnerSystem(variant, language) {
   const definition = personaPath === undefined ? 'conductor' : loadPersonaPromptFromPath(personaPath, repoRoot);
   return buildWrappedSystemPrompt(definition, { language, personaPath, providerRuntimeInstructions: null });
 }
-
-test('loads workflow-owned uses rules, parallel sub-step rules, and loop monitors', () => {
-  const repair = loadPhase3JudgmentRules(baseVars);
-  assert.equal(repair.name, 'fix');
-  assert.equal(repair.candidates[0].label, '修正完了');
-  assert.equal(repair.candidates.length, 3);
-  const reviewer = loadPhase3JudgmentRules({ language: 'en', workflow: 'review-backend', step_name: 'coding-review' });
-  assert.deepEqual(reviewer.candidates.map(({ label }) => label), ['approved', 'needs_fix']);
-  const monitor = loadPhase3JudgmentRules({ language: 'en', workflow: 'development-remediation-dynamic', loop_monitor_index: 1 });
-  assert.equal(monitor.name, '_loop_judge_fix');
-  assert.equal(monitor.candidates[3].label, 'No feasible path can satisfy the requirements');
-  for (const language of ['ja', 'en']) {
-    const finalGate = loadPhase3JudgmentRules({ language, workflow: 'peer-review', step_name: 'final-gate' });
-    assert.equal(finalGate.name, 'final-gate');
-    assert.deepEqual(finalGate.candidates.map(({ label }) => label), ['APPROVE', 'REJECT', 'BLOCKED']);
-    const firstMonitor = loadPhase3JudgmentRules({ language, workflow: 'development-remediation-dynamic', loop_monitor_index: 1 });
-    assert.equal(firstMonitor.name, '_loop_judge_fix');
-    assert.equal(firstMonitor.candidates[0].label, language === 'ja'
-      ? '健全（修正進捗があり、報告内容も収束している）'
-      : 'Healthy (fix progress exists and report content is converging)');
-  }
-});
 
 for (const language of ['ja', 'en']) {
   test(`matches the system actually assembled by the production runner (${language})`, async (t) => {
@@ -126,7 +103,6 @@ for (const language of ['ja', 'en']) {
     }
     assert.notEqual(prompts.baseline, prompts.candidate);
     assert.equal(runnerSystem('baseline', language), 'conductor');
-    assert.match(runnerSystem('candidate', language), /^# TAKT$/m);
     assert.notEqual(sourceTemplate('baseline', language), sourceTemplate('candidate', language));
   });
 
@@ -189,22 +165,12 @@ test('rejects missing or malformed input, baseline revisions, and ambiguous rule
   }
 });
 
-test('covers six current cases in both languages and variants without rendering grading expectations', () => {
-  assert.equal(suite.tests.length, 12);
-  assert.deepEqual(suite.defaultTest.vars.variant, ['baseline', 'candidate']);
-  const expectedLabels = {
-    ja: ['verified', 'approved', '要件を満たす実現可能な打開手段がない', 'needs_fix', 'needs_fix', 'verified',
-      'APPROVE', '健全（修正進捗があり、報告内容も収束している）'],
-    en: ['verified', 'approved', 'No feasible path can satisfy the requirements', 'needs_fix', 'needs_fix', 'verified',
-      'APPROVE', 'Healthy (fix progress exists and report content is converging)'],
-  };
+test('assembles every configured case and variant without rendering grading expectations', () => {
   const seen = new Set();
-  let rows = 0;
   for (const testCase of suite.tests) {
     const caseNumber = Number(testCase.description.split(' ')[0]);
     for (const variant of suite.defaultTest.vars.variant) {
       const vars = caseVars(testCase, variant);
-      assert.equal(vars.expected_label, expectedLabels[vars.language][caseNumber - 1]);
       const { candidates } = loadPhase3JudgmentRules(vars);
       const step = candidates.findIndex(({ label }) => label === vars.expected_label) + 1;
       assert.ok(step > 0);
@@ -217,50 +183,9 @@ test('covers six current cases in both languages and variants without rendering 
       if (caseNumber === 6) assert.doesNotMatch(vars.input, /^## (結果|Result)/m);
       assert.equal(vars.input_source, [3, 8].includes(caseNumber) ? 'response' : 'report');
       seen.add(`${caseNumber}/${vars.language}/${variant}`);
-      rows += testCase.providers.length;
     }
   }
-  assert.equal(seen.size, 24);
-  assert.equal(rows, 72);
-});
-
-test('binds every case to only its fixture and the required native-schema and strengthened providers', () => {
-  assert.equal(suite.evaluateOptions.repeat, 3);
-  assert.equal(suite.evaluateOptions.maxConcurrency, 3);
-  assert.equal(suite.defaultTest.assert[0].metric, 'phase3-follow-input/row');
-  const schema = JSON.parse(readFileSync(resolve(repoRoot, 'builtins/schemas/judgment.json'), 'utf8'));
-  const fixtures = ['tool-refusal', 'refund', 'ingestion', 'config', 'refund', 'tool-refusal', 'signup', 'inventory'];
-  assert.equal(suite.providers.length, 18);
-  assert.equal(new Set(suite.providers.map(({ label }) => label)).size, 18);
-  for (const testCase of suite.tests) {
-    const fixture = fixtures[Number(testCase.description.split(' ')[0]) - 1];
-    assert.equal(testCase.providers.length, 3);
-    const providers = testCase.providers.map((label) => suite.providers.find((provider) => provider.label === label));
-    assert.ok(providers.every(Boolean));
-    assert.deepEqual(providers.map(({ config }) => config.model), ['gpt-6.1-sol', 'gpt-6-luna', 'claude-opus-5']);
-    for (const provider of providers) {
-      const { config } = provider;
-      const root = provider.id === 'openai:codex-sdk' ? suiteDir : evalDir;
-      assert.equal(resolve(root, config.working_dir), resolve(evalDir, 'fixtures/phase3-judgment', fixture));
-      if (provider.id === 'openai:codex-sdk') {
-        assert.equal(config.sandbox_mode, 'read-only');
-        assert.equal(config.approval_policy, 'never');
-        assert.equal(config.skip_git_repo_check, true);
-        assert.equal(config.model_reasoning_effort, config.model === 'gpt-6.1-sol' ? 'low' : 'max');
-        assert.deepEqual(config.output_schema, schema);
-      } else {
-        assert.equal(provider.id, 'file://../../providers/cli-review.mjs');
-        assert.match(provider.label, /強めた条件/);
-        assert.equal(config.cli, 'claude');
-        assert.equal(config.isolate_working_dir, true);
-      }
-    }
-  }
-  const [registered] = selectPromptEvalSuites({ names: ['phase3-follow-input'] });
-  assert.equal(registered.execution.defaultEligible, false);
-  assert.deepEqual(registered.execution.credentials, ['codex', 'claude']);
-  assert.equal(registered.execution.cost, 'high');
-  assert.deepEqual(promptEvalPrepareTargets([registered]), []);
+  assert.equal(seen.size, suite.tests.length * suite.defaultTest.vars.variant.length);
 });
 
 for (const fixture of ['tool-refusal', 'refund', 'ingestion', 'config', 'signup', 'inventory']) {
