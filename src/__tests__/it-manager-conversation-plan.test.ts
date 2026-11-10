@@ -29,6 +29,8 @@ import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
 import * as ui from '../shared/ui/index.js';
+import * as workflowLoader from '../infra/config/loaders/workflowLoader.js';
+import * as configTrace from '../infra/config/traced/tracedConfigLoader.js';
 
 const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
@@ -84,6 +86,75 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-workflow'));
+  });
+
+  it.each([{ workflows: ['simple'] }, { workflows: 'all' }])('warns and omits an unavailable default workflow with workflows=$workflows', ({ workflows }) => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: missing-manager-default\n`);
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+
+    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
+
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-default'));
+    const defaultLine = prompt.split('\n').find((line) => line.startsWith('Default workflow: '))!;
+    expect(JSON.parse(defaultLine.slice('Default workflow: '.length))).toBeNull();
+  });
+
+  it.each([{ workflows: ['simple'] }, { workflows: 'all' }])('keeps a valid default workflow outside the explicit list with workflows=$workflows', ({ workflows }) => {
+    const directory = join(cwd, '.takt', 'workflows');
+    mkdirSync(directory);
+    writeFileSync(join(directory, 'fixture-manager-default.yaml'), 'name: fixture-manager-default\ninitial_step: work\nsteps:\n  - name: work\n    instruction: Work\n    rules:\n      - condition: done\n        next: COMPLETE\n');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: fixture-manager-default\n`);
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+
+    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
+
+    expect(warning).not.toHaveBeenCalled();
+    const defaultLine = prompt.split('\n').find((line) => line.startsWith('Default workflow: '))!;
+    expect(JSON.parse(defaultLine.slice('Default workflow: '.length))).toBe('fixture-manager-default');
+  });
+
+  it('uses one configuration snapshot during candidate validation and refreshes it for the next plan', () => {
+    const projectPath = join(cwd, '.takt', 'config.yaml');
+    const globalPath = join(getGlobalConfigDir(), 'config.yaml');
+    mkdirSync(getGlobalConfigDir(), { recursive: true });
+    writeFileSync(projectPath, 'provider: mock\nmodel: before\nmanager:\n  workflows: [research, simple]\nworkflow_overrides:\n  quality_gates: [snapshot-project-before]\n');
+    writeFileSync(globalPath, 'language: en\nworkflow_overrides:\n  quality_gates: [snapshot-global-before]\n');
+    const loadWorkflow = workflowLoader.loadWorkflowByIdentifier;
+    const candidates = vi.spyOn(workflowLoader, 'loadWorkflowByIdentifier').mockImplementationOnce((...args) => {
+      const workflow = loadWorkflow(...args);
+      writeFileSync(projectPath, 'provider: mock\nmodel: after\nmanager:\n  workflows: [research, simple]\nworkflow_overrides:\n  quality_gates: [snapshot-project-after]\n');
+      writeFileSync(globalPath, 'language: ja\nworkflow_overrides:\n  quality_gates: [snapshot-global-after]\n');
+      return workflow;
+    });
+    const projectReads = vi.spyOn(configTrace, 'loadProjectConfigTrace');
+    const globalReads = vi.spyOn(configTrace, 'loadGlobalConfigTrace');
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    const description = (language: string, name: string): string => parse(readFileSync(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), 'utf8')).description;
+
+    const first = createManagerConversationPlan(cwd, {});
+
+    expect(first.ctx).toMatchObject({ lang: 'en', model: 'before' });
+    expect(candidates.mock.results.map(({ value }) => value?.description)).toEqual([description('en', 'research'), description('en', 'simple')]);
+    for (const { value } of candidates.mock.results) {
+      expect(new Set(value.steps[0].qualityGates.filter((gate: unknown) => typeof gate === 'string' && gate.startsWith('snapshot-'))))
+        .toEqual(new Set(['snapshot-project-before', 'snapshot-global-before']));
+    }
+    expect(warning).not.toHaveBeenCalled();
+    expect(projectReads).toHaveBeenCalledTimes(1);
+    expect(globalReads).toHaveBeenCalledTimes(1);
+
+    const next = createManagerConversationPlan(cwd, {});
+
+    expect(next.ctx).toMatchObject({ lang: 'ja', model: 'after' });
+    expect(candidates.mock.results.slice(2).map(({ value }) => value?.description)).toEqual([description('ja', 'research'), description('ja', 'simple')]);
+    for (const { value } of candidates.mock.results.slice(2)) {
+      expect(new Set(value.steps[0].qualityGates.filter((gate: unknown) => typeof gate === 'string' && gate.startsWith('snapshot-'))))
+        .toEqual(new Set(['snapshot-project-after', 'snapshot-global-after']));
+    }
+    expect(warning).not.toHaveBeenCalled();
+    expect(projectReads).toHaveBeenCalledTimes(2);
+    expect(globalReads).toHaveBeenCalledTimes(2);
   });
 
   it.each([

@@ -26,6 +26,7 @@ import {
 import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
+import { getConfigSnapshot } from '../configSnapshot.js';
 import { validateProviderModelRequirements } from '../providerModelRequirements.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
@@ -315,6 +316,8 @@ export function invalidateGlobalConfigCache(): void {
 }
 
 export function loadGlobalConfig(): GlobalConfig {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.global;
   return GlobalConfigManager.getInstance().load();
 }
 
@@ -323,5 +326,7 @@ export function saveGlobalConfig(config: GlobalConfig): void {
 }
 
 export function loadGlobalConfigTraceState(): ConfigTrace {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.globalTrace;
   return GlobalConfigManager.getInstance().getTrace();
 }

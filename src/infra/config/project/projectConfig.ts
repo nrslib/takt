@@ -65,6 +65,7 @@ import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfig
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { getProjectConfigSnapshot } from '../configSnapshot.js';
 import {
   omitDeprecatedAssistantGherkin,
   warnDeprecatedAssistantGherkin,
@@ -77,6 +78,8 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 /** Load project configuration with provenance, validating it before normalizing provider options. */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.project;
   const configPath = getProjectConfigPath(projectDir);
   const loadedTrace = loadProjectConfigTrace(
     configPath,
@@ -242,6 +245,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
 }
 
 export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.projectTrace;
   const cached = getCachedProjectConfigTrace(projectDir);
   if (cached) {
     return cached;

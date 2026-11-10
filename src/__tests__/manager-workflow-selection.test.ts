@@ -28,7 +28,7 @@ it('keeps mixed entries and adds the default workflow without replacing usage de
     { name: 'simple', description: 'Workflow simple' },
     { name: 'custom', description: 'Workflow custom', usageDescription: 'Custom work' },
     { name: 'default', description: 'Workflow default' },
-  ], missingWorkflows: [] });
+  ], defaultWorkflow: 'default', missingWorkflows: [] });
   expect(resolveManagerWorkflowSelection('/repo', {
     workflows: [{ default: 'Explicit usage' }], defaultWorkflow: 'default',
   }, 'en').workflows).toEqual([{ name: 'default', description: 'Workflow default', usageDescription: 'Explicit usage' }]);
@@ -41,4 +41,8 @@ it('ignores missing names and reports them for startup warnings', () => {
 
 it('allows every workflow when all is configured', () => {
   expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all' }, 'en')).toEqual({ missingWorkflows: [] });
+  expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all', defaultWorkflow: 'default' }, 'en'))
+    .toEqual({ defaultWorkflow: 'default', missingWorkflows: [] });
+  expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all', defaultWorkflow: 'missing' }, 'en'))
+    .toEqual({ missingWorkflows: ['missing'] });
 });

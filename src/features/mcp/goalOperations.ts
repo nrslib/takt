@@ -16,9 +16,6 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
   let enqueued = false;
   try {
     return await goalWrite(input, deps, signal, async () => {
-      if (deps.managerWorkflows !== undefined && !deps.managerWorkflows.some(({ name }) => name === input.workflow)) {
-        throw new Error(`Workflow "${input.workflow}" is not allowed for manager tasks. Allowed workflows: ${deps.managerWorkflows.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.workflows or manager.default_workflow in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
-      }
       const store = new GoalStore(input.cwd);
       const goal = await store.get(input.goalId);
       const runner = new TaskRunner(input.cwd);
@@ -32,6 +29,9 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
       });
       if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };
       if (goal.status !== 'created') throw new Error('Goal cannot accept work');
+      if (deps.managerWorkflows !== undefined && !deps.managerWorkflows.some(({ name }) => name === input.workflow)) {
+        throw new Error(`Workflow "${input.workflow}" is not allowed for manager tasks. Allowed workflows: ${deps.managerWorkflows.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.workflows or manager.default_workflow in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
+      }
       if (loadWorkflowByIdentifier(input.workflow, input.cwd) === null) throw new Error(`Workflow not found: ${input.workflow}`);
       signal.throwIfAborted();
       const created = await enqueueTask({
