@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
-import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
-import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
+import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { MAX_PROCESS_MESSAGE_BYTES } from '../../core/daemon/processProtocol.js';
 import type { AcceptedEvent, EventInput } from '../../core/daemon/events.js';
@@ -30,15 +30,17 @@ const observation = z.discriminatedUnion('kind', [
   z.object({ ...observed, kind: z.literal('watch_failed'), reason: z.string() }).strict(),
   z.object({ ...observed, kind: z.literal('director_state_changed'), managerConversationId: id, repositoryDirectory: z.string(), goalId: id.nullable(), state: z.string() }).strict(),
 ]);
+const inquiryAnswer = z.object({ questionId: id, question: z.string().optional(), answer: GoalAnswerSchema }).strict();
 const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
     speaker: ConversationActorSchema, agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: ConversationCommandSchema.refine((command) => command.kind === 'answer_question') }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
-  z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string(), inquiryAnswer: z.object({ questionId: id, question: z.string().optional(), answer: GoalAnswerSchema }).strict().optional() }).strict(),
+  z.object({ kind: z.literal('director_message'), directorConversationId: id, text: z.string(), origin: DirectorMessageOriginSchema.optional(), inquiryAnswer: inquiryAnswer.optional() }).strict(),
   z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
-  z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), repositoryDirectory: z.string(), goalId: id }).strict(),
+  z.object({ kind: z.literal('goal_registered'), repositoryDirectory: z.string(), goalId: id }).strict(),
+  z.object({ kind: z.literal('goal_resumed'), repositoryDirectory: z.string(), goalId: id, origin: GoalExecutionOriginSchema.optional() }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
   z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
 ]);
@@ -73,17 +75,46 @@ const storedAnswer = z.object({
   kind: z.literal('inquiry_answer'),
   command: z.object({ kind: z.literal('answer_question'), permission: z.unknown().optional() }).passthrough(),
 }).passthrough().transform(({ command: { permission: _legacyPermission, ...answer }, ...event }) => ({ ...event, command: answer }));
+const legacyAnswerPrefix = 'A person answered a standalone inquiry. ';
+function storedDirectorAnswer(saved: AcceptedEvent): z.infer<typeof inquiryAnswer> | undefined {
+  const { event } = saved;
+  if (event.kind !== 'director_message' || event.inquiryAnswer !== undefined || event.origin !== undefined
+    || saved.requestId !== saved.eventId
+    || event.directorConversationId !== conversationId({ kind: 'daemon' }) || !event.text.startsWith(legacyAnswerPrefix)) return undefined;
+  let payload: unknown;
+  try { payload = JSON.parse(event.text.slice(legacyAnswerPrefix.length)); }
+  catch { return undefined; }
+  const answer = inquiryAnswer.safeParse(payload);
+  return answer.success ? answer.data : undefined;
+}
+export function storedStandaloneInboxAnswer(saved: AcceptedEvent): z.infer<typeof inquiryAnswer> | undefined {
+  if (saved.source !== 'run' || !/^standalone-answer-[a-f0-9]{64}$/.test(saved.eventId)) return undefined;
+  return storedDirectorAnswer(saved);
+}
+function normalizeStoredWorkspaceAnswer(saved: AcceptedEvent): AcceptedEvent {
+  if (saved.source !== 'director' || !saved.eventId.startsWith('workspace-answer-')) return saved;
+  const { event } = saved;
+  const answer = storedDirectorAnswer(saved);
+  if (answer === undefined || event.kind !== 'director_message') return saved;
+  // 旧 publish_workspace_inquiry_answer の採番と配送先が一致する保存イベントだけを移行する。
+  const questionSuffix = `-${answer.questionId}`;
+  if (!saved.eventId.endsWith(questionSuffix)) return saved;
+  const workspaceId = z.uuid().safeParse(saved.eventId.slice('workspace-answer-'.length, -questionSuffix.length));
+  if (!workspaceId.success || saved.conversationId !== conversationId({ kind: 'workspace', workspaceId: workspaceId.data })
+    || saved.occurredAt !== answer.answer.answeredAt) return saved;
+  return { ...saved, event: { ...event, inquiryAnswer: answer } };
+}
 const storedEvent = z.preprocess((input) => {
   if (typeof input !== 'object' || input === null || !('event' in input)) return input;
   const answer = storedAnswer.safeParse(input.event);
   return answer.success ? { ...input, event: answer.data } : input;
-}, storedAcceptedEvent);
+}, storedAcceptedEvent).transform(normalizeStoredWorkspaceAnswer);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
-  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessage: text.nullable().optional(),
@@ -103,10 +134,18 @@ const outcome = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('failed'), message: text, change: ConversationChangeSchema.optional() }).strict(),
   z.object({ kind: z.literal('interrupted'), message: text.optional(), change: ConversationChangeSchema.optional() }).strict(),
 ]);
-export const StoredResultSchema: z.ZodType<TurnResult> = z.object({ ...StoredTurnSchema.shape, event: storedEvent, outcome }).strict();
+// 廃止イベントの確定は許すが、書込検証では旧回答の移行を行わない。
+const writableEvent = z.union([AcceptedEventSchema, retiredAcceptedEvent]) as z.ZodType<AcceptedEvent>;
+const turnResult = z.object({ ...StoredTurnSchema.shape, event: writableEvent, outcome }).strict();
+export const TurnResultSchema: z.ZodType<TurnResult> = turnResult;
+export const StoredResultSchema: z.ZodType<TurnResult> = turnResult.extend({ event: storedEvent });
+const queuedRecord = z.object({ state: z.literal('queued'), event: writableEvent }).strict();
+const runningRecord = z.object({ state: z.literal('running'), event: writableEvent, turn: StoredTurnSchema }).strict();
+const settledRecord = z.object({ state: z.enum(['settling', 'settled']), event: writableEvent, result: TurnResultSchema }).strict();
+export const EventRecordWriteSchema = z.discriminatedUnion('state', [queuedRecord, runningRecord, settledRecord]);
 export const EventRecordSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('queued'), event: storedEvent }).strict(),
-  z.object({ state: z.literal('running'), event: storedEvent, turn: StoredTurnSchema }).strict(),
-  z.object({ state: z.enum(['settling', 'settled']), event: storedEvent, result: StoredResultSchema }).strict(),
+  queuedRecord.extend({ event: storedEvent }),
+  runningRecord.extend({ event: storedEvent }),
+  settledRecord.extend({ event: storedEvent, result: StoredResultSchema }),
 ]);
 export type EventRecord = z.infer<typeof EventRecordSchema>;

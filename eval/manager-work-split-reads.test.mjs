@@ -318,6 +318,10 @@ test('finished tasks require an explicit completion time and preserve it in save
 test('task completion, integration records and new pause-case run evidence follow execution order', () => {
   for (const { case: caseId, lang, fixture } of fixtures) {
     if (fixture.turn !== 'event') continue;
+    if (caseId === 'self-record-not-human-stop') {
+      const stopRecord = fixture.additionalGoals[0].workLog[0];
+      assert.ok(Date.parse(stopRecord.recordedAt) < Date.parse(fixture.event.createdAt), `${caseId}/${lang}: self-record must precede the next event`);
+    }
     for (const task of fixture.tasks) {
       const label = `${caseId}/${lang}/${task.name}`;
       if (task.startedAt !== undefined) assert.ok(Date.parse(task.createdAt) <= Date.parse(task.startedAt), label);

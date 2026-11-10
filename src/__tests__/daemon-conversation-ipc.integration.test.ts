@@ -7,6 +7,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Client } from './helpers/conversation-ipc-client.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
 import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { humanTurnText } from './helpers/daemon-turn.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../features/daemon/conversationFrames.js';
@@ -456,7 +457,7 @@ it('closes an unauthenticated submit without side effects and preserves the auth
     expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: 'reply' } });
   });
   expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe(params.command.text);
+  expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(params.command.text);
   await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
   expect(service.attachmentCount).toBe(1);
@@ -552,7 +553,7 @@ it('queues a simultaneous message and completes both operations after both clien
   expect(input!.abortSignal.aborted).toBe(false); expect(fixture.activeOperationCount).toBe(1);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(['accepted', 'queued']);
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
   expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
   const saved = (await new ConversationStateStore(directory).read(selected.conversationId))?.record;
@@ -616,10 +617,10 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
     for (const [index, id] of requestIds.slice(1).entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
     expect(value.socket.destroyed).toBe(false);
     expect(written).toHaveBeenCalledTimes(count);
-    expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
+    expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(requestIds[0]);
     release!(); await fixture.settled();
     expect(fixture.activeOperationCount).toBe(0);
-    expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(requestIds);
+    expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual(requestIds);
     expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })).sort((a, b) => requestIds.indexOf(a.id) - requestIds.indexOf(b.id)))
       .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
@@ -642,10 +643,10 @@ it('accepts a complete message spanning input batches and queues concurrent mess
   for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
   await fixture.executing(1);
     expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe(text);
+  expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(text);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual([text, 'second', 'third']);
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
 

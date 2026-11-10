@@ -39,7 +39,7 @@ ja:
       failureReason: 指示書に CSV の仕様書が指定されておらず、列名を誤って扱った。
       workflowResult: error
     goalId: 650e8400-e29b-41d4-a716-446655440000
-    createdAt: 2026-10-11T00:20:00Z
+    createdAt: 2026-10-11T00:22:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -535,7 +535,7 @@ en:
       failureReason: The CSV specification was not listed in the instructions, and the column names were handled incorrectly.
       workflowResult: error
     goalId: 650e8400-e29b-41d4-a716-446655440000
-    createdAt: 2026-10-11T00:20:00Z
+    createdAt: 2026-10-11T00:22:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000

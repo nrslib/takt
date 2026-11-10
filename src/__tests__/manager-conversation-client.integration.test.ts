@@ -36,7 +36,7 @@ import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
-import { deferred } from './helpers/daemon-turn.js';
+import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
@@ -184,7 +184,10 @@ it('shows provider activity through daemon IPC at width 80 and clears it without
       const json = JSON.stringify(persisted);
       expect(json).not.toContain('ActivityToolUnique');
       expect(json).not.toContain('private-');
-      expect(json).not.toContain('"activity"');
+      JSON.parse(json, (key, value: unknown) => {
+        expect(key).not.toBe('activity');
+        return value;
+      });
     }
     expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-');
   } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); }
@@ -501,7 +504,7 @@ it('connects to the current daemon when the previous daemon stops during assignm
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const outputs: unknown[] = []; client.onOutput((output) => outputs.push(output));
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
-  const generate = vi.fn(async () => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
+  const generate = vi.fn(async (_input: ManagerTurnInput) => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
   const registration = vi.spyOn(goalService, 'registerReservedGoal');
   await client.connect(); await complete();
@@ -532,7 +535,7 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   expect((await new ConversationStateStore(directory).read(record.id))?.record).toMatchObject({
     pending: { revision: 5, summary }, approval: null, running: null,
   });
-  expect(generate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: getLabel('manager.goSummaryRequest', 'en') }));
+  expect(humanTurnText(generate.mock.calls[0]![0].prompt)).toBe(getLabel('manager.goSummaryRequest', 'en'));
   expect(registration).not.toHaveBeenCalled();
   expect((await new GoalStore(repository).list()).goals).toEqual([]);
   registration.mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
@@ -918,7 +921,7 @@ it('forwards attachment overrides into the daemon runtime and delivers the compl
   expect(result.kind).toBe('accepted');
   await waitFor(() => expect(output).toHaveBeenCalledWith(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'finished' } })));
   expect(doubles.resolve).toHaveBeenCalledWith(assignment, expect.any(AbortSignal), { provider: 'mock', model: 'chosen-model' });
-  expect(execute).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'continue' }));
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toContain('continue');
   expect(client.getSnapshot().state).toMatchObject({ running: null, revision: 5 });
 });
 

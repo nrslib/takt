@@ -44,7 +44,7 @@ export async function startDaemon(options: {
 }) {
   const directory = options.configDirectory;
   const routing = new DaemonRouting(directory);
-  const eventStore = new FileEventStore(directory);
+  const eventStore = new FileEventStore(directory, routing);
   const store = new ConversationStateStore(directory);
   const notifications = new DaemonNotifications(directory);
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;

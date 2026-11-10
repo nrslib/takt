@@ -32,10 +32,10 @@ const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 152 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 164 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 152);
+  assert.equal(suite.tests.length, 164);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -65,7 +65,7 @@ test('assembles all 152 turn prompts without a provider call, excluding scoring 
     assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/tool-calls|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
     assert.ok(!prompt.includes('expectedQuestionType'));
     assert.equal(currentInput(prompt), buildManagerCurrentInput(fixture));
-    if (fixture.turn === 'event' && fixture.event.kind !== 'answer') {
+    if (fixture.turn === 'event' && !['answer', 'director_message'].includes(fixture.event.kind)) {
       const context = turnData(currentInput(prompt));
       assert.deepEqual(context, turnData(buildManagerEventInput(fixture.cwd, fixture.event, fixture.lang)));
       assert.deepEqual(Object.keys(context), ['event', 'instruction']);
@@ -296,10 +296,13 @@ test('event fixtures use the production event envelope and goal/task reading con
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
     const input = turnData(buildManagerEventInput(fixture.cwd, fixture.event));
-    const event = ['watch_observation', 'patrol'].includes(fixture.event.kind) ? fixture.event
+    const event = ['watch_observation', 'patrol', 'director_message'].includes(fixture.event.kind) ? fixture.event
       : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
-    assert.deepEqual(event.kind === 'inquiry_answered' ? input : input.event, event);
-    if (event.kind !== 'inquiry_answered') assert.equal(input.instruction, JSON.parse(buildManagerEventPrompt(event)).instruction);
+    if (event.kind === 'director_message') assert.deepEqual(input, {
+      text: event.text, origin: event.origin ?? 'unknown', directorConversationId: event.directorConversationId,
+    });
+    else if (event.kind === 'inquiry_answered') assert.deepEqual(input, event);
+    else assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(event)));
     parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
       event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
         lane: 'other', source: event.kind === 'patrol' ? 'daemon' : event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
@@ -450,7 +453,8 @@ test('work contents, integrated verification and constraint cases receive semant
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
     'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit', 'no-check-same-module',
-    'tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only', 'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop']);
+    'tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only', 'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop',
+  'resume-origin-human', 'resume-origin-manager', 'resume-origin-unknown', 'director-origin-human', 'director-origin-director', 'director-origin-unknown']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
     if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
@@ -964,6 +968,24 @@ test('source-tagged histories retain ordered authors, SDK notice roles and tool 
     assert.equal(data.question, answer.additionalGoals[0].questions[0].body);
     assert.deepEqual(data.answer, answer.event.answer);
     assert.equal(data.goalId, answer.additionalGoals[0].id);
+  }
+});
+
+test('state and director origins reach evaluation prompts without text-based authorship inference', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const origin of ['human', 'manager', 'unknown']) {
+      const fixture = loadManagerCase(`resume-origin-${origin}`, lang);
+      const data = turnData(buildManagerCurrentInput(fixture));
+      assert.equal(data.event.kind, 'goal_resumed');
+      assert.equal(data.event.origin, origin);
+      if (origin === 'unknown') assert.equal(Object.hasOwn(fixture.event, 'origin'), false);
+    }
+    for (const origin of ['human', 'director', 'unknown']) {
+      const fixture = loadManagerCase(`director-origin-${origin}`, lang);
+      const data = turnData(buildManagerCurrentInput(fixture));
+      assert.deepEqual(data, { origin, text: fixture.event.text, directorConversationId: fixture.event.directorConversationId });
+      if (origin === 'unknown') assert.equal(Object.hasOwn(fixture.event, 'origin'), false);
+    }
   }
 });
 

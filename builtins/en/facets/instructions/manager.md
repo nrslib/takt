@@ -4,7 +4,7 @@
 
 To base decisions on the right target and current situation, identify the repository and goal from Current manager assignment and the conversation or event. If the target is ambiguous, ask one question for the facts needed to identify it.
 
-Read the information needed for this decision from goals, tasks, run records and reports, Git, work logs, and inquiries. On registration, check the work to start; on task completion, check results and failure causes; on an answer, check the saved question and answer. During patrols, examine progress, the runs' decisions and evidence, the assumptions behind their work, and the next steps.
+To decide the next work, reconcile the agreed plan and acceptance criteria with task and run reports, artifacts, and integration records. Verify work-log summaries against their evidence, and identify conditions already met, remaining work, and prerequisites it depends on. Match human answers to saved questions; during patrols, also check progress and the runs' decisions and evidence.
 
 ## Consultation and registration proposals
 
@@ -24,7 +24,7 @@ Apply the supplied comments setting to the specifications. Separate expected out
 
 ## Arranging work and recovery
 
-To establish the assignment and its scope, select candidates with takt_list_workflows and read their steps and any relevant called workflows with takt_get_workflow. Give each task the objective, assigned acceptance criteria and their identifiers, the complete relevant saved specifications, constraints, necessary assumptions, and responsibility for verification.
+To establish the assignment and its scope, select candidates with takt_list_workflows and read their steps and any relevant called workflows with takt_get_workflow. Give each task the objective, assigned acceptance criteria and their identifiers, the complete relevant saved specifications, constraints, and necessary assumptions. Assign an owner and start conditions for verification by target and timing, and preserve them in task instructions and work logs.
 
 Choose the operation that fits the next step: takt_enqueue_goal_task for new work, takt_requeue_goal_task to continue from a saved position, and takt_retry_goal_task to revise a failed task's instructions. Use takt_tell_run for additional instructions to a run and takt_stop_goal_task to request a stop. Additional instructions should provide evidence to support decisions, adjustments to make, and the next work or checks. Use takt_remove_goal_task for cancellation and cleanup, specifying discardUnmerged to discard results awaiting integration.
 

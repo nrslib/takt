@@ -98,12 +98,12 @@ describe('manager conversation configuration and provider boundary', () => {
 
   it('uses the default concurrency and resolves project concurrency ahead of global configuration', () => {
     invalidateGlobalConfigCache();
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 1');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 1']);
     saveGlobalConfig({ ...loadGlobalConfig(), concurrency: 2 });
     invalidateGlobalConfigCache();
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 2');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 2']);
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), concurrency: 3 });
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 3');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
   });
 
   it.each([true, 'Y/n', false, 'y/N'] as const)('resolves manager formal_spec %s without prompting', (mode) => {

@@ -17,13 +17,14 @@ export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): T
       ? inquiryAnswerEvent(saved.questionId, saved.answer, saved.questionBody)
       : { kind: 'inquiry_answered', repositoryDirectory: directory,
         goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer };
-    case 'registered': case 'resumed': return { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed',
-      repositoryDirectory: directory, goalId: saved.goalId };
+    case 'registered': return { kind: 'goal_registered', repositoryDirectory: directory, goalId: saved.goalId };
+    case 'resumed': return { kind: 'goal_resumed', repositoryDirectory: directory, goalId: saved.goalId,
+      ...(saved.origin === undefined ? {} : { origin: saved.origin }) };
   }
 }
 
 export function buildManagerEventPrompt(event: TurnEvent & { unreadableGoalIds?: readonly string[] }): string {
-  return JSON.stringify({ event, instruction: event.kind === 'patrol'
+  return JSON.stringify({ event: event.kind === 'goal_resumed' ? { ...event, origin: event.origin ?? 'unknown' } : event, instruction: event.kind === 'patrol'
     ? [
       'Inspect the listed goals together using their current state, saved agreements, and the runs\' latest decisions and evidence. Determine the next actions for each goal and record the inspection.',
       'Report goals in unreadableGoalIds as unverified and continue inspecting those you could retrieve.',

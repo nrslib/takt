@@ -42,7 +42,6 @@ function identityOf(assignment: ConversationDisplayAssignment): ConversationAssi
 }
 
 export function createConversationTurnService(configDirectory: string, runtime: ConversationRuntime): Pick<TurnBusiness, 'execute'> {
-  let contextKey: string | undefined;
   return {
     async execute(input, io): Promise<TurnOutcome> {
       const state = new TurnConversationState(input.state, io);
@@ -151,13 +150,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           try {
             if (!patrol) {
               const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-                || contextKey !== undefined && contextKey !== resolved.contextKey;
-              if (changed || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
+                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey;
+              // fingerprint のない旧状態は保存済みセッションを引き継ぎ、次回から変更を検出する。
+              if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
+                  contextKey: resolved.contextKey,
                   ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
               }
-              contextKey = resolved.contextKey;
             }
             language = resolved.language;
             const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
@@ -207,7 +207,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
             const status = command.kind === 'pause_goal' ? 'paused' : command.kind === 'resume_goal' ? 'active' : 'aborted';
-            await setGoalExecutionStatus(repository, command.goalId, status, io.signal);
+            await setGoalExecutionStatus(repository, command.goalId, status, io.signal, 'human');
             if (status === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(command.goalId);
             if (status === 'active') await ensureManagerRun(repository);
             result = { kind: 'notice', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };

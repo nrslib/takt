@@ -679,6 +679,7 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
   const committed = deferred<void>();
   const releaseReply = deferred<void>();
   const replied = deferred<void>();
+  const shutdownStarted = deferred<void>();
   const envelope = { protocolVersion: 1 as const, launchId: 'manager-invalidation-race' };
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
     message: 'continued', summary: null, sessionId: 'next-session', assignment: undefined,
@@ -699,14 +700,14 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
         const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
         const invalidation = message.request.kind === 'save_conversation' && message.request.change.session?.sessionId === null;
         if (invalidation) {
-          expect(reply).toMatchObject({ kind: 'state_saved', version: 2 });
+          expect(reply).toMatchObject({ kind: 'state_saved', version: 3 });
           committed.resolve();
           await releaseReply.promise;
         }
         await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
         if (invalidation) replied.resolve();
       } else if (message.kind === 'turn_finished') {
-        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 1,
+        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 2,
           interruptedMessage: 'interrupted during invalidation' } });
         await f.runner.finish(active, message.outcome);
       }
@@ -715,18 +716,26 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
   cleanups.push(() => runtime.disconnect());
   await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id,
     assignment: active.input.state.assignment, configDirectory: f.directory });
-  f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
+  f.runner.beforeClose = () => {
+    const stopping = runtime.receive({ ...envelope, kind: 'shutdown' });
+    shutdownStarted.resolve();
+    return stopping;
+  };
   await runtime.receive({ ...envelope, kind: 'start_turn', input: active.input });
   let committedError: unknown;
   try {
     await committed.promise;
   } catch (error) { committedError = error; }
-  finally { releaseReply.resolve(); }
-  await f.close();
+  finally {
+    const stopping = f.close();
+    await shutdownStarted.promise;
+    releaseReply.resolve();
+    await stopping;
+  }
   if (committedError !== undefined) throw committedError;
   await replied.promise;
   expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({
-    version: 3, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',
+    version: 4, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',
   });
   const restarted = await fixture();
   const child = await conversationProcess(restarted, execute);
@@ -1016,7 +1025,7 @@ it.each([true, false])('defers a paused task result across restart and handles i
   const resumedPath = join(inbox, (await readdir(inbox))[0]!);
   await receiveInboxChange({ target, path: resumedPath, removed: false, generation: 'resume', value: {} }, files, f.conversations, restarted);
   const resumed = await runner.started(3);
-  expect(resumed.input.event.event.kind).toBe('goal_resumed');
+  expect(resumed.input.event.event).toMatchObject({ kind: 'goal_resumed', origin: 'human' });
   await perform(resumed);
   const retried = await runner.started(4);
   expect(retried.input.event).toEqual(completion.input.event);
@@ -1183,9 +1192,10 @@ it.each<TurnOutcome>([
   accepted(await f.dispatcher.accept(input('director-turn', director)));
   const call = await f.runner.started(1);
   expect(await f.dispatcher.request(call.turn, { kind: 'get_delivery', conversationId: f.id }, call.signal)).toMatchObject({ kind: 'delivery', conversationId: f.id, connectedPorts: ['tui'] });
-  const request = { kind: 'accept_director_message' as const, conversationId: f.id, eventId: 'director-input', requestId: 'director-input', text: 'inspect', occurredAt: '2026-11-03T00:00:00Z' };
+  const request = { kind: 'accept_director_message' as const, conversationId: f.id, eventId: 'director-input', requestId: 'director-input', text: 'inspect', origin: 'human' as const, occurredAt: '2026-11-03T00:00:00Z' };
   expect(await f.dispatcher.request(call.turn, request, call.signal)).toMatchObject({ kind: 'event_accepted', admission: { kind: 'accepted' } });
   const manager = await f.runner.started(2);
+  expect(manager.input.event.event).toMatchObject({ kind: 'director_message', text: request.text, origin: request.origin });
   await f.runner.finish(manager, outcome);
   const saved = [];
   for await (const notice of f.conversations.notifications.iterate()) saved.push(notice);

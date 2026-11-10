@@ -54,7 +54,8 @@ describe('managerInboxTurnEvent', () => {
     expect(event).toEqual({
       kind: expected, repositoryDirectory: directory, goalId: common.goalId,
     });
-    expect(JSON.parse(buildManagerEventPrompt(event))).toEqual({ event, instruction: expect.any(String) });
+    const promptEvent = kind === 'resumed' ? { ...event, origin: 'unknown' } : event;
+    expect(JSON.parse(buildManagerEventPrompt(event))).toEqual({ event: promptEvent, instruction: expect.any(String) });
   });
 });
 

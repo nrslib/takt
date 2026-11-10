@@ -280,8 +280,9 @@ for (const lang of ['ja', 'en']) {
         : caseId === 'escalate-not-on-first-failure'
           ? ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
         : patrolTellCases.has(caseId) ? ['takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
-          : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
-            : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal']
+          : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_stop_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
+            : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal',
+              ...(caseId === 'existing-invoice-format' ? ['takt_stop_goal_task'] : [])]
             : patrolNoTellCases.has(caseId) ? ['takt_record_goal_work_log', 'takt_notify_goal']
               : caseId.startsWith('summary-') ? [] : caseId === 'integration-check'
                 ? ['takt_record_goal_work_log', 'takt_notify_goal'] : [
@@ -315,6 +316,30 @@ for (const lang of ['ja', 'en']) {
   }
 }
 for (const lang of ['ja', 'en']) {
+  for (const caseId of ['existing-invoice-format', 'conflicting-calendar-visibility']) {
+    test(`${lang}/${caseId}: accepts a scoped stop request for the current running execution`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const task = fixture.tasks.find((task) => task.goalId === fixture.goal.id && task.status === 'running');
+      const output = goodOutput(caseId, lang);
+      const stop = { tool: 'takt_stop_goal_task', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name, executionId: task.executionId,
+      } };
+      output.calls.unshift(stop);
+      assert.equal(score(output, caseId, lang).pass, true);
+      assertSemanticGrader(caseId, lang);
+      for (const invalid of [
+        { ...stop.arguments, goalId: '650e8400-e29b-41d4-a716-446655440099' },
+        { ...stop.arguments, taskName: 'not-running-task' },
+        { ...stop.arguments, executionId: 'stale-execution' },
+        { ...stop.arguments, executionId: undefined },
+      ]) {
+        const wrong = structuredClone(output);
+        wrong.calls[0].arguments = invalid;
+        assert.equal(score(wrong, caseId, lang).pass, false);
+      }
+    });
+  }
+
   test(`${lang}: existing invoice format uses structural checks and delegates dismissal meaning to the rubric`, () => {
     const caseId = 'existing-invoice-format';
     const fixture = loadManagerCase(caseId, lang);
@@ -1791,28 +1816,39 @@ for (const lang of ['ja', 'en']) {
 test('input-source cases require independent Y recovery and preserve a scoped X wait', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
-      'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop']) {
+      'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop',
+  'resume-origin-human', 'resume-origin-manager', 'resume-origin-unknown', 'director-origin-human', 'director-origin-director', 'director-origin-unknown']) {
       const fixture = loadManagerCase(caseId, lang);
       const context = { vars: { case: caseId, lang } };
       const encode = (calls) => JSON.stringify({ response: { message: 'Recovery decision', summary: null }, calls });
-      const recovery = { tool: 'takt_requeue_goal_task', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import' } };
+      const recovery = { tool: 'takt_requeue_goal_task', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import',
+        retryNote: 'Use the saved CSV specification and sample data to correct the columns and date format, then rerun the failed tests.' } };
       const log = (goalId) => ({ tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId, summary: 'Decision and grounds' } });
       const calls = [recovery, log(fixture.goal.id), log(fixture.additionalGoals[0].id)];
       assert.equal(evaluate(encode(calls), context).pass, true, `${caseId}/${lang}`);
       assert.equal(evaluate(encode([recovery]), context).pass, true, 'The semantic grader checks the decision and its grounds in the response and any records');
+      for (const retryNote of [undefined, '', '   ']) {
+        assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, retryNote } }]), context).pass, false,
+          'A recovery call without instructions must not pass');
+      }
+      const { retryNote: _retryNote, ...retryArgs } = recovery.arguments;
+      assert.equal(evaluate(encode([{ tool: 'takt_retry_goal_task', arguments: { ...retryArgs,
+        task: 'Align the loader with the documented schema and representative CSV, then verify the failed import checks.' } }]), context).pass, true);
+      assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, retryNote: 'Repeat the previous instructions.' } }]), context).pass, true,
+        'JS checks instruction presence; llm-rubric must reject instructions that leave the failure cause unchanged');
       assert.equal(evaluate(encode(calls.slice(1)), context).pass, false);
       assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, goalId: fixture.additionalGoals[0].id } }, ...calls.slice(1)]), context).pass, false);
       const enqueue = { tool: 'takt_enqueue_goal_task', arguments: {
         cwd: fixture.cwd, goalId: fixture.goal.id, workKey: 'new-work', purpose: 'Independent work', task: 'Independent work', workflow: fixture.defaultWorkflow,
       } };
-      if (!['human-wait-x-only', 'inquiry-answer-wait'].includes(caseId)) {
+      if (!['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human'].includes(caseId)) {
         assert.equal(evaluate(encode([...calls, enqueue]), context).pass, true, 'The configured default is an available workflow');
       }
       assert.equal(evaluate(encode([...calls, { ...enqueue, arguments: { ...enqueue.arguments, workflow: 'missing-workflow' } }]), context).pass, false);
       assert.equal(evaluate(encode([...calls, { tool: 'takt_ask_goal_question', arguments: {
         cwd: fixture.cwd, goalId: fixture.goal.id, body: 'May I continue?',
       } }]), context).pass, false);
-      if (['human-wait-x-only', 'inquiry-answer-wait'].includes(caseId)) {
+      if (['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human'].includes(caseId)) {
         assert.equal(evaluate(encode(calls.slice(0, 2)), context).pass, true);
         assert.equal(evaluate(encode([...calls, { tool: 'takt_enqueue_goal_task', arguments: {
           cwd: fixture.cwd, goalId: fixture.additionalGoals[0].id, purpose: 'Continue X', task: 'Continue X', workflow: fixture.defaultWorkflow,

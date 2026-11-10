@@ -255,13 +255,44 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.deepEqual(promptEvalPrepareTargets([suite]), []);
   assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
   const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
-  assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
-    ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
-    ['gpt-6.1-terra', 'medium'],
-    ['claude-opus-5', undefined],
-  ]);
-  assert.equal(config.tests.length, 152);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 76);
+  assert.equal(new Set(config.providers.map(({ label }) => label)).size, config.providers.length);
+  assert.deepEqual(Object.fromEntries(config.providers.map(({ label, id, config: { model, reasoning_effort } }) => [
+    label, { id, model, reasoning_effort },
+  ])), {
+    'codex-sol-low': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-sol',
+      reasoning_effort: 'low',
+    },
+    'claude-opus-5': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+    'codex-luna-max': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6-luna',
+      reasoning_effort: 'max',
+    },
+    'codex-terra-medium': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-terra',
+      reasoning_effort: 'medium',
+    },
+    'claude-sdk-opus-5': {
+      id: 'file://../../providers/manager-work-split-execution.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+  });
+  assert.equal(config.tests.length, 164);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 82);
+  const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
+  assert.equal(executionTests.length, 8);
+  assert.equal(new Set(executionTests.map(({ vars }) => vars.case)).size, 4);
+  const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
+  assert.equal(replayTests.length, 156);
+  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 78);
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',

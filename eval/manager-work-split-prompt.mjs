@@ -7,6 +7,7 @@ import { toJSONSchema } from 'zod/v4';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../dist/infra/config/loaders/resource-resolver.js';
 import { managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
+import { EventInputSchema } from '../dist/infra/daemon/eventRecord.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../dist/features/interactive/taskInstructionFormat.js';
 import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
 const production = await import(process.env.TAKT_EVAL_MANAGER_PROMPT_MODULE ?? '../dist/features/manager/conversationPrompt.js');
@@ -14,6 +15,7 @@ import { managerStateReads } from './manager-work-split-reads.mjs';
 import * as schemas from '../dist/features/mcp/schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from '../dist/features/mcp/goalTaskRemovalSchemas.js';
+import { stopGoalTaskInputSchema } from '../dist/features/mcp/goalTaskStopSchemas.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const managerWriteSchemas = {
@@ -21,6 +23,7 @@ export const managerWriteSchemas = {
   takt_requeue_goal_task: requeueGoalTaskInputSchema,
   takt_retry_goal_task: retryGoalTaskInputSchema,
   takt_remove_goal_task: removeGoalTaskInputSchema,
+  takt_stop_goal_task: stopGoalTaskInputSchema,
   takt_merge_goal_task: schemas.mergeGoalTaskInputSchema,
   takt_complete_goal: schemas.completeGoalInputSchema,
   takt_merge_goal_pr: schemas.mergeGoalPrInputSchema,
@@ -100,7 +103,9 @@ export function resolveManagerEvalFacet(facetType, envKey, context, root) {
 }
 
 export function buildManagerEventInput(cwd, saved, lang = 'en', question) {
-  const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
+  const event = ['watch_observation', 'patrol'].includes(saved.kind) ? saved
+    : saved.kind === 'director_message' ? EventInputSchema.shape.event.parse(saved)
+      : managerInboxTurnEvent(cwd, ManagerEventSchema.parse(saved));
   return production.buildManagerTurnPrompt({ lang, event, question });
 }
 

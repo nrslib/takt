@@ -49,9 +49,13 @@ export function buildManagerTurnPrompt(input: {
       body = JSON.stringify({ speaker: event.speaker, text: event.command.text });
       break;
     case 'director_message':
-      kind = event.inquiryAnswer === undefined ? event.kind : 'inquiry_answered';
-      body = JSON.stringify(event.inquiryAnswer === undefined ? { text: event.text, speaker: { namespace: 'agent', id: 'director' } }
+      kind = event.inquiryAnswer === undefined ? `director_message_${event.origin ?? 'unknown'}` : 'inquiry_answered';
+      body = JSON.stringify(event.inquiryAnswer === undefined ? { text: event.text, origin: event.origin ?? 'unknown', directorConversationId: event.directorConversationId }
         : { goalId: null, ...event.inquiryAnswer });
+      break;
+    case 'goal_resumed':
+      kind = `goal_resumed_${event.origin ?? 'unknown'}`;
+      body = buildManagerEventPrompt(event);
       break;
     case 'inquiry_answered':
       body = JSON.stringify({ ...event, ...(input.question === undefined ? {} : { question: input.question }) });

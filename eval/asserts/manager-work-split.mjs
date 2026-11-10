@@ -52,8 +52,9 @@ const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const goalPrCases = new Set(['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']);
 const provenanceCases = new Set(['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
-  'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop']);
-const scopedWaitCases = new Set(['human-wait-x-only', 'inquiry-answer-wait']);
+  'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop',
+  'resume-origin-human', 'resume-origin-manager', 'resume-origin-unknown', 'director-origin-human', 'director-origin-director', 'director-origin-unknown']);
+const scopedWaitCases = new Set(['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human']);
 const caseWriteTools = {
   ...Object.fromEntries([...provenanceCases].map((id) => [id, new Set(['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_enqueue_goal_task'])])),
   ...Object.fromEntries([...goalPrCases].map((id) => [id, new Set(['takt_merge_goal_pr'])])),
@@ -82,12 +83,14 @@ const caseWriteTools = {
   ...Object.fromEntries([...completionCases].map((caseId) => [caseId, completionTools])),
   ...Object.fromEntries([...summaryCases].map((caseId) => [caseId, new Set()])),
   ...Object.fromEntries([...patrolTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
-  ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_ask_goal_question'])])),
+  ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set([
+    'takt_tell_run', 'takt_ask_goal_question', ...(caseId === 'existing-invoice-format' ? ['takt_stop_goal_task'] : []),
+  ])])),
   ...Object.fromEntries([...patrolNoTellCases].map((caseId) => [caseId, new Set()])),
   ...Object.fromEntries([...patrolRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_enqueue_goal_task'])])),
   ...Object.fromEntries([...patrolLeaveAsIsCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...patrolUnrelatedRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
-  ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run'])])),
+  ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run', 'takt_stop_goal_task'])])),
 };
 const commonTools = new Set(['takt_record_goal_work_log', 'takt_notify_goal']);
 const pauseRequeueCases = new Set(['paused-requeue', 'paused-requeue-before-start']);
@@ -176,6 +179,11 @@ export default function assertManagerWorkSplit(output, context) {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
       if (task === undefined || task.goalId !== args.goalId || task.status !== 'running') return result(false, 'Choose the running goal task');
     }
+    if (call.tool === 'takt_stop_goal_task') {
+      const task = fixture.tasks.find(({ name }) => name === args.taskName);
+      if (task === undefined || task.goalId !== args.goalId || task.status !== 'running'
+        || task.executionId !== args.executionId) return result(false, 'Choose the current running goal execution');
+    }
   }
   const enqueues = parsed.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');
   const keys = enqueues.map(({ arguments: args }) => args.workKey);
@@ -233,10 +241,15 @@ export default function assertManagerWorkSplit(output, context) {
       || retries[0].arguments.taskName !== 'csv-import') {
       return result(false, 'Advance the independent Y task by resuming or correcting its saved work once');
     }
+    const retry = retries[0];
+    const instructions = retry.tool === 'takt_retry_goal_task' ? retry.arguments.task : retry.arguments.retryNote;
+    if (typeof instructions !== 'string' || instructions.trim().length === 0) {
+      return result(false, 'Y recovery requires corrected task instructions or a retry note; llm-rubric judges whether they address the failure');
+    }
     if (scopedWaitCases.has(caseId) && enqueues.some(({ arguments: args }) => args.goalId === waitingGoal)) {
       return result(false, 'Keep X waiting with its scoped human reason while progressing Y');
     }
-    return result(true, 'Targets and independent recovery checked; source attribution, stop records, reapproval and scoped waiting are graded by llm-rubric');
+    return result(true, 'Targets and recovery instruction presence checked; failure remediation, source attribution, stop records, reapproval and scoped waiting are graded by llm-rubric');
   }
   if (patrolRepairCases.has(caseId) || patrolLeaveAsIsCases.has(caseId) || patrolUnrelatedRepairCases.has(caseId)) {
     if (!workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {

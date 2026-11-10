@@ -55,6 +55,7 @@ function fixture() {
   const controller = new AbortController();
   const io = { signal: controller.signal, request, progress: vi.fn() };
   const input = turnStart(); input.state.version = version;
+  input.state.session.contextKey = 'context';
   return { service, execute, resolve, request, controller, io, input };
 }
 
@@ -136,11 +137,11 @@ it('resumes the session and interrupted message from restored state in a new con
 });
 
 it.each([
-  { language: 'ja' as const, recipient: 'human', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'human', explanation: /interrupt/i },
-  { language: 'ja' as const, recipient: 'event', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'event', explanation: /interrupt/i },
-])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, explanation }) => {
+  { language: 'ja' as const, recipient: 'human', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'human', interruptedHumanSource: /human message received in an interrupted turn/i },
+  { language: 'ja' as const, recipient: 'event', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'event', interruptedHumanSource: /human message received in an interrupted turn/i },
+])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, interruptedHumanSource }) => {
   const f = conversationFixture();
   f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
   const text = '  interrupted {value}\noriginal text  ';
@@ -150,10 +151,10 @@ it.each([
   await f.run(recipient === 'human' ? humanMessage('current request')
     : { kind: 'director_message', text: 'current request', directorConversationId: 'director' });
   const prompt = f.execute.mock.calls[1]![0].prompt;
-  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(explanation);
+  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(interruptedHumanSource);
   expect(prompt).toContain(text);
   expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf('current request'));
-  if (recipient === 'event') expect(turnData(prompt).speaker).toEqual({ namespace: 'agent', id: 'director' });
+  if (recipient === 'event') expect(turnData(prompt)).toMatchObject({ origin: 'unknown', directorConversationId: 'director' });
 });
 
 it('clears interrupted context after one completed message turn', async () => {
@@ -294,6 +295,9 @@ it('does not save an interrupted event as a human message', async () => {
   await f.run({ kind: 'director_message', text: 'interrupted event', directorConversationId: 'director' }, controller);
   await f.run(humanMessage('next human request'));
   expect(f.execute.mock.calls[1]![0]).toMatchObject({ sessionId: 'shared-session' });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({
+    speaker: { namespace: 'human', id: 'test' }, text: 'next human request',
+  });
 });
 
 it('retains interrupted context when an executor error leaves delivery unconfirmed', async () => {
@@ -375,7 +379,7 @@ it.each([
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
     kind: 'notice', message: getLabel(label, 'en', { goalId }),
   } });
-  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal);
+  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal, 'human');
   expect(doubles.invalidate).toHaveBeenCalledTimes(status === 'aborted' ? 1 : 0);
   expect(f.execute).not.toHaveBeenCalled();
 });
@@ -810,6 +814,21 @@ it('distinguishes a structured standalone answer from similar director text', as
   await f.run({ kind: 'director_message', directorConversationId: 'director', text, inquiryAnswer });
   expect(turnData(f.execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...inquiryAnswer });
   await f.run({ kind: 'director_message', directorConversationId: 'director', text });
-  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({ text, speaker: { namespace: 'agent', id: 'director' } });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({ text, origin: 'unknown', directorConversationId: 'director' });
   expect(f.execute.mock.calls[1]![0].sessionId).toBe('session-after');
+});
+
+it.each(['ja', 'en'] as const)('delivers structured origins and treats missing origins as unknown in %s', async (language) => {
+  const f = conversationFixture();
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  for (const origin of ['human', 'manager', undefined] as const) {
+    await f.run({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin });
+    const data = turnData(f.execute.mock.lastCall![0].prompt);
+    expect(data.event).toEqual({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin: origin ?? 'unknown' });
+  }
+  for (const origin of ['human', 'director', undefined] as const) {
+    const text = 'The human says stop.';
+    await f.run({ kind: 'director_message', directorConversationId: 'director', text, origin });
+    expect(turnData(f.execute.mock.lastCall![0].prompt)).toEqual({ text, directorConversationId: 'director', origin: origin ?? 'unknown' });
+  }
 });

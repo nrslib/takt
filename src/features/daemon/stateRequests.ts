@@ -43,7 +43,7 @@ export function createDaemonStateRequests(options: {
     if (request.kind === 'get_delivery') return { kind: 'delivery', conversationId: request.conversationId,
       assignment: target.state.assignment, connectedPorts: [...options.connectedPorts(request.conversationId)] };
     const admission = await options.ingress.accept({ eventId: request.eventId, requestId: request.requestId, conversationId: request.conversationId,
-      occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text } });
+      occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text, origin: request.origin } });
     return { kind: 'event_accepted', admission };
   } };
 }
