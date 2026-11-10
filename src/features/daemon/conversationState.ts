@@ -20,10 +20,11 @@ export class DaemonConversations implements ConversationOwner {
   private readonly sequences = new Map<string, number>();
   private readonly deliveries = new Set<Promise<void>>();
   private readonly interrupted = new Set<string>();
+  private readonly running = new Map<string, NonNullable<ConversationState['running']>>();
 
   constructor(readonly store: ConversationStateStore, readonly routing: DaemonRouting,
     readonly notifications: DaemonNotifications,
-    private readonly deliver: (id: string, output: PortOutput, version: OutputVersion) => Promise<void>,
+    private readonly deliver: (id: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal) => Promise<void>,
     private readonly onError: (error: unknown) => void) {}
 
   async ensure(assignment: ConversationAssignment): Promise<void> {
@@ -50,17 +51,21 @@ export class DaemonConversations implements ConversationOwner {
 
   started(input: TurnStart): void {
     const { event, turn, state } = input;
+    const running = { operationId: turn.operationId, kind: 'turn', generation: turn.generation, startedAt: Date.now() };
+    this.running.set(turn.conversationId, { ...running });
+    this.interrupted.delete(turn.conversationId);
     const version = this.version(turn.conversationId, state.revision, turn.operationId);
     if (event.event.kind === 'human_command' && event.event.command.kind === 'message' && event.event.command.display !== false) {
       this.send(turn.conversationId, { kind: 'user_message', operationId: turn.operationId, message: event.event.command.text }, version);
     }
     this.send(turn.conversationId, { kind: 'running', state: { conversationId: turn.conversationId, assignment: state.assignment,
       revision: state.revision, pending: state.pending, approval: state.approval, interrupted: false,
-      running: { operationId: turn.operationId, kind: 'turn', generation: turn.generation } } }, version);
+      running } }, version);
   }
 
   async apply(result: TurnResult): Promise<void> {
     await this.store.apply(result);
+    this.running.delete(result.conversationId);
     const current = await this.store.read(result.conversationId);
     if (current === undefined) throw new Error('Missing result conversation');
     if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
@@ -102,11 +107,16 @@ export class DaemonConversations implements ConversationOwner {
     }
   }
 
-  async progress(turn: TurnIdentity, message: ConversationProgress): Promise<void> {
+  async progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void> {
     const version = this.version(turn.conversationId, 0, turn.operationId);
     const current = await this.store.read(turn.conversationId);
+    if (signal.aborted) return;
     if (current === undefined) throw new Error('Missing progress conversation');
     version.revision = current.state.revision;
+    if (typeof message !== 'string' && message.kind === 'turn_text') {
+      await this.deliver(turn.conversationId, { ...message, operationId: turn.operationId, generation: turn.generation }, version, signal);
+      return;
+    }
     const output: PortOutput = typeof message === 'string' ? { kind: 'progress', operationId: turn.operationId, message }
       : { kind: 'activity', operationId: turn.operationId, generation: turn.generation, activity: message };
     this.send(turn.conversationId, output, version);
@@ -130,8 +140,9 @@ export class DaemonConversations implements ConversationOwner {
     const current = await this.store.read(id);
     if (current === undefined) throw new Error('Unknown conversation');
     version.revision = current.state.revision;
+    const running = this.running.get(id);
     const state: ConversationState = { conversationId: id, assignment: current.state.assignment, revision: current.state.revision,
-      pending: current.state.pending, approval: current.state.approval, running: null, interrupted: this.interrupted.has(id) };
+      pending: current.state.pending, approval: current.state.approval, running: running === undefined ? null : { ...running }, interrupted: this.interrupted.has(id) };
     const { routing, notifications, displayFiles } = this;
     let cancelled = false;
     return { ...version, transferId: randomUUID(), conversationId: id, mode: 'initial', turnState: current.state,

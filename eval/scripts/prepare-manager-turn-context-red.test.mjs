@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,3 +71,112 @@ test('red preparation copies exactly the manager suite fixtures and its harness 
     rmSync(target, { recursive: true, force: true });
   }
 });
+
+function redExampleFixture(t, temporaryMode) {
+  const directory = mkdtempSync(join(tmpdir(), 'takt-manager-red-example-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const green = join(directory, 'green with spaces');
+  const temporary = join(directory, 'tmp with spaces');
+  const bin = join(directory, 'bin');
+  const log = join(directory, 'evaluations.jsonl');
+  for (const path of [green, temporary, bin]) mkdirSync(path);
+  const git = (...args) => execFileSync('git', args, { cwd: green, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init');
+  git('config', 'core.hooksPath', '/dev/null');
+  mkdirSync(join(green, 'eval/scripts'), { recursive: true });
+  writeFileSync(join(green, 'eval/scripts/run-evals.mjs'), `
+    import { appendFileSync } from 'node:fs';
+    appendFileSync(process.env.EVAL_TEST_LOG, JSON.stringify({
+      cwd: process.cwd(), args: process.argv.slice(2),
+      adapter: process.env.TAKT_EVAL_MANAGER_PROMPT_MODULE,
+    }) + '\\n');
+    if (process.env.EVAL_TEST_SIGNAL) process.kill(process.ppid, process.env.EVAL_TEST_SIGNAL);
+    process.exit(Number(process.env.EVAL_TEST_EXIT));
+  `);
+  git('add', '.');
+  git('-c', 'user.name=Eval Test', '-c', 'user.email=eval@example.invalid', 'commit', '-m', 'fixture');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  const existing = join(temporary, 'takt-manager-turn-context-red');
+  git('worktree', 'add', '--detach', existing, 'HEAD');
+  writeFileSync(join(existing, 'keep.txt'), 'existing worktree data');
+  const worktrees = git('worktree', 'list', '--porcelain');
+  copyManagerTurnContextHarness(root, green);
+  copyFileSync(join(root, 'eval/scripts/prepare-manager-turn-context-red.mjs'),
+    join(green, 'eval/scripts/prepare-manager-turn-context-red.mjs'));
+  symlinkSync(join(root, 'node_modules'), join(green, 'node_modules'), 'dir');
+  // Dependency installation and model execution are outside this lifecycle test.
+  writeFileSync(join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const blocks = [...readFileSync(join(root, 'eval/README.md'), 'utf8').matchAll(/```bash\n([\s\S]*?)\n```/g)];
+  const example = blocks.find(([, code]) => code.includes('prepare-manager-turn-context-red.mjs'))?.[1];
+  assert.ok(example, 'README must provide an executable red preparation example');
+  const cwd = join(green, 'eval');
+  const temporaryPath = temporaryMode === 'relative' ? relative(cwd, temporary) : temporary;
+  return {
+    green,
+    run(shell, exit, signal) {
+      return spawnSync(shell, ['-c', example], {
+        cwd, encoding: 'utf8', timeout: 20_000,
+        env: { ...process.env, TMPDIR: temporaryPath, PATH: `${bin}:${process.env.PATH}`,
+          EVAL_TEST_LOG: log, EVAL_TEST_EXIT: String(exit), EVAL_TEST_SIGNAL: signal },
+      });
+    },
+    records: () => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)),
+    assertClean() {
+      assert.equal(git('worktree', 'list', '--porcelain'), worktrees);
+      assert.equal(readFileSync(join(existing, 'keep.txt'), 'utf8'), 'existing worktree data');
+      assert.deepEqual(readdirSync(temporary).filter((name) => name.startsWith('takt-manager-turn-context-red')),
+        ['takt-manager-turn-context-red']);
+    },
+  };
+}
+
+for (const temporaryMode of ['absolute', 'relative']) {
+  for (const shell of ['bash', 'zsh']) {
+    test(`README red example with ${temporaryMode} TMPDIR can run twice in ${shell} without removing an existing worktree`, (t) => {
+      if (shell === 'zsh' && spawnSync(shell, ['--version']).error?.code === 'ENOENT') {
+        t.skip('zsh is not installed');
+        return;
+      }
+      const fixture = redExampleFixture(t, temporaryMode);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = fixture.run(shell, 0, '');
+        assert.equal(result.status, 0, result.stderr);
+        fixture.assertClean();
+      }
+      const [first, second] = fixture.records();
+      assert.notEqual(first.cwd, second.cwd);
+      for (const record of [first, second]) {
+        assert.equal(existsSync(record.cwd), false);
+        assert.equal(record.adapter, './manager-turn-context-baseline.mjs');
+        assert.ok(record.args.includes('manager-work-split'));
+      }
+    });
+  }
+
+  for (const [name, exit, signal, expected] of [
+    ['evaluation failure', 7, '', 7],
+    ['HUP', 0, 'SIGHUP', 129],
+    ['INT', 0, 'SIGINT', 130],
+    ['TERM', 0, 'SIGTERM', 143],
+  ]) {
+    test(`README red example with ${temporaryMode} TMPDIR cleans up after ${name} and permits a rerun`, (t) => {
+      const fixture = redExampleFixture(t, temporaryMode);
+      const result = fixture.run('bash', exit, signal);
+      assert.equal(result.status, expected, result.stderr);
+      assert.equal(fixture.records().length, 1);
+      fixture.assertClean();
+      const rerun = fixture.run('bash', 0, '');
+      assert.equal(rerun.status, 0, rerun.stderr);
+      fixture.assertClean();
+    });
+  }
+
+  test(`README red example with ${temporaryMode} TMPDIR cleans up a worktree when harness preparation fails`, (t) => {
+    const fixture = redExampleFixture(t, temporaryMode);
+    rmSync(join(fixture.green, scenario));
+    const result = fixture.run('bash', 0, '');
+    assert.notEqual(result.status, 0);
+    assert.equal(result.error, undefined);
+    fixture.assertClean();
+  });
+}

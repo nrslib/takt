@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { ConversationActivitySchema } from '../../shared/types/conversation-activity.js';
+import { ConversationActivitySchema, ConversationTextSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
@@ -12,7 +12,7 @@ export const MAX_PROCESS_MESSAGE_BYTES = 12 * 1024 * 1024;
 export const MAX_PROCESS_PENDING_REQUESTS = 32;
 export const MAX_PROCESS_PENDING_BYTES = 1024 * 1024;
 export const MAX_PROCESS_SEND_BYTES = MAX_PROCESS_MESSAGE_BYTES;
-export const MAX_PROCESS_PROGRESS_BYTES = 16 * 1024;
+export { MAX_PROCESS_PROGRESS_BYTES };
 export const MAX_PROCESS_DELIVERY_PORTS = 32;
 
 const id = z.string().min(1).max(128);
@@ -117,7 +117,7 @@ const daemonMessage = z.discriminatedUnion('kind', [
 const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('ready') }).strict(),
   z.object({ ...common, kind: z.literal('turn_progress'), turn: TurnIdentitySchema,
-    message: z.union([z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES), ConversationActivitySchema]) }).strict(),
+    message: z.union([z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES), ConversationActivitySchema, ConversationTextSchema]) }).strict(),
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
   z.object({ ...common, kind: z.literal('daemon_request'), turn: TurnIdentitySchema, requestId: id, request: stateRequest }).strict(),

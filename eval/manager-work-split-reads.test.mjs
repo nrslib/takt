@@ -395,7 +395,7 @@ function cloneWorkingLocations(cwd, fixture, source) {
   }
 }
 
-test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
+test('running patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
   const required = new Set(['local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'verification-once', 'verification-mixed', 'unrelated-history-repair']);
@@ -412,6 +412,7 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
       if (fixture.event?.kind !== 'patrol') continue;
       const cwd = join(root, caseId, lang);
       const task = fixture.tasks.find(({ status }) => status === 'running');
+      if (task === undefined) continue;
       assert.equal(task.worktree, true);
       cloneWorkingLocations(cwd, fixture, source);
       const records = saveTasks(cwd, fixture);

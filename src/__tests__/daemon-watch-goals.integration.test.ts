@@ -172,11 +172,12 @@ it.each([true, false])('observes runnable awaiting-merge work only for merge_tas
   expect(errors).not.toHaveBeenCalled();
 });
 
-it('patrols linked pending and running merge work until only human merge waits remain', async () => {
+it('patrols linked active and failed merge work until only human merge waits remain', async () => {
   const base = goalRecord();
   const completion = { goalBranch: base.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
     changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
-  const goals: Goal[] = Array.from({ length: 7 }, () => ({ ...base, id: randomUUID(), status: 'awaiting_merge', completion }));
+  const statuses = ['pending', 'running', 'completed', 'pending', 'pending', 'pending', 'pending', 'failed', 'exceeded', 'pr_failed'] as const;
+  const goals: Goal[] = statuses.map(() => ({ ...base, id: randomUUID(), status: 'awaiting_merge', completion }));
   goals[5]!.executionStatus = 'paused';
   goals[6]!.executionStatus = 'aborted';
   for (const goal of goals) {
@@ -185,14 +186,14 @@ it('patrols linked pending and running merge work until only human merge waits r
     await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
   }
   const tasks = goals.map((goal, index) => ({ name: `task-${index}`, goal_id: goal.id, merge_task: index !== 3,
-    status: index === 0 || index >= 3 ? 'pending' : index === 1 ? 'running' : 'completed',
+    status: statuses[index],
     created_at: '2026-11-06T00:00:00.000Z', started_at: null, completed_at: null }));
   tasks[4]!.goal_id = randomUUID();
   const tasksPath = join(directory, '.takt', 'tasks.yaml');
   await writeFile(tasksPath, JSON.stringify({ tasks }));
   const errors = vi.fn();
   const { source } = await watchSource(errors);
-  expect([...(await source.patrolGoalIds(directory))].sort()).toEqual([goals[0]!.id, goals[1]!.id].sort());
+  expect([...(await source.patrolGoalIds(directory))].sort()).toEqual([0, 1, 7, 8, 9].map((index) => goals[index]!.id).sort());
   await writeFile(tasksPath, JSON.stringify({ tasks: tasks.map((task) => ({ ...task, status: 'completed' })) }));
   expect(await source.patrolGoalIds(directory)).toEqual([]);
   expect(errors).not.toHaveBeenCalled();

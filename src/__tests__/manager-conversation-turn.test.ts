@@ -50,7 +50,9 @@ it('preserves JSON business context when reconstructing a rejected session', asy
   expect(JSON.parse(call.mock.calls[1]![0].split('Business context (not approval): ')[1]!)).toEqual(context);
 });
 
-it.each(['claude', 'codex'] as const)('keeps %s MCP configuration and disposal unchanged across turns', async (providerType) => {
+it.each((['claude', 'claude-sdk', 'codex', 'opencode'] as const).flatMap((providerType) =>
+  [true, false].map((aiReviewPermissions) => ({ providerType, aiReviewPermissions }))))(
+  'passes AI review $aiReviewPermissions and preserves $providerType MCP configuration across turns', async ({ providerType, aiReviewPermissions }) => {
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(response);
   const dispose = vi.fn(async () => {});
   const prepare = vi.fn(async (_servers: ResolvedMcpServers) => ({ dispose }));
@@ -59,7 +61,7 @@ it.each(['claude', 'codex'] as const)('keeps %s MCP configuration and disposal u
   const config: McpServerConfig = { type: 'http', url: 'http://localhost:1234',
     headers: { [MANAGER_ASSIGNMENT_HEADER]: 'assignment', authorization: 'Bearer test' } };
   const original = structuredClone(config);
-  const executor = createManagerTurnExecutor('/repository', { ctx: { providerType, lang: 'en', model: undefined,
+  const executor = createManagerTurnExecutor('/repository', { ctx: { providerType, lang: 'en', model: undefined, aiReviewPermissions,
     provider: makeProvider({ setup: () => ({ call }) }), mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: config } },
     strategy: { systemPrompt: 'manager' } });
   for (let turn = 0; turn < 3; turn++) await executor.execute(input);
@@ -69,6 +71,15 @@ it.each(['claude', 'codex'] as const)('keeps %s MCP configuration and disposal u
     expect(options.mcpServers).toEqual(expected);
     expect(options.callerManagedMcp).toBe(true);
     expect(options.preparedMcp).toEqual({ dispose });
+    expect(options).toMatchObject({ permissionMode: 'full', aiReviewPermissions });
+    if (providerType === 'claude' || providerType === 'claude-sdk') {
+      expect(options.allowedTools).toContain(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_get_goal`);
+    }
+  }
+  if (providerType === 'codex') {
+    expect(prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: expect.arrayContaining(['takt_get_goal']) },
+    }));
   }
   expect(call.mock.calls[2]![0]).toBe(input.prompt);
   expect(dispose).toHaveBeenCalledTimes(3);

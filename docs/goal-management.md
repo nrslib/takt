@@ -6,7 +6,9 @@
 
 Each patrol runs in a new session, separate from the conversation, and does not read the conversation history. The initial prompt includes the business context it needs. Results remain in work records and are available to later conversation turns through that context. Human conversations continue in their original session.
 
-For each repository with active goals (excluding paused, aborted, completed and awaiting-merge goals), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+For each repository with active goals (excluding paused, aborted, completed and human merge waits), the manager periodically inspects eligible goals together. No patrol runs when there are no eligible goals. Set `manager.patrol_interval` to a positive integer in seconds in `.takt/config.yaml` or `~/.takt/config.yaml`. Repository settings take precedence; the default is 1800 seconds (30 minutes).
+
+A goal is waiting for human merge when it is `awaiting_merge`, none of its linked finishing tasks (`merge_task: true`) are `pending` or `running`, and its last finishing task is not `failed`, `exceeded` or `pr_failed`. The last task is determined by its position in `tasks.yaml`. A goal with no finishing tasks also waits for human merge. Goals with pending or running finishing work, or whose last finishing task failed, remain eligible for patrols.
 
 The daemon saves the last accepted patrol time for each repository. On startup, it queues one patrol at the first observation if eligible goals exist and either the interval has elapsed or no patrol has been accepted before. Otherwise, it waits until the last accepted patrol time plus the interval. Restarting the daemon repeatedly does not add patrols before that interval has elapsed.
 
@@ -23,11 +25,13 @@ Patrols compare the latest reports and records from running runs against the tas
 
 ## Discussion and registration
 
+While a turn is running, the TUI shows its elapsed time and current activity. Bash displays its description when available; other tools display their names. Long tool labels end with an ellipsis so elapsed time remains visible at 80 columns. In ordinary turns and the interpretation stage of `/verify`, intermediate text appears in the conversation in order when the next tool starts, before the final reply. Text remaining at the end of the turn or interpretation stage is discarded without being shown as intermediate output. The final reply is still displayed. This intermediate text is not saved or redisplayed after reconnecting. Patrol turns show tool activity and elapsed time but omit intermediate text. Slack does not receive intermediate text or tool descriptions.
+
 Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the conversation. Review the displayed proposal and use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to ask the daemon to register it. Returning to the conversation, pressing `Esc` while idle, or typing changes dismisses the proposal; ask manager for changes and generate a new proposal. During processing, `Esc` interrupts the operation.
 
 Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a goal proposal itself.
 
-The bottom status line shows the assignment name, counts of ongoing goals (active and paused) and unanswered inquiries. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal` and `/verify` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. Input starting with `/` other than `/make-goal` and `/verify` is sent to manager as a regular message.
+The bottom status line shows the assignment name, counts of ongoing goals (active and paused), human merge waits and unanswered inquiries. Goals with pending or running finishing work, or whose last finishing task failed, count as ongoing. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal` and `/verify` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. Input starting with `/` other than `/make-goal` and `/verify` is sent to manager as a regular message.
 
 Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
@@ -51,6 +55,21 @@ manager:
   auto_run: false
   default_workflow: default
 ```
+
+Set `manager.workflows` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to choose the workflows manager may use for new development tasks. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair, using the same notation as `workflow_categories.workflows`.
+
+```yaml
+manager:
+  workflows:
+    - default: Regular features and bug fixes, covering planning through review.
+    - simple: Small changes in one or two files, using a lightweight workflow.
+    - takt-default
+  default_workflow: default
+```
+
+When omitted at both scopes, the list is `default` and `simple`, with the usage descriptions above in English or their Japanese equivalents according to `language`. Explicit name-only entries have no usage description. `manager.default_workflow` is also allowed even when absent from the list. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
+
+Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.workflow` or `merge-prepare`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 

@@ -112,7 +112,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     git(cwd, ['config', 'user.email', 'takt-test@example.invalid']);
     initialSha = git(cwd, ['rev-parse', 'HEAD']);
     mkdirSync(join(cwd, '.takt', 'workflows', 'personas'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nauto_pr: false\nmanager:\n  auto_run: false\n');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nauto_pr: false\nmanager:\n  workflows: []\n  auto_run: false\n');
     writeFileSync(join(cwd, '.takt', 'workflows', `${workflowName}.yaml`), [
       `name: ${workflowName}`, 'max_steps: 10', 'initial_step: plan', 'steps:',
       '  - name: plan', '    persona: ./personas/planner.md', '    instruction: "{task}"',

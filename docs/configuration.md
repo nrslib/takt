@@ -503,6 +503,62 @@ Set project `.takt/config.yaml` `manager.main_merge` to `approve` (default) or `
 
 `until: prepare` uses `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
 
+## Manager task workflows
+
+Set `manager.workflows` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to choose the workflows manager may use for new development tasks. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair, using the same notation as `workflow_categories.workflows`.
+
+```yaml
+manager:
+  workflows:
+    - default: Regular features and bug fixes, covering planning through review.
+    - simple: Small changes in one or two files, using a lightweight workflow.
+    - takt-default
+  default_workflow: default
+```
+
+When omitted at both scopes, the list is `default` and `simple`, with the usage descriptions above in English or their Japanese equivalents according to `language`. Explicit name-only entries have no usage description. `manager.default_workflow` is also allowed even when absent from the list. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
+
+Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.workflow` or `merge-prepare`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
+
+## Manager tool permissions
+
+Set these in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` accepts `auto` (default) or `full`. `manager.provider_permissions`
+maps provider names to the same values and defaults to an empty map. The example
+uses AI review for Claude and full permissions for other providers.
+
+Resolution order is project provider override → global provider override → project
+`permission` → global `permission` → `auto`. Lookup uses the provider actually
+resolved for the manager turn. `claude` and `claude-sdk` are aliases; within one
+scope, an exact provider key wins if both are present. Repository managers use
+their repository configuration. Workspace managers use the first registered
+repository's configuration, or their workspace directory when no repository is
+registered, matching other manager settings such as `auto_run`.
+
+- **Claude (`claude` / `claude-sdk`)**: `auto` uses SDK `permissionMode: auto`
+  without permission bypass. The classifier allows or denies tool calls.
+  `full` uses `bypassPermissions` as before.
+- **Codex**: `auto` uses `workspace-write`, `approvalPolicy: on-request`, and
+  `approvals_reviewer = "auto_review"`. Network access is enabled for commands
+  such as `gh`. AI review can approve escalation requests without a person
+  present. `full` retains `danger-full-access` and `approvalPolicy: never`.
+- **Other providers**: `auto` behaves like `full` because they do not provide
+  this AI permission review mechanism.
+
+Manager MCP tools retain their existing approval allowlists and can be used
+without confirmation in either mode. Operations denied by AI review are returned
+to the manager as tool results. TAKT does not automatically turn these denials
+into human questions. These settings apply to manager turns only; workflow step
+and run permissions are unchanged.
+
 ## Slack conversations with manager
 
 In a conversation thread, send `/make-goal` to create a proposal. Use **Register goal** or **Return to conversation without registering**; buttons on an outdated proposal no longer work.
@@ -1659,6 +1715,8 @@ provider_options:
     network_access: true
 ```
 
+With TAKT-managed permissions, Phase 1 can allow network access while keeping files read-only. This applies to steps with `edit: false` and calls resolved to `permission_mode: readonly`. With `permission_control: codex`, configure network access in Codex itself. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) always use the `read-only` sandbox and disable network access, even when `network_access: true`.
+
 OpenCode does not have a native sandbox. TAKT controls `webfetch` / `websearch` tool permissions as an abstraction layer behind the same key:
 
 ```yaml
@@ -1698,7 +1756,16 @@ Set it in a runtime profile, legacy `provider_routing`, project or global `provi
 
 #### Codex permission control (`permission_control`)
 
-Codex uses TAKT's permission mode mapping by default. This is equivalent to `permission_control: takt` and passes the resolved TAKT `permission_mode` to the Codex SDK as `sandboxMode`. `network_access`, when set, is also passed as `networkAccessEnabled`; when omitted, Codex keeps its default (`false`).
+Codex uses TAKT-managed permissions by default, equivalent to `permission_control: takt`. TAKT resolves write permission separately from `network_access`. Phase 1 is read-only when `edit: false` or the resolved `permission_mode` is `readonly`; `edit: false` also takes precedence over `permission_mode: full`.
+
+| Write permission | `network_access` | Codex options |
+|---|---|---|
+| Writable | `true` | `workspace-write` sandbox (`danger-full-access` for `full`) and `networkAccessEnabled: true` |
+| Writable | `false` / omitted | Existing sandbox mapping; explicit `false` is passed, omission keeps the Codex default |
+| Read-only | `true` | No sandbox flag; TAKT passes the `takt-readonly-network` permission profile through `--config`, inheriting `:read-only` with `network.enabled=true` |
+| Read-only | `false` / omitted | `read-only` sandbox |
+
+TAKT-managed permissions add `--ignore-rules` to every `codex exec` invocation, including writable steps, new sessions, and `exec ... resume <id>`. Codex therefore does not load user or project execpolicy `.rules` files, whose allow rules could otherwise run matching commands outside the sandbox. With `permission_control: codex`, TAKT leaves those rules enabled, except in Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls). Phase 2, these internal calls, and MCP-only side effects always add `--ignore-rules` and prohibit writes and network access. When a Phase 2 call or an internal call running with `strict-readonly` selects `config_profile`, both `--ignore-rules` and `--profile <name>` are passed. Auxiliary `mcp list` / `mcp get` commands do not receive the exec flag.
 
 To delegate permission control to Codex, explicitly opt in:
 
@@ -1715,7 +1782,7 @@ provider_options:
 
 With `permission_control: codex`, Codex settings control sandbox and network permissions. TAKT's `network_access` setting does not affect effective Codex permissions in this mode. TAKT still sets `approvalPolicy: never` for non-interactive runs, so check the Codex configuration you use. `reasoning_effort`, `fast_mode`, and `skills` continue to apply.
 
-Phase 2 and Phase 1 of steps with an explicit `edit: false` still pass a `read-only` sandbox. Codex uses this sandbox in Phase 1 regardless of the resolved permission mode, including with `permission_control: codex`. These calls also handle `network_access` as in TAKT-managed permission control.
+In Phase 1, `permission_control: codex` omits TAKT's sandbox and network overrides even with `edit: false` or `permission_mode: readonly`. Structured calls without `strict-readonly` follow the same rule. Codex's own configuration determines the effective permissions. Phase 2 and TAKT internal calls running with `strict-readonly` (such as isolated structured calls) remain exceptions: TAKT manages their permissions and always passes the `read-only` sandbox with `networkAccessEnabled: false`, including with delegated permissions. MCP-only side effects also retain the `read-only` sandbox and explicitly disable network access and web search; this mode cannot be combined with `permission_control: codex`.
 
 To select a named Codex configuration profile, add `config_profile` alongside `permission_control: codex`:
 

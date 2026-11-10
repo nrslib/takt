@@ -238,6 +238,9 @@ export class SdkOptionsBuilder {
   }
 
   private resolvePermissionMode(): SdkPermissionMode {
+    if (this.options.aiReviewPermissions) {
+      return 'auto';
+    }
     if (this.options.bypassPermissions) {
       return 'bypassPermissions';
     }

@@ -1,5 +1,6 @@
 import { TurnToolScope } from '../daemonTurn/toolScope.js';
 import { createHash } from 'node:crypto';
+import { invalidateGlobalConfigCache } from '../../infra/config/global/globalConfig.js';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
@@ -34,6 +35,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
       const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
         : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, configDirectory).cwd;
+      invalidateGlobalConfigCache();
       const plan = createManagerConversationPlan(cwd, { ...agentOverrides,
         ...(assignment.kind === 'workspace' ? { repositoryDirectories: assignment.repositoryDirectories } : {}),
       });
@@ -41,6 +43,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions,
         mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,
         language: plan.ctx.lang,
+        aiReviewPermissions: plan.ctx.aiReviewPermissions,
       })).digest('hex');
       const id = conversationId(identity);
       const existing = entries.get(id);
@@ -56,6 +59,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         await plan.ctx.provider.preflight?.({
           cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
           permissionMode: 'full', mcpServers: mcp.servers, outputSchema: getManagerOutputSchema(plan.ctx.providerType),
+          aiReviewPermissions: plan.ctx.aiReviewPermissions,
         });
         const executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,

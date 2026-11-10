@@ -33,6 +33,7 @@ export interface ManagerTurnInput {
   verify?: ResolvedFormalSpecConfiguration & { repositoryDirectory: string };
   onProviderOutput?: () => void;
   onActivity?: (activity: ConversationActivity) => void;
+  onText?: (message: string) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
@@ -45,7 +46,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
         signal.throwIfAborted();
         if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify);
         let assignment = input.assignment;
-        const reportActivity = createTurnActivityReporter((activity) => input.onActivity?.(activity));
+        const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
           Object.entries(plan.ctx.mcpServers).map(([name, config]) => [name,
             assignment === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignment)]),
@@ -71,6 +72,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           }, {
             cwd, model: plan.ctx.model, sessionId: input.patrol ? undefined : input.sessionId, abortSignal: signal,
             providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
+            aiReviewPermissions: plan.ctx.aiReviewPermissions,
             ...(servers?.[TAKT_MANAGER_MCP_SERVER_NAME] !== undefined
               && (plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk')
               ? { allowedTools: managerToolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`) }
@@ -80,7 +82,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
             onStream: (event) => {
               input.onProviderOutput?.();
-              if (!signal.aborted) reportActivity(event);
+              if (!signal.aborted) reporter.onStream(event);
               if (event.type === 'tool_use') {
                 if (addRepositoryTools.has(event.data.tool)) additions.add(event.data.id);
               }
@@ -94,11 +96,12 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
                 } catch { return; }
               }
             },
-          }, input.patrol ? undefined : input.recovery?.invalidateSession);
+          }, input.patrol ? undefined : input.recovery?.invalidateSession, reporter.discard);
           signal.throwIfAborted();
           return { ...parseManagerResponse(response, plan.ctx.providerType),
             sessionId: response.sessionId, assignment };
         } finally {
+          reporter.discard();
           await prepared?.dispose();
         }
       };

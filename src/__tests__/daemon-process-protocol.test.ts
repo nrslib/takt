@@ -73,6 +73,33 @@ describe('daemon turn process protocol', () => {
     }
   });
 
+  it('accepts bounded intermediate text and rejects extra fields and UTF-8 overflow', () => {
+    const value = { ...common, kind: 'turn_progress', turn,
+      message: { kind: 'turn_text', message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) } };
+    expect(parseTurnProcessMessage(value, common.launchId)).toEqual(value);
+    for (const message of [
+      { kind: 'turn_text', message: 'あ'.repeat(Math.ceil(MAX_PROCESS_PROGRESS_BYTES / 3)) },
+      { kind: 'turn_text', message: 'safe', input: { command: 'private' } },
+    ]) expect(() => parseTurnProcessMessage({ ...value, message }, common.launchId)).toThrow();
+  });
+
+  it.each(['コードを読む', 'あ'.repeat(256)])('accepts a bounded Bash description: %s', (description) => {
+    const value = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool', tool: 'Bash', description } };
+    expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(value)), common.launchId)).toEqual(value);
+  });
+
+  it.each([
+    { kind: 'tool', tool: 'Bash', description: 'あ'.repeat(257) },
+    { kind: 'tool', tool: 'Bash', description: 'line\nline' },
+    { kind: 'tool', tool: 'Bash', description: '\u001b[31mred' },
+    { kind: 'tool', tool: 'Bash', description: 'line\u2028line' },
+    { kind: 'tool', tool: 'Bash', description: 42 },
+    { kind: 'tool', tool: 'Bash', description: 'safe', command: 'private command' },
+    { kind: 'tool', tool: 'Read', description: 'private input' },
+  ])('rejects invalid descriptions and unauthorized input fields: %#', (message) => {
+    expect(() => parseTurnProcessMessage({ ...common, kind: 'turn_progress', turn, message }, common.launchId)).toThrow();
+  });
+
   it('transfers a standalone answer through the existing director message event shape', () => {
     const event = { ...acceptedEvent, lane: 'other', source: 'director', event: {
       kind: 'director_message', directorConversationId: 'director', text: 'A person answered a standalone inquiry.',

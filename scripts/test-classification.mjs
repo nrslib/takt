@@ -465,10 +465,10 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/workflow-resume-results.integration.test.ts',
   'src/__tests__/it-cli-react-production.test.ts',
   'src/__tests__/it-goal-task-pause-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
-  'src/__tests__/caccia-published-pr.integration.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Measured slow suites dominate the serial light gate; CI shards this gate.
@@ -488,12 +488,16 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // Escape hatch for tests that must not run concurrently with the rest of the
 // IT slice. A 2026-08 audit found zero files with shared mutable state (all
 // use mkdtemp isolation under pool:'forks'), so membership is not about
-// correctness. The files below are fsync/spawnSync storms: their IO
-// serializes at the device level, so running them in the parallel pool only
-// adds contention and can block a worker synchronously past the 60s vitest
-// RPC timeout (spurious "Timeout calling onTaskUpdate" unhandled errors).
+// correctness. Their fsync/spawnSync-heavy workloads compete for CPU and IO
+// in the parallel pool, which can exceed hook deadlines or block a worker
+// synchronously past the 60s vitest RPC timeout (spurious "Timeout calling
+// onTaskUpdate" unhandled errors).
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
+  // 2026-11: On a loaded 10-CPU machine, the 4-worker heavy run exceeded
+  // the 10s beforeEach limit in synchronous Git fixture setup; the same suite
+  // passed alone with 1 worker. Isolate its init/commit/push/clone workload.
+  'src/__tests__/caccia-published-pr.integration.test.ts',
   'src/__tests__/companion-diff-runtime.integration.test.ts',
   'src/__tests__/it-list-filtered-delete.test.ts',
   // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+filesystem I/O の重量級になった(#1264 shard 飽和の主因)。

@@ -126,6 +126,7 @@ export interface ClaudeCallOptions {
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   /** Enable streaming mode with callback for real-time output */
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
@@ -182,6 +183,7 @@ export interface ClaudeSpawnOptions {
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (TAKT abstract value, mapped to SDK value in SdkOptionsBuilder) */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */

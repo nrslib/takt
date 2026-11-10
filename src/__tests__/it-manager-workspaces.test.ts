@@ -83,6 +83,18 @@ describe('manager workspace storage and repository boundaries', () => {
   });
   afterEach(() => { cleanup(); resetScenario(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
+  it('uses the selected repository workflow configuration for a workspace manager', async () => {
+    writeFileSync(join(repositoryA, '.takt', 'config.yaml'), 'manager:\n  auto_run: false\n  workflows: [default]\n');
+    writeFileSync(join(repositoryB, '.takt', 'config.yaml'), 'manager:\n  auto_run: false\n  workflows: [simple]\n');
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: 'Workflows', repositoryDirectories: [repositoryA, repositoryB] });
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (client) => {
+      for (const [cwd, expected] of [[repositoryA, 'default'], [repositoryB, 'simple']]) {
+        const result = await call(client, 'takt_list_workflows', { cwd });
+        expect(result.workflows.map((entry: { name: string }) => entry.name)).toEqual([expected]);
+      }
+    });
+  });
+
   it('retrieves every saved repository after bounded add, remove and rename responses without repeating the mutation', async () => {
     const directories = [repositoryA, ...workspaceRepositories(110)];
     const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: directories });

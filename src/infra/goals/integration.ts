@@ -88,6 +88,8 @@ export async function integrateGoalTask(
     ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
+const includedGoalCompletionGuidance = 'To correct evidence for an approved goal SHA already included in the target branch, use takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion.';
+
 function completionRecord(
   goal: Goal, expectedSha: string, targetBranch: string, summary: string,
   changeSummary: NonNullable<Goal['completion']>['changeSummary'], worktrees: string[],
@@ -96,7 +98,11 @@ function completionRecord(
     goalBranch: goal.branch, goalSha: expectedSha, targetBranch, summary, changeSummary,
     ...(worktrees.length > 0 ? { worktrees } : {}),
     instructions: [
-      'In awaiting_merge, resubmit takt_complete_goal only if PR preparation failed (the saved pullRequest was cleared or an error was returned) or completion evidence needs correction. Before resubmitting, inspect and verify the current tip of the goal branch, then pass that SHA as expectedSha with an evidence-backed summary. Resubmission can rebuild the completion record and existing PR body even at the same SHA. If only reading or updating the existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
+      `For awaiting_merge without a saved PR, use takt_complete_goal to retry PR preparation (expectedSha: ${expectedSha}). Reuse saved humanChecks; if none was saved, the supplied value is saved. When humanChecks is supplied, retain the saved summary; when omitted, the new summary is saved.`,
+      'Before resubmitting, inspect and verify the current goal branch tip. If it has advanced beyond the saved goalSha, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks.',
+      'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks.',
+      includedGoalCompletionGuidance,
+      'If only reading or updating an existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
       'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
     ],
   };
@@ -176,6 +182,39 @@ export async function completeGoal(
   const targetBranch = goal.integrationBranch;
   const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   const included = await isGoalContentIncluded(cwd, expectedSha, targetSha, signal);
+  if (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha && !included) {
+    if (goal.pullRequest === undefined) {
+      const retryHumanChecks = goal.completion.humanChecks ?? humanChecks;
+      if (retryHumanChecks === undefined) {
+        throw new Error('humanChecks is required to retry PR preparation. Provide humanChecks and call takt_complete_goal again.');
+      }
+      const retryCompletion = humanChecks === undefined
+        ? { ...goal.completion, summary }
+        : goal.completion;
+      const { pullRequest, failure, bodyFailure } = await prepareCompletionPullRequest(
+        cwd, goal, retryCompletion, retryHumanChecks, language, signal,
+      );
+      await store.update(goalId, (current) => {
+        signal?.throwIfAborted();
+        assertCompletionAllowed(current, goal);
+        const completion = current.completion!.humanChecks === undefined
+          ? { ...retryCompletion, humanChecks: retryHumanChecks }
+          : retryCompletion;
+        const updated = { ...current, completion,
+          ...(bodyFailure === undefined && pullRequest !== undefined
+            ? { pullRequest: current.pullRequest ?? pullRequest }
+            : {}) };
+        return recordPullRequestFailure(updated, failure, notifications, language);
+      });
+      if (failure !== undefined) {
+        saveManagerEvent(cwd, { kind: 'pr_failed', goalId, expectedSha, reason: failure });
+      }
+      const current = store.getSync(goalId);
+      assertCompletionUnchanged(current, goal);
+      return { status: current.status, completion: current.completion, goal: current,
+        ...(bodyFailure === undefined ? {} : { pullRequestBodyError: bodyFailure }) };
+    }
+  }
   const changeSummary = await readGoalDiffSummary(cwd, targetSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
   const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);
   const result = included ? { status: 'merged' as const, sha: targetSha } : undefined;
@@ -222,7 +261,7 @@ export async function reopenGoal(
   const approvedSha = goal.completion.goalSha;
   const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   if (await isGoalContentIncluded(cwd, approvedSha, targetSha, signal)) {
-    throw new Error('Approved goal SHA is already included in the target branch. Use takt_check_goal_completion.');
+    throw new Error(includedGoalCompletionGuidance);
   }
   signal?.throwIfAborted();
   const env = await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false });
@@ -239,7 +278,7 @@ export async function reopenGoal(
     const included = isGoalContentIncludedSync(cwd, approvedSha, currentTargetSha, env);
     signal?.throwIfAborted();
     if (included) {
-      throw new Error('Approved goal SHA is already included in the target branch. Use takt_check_goal_completion.');
+      throw new Error(includedGoalCompletionGuidance);
     }
     return appendGoalWorkLog({ ...current, status: 'created' }, { summary: reason });
   });

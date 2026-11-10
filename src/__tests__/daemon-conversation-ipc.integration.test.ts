@@ -143,6 +143,92 @@ it('finishes each output transfer before newer state on both attachments', async
   } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
 });
 
+it.each([false, true])('keeps queued text ordered and suppresses it after interruption while the socket writer is blocked: %s', async (interrupted) => {
+  const connection = await authenticated();
+  const open = await opened(connection);
+  await connection.items(open.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let blocked = false;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string } };
+    if (!blocked && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      blocked = true; await gate;
+    }
+    await write(socket, value);
+  });
+  const operationId = '11111111-1111-4111-8111-111111111111';
+  const version = { revision: connection.latestState()!.revision, stateSequence: 10, operationId };
+  const controller = new AbortController();
+  const sending = service.deliver(selected.conversationId, { kind: 'notice', id: 'blocked', message: 'notice' }, { ...version, operationId: null });
+  const pending: Promise<void>[] = [sending];
+  try {
+    await vi.waitFor(() => expect(blocked).toBe(true));
+    for (const [index, message] of ['first', 'second'].entries()) pending.push(service.deliver(selected.conversationId,
+      { kind: 'turn_text', operationId, generation: 1, message }, { ...version, stateSequence: 11 + index }, controller.signal));
+    pending.push(service.deliver(selected.conversationId, { kind: 'result', operationId,
+      result: { kind: 'reply', message: 'final' } }, { ...version, stateSequence: 13 }));
+    if (interrupted) controller.abort();
+    resume(); await Promise.all(pending);
+    const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+    await vi.waitFor(() => {
+      observer.output.mockClear();
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      for (const frame of connection.frames) if (frame.type === 'event') receiver.receive(frame);
+      expect(observer.output).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'result' }), expect.anything());
+    });
+    expect(observer.output.mock.calls.flatMap(([output]) => output.kind === 'turn_text' ? [output.message] : []))
+      .toEqual(interrupted ? [] : ['first', 'second']);
+  } finally { resume(); await Promise.all(pending); writing.mockRestore(); }
+});
+
+it('reports an interrupted started text transfer and still delivers the terminal result', async () => {
+  const connection = await authenticated();
+  const open = await opened(connection);
+  await connection.items(open.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let startedTransferId: string | undefined;
+  let blocked = false;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string; transferId: string } };
+    if (frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') startedTransferId = frame.output.transferId;
+    if (!blocked && frame.output?.kind === 'transfer_data' && frame.output.transferId === startedTransferId) {
+      blocked = true;
+      await gate;
+    }
+    await write(socket, value);
+  });
+  const operationId = '11111111-1111-4111-8111-111111111111';
+  const version = { revision: connection.latestState()!.revision, stateSequence: 10, operationId };
+  const controller = new AbortController();
+  const sendingText = service.deliver(selected.conversationId,
+    { kind: 'turn_text', operationId, generation: 1, message: 'intermediate text' }, version, controller.signal);
+  try {
+    await vi.waitFor(() => expect(blocked).toBe(true));
+    const transferId = startedTransferId!;
+    await vi.waitFor(() => expect(connection.frames.some(({ output }) => output?.kind === 'transfer_start'
+      && output.transferId === transferId)).toBe(true));
+    const result = { kind: 'result' as const, operationId, result: { kind: 'reply' as const, message: 'final' } };
+    const sendingResult = service.deliver(selected.conversationId, result, { ...version, stateSequence: 11 });
+    controller.abort();
+    resume();
+    await sendingText;
+    await sendingResult;
+    await vi.waitFor(() => expect(connection.frames.some(({ output }) => output?.kind === 'transfer_error'
+      && output.transferId === transferId)).toBe(true));
+    const textFrames = connection.frames.filter(({ output }) => output?.transferId === transferId).map(({ output }) => output?.kind);
+    expect(textFrames).toEqual(['transfer_start', 'transfer_data', 'transfer_error']);
+    expect(connection.frames.some(({ output }) => output?.kind === 'transfer_end' && output.transferId === transferId)).toBe(false);
+    const resultTransferId = connection.frames.filter(({ output }) => output?.kind === 'transfer_start'
+      && output.purpose === 'output' && output.transferId !== transferId).at(-1)?.output?.transferId;
+    expect(resultTransferId).toBeDefined();
+    expect(await connection.items(resultTransferId!)).toEqual([result]);
+  } finally { resume(); await Promise.allSettled([sendingText]); writing.mockRestore(); }
+});
+
 it.each(['notice', 'activity'] as const)('coalesces activity per connection while a slow TUI %s write is blocked without disconnecting it', async (kind) => {
   const first = await authenticated(); const second = await authenticated();
   const firstOpen = await opened(first); const secondOpen = await opened(second);

@@ -88,19 +88,89 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
+  const permissionCases = [
+    { edit: false, permissionMode: undefined, sandbox: 'read-only' },
+    { edit: false, permissionMode: 'full', sandbox: 'read-only' },
+    { edit: true, permissionMode: 'readonly', sandbox: 'read-only' },
+    { edit: undefined, permissionMode: 'readonly', sandbox: 'read-only' },
+    { edit: true, permissionMode: 'edit', sandbox: 'workspace-write' },
+    { edit: true, permissionMode: 'full', sandbox: 'danger-full-access' },
+    { edit: undefined, permissionMode: undefined, sandbox: 'workspace-write' },
+  ] as const;
+
+  it.each(permissionCases.flatMap((entry) => [true, false, undefined].flatMap((networkAccess) =>
+    [undefined, 'existing-thread'].map((sessionId) => ({ ...entry, networkAccess, sessionId })),
+  )))('passes Phase 1 permissions to the SDK (edit=$edit, mode=$permissionMode, network=$networkAccess, session=$sessionId)', async ({ edit, permissionMode, sandbox, networkAccess, sessionId }) => {
+    mockEvents = [
+      { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+      { type: 'turn.completed' },
+    ];
+    const result = await new CodexProvider().setup({ name: 'reviewer', systemPrompt: 'Review' }).call('Inspect', {
+      cwd: '/tmp', executionPhase: 1, edit, permissionMode, sessionId, outputSchema: { type: 'object' },
+      providerOptions: { codex: { permissionControl: 'takt', networkAccess } },
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions?.approvalPolicy).toBe('never');
+    const config = lastCodexConstructorOptions?.config;
+    if (sandbox === 'read-only' && networkAccess === true) {
+      expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+      expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(config).toMatchObject({
+        default_permissions: 'takt-readonly-network',
+        permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
+      });
+    } else {
+      expect(lastThreadOptions?.sandboxMode).toBe(sandbox);
+      expect(lastThreadOptions?.networkAccessEnabled).toBe(networkAccess);
+      expect(config).not.toHaveProperty('default_permissions');
+      expect(config).not.toHaveProperty('permissions');
+    }
+    expect(config).not.toHaveProperty('sandbox_mode');
+    expect(config).not.toHaveProperty('sandbox_workspace_write');
+  });
+
+  it.each(['takt', 'codex'] as const)('keeps Phase 2 read-only with network and AI review requested (control=%s)', async (permissionControl) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    expect((await new CodexProvider().setup({ name: 'reporter' }).call('Report', {
+      cwd: '/tmp', executionPhase: 2, edit: false, permissionMode: 'full', aiReviewPermissions: true,
+      providerOptions: { codex: { permissionControl, networkAccess: true } },
+    })).status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', networkAccessEnabled: false, approvalPolicy: 'never' });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('approvals_reviewer');
+  });
+
+  it.each(['takt', 'codex'] as const)('keeps isolated structured calls read-only and offline with network and AI review requested (control=%s)', async (permissionControl) => {
+    mockEvents = [
+      { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+      { type: 'turn.completed' },
+    ];
+    const result = await new CodexProvider().setupIsolatedStructured({ name: 'selector' }).call('Choose', {
+      cwd: '/tmp', executionPhase: 1, edit: false, permissionMode: 'full', outputSchema: { type: 'object' }, aiReviewPermissions: true,
+      providerOptions: { codex: { permissionControl, networkAccess: true } },
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', networkAccessEnabled: false, approvalPolicy: 'never' });
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
+    expect(lastCodexConstructorOptions?.config).not.toHaveProperty('approvals_reviewer');
+  });
+
   it.each([
     { permissionControl: 'takt', sessionId: undefined },
     { permissionControl: 'codex', sessionId: undefined },
     { permissionControl: 'takt', sessionId: 'existing-session' },
     { permissionControl: 'codex', sessionId: 'existing-session' },
-  ] as const)('enforces edit=false readonly in Phase 1 ($permissionControl, $sessionId)', async ({ permissionControl, sessionId }) => {
+  ] as const)('respects permission control for edit=false in Phase 1 ($permissionControl, $sessionId)', async ({ permissionControl, sessionId }) => {
     mockEvents = [{ type: 'turn.completed' }];
     const result = await new CodexProvider().setup({ name: 'reviewer' }).call('Review', {
       cwd: '/tmp', edit: false, permissionMode: 'edit', executionPhase: 1, sessionId,
       providerOptions: { codex: { permissionControl } },
     });
     expect(result.status).toBe('done');
-    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+    expect(lastThreadOptions?.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
+    expect(lastThreadOptions?.approvalPolicy).toBe('never');
     if (sessionId === undefined) {
       expect(mockStartThread).toHaveBeenCalledOnce();
       expect(mockResumeThread).not.toHaveBeenCalled();
@@ -125,7 +195,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
       cwd: '/tmp', edit: false, permissionMode: 'full', executionPhase: 1,
       providerOptions: { codex: { permissionControl } },
     });
-    expect(lastThreadOptions?.sandboxMode).toBe('read-only');
+    expect(lastThreadOptions?.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
   });
 
   it.each([undefined, 'existing-session'])('forces read-only sandbox in Phase 2 with delegated Codex permissions (session=%s)', async (sessionId) => {
@@ -237,7 +307,8 @@ describe('CodexClient — structuredOutput 抽出', () => {
     const controller = new AbortController();
     const options: CodexCallOptions = {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
-      permissionMode: 'full', networkAccess: true, fastMode: true,
+      executionPhase: 1, edit: false,
+      permissionMode: 'full', networkAccess: true, fastMode: true, aiReviewPermissions: true,
       skills: { repo: true, user: true }, model: 'test-model', reasoningEffort: 'high',
       childProcessEnv: { CODEX_HOME: '/temporary/codex-home' }, abortSignal: controller.signal,
       preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node', args: ['unused.js'] } } } },
@@ -252,6 +323,8 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(listInput.env).toEqual(lastCodexConstructorOptions?.env);
     expect(lastCodexConstructorOptions?.codexPathOverride).toBe(listInput.executablePath);
     expect(lastThreadOptions).toMatchObject({ workingDirectory: '/tmp', sandboxMode: 'read-only', networkAccessEnabled: false, webSearchMode: 'disabled', approvalPolicy: 'never' });
+    expect(listInput.configOverrides.filter((override) => override.startsWith('approvals_reviewer='))).toEqual([]);
+    expect(listInput.configOverrides.some((override) => /^(default_permissions|permissions)\./.test(override) || override.startsWith('default_permissions='))).toBe(false);
     expect(listInput.configOverrides).toEqual(expect.arrayContaining([
       'model="test-model"', 'model_reasoning_effort="high"', 'features.fast_mode=true',
       'sandbox_mode="read-only"', 'approval_policy="never"',
@@ -595,6 +668,8 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
       await client.call('coder', 'prompt', {
         cwd: '/tmp',
+        executionPhase: 1,
+        edit: false,
         permissionMode: 'readonly',
         permissionControl: 'codex',
         networkAccess,
@@ -617,6 +692,8 @@ describe('CodexClient — structuredOutput 抽出', () => {
       expect(lastThreadOptions).toMatchObject({ approvalPolicy: 'never' });
       expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
       expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('default_permissions');
+      expect(lastCodexConstructorOptions?.config).not.toHaveProperty('permissions');
       expect(mockLogger.warn).not.toHaveBeenCalled();
     },
   );
@@ -730,7 +807,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
   });
 
-  it('permission_control=takt は従来の sandbox と network mapping を明示的に維持する', async () => {
+  it.each([undefined, 'takt'] as const)('permission_control=%s は readonly と network_access=true を権限プロファイルで渡す', async (permissionControl) => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
@@ -740,14 +817,15 @@ describe('CodexClient — structuredOutput 抽出', () => {
     await client.call('coder', 'prompt', {
       cwd: '/tmp',
       permissionMode: 'readonly',
-      permissionControl: 'takt',
+      permissionControl,
       networkAccess: true,
     });
 
-    expect(lastThreadOptions).toMatchObject({
-      sandboxMode: 'read-only',
-      networkAccessEnabled: true,
-      approvalPolicy: 'never',
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+    expect(lastThreadOptions).not.toHaveProperty('networkAccessEnabled');
+    expect(lastCodexConstructorOptions?.config).toMatchObject({
+      default_permissions: 'takt-readonly-network',
+      permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
     });
   });
 

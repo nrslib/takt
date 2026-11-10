@@ -53,6 +53,14 @@ export class WorkflowRestartNavigator {
     return entry?.kind === 'workflow_call' && entry.step === step.name;
   }
 
+  isSelectedCallAncestor(
+    step: WorkflowStep,
+    callStack: readonly WorkflowResumePointEntry[],
+  ): boolean {
+    return this.isSelectedCallPath(step, callStack)
+      && callStack.length + 1 < this.restartPoint.stack.length;
+  }
+
   resolveChildStartStep(
     childWorkflow: WorkflowConfig,
     callStack: readonly WorkflowResumePointEntry[],

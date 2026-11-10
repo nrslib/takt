@@ -34,6 +34,7 @@ import {
 import type { OptionsBuilder } from './OptionsBuilder.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
+  persistResults?: () => void;
   beginReportExecution?: (step: WorkflowStep) => string | undefined;
   finishReportExecution?: (id: string, completed: boolean) => void;
   config: {
@@ -426,6 +427,7 @@ export class WorkflowEngineStepCoordinator {
       completed = result.response.status === 'done';
       return result;
     } finally {
+      this.deps.persistResults?.();
       if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
     }
   }

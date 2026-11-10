@@ -494,6 +494,54 @@ workflow_system_commands:
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## manager 的任务 workflow
+
+在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中设置 `manager.workflows`，指定 manager 创建开发任务时可选的 workflow。项目值替换整个全局列表。元素可以是名称字符串，或仅含一对 `{ 名称: 使用说明 }` 的对象，与 `workflow_categories.workflows` 的写法一致。
+
+```yaml
+manager:
+  workflows:
+    - default: 常规功能开发和缺陷修复，从计划到审查。
+    - simple: 只需修改一两个文件的小任务。
+    - takt-default
+  default_workflow: default
+```
+
+两层都省略时，默认只允许 `default` 和 `simple`，并根据 `language` 提供日文或英文的使用说明。显式的纯名称元素不补充说明。`manager.default_workflow` 即使不在列表中也可选。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
+
+manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.workflow` / `merge-prepare`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
+
+## manager 工具权限
+
+在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中配置：
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` 接受 `auto`（默认）或 `full`。`manager.provider_permissions`
+将 provider 名映射到相同的值，默认为空。此例仅对 Claude 启用 AI 权限审核，其他 provider 使用完整权限。
+
+解析顺序：project 的 provider 覆盖 → global 的 provider 覆盖 → project 的 `permission` →
+global 的 `permission` → `auto`。按 manager turn 实际解析的 provider 查找。
+`claude` 和 `claude-sdk` 互为别名；同一层中同时配置时，精确匹配的键优先。
+仓库 manager 使用该仓库的配置。workspace manager 使用第一个已注册仓库的配置，
+尚无仓库时使用 workspace 专用目录，与 `auto_run` 等现有 manager 设置一致。
+
+- **Claude（`claude` / `claude-sdk`）**：`auto` 使用 SDK `permissionMode: auto`，
+  不绕过权限检查，分类器允许或拒绝工具调用。`full` 保持 `bypassPermissions`。
+- **Codex**：`auto` 使用 `workspace-write`、`approvalPolicy: on-request` 和
+  `approvals_reviewer = "auto_review"`。为 `gh` 等命令启用网络访问。
+  AI 审核权限扩展请求，即使无人值守也可批准。`full` 保持 `danger-full-access` 和 `approvalPolicy: never`。
+- **其他 provider**：没有此 AI 权限审核机制，`auto` 与 `full` 行为相同。
+
+manager MCP 工具保留现有审批允许列表，两种模式下均可免确认使用。
+AI 拒绝的操作作为工具结果返回 manager。TAKT 不会自动将拒绝转换为人工询问。
+这些设置仅适用于 manager turn，不改变 workflow step 或 run 的权限。
+
 ## 通过 Slack 与 manager 对话
 
 在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」操作；旧版本提案的按钮无效。
@@ -1261,6 +1309,8 @@ provider_options:
     network_access: true
 ```
 
+在 TAKT 管理权限的 Phase 1 中，可以保持文件只读并允许网络访问，适用于 `edit: false` 或解析为 `permission_mode: readonly` 的调用。使用 `permission_control: codex` 时，应在 Codex 中配置网络。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终使用 `read-only` sandbox，并禁用网络访问，即使设置 `network_access: true` 也不例外。
+
 OpenCode 通过 `webfetch` / `websearch` 工具权限实现同一抽象：
 
 ```yaml
@@ -1274,7 +1324,16 @@ provider_options:
 
 #### Codex 权限控制（`permission_control`）
 
-Codex 默认使用 TAKT 的权限映射，相当于 `permission_control: takt`，并将解析出的 TAKT `permission_mode` 传给 Codex SDK 的 `sandboxMode`。设置 `network_access` 时也会传入 `networkAccessEnabled`；省略时 Codex 保持默认 `false`。
+Codex 默认由 TAKT 管理权限，相当于 `permission_control: takt`。写入权限与 `network_access` 分开解析。Phase 1 中，`edit: false` 或解析出的 `permission_mode: readonly` 会禁止写入；即使 `permission_mode: full`，`edit: false` 仍然优先。
+
+| 写入权限 | `network_access` | 传给 Codex 的设置 |
+|---|---|---|
+| 允许 | `true` | `workspace-write` sandbox（`full` 使用 `danger-full-access`）及 `networkAccessEnabled: true` |
+| 允许 | `false` / 未指定 | 保持原有 sandbox 映射；显式传递 `false`，省略时保留 Codex 默认值 |
+| 禁止 | `true` | 不传 sandbox 标志；通过 `--config` 传递继承 `:read-only` 且设置 `network.enabled=true` 的 `takt-readonly-network` 权限 profile |
+| 禁止 | `false` / 未指定 | `read-only` sandbox |
+
+TAKT 管理权限时，会为所有 `codex exec` 添加 `--ignore-rules`，包括可写 step、新 session 和 `exec ... resume <id>`。因此 Codex 不会加载用户或项目的 execpolicy `.rules` 文件，避免 allow 规则让匹配的命令在 sandbox 外执行。使用 `permission_control: codex` 时，规则由用户配置决定，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）例外。Phase 2、这些内部调用和仅允许 MCP 副作用的模式始终添加 `--ignore-rules`，并禁止写入和网络访问。Phase 2 或这些内部调用指定 `config_profile` 时，同时传递 `--ignore-rules` 和 `--profile <name>`。辅助命令 `mcp list` / `mcp get` 不会收到 exec 专用标志。
 
 ```yaml
 provider_options:
@@ -1287,9 +1346,9 @@ provider_options:
       repo: true
 ```
 
-使用 `permission_control: codex` 时，TAKT 从每次 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
+Phase 1 使用 `permission_control: codex` 时，TAKT 从未使用 `strict-readonly` 的 Codex 调用中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
 
-但 Phase 2 和显式设置 `edit: false` 的 step 的 Phase 1 仍会传入 `read-only` sandbox。Codex 在 Phase 1 中无论解析出的 permission mode 是什么，都会使用此 sandbox，包括 `permission_control: codex`。这些调用的 `network_access` 也按 TAKT 管理权限时的规则处理。
+Phase 1 使用 `permission_control: codex` 时，即使设置 `edit: false` 或 `permission_mode: readonly`，TAKT 也不传 sandbox 和网络覆盖，由 Codex 配置决定实际权限，未使用 `strict-readonly` 的结构化调用同样适用。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）是例外：即使委托权限，TAKT 仍管理这些调用的权限，始终传递 `read-only` sandbox 和 `networkAccessEnabled: false`。仅允许 MCP 副作用的模式也保持 `read-only` sandbox，并显式禁用网络和 Web 搜索；该模式不能与 `permission_control: codex` 同时使用。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 

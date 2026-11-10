@@ -142,7 +142,7 @@ it.each(['tui', 'slack'] as const)('does not interrupt a non-patrol event for %s
     expect(f.runner.interrupts).toEqual([]);
     expect(f.runner.calls).toHaveLength(1);
     await f.runner.progress(active, 'event progress');
-    expect(f.owner.progress).toHaveBeenCalledWith(active.turn, 'event progress');
+    expect(f.owner.progress).toHaveBeenCalledWith(active.turn, 'event progress', expect.any(AbortSignal));
     await f.runner.finish(active);
     const human = await f.runner.started(2);
     expect(human.input.event.eventId).toBe('human');

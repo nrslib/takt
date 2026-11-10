@@ -26,6 +26,7 @@ import {
 import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
+import { getConfigSnapshot } from '../configSnapshot.js';
 import { validateProviderModelRequirements } from '../providerModelRequirements.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
@@ -236,7 +237,8 @@ export class GlobalConfigManager {
         },
       },
       manager: parsed.manager === undefined ? undefined : {
-        patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
+        permission: parsed.manager.permission, providerPermissions: parsed.manager.provider_permissions,
+        patrolInterval: parsed.manager.patrol_interval, autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, workflows: parsed.manager.workflows, notifications: parsed.manager.notifications,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),
@@ -314,6 +316,8 @@ export function invalidateGlobalConfigCache(): void {
 }
 
 export function loadGlobalConfig(): GlobalConfig {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.global;
   return GlobalConfigManager.getInstance().load();
 }
 
@@ -322,5 +326,7 @@ export function saveGlobalConfig(config: GlobalConfig): void {
 }
 
 export function loadGlobalConfigTraceState(): ConfigTrace {
+  const snapshot = getConfigSnapshot();
+  if (snapshot !== undefined) return snapshot.globalTrace;
   return GlobalConfigManager.getInstance().getTrace();
 }
