@@ -12,9 +12,7 @@
 {{include:policies/finding-validity}}
 {{include:policies/applicable-inputs}}
 
-<!-- policy-priority -->
 推測ではなく実コードを確認してから指摘する。
-<!-- /policy-priority -->
 
 ## 原則
 

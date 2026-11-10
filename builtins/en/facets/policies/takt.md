@@ -16,11 +16,9 @@ Provide one source of truth for independent judgments about takt.
 
 ### Provider Integration
 
-<!-- policy-priority -->
 | Rule | Decision |
 |---|---|
 | SDK-specific error handling leaking outside Provider | REJECT |
-<!-- /policy-priority -->
 | Errors not propagated to AgentResponse.error | REJECT |
 | Session key collision between providers | REJECT |
 | Session key format `{persona}:{provider}` | OK |

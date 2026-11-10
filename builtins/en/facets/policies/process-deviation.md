@@ -1,6 +1,4 @@
-<!-- policy-priority -->
 Past deviations: record only; no fail/incomplete/replan/stop iff irreversible by rework, no artifact/external effects, current code verified as specified, and stopped. Else repair/revert/recover; keep checks. Deviation alone cannot return code. Exclude other-code/config proof. Judge boundary violations normally.
-<!-- /policy-priority -->
 
 # Process deviations
 

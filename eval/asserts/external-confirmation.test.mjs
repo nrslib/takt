@@ -91,36 +91,6 @@ test('all external-confirmation fixture evidence hashes match the actual current
   }
 });
 
-test('prepared adjudication exposes its complete core criterion before the inline policy limit', () => {
-  execFileSync(process.execPath, [
-    'eval/scripts/prepare.mjs', ...promptEvalPrepareTargets(suites),
-  ], { cwd: repoRoot });
-  const id = 'review-external-confirmation-runtime';
-  const prompt = readFileSync(join(evalDir, 'prompts', `${id}.phase1.j2`), 'utf8');
-  const snapshot = readFileSync(join(evalDir, 'fixtures/review-external-confirmation/runtime',
-    '.takt/eval-snapshots', `${id}-policies.md`), 'utf8');
-  for (const language of ['ja', 'en']) {
-    const policy = readFileSync(join(repoRoot, `builtins/${language}/facets/policies/review-adjudication.md`), 'utf8');
-    const orderHeading = language === 'ja' ? '## 判定の順序' : '## Decision Order';
-    const orderStart = policy.indexOf(orderHeading);
-    assert.ok(orderStart >= 0);
-    const order = policy.slice(orderStart, policy.indexOf('{{include:', orderStart)).trim();
-    const priority = policy.match(/<!-- policy-priority -->\s*([\s\S]*?)\s*<!-- \/policy-priority -->/)?.[1];
-    assert.ok(priority);
-    assert.ok(priority.length <= 2000);
-    assert.match(priority, language === 'ja'
-      ? /現在の修正と必要な環境内検証が完了.*根拠ある未充足条件を外部でしか観測できない場合だけ外部確認待ち/
-      : /Await grounded external-only criteria only after current repairs\/necessary local checks pass/);
-    if (language === 'ja') {
-      assert.ok(snapshot.includes(order));
-      const end = prompt.lastIndexOf('\n...（以下省略）...');
-      assert.ok(end >= 2000);
-      const excerpt = prompt.slice(end - 2000, end);
-      assert.ok(excerpt.includes(priority), 'the complete external-confirmation criterion must survive actual prompt truncation');
-    }
-  }
-});
-
 test('promptfoo calls the CLI in each case fixture and persists matching evidence without a model', () => {
   const directory = mkdtempSync(join(tmpdir(), 'takt-external-confirmation-provider-'));
   const bin = join(directory, 'bin');

@@ -1,8 +1,6 @@
 # Coding Policy
 
-<!-- policy-priority -->
 Correctness before speed/ease.
-<!-- /policy-priority -->
 
 ## Principles
 

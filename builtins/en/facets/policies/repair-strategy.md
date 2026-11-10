@@ -1,6 +1,4 @@
-<!-- policy-priority -->
 Resolved defect recurs on another in-scope input/path; same violated condition, confirmed shared mechanism: switch to remove shared method assumptions. First finding: normal analysis, no history-based switch. Different causes/conditions: separate; files/symptoms never suffice to merge. Shared-cause plan progressing: fill gaps; finish.
-<!-- /policy-priority -->
 
 # Repair Strategy
 

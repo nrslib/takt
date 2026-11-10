@@ -1,8 +1,6 @@
 # Testing Policy
 
-<!-- policy-priority -->
 With all five evidence conditions: changed observable behavior needs minimal tests for regressions existing tests miss; fixes need tests detecting pre-fix failure.
-<!-- /policy-priority -->
 
 ## Principles
 

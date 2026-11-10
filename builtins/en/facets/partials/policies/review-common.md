@@ -12,9 +12,7 @@ This review is a defensive quality and security audit performed, on request, aga
 {{include:policies/finding-validity}}
 {{include:policies/applicable-inputs}}
 
-<!-- policy-priority -->
 Check code before findings; never speculate.
-<!-- /policy-priority -->
 
 ## Principles
 

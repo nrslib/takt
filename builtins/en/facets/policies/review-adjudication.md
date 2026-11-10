@@ -1,6 +1,4 @@
-<!-- policy-priority -->
 Separate validity/repair need. Repair requirement/acceptance breaches, change regressions, required consumer migration. Merge unvisited consumers sharing an accepted problem's cause/condition/acceptance criteria. Out-of-scope premises alone: expansion; judge in-scope breaches. Await grounded external-only criteria only after current repairs/necessary local checks pass.
-<!-- /policy-priority -->
 
 # Finding decisions
 

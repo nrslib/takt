@@ -1,6 +1,4 @@
-<!-- policy-priority -->
 Proposals/repetition create no requirements/contracts. Check support/refutation on real guarded paths and guard timing/effects/success. Honor required methods/structure/tests/docs. No evidence: unknown, not success/defect. Keep authority.
-<!-- /policy-priority -->
 
 # Evidence-Based Judgment
 

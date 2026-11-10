@@ -18,11 +18,9 @@ Provide one source of truth for independent judgments about architecture.
 
 Judge the operation's requirements, input bounds, and actual path from acquisition to consumption. Needing to process every item is different from needing to retain every item simultaneously.
 
-<!-- policy-priority -->
 | Rule | Decision |
 |---|---|
 | Unneeded full fetch/materialization of uncapped input before limiting a subset | REJECT |
-<!-- /policy-priority -->
 | A full-data operation supports incremental consumption but buffers everything before delivery without a contractual need | REJECT |
 | A resource remedy truncates a scan required for complete output or exact aggregation, dropping required results | REJECT |
 | A necessary full scan controls retained data and outstanding unconsumed work | OK |
