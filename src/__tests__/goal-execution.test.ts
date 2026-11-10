@@ -95,6 +95,16 @@ describe('goal execution inquiry lifecycle', () => {
     expect(aborted.questions?.[0]?.withdrawalReason?.trim().length).toBeGreaterThan(0);
   });
 
+  it.each(['human', 'manager'] as const)('saves the %s origin on resumption', async (origin) => {
+    stored = GoalSchema.parse({ ...stored, executionStatus: 'paused' });
+    await setGoalExecutionStatus('/project', goalId, 'active', signal, origin);
+    expect(stored.executionStatus).toBe('active');
+    expect(doubles.saveEvent).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'resumed', goalId, origin });
+    doubles.saveEvent.mockClear();
+    await expect(setGoalExecutionStatus('/project', goalId, 'active', signal, origin)).rejects.toThrow();
+    expect(doubles.saveEvent).not.toHaveBeenCalled();
+  });
+
   it('does not overwrite the original withdrawal when abort is retried', async () => {
     const first = await setGoalExecutionStatus('/project', goalId, 'aborted', signal);
     vi.setSystemTime(later);

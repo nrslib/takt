@@ -141,8 +141,9 @@ it('registers through manager MCP and daemon IPC, preserves cwd, and delivers th
   const outcome = await service.execute(next.input, { signal: next.signal, progress() {}, request });
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(execute).toHaveBeenCalledOnce();
-  const prompt = JSON.parse(execute.mock.calls[0]![0].prompt) as { event: unknown };
-  expect(prompt.event).toEqual(event);
+  const prompt = execute.mock.calls[0]![0].prompt;
+  const body = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2)) as { event: unknown };
+  expect(body.event).toEqual(event);
   expect(execute.mock.calls[0]![0].requestDaemon).toBe(request);
   await f.runner.finish(next, outcome);
   await f.dispatcher.drain();
@@ -182,7 +183,9 @@ it('skips deleted workspace candidates in MCP and daemon matching and retains th
     repositoryDirectory: f.repositoryDirectory, goalId: goalRecord().id, status: 'succeeded', exitCode: 0,
     outputTail: `${cwd}\n` });
   expect(execute).toHaveBeenCalledOnce();
-  expect((JSON.parse(execute.mock.calls[0]![0].prompt) as { event: unknown }).event).toEqual(next.input.event.event);
+  const prompt = execute.mock.calls[0]![0].prompt;
+  const body = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2)) as { event: unknown };
+  expect(body.event).toEqual(next.input.event.event);
   await f.runner.finish(next, outcome);
   await f.dispatcher.drain();
   expect(f.runner.calls).toHaveLength(2);

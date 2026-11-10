@@ -234,11 +234,11 @@ is absent or present according to the user's stated scope. Compare
 per-metric rates and inspect actual model outputs before changing templates.
 
 `manager-work-split` は本番と同じ resolver で manager の persona / policy /
-knowledge / instruction を全文組み立て、設定行も本番と同じ形で付ける。
+knowledge / instruction を解決し、本番の `conversationPrompt` で前提説明・ファセット・設定を組み立てる。
 `projectDir` と `TAKT_CONFIG_DIR` は空の一時ディレクトリに隔離し、ユーザーと
 プロジェクトの上書きを拾わない。Repository 行と書き込み引数には固定ケースの
-`cwd` を使う。イベント入力は本番と同じイベントと処理指示の JSON、会話入力は
-本番の `handleUserMessage` が渡す文書本文を使う。書き込みツールの引数 schema
+`cwd` を使う。イベントと会話の入力も本番の turn builder を通し、入力の出所を示す
+前置きと本文を渡す。SDK の取り消し結果を再生するケースは、道具の結果を現在入力として渡す。書き込みツールの引数 schema
 も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
 既存のテキスト再生ケースは「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
 固定のツール結果や保存済みの履歴を読んだあとの判断を測る。本番のツール実行、権限審査や
@@ -333,9 +333,12 @@ JavaScript assert は操作・本番引数・対象ゴールの作業記録を�
 拒否文の出所の扱い、独立した根拠での続行と拒否の報告を内容で判定する。
 人の許可が届く次のターンでの実際の再試行、provider による審査・拒否の配送は測らない。
 
-74ケース・日英148入力のうち、再生の70ケース・140入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+86ケース・日英172入力のうち、SDK実行は4ケース・8入力、再生は82ケース・164入力である。
+再生の164入力を、Sol Low (`gpt-6.1-sol`)、Opus 5 (`claude-opus-5`)、
 Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
 `--filter-providers` で選べる。
+このスイートの provider 別名は `codex-sol-low = gpt-6.1-sol`（effort: low）、
+`codex-luna-max = gpt-6-luna`（effort: max）に対応する。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
 明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
 生の生成結果の保存は共通CLI provider の `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` を使える。
@@ -474,7 +477,7 @@ node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
   --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
   -o eval/.results/manager-pause-green.json || pause_eval_green_status=$?
-# GREEN で既存場面も含めた再生90入力の回帰を確認する。
+# GREEN で既存場面も含めた再生164入力の回帰を確認する。
 pause_eval_green_all_status=0
 node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
@@ -489,7 +492,8 @@ trap - EXIT
 `manager-work-split-offline.test.mjs` でもこの CLI の絞り込みをモデルなしで実行する。
 RED で通った場面は「その場面では追加の効果を確かめられない」と報告する。
 
-実操作を観測する追加2ケース（stopped-background-execution、integrated-task-execution）は、
+実操作を観測するSDK実行4ケース・日英8入力（stopped-background-execution、integrated-task-execution、
+two-goal-pr-execution、finite-check-external-execution）は、
 専用の claude-sdk-opus-5 provider だけで実行する。既存の再生ケースには従来の4 provider だけを対応させる。
 試行ごとの worker が本番の manager plan / turn executor と権限判定を使い、ローカル MCP を接続する。
 使い捨て Git リポジトリ、隔離した TAKT 設定、背景プロセスとテストを用意し、実 GitHub や外部通知は使わない。
@@ -534,7 +538,7 @@ node --test eval/suite-registry.test.mjs
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
 RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
-それぞれ全112入力をモデルを呼ばない provider に渡す。さらに一時停止に関する4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
+それぞれ全86ケース・日英172入力をモデルを呼ばない provider に渡す。さらに一時停止に関する4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
 `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
@@ -1042,7 +1046,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（74ケース×日英、再生70・SDK実行4） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）、環境差による確認失敗を直す／直さず報告する判断の尊重と無関係な改修の除外、権限審査拒否後の質問・迂回防止・補助確認なしの続行・拒否文と人の指示の区別。操作選択と引数、確認の指示・計画・作業記録の実質を測定。SDK実行では終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（86ケース×日英、再生82・SDK実行4） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）、環境差による確認失敗を直す／直さず報告する判断の尊重と無関係な改修の除外、権限審査拒否後の質問・迂回防止・補助確認なしの続行・拒否文と人の指示の区別。操作選択と引数、確認の指示・計画・作業記録の実質を測定。SDK実行では終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
@@ -1794,3 +1798,108 @@ for (const directory of ['.tmp/development-loop-comparison', '.tmp/development-l
 }
 JS
 ```
+
+### manager の入力出所: red / green
+
+`manager-work-split` は本番の `conversationPrompt` を使ってシステムとターンを組み立てる。
+入力出所の 6 ケースと発信元の 6 ケースを日英で登録し、権限拒否の 4 ケースを含む既存 148 入力を残した全 172 入力を回帰対象とする。
+`previousTurns` は従来の `{ event, response }` に加え、`source` を持つ順序付き記録を受け付ける。
+`human`、`event`、`manager`、`tool_call`、`tool_result`、`environment_notice` を区別し、
+tool call ID、結果のエラー・取り消し情報、通知の発信元も保持する。
+CLI のテキスト再生では source と role を JSON に保持して渡す。実際の SDK の
+system / user / tool メッセージやターン外の実行制御そのものを再現する評価ではない。
+`tool-cancel-not-human-stop` は通知までの履歴と道具呼び出しを並べ、現在入力を
+道具の取り消し結果として渡す。次ターンへの誤認の持ち越しは別ケースで評価する。
+`resume-origin-{human,manager,unknown}` と `director-origin-{human,director,unknown}` は、
+本番の schema・受け箱変換・builder を使って発信元を渡す。unknown の fixture は旧保存形式どおり
+origin を省略し、本文から補わない。JS は発信元の到達、Y の復旧手配と指示の存在、
+人の中継指示による X の待機範囲を確認する。意味採点は誤った人への帰属・再承認・復旧指示の内容を確認する。
+これらは新しい発信元契約の green 評価であり、下記 main との red / green 比較は元の入力出所 6 ケースを使う。
+
+以下はコーディネーターが実行する手順。モデル評価は実装作業では実行しない。
+まず main のコミットを固定し、別の新規 worktree に main の本番コードと manager 用の eval 資産を配置する。
+準備スクリプトは manager のハーネス・scenario・assert・共有依存を明示してコピーし、
+fixture はその scenario が参照するものだけをコピーする。別 suite の scenario・fixture・assert はコピーしない。
+全 suite 共通の runner と registry は main のものを使い、green から上書きしない。
+
+red 用の eval adapter は main の `createManagerConversationPlan` と `buildManagerEventPrompt`
+を呼ぶ。評価用の解決済み設定とファセットを一時プロジェクトへ渡し、表示するリポジトリだけを
+fixture のパスに置き換える。本番コード・ファセット・プロンプト資産は main のまま。
+green は新しい共通 builder を呼ぶ。切り替え変数は eval 内だけで消費する。
+古い比較用の `TAKT_EVAL_MANAGER_OMIT_CONCURRENCY` は今回の red には使用しない。
+
+入力出所の比較では、両方をビルドした後、同じ 6 ケース（日英 12 入力）・採点・4 provider・反復数で実行する。
+以下の絞り込みを red と green の両方に指定し、発信元ケースを比較対象に含めない。
+green の worktree 内（サブディレクトリでも可）から、以下のブロック全体を実行する。
+`mktemp -d` で実行ごとの専用ディレクトリを確保し、その未使用の子パスへ red を追加する。
+通常終了・準備や評価の失敗・HUP/INT/TERM による中断時は、サブシェルの trap が
+今回追加した red だけを `git worktree remove --force` で削除し、専用ディレクトリを `rmdir` で片付ける。
+既存の他 worktree には触れず、削除に失敗した場合はパスを表示して残す。
+red の評価が非0で終了した場合も、その終了コードを保持して cleanup する。
+red 内の manifest と評価結果も削除される。証跡を残す場合は、manifest を評価前に外へコピーし、
+評価コマンドに専用ディレクトリ外の保存先を `--output` で指定する。
+
+```bash
+(
+  set -eu
+  GREEN=$(git rev-parse --show-toplevel)
+  MAIN_SHA=$(git -C "$GREEN" rev-parse origin/main)
+  TMPDIR=$(CDPATH= cd -- "${TMPDIR:-/tmp}" && pwd -P)
+  RED_TMP=$(mktemp -d "$TMPDIR/takt-manager-turn-context-red.XXXXXX")
+  RED="$RED_TMP/worktree"
+  cleanup() {
+    result=$?
+    trap - EXIT HUP INT TERM
+    cd "$GREEN" || exit 1
+    if [ -f "$RED/.git" ]; then
+      git -C "$GREEN" worktree remove --force "$RED" || {
+        printf 'Cleanup failed; retained worktree: %s\n' "$RED" >&2
+        exit 1
+      }
+    fi
+    rmdir "$RED_TMP" || exit 1
+    exit "$result"
+  }
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  node "$GREEN/eval/scripts/prepare-manager-turn-context-red.mjs" "$MAIN_SHA" "$RED"
+  npm --prefix "$RED" ci
+  npm --prefix "$RED" run build
+  npm --prefix "$RED" run eval:prompts:setup
+  cd "$RED"
+  # red: 入力出所 6 ケースの比較
+  TAKT_EVAL_MANAGER_PROMPT_MODULE=./manager-turn-context-baseline.mjs \
+    node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
+    --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
+    --filter-pattern '^(ja|en): (tool-cancel-not-human-stop|self-record-not-human-stop|human-wait-x-only|run-report-stop-text|inquiry-answer-wait|human-quotes-review-stop)$'
+)
+```
+
+red が終了したら、green の worktree 内から以下を実行する。
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+npm run build
+# green の worktree 内: 同じ入力出所 6 ケースの比較
+node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
+  --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
+  --filter-pattern '^(ja|en): (tool-cancel-not-human-stop|self-record-not-human-stop|human-wait-x-only|run-report-stop-text|inquiry-answer-wait|human-quotes-review-stop)$'
+```
+
+全件回帰は green で別に実行する。発信元 6 ケースと権限拒否 4 ケースを含む全 86 ケース（日英 172 入力、
+再生 82 ケース・SDK 実行 4 ケース）を対象にし、新しい発信元契約と既存ケースへの影響を確認する。
+provider とケースの絞り込みを付けず、再生用 4 provider と SDK 実行用 provider を使う。
+SDK 実行には既存の Claude SDK のセットアップが必要（上記 `eval:prompts:setup` は採点用 Codex SDK のみ）。
+これは main との差を測る red / green 比較とは別の回帰確認である。
+
+```bash
+# green の worktree 内: 発信元ケース・SDK 実行ケースを含む全件回帰
+node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3
+```
+
+JS 採点は復旧操作の対象、独立した Y の進行、X に限定した待機と作業記録を確認する。
+意味採点は応答だけでなく、作業記録・通知・タスク指示の誤った停止認定、不要な再承認要求、
+未確認の成功の捏造を確認する。red の失敗や green の改善は実測するまで不明。
+準備した main の SHA とコピーしたファイルの一覧は red の `eval/manager-turn-context-red.json` に残る。

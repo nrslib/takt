@@ -3,6 +3,9 @@ import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
+export const GoalExecutionOriginSchema = z.enum(['human', 'manager']);
+export type GoalExecutionOrigin = z.infer<typeof GoalExecutionOriginSchema>;
+
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);

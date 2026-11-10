@@ -5,9 +5,12 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
 import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
-import { AcceptedEventSchema, EventRecordSchema, isRetiredWatchEvent, StoredResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
+import type { ConversationAssignment } from '../conversations/schema.js';
+import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, isRetiredWatchEvent, storedStandaloneInboxAnswer, TurnResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
 import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
+import { ConversationStateStore } from './conversationStateStore.js';
+import { DaemonPersistedFiles } from './persistedFiles.js';
 
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
@@ -20,9 +23,17 @@ export class FileEventStore implements EventStore {
   private readonly sequences = new Map<number, string>();
   private readonly knownFiles = new Set<string>();
   private readonly lock = new FileAsyncLock();
+  private readonly conversations: ConversationStateStore;
+  private readonly files: DaemonPersistedFiles;
   private lastSequence = 0;
 
-  constructor(configDirectory: string) { this.directory = join(configDirectory, 'daemon-events'); }
+  constructor(configDirectory: string, private readonly routing?: {
+    permits(assignment: ConversationAssignment, id: string): Promise<boolean>;
+  }) {
+    this.directory = join(configDirectory, 'daemon-events');
+    this.conversations = new ConversationStateStore(configDirectory);
+    this.files = new DaemonPersistedFiles(configDirectory);
+  }
 
   private exclusive<T>(action: () => Promise<T>): Promise<T> {
     return this.lock.exclusive(join(this.directory, '.lock'), action, { signal: new AbortController().signal, timeoutMs: 5000 });
@@ -36,7 +47,30 @@ export class FileEventStore implements EventStore {
     if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
     if (record.state === 'running') this.assertTurn(record.event, record.turn);
     if (record.state === 'settling' || record.state === 'settled') this.assertResult(record.event, record.result);
-    return record;
+    const event = await this.restoreStandaloneInboxAnswer(record.event);
+    if (record.state === 'settling' || record.state === 'settled') return { ...record, event, result: { ...record.result, event } };
+    return { ...record, event };
+  }
+
+  private async restoreStandaloneInboxAnswer(saved: AcceptedEvent): Promise<AcceptedEvent> {
+    const answer = storedStandaloneInboxAnswer(saved);
+    if (answer === undefined || saved.event.kind !== 'director_message' || this.routing === undefined) return saved;
+    const savedAssignment = (await this.conversations.read(saved.conversationId))?.state.assignment;
+    if (savedAssignment === undefined || savedAssignment.kind === 'daemon') return saved;
+    const repositories = savedAssignment.kind === 'repository' ? [savedAssignment.repositoryDirectory]
+      : await this.files.readWorkspaceRepositories(savedAssignment.workspaceId);
+    // 保存済み assignment は探索候補であり、現在の配送先を保証しない。
+    for (const repository of repositories) {
+      let inboxDirectory: string;
+      try {
+        if (!await this.routing.permits({ kind: 'repository', repositoryDirectory: repository }, saved.conversationId)) continue;
+        inboxDirectory = await this.files.inboxDirectory(repository);
+      } catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
+      const expected = `standalone-answer-${createHash('sha256').update(JSON.stringify([inboxDirectory, answer.questionId])).digest('hex')}`;
+      // 旧 inbox の createdAt は回答日時とは別に採番される。
+      if (saved.eventId === expected) return { ...saved, event: { ...saved.event, inquiryAnswer: answer } };
+    }
+    return saved;
   }
 
   private path(eventId: string): string { return join(this.directory, `${fileKey(eventId)}.json`); }
@@ -67,7 +101,7 @@ export class FileEventStore implements EventStore {
   }
 
   private async write(record: EventRecord): Promise<void> {
-    const content = JSON.stringify(EventRecordSchema.parse(record));
+    const content = JSON.stringify(EventRecordWriteSchema.parse(record));
     if (Buffer.byteLength(content) > MAX_RECORD_BYTES) throw new Error('Stored event exceeds capacity');
     await writePrivateFile(this.path(record.event.eventId), content);
   }
@@ -131,7 +165,7 @@ export class FileEventStore implements EventStore {
   }
 
   async saveResult(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
+    const result = TurnResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       this.assertResult(record.event, result);
@@ -145,7 +179,7 @@ export class FileEventStore implements EventStore {
   }
 
   async markSettled(eventId: string, input: TurnResult): Promise<void> {
-    const result = StoredResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
+    const result = TurnResultSchema.parse(JSON.parse(JSON.stringify(input)) as unknown);
     await this.exclusive(async () => {
       const record = await this.read(this.path(eventId));
       if (result.outcome.kind === 'deferred' && record.state === 'queued' && isDeepStrictEqual(record.event, result.event)) return;

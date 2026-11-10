@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalAnswerSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import type { IoOptions } from '../../core/daemon/io.js';
@@ -23,9 +23,11 @@ const inboxEvent = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(),
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
-  z.object({ ...common, kind: z.enum(['registered', 'resumed', 'patrol']) }).strict(),
+  z.object({ ...common, kind: z.enum(['registered', 'patrol']) }).strict(),
+  z.object({ ...common, kind: z.literal('resumed'), origin: GoalExecutionOriginSchema.optional() }).strict(),
 ]);
 const inquiryId = z.uuid();
+const workspaceRepositories = z.object({ id: z.uuid(), repositoryDirectories: z.array(z.string().refine(isAbsolute)) });
 
 export type DaemonInquiryOwner = Extract<ConversationAssignment, { kind: 'workspace' | 'repository' }>;
 
@@ -101,6 +103,15 @@ export class DaemonPersistedFiles {
   async inboxDirectory(repositoryDirectory: string): Promise<string> {
     const canonical = await realpath(repositoryDirectory);
     return join(this.configDirectory, 'manager-inbox', createHash('sha256').update(canonical).digest('hex'));
+  }
+
+  async readWorkspaceRepositories(workspaceId: string): Promise<readonly string[]> {
+    const path = join(this.configDirectory, 'workspaces', inquiryId.parse(workspaceId), 'workspace.json');
+    const content = await readPrivateFile(path, MAX_PROJECTION_BYTES);
+    if (content === undefined) return [];
+    const workspace = workspaceRepositories.parse(JSON.parse(content.toString('utf8')) as unknown);
+    if (workspace.id !== workspaceId) throw new Error('Workspace ID differs from its directory');
+    return workspace.repositoryDirectories;
   }
 
   async saveStandaloneInquiryAnswer(repositoryDirectory: string, questionId: string, questionBody: string,

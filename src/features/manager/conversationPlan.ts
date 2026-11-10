@@ -11,7 +11,7 @@ import type { McpServerConfig, StepProviderOptions } from '../../core/models/ind
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
 import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/taskInstructionFormat.js';
 import { loadFormalSpecVerifierConstraints } from '../interactive/formalSpecPrompts.js';
-import { renderTemplate } from '../../shared/prompts/index.js';
+import { buildManagerSystemPrompt } from './conversationPrompt.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { resolveManagerWorkflowSelection } from './workflowSelection.js';
 import { warn } from '../../shared/ui/index.js';
@@ -84,7 +84,6 @@ function buildManagerConversationPlan(
     : input.repositoryDirectories.map((repositoryDirectory) => ({
       repositoryDirectory, ...withRepositoryConfig(repositoryDirectory, () => resolveFormalSpecConfigurationWithoutPrompt(repositoryDirectory)),
     }));
-  const specificationSettings = Array.isArray(specificationConfiguration) ? specificationConfiguration : [specificationConfiguration];
   const managerConfig = resolveManagerConfig(cwd, resolved.provider);
   const workflowSelection = resolveManagerWorkflowSelection(cwd, managerConfig, lang);
   for (const repositoryDirectory of new Set([cwd, ...(input.repositoryDirectories ?? [])])) {
@@ -106,18 +105,12 @@ function buildManagerConversationPlan(
       aiReviewPermissions: managerConfig.permission === 'auto',
     },
     strategy: {
-      systemPrompt: [
-        persona.trim(), policy.trim(), knowledge.trim(), renderTemplate(instruction.trim(), {
-          formalSpec: specificationSettings.some((setting) => setting.mode),
-          formalSpecCommentsEnabled: specificationSettings.some((setting) => setting.mode && setting.comments),
-          formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang),
-        }),
-        `Formal specification configuration: ${JSON.stringify(specificationConfiguration)}`,
-        `Repository: ${JSON.stringify(cwd)}`,
-        `Default workflow: ${JSON.stringify(workflowSelection.defaultWorkflow ?? null)}`,
-        `Repository manager.main_merge: ${JSON.stringify(managerConfig.mainMerge)}`,
-        `Concurrency limit: ${resolveConfigValue(cwd, 'concurrency')}`,
-      ].join('\n\n'),
+      systemPrompt: buildManagerSystemPrompt({
+        lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
+        formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: cwd,
+        defaultWorkflow: workflowSelection.defaultWorkflow ?? null, mainMerge: managerConfig.mainMerge,
+        concurrency: resolveConfigValue(cwd, 'concurrency'),
+      }),
     },
   };
 }

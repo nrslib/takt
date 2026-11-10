@@ -15,6 +15,7 @@ export interface ConversationSession {
   provider: string;
   model: string | null;
   sessionId: string | null;
+  contextKey?: string;
   agentOverrides?: AssistantCliOverrides;
 }
 

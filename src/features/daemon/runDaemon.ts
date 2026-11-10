@@ -34,7 +34,7 @@ import { FileDaemonWatchSource } from './watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } from './inbox.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
-import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
 
 class DaemonCleanupError extends AggregateError {}
 
@@ -48,7 +48,7 @@ export async function startDaemon(options: {
 }) {
   const directory = options.configDirectory;
   const routing = new DaemonRouting(directory);
-  const eventStore = new FileEventStore(directory);
+  const eventStore = new FileEventStore(directory, routing);
   const store = new ConversationStateStore(directory);
   const notifications = new DaemonNotifications(directory);
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
@@ -179,8 +179,7 @@ export async function startDaemon(options: {
         if (owner.kind === 'workspace') {
           const eventId = `workspace-answer-${owner.workspaceId}-${question.id}`;
           const admission = await dispatcher.accept({ eventId, requestId: eventId, conversationId: conversationId(owner),
-            occurredAt: question.answer.answeredAt, source: 'director', event: { kind: 'director_message',
-              directorConversationId: conversationId({ kind: 'daemon' }), text: inquiryAnswerMessage(question.id, question.answer, question.body) } });
+            occurredAt: question.answer.answeredAt, source: 'director', event: inquiryAnswerEvent(question.id, question.answer, question.body) });
           if (admission.kind !== 'accepted') throw new Error(`Standalone answer was not accepted: ${admission.reason}`);
           return;
         }

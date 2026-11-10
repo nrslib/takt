@@ -7,7 +7,7 @@ import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
-import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
 import { hasCode } from '../../infra/daemon/privateFile.js';
 
 export function createDaemonStateRequests(options: {
@@ -58,8 +58,7 @@ export function createDaemonStateRequests(options: {
       const id = `workspace-answer-${owner.workspaceId}-${question.id}`;
       const admission = await options.ingress.accept({ eventId: id, requestId: id, conversationId: turn.conversationId,
         occurredAt: question.answer.answeredAt, source: 'director',
-        event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
-          text: inquiryAnswerMessage(question.id, question.answer, question.body) } });
+        event: inquiryAnswerEvent(question.id, question.answer, question.body) });
       return { kind: 'event_accepted', admission };
     }
     if (source?.state.assignment.kind !== 'daemon' || turn.conversationId !== conversationId({ kind: 'daemon' })) return forbidden();
@@ -76,7 +75,7 @@ export function createDaemonStateRequests(options: {
     if (request.kind === 'get_delivery') return { kind: 'delivery', conversationId: request.conversationId,
       assignment: target.state.assignment, connectedPorts: [...options.connectedPorts(request.conversationId)] };
     const admission = await options.ingress.accept({ eventId: request.eventId, requestId: request.requestId, conversationId: request.conversationId,
-      occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text } });
+      occurredAt: request.occurredAt, source: 'director', event: { kind: 'director_message', directorConversationId: turn.conversationId, text: request.text, origin: request.origin } });
     return { kind: 'event_accepted', admission };
   } };
 }

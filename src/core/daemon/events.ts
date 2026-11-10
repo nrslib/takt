@@ -1,6 +1,6 @@
 import type { WaitCommandCompleted } from './waitCommand.js';
-import type { ConversationActor } from '../../infra/conversations/schema.js';
-import type { GoalQuestion, GoalTaskResult } from '../../infra/goals/schema.js';
+import type { ConversationActor, DirectorMessageOrigin } from '../../infra/conversations/schema.js';
+import type { GoalExecutionOrigin, GoalQuestion, GoalTaskResult } from '../../infra/goals/schema.js';
 import type { ConversationCommand } from '../../features/manager/conversationPort.js';
 import type { AssistantCliOverrides } from '../config/provider-resolution.js';
 
@@ -38,9 +38,10 @@ export type TurnEvent =
   | { kind: 'human_command'; command: HumanCommand; speaker: ConversationActor; agentOverrides?: AssistantCliOverrides }
   | { kind: 'inquiry_answer'; command: Extract<ConversationCommand, { kind: 'answer_question' }> }
   | { kind: 'task_completed' | 'task_failed'; task: TaskRef; result: GoalTaskResult }
-  | { kind: 'director_message'; directorConversationId: string; text: string }
+  | { kind: 'director_message'; directorConversationId: string; text: string; origin?: DirectorMessageOrigin; inquiryAnswer?: { questionId: string; question?: string; answer: NonNullable<GoalQuestion['answer']> } }
   | { kind: 'goal_pr_failed'; repositoryDirectory: string; goalId: string; expectedSha: string; reason: string }
-  | { kind: 'goal_registered' | 'goal_resumed'; repositoryDirectory: string; goalId: string }
+  | { kind: 'goal_registered'; repositoryDirectory: string; goalId: string }
+  | { kind: 'goal_resumed'; repositoryDirectory: string; goalId: string; origin?: GoalExecutionOrigin }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation }
   | { kind: 'patrol'; repositoryDirectory: string; goalIds: string[] };
