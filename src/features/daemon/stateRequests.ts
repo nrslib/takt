@@ -36,7 +36,7 @@ export function createDaemonStateRequests(options: {
         const root = await realpath(directory);
         const path = relative(root, cwd);
         if (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)) {
-          repositoryDirectory = root;
+          repositoryDirectory = directory;
           break;
         }
       }

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -23,6 +23,8 @@ import { EventInputSchema } from '../infra/daemon/eventRecord.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
 import { ControlledTurnRunner, deferred, input } from './helpers/controlledDaemon.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -56,20 +58,30 @@ const node = (script: string): string => process.platform === 'win32'
 const noop = node('');
 const processTimeoutSeconds = process.platform === 'win32' ? 10 : 1;
 
-async function daemonFixture() {
+async function daemonFixture(options?: { workspaceAlias: boolean }) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'repository');
   await mkdir(join(repository, '.takt'), { recursive: true });
   await promisify(execFile)('git', ['init', '-b', 'main', repository]);
   await writeFile(join(repository, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
   await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  let assignment: ManagerAssignmentIdentity = { kind: 'repository', repositoryDirectory: repository };
+  let repositoryDirectory = repository;
+  if (options?.workspaceAlias) {
+    const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'wait workspace', repositoryDirectories: [repository] });
+    repositoryDirectory = join(directory, 'saved-repository');
+    await symlink(repository, repositoryDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+    await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'),
+      JSON.stringify({ ...workspace, repositoryDirectories: [repositoryDirectory] }));
+    assignment = { kind: 'workspace', workspaceId: workspace.id };
+  }
   const runner = new ControlledTurnRunner();
   const daemon = await startDaemon({ configDirectory: directory, owner: {
     pid: process.pid, identity: { startTime: 'fixture' }, version: 'test', cliPath: '/daemon.js',
   }, tokens: undefined, signal, runnerFactory(bus) { runner.bus = bus; return runner; } });
   cleanups.push(daemon.close);
   await daemon.watchers.close();
-  const id = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const id = conversationId(assignment);
   await daemon.dispatcher.accept(input('wait', id));
   const active = await runner.started(1);
   const envelope = { protocolVersion: TURN_PROTOCOL_VERSION, launchId: 'wait-test' };
@@ -81,7 +93,7 @@ async function daemonFixture() {
     if (response.kind !== 'daemon_reply') throw new Error('Expected a reply');
     return response.reply;
   };
-  const connection = await startManagerMcpConnection(repository, undefined, undefined, undefined, requestDaemon);
+  const connection = await startManagerMcpConnection(repository, assignment, undefined, undefined, requestDaemon);
   cleanups.push(connection.dispose);
   const client = new Client({ name: 'wait-test', version: 'test' });
   cleanups.push(() => client.close());
@@ -90,7 +102,7 @@ async function daemonFixture() {
   const call = (args: Record<string, unknown>) => client.callTool({ name: 'takt_wait_command', arguments: {
     cwd: repository, command: noop, description: 'CI result', ...args,
   } });
-  return { ...daemon, directory, repository, runner, id, active, requestDaemon, call, client };
+  return { ...daemon, directory, repository, repositoryDirectory, runner, id, active, requestDaemon, call, client };
 }
 
 it('registers through manager MCP and daemon IPC, preserves cwd, and delivers the result to the next manager turn once', async () => {
@@ -128,6 +140,45 @@ it('registers through manager MCP and daemon IPC, preserves cwd, and delivers th
   const prompt = JSON.parse(execute.mock.calls[0]![0].prompt) as { event: unknown };
   expect(prompt.event).toEqual(event);
   expect(execute.mock.calls[0]![0].requestDaemon).toBe(request);
+  await f.runner.finish(next, outcome);
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(2);
+});
+
+it('matches workspace completion to the saved assignment when its repository path differs from the real cwd', async () => {
+  const f = await daemonFixture({ workspaceAlias: true });
+  const cwd = join(f.repository, 'subdirectory'); await mkdir(cwd);
+  expect(await realpath(f.repositoryDirectory)).toBe(f.repository);
+  expect(f.repositoryDirectory).not.toBe(f.repository);
+  const outside = join(f.directory, 'other-repository'); await mkdir(outside);
+  await promisify(execFile)('git', ['init', '-b', 'main', outside]);
+  expect((await f.call({ cwd: outside })).isError).toBe(true);
+  expect(await f.requestDaemon({ kind: 'wait_command', cwd: outside, command: noop,
+    description: 'unassigned', timeoutSeconds: 10 })).toMatchObject({ kind: 'error', code: 'forbidden' });
+
+  const goalPath = join(f.repository, '.takt', 'goals', goalRecord().id, 'goal.json');
+  await mkdir(join(goalPath, '..'), { recursive: true });
+  await writeFile(goalPath, JSON.stringify(goalRecord()));
+  const response = await f.call({ cwd, goalId: goalRecord().id, command: node('console.log(process.cwd())') });
+  expect(response.isError).not.toBe(true);
+  const { id } = JSON.parse(firstTextContent(response.content)) as { id: string };
+  await f.runner.finish(f.active);
+  const next = await f.runner.started(2);
+  expect(next.turn.conversationId).toBe(f.id);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'received', summary: null, assignment: undefined, sessionId: undefined,
+  });
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'workspace-wait', executor: { execute } };
+  }, async close() {} });
+  const outcome = await service.execute(next.input, { signal: next.signal, progress() {},
+    request: (request) => f.dispatcher.request(next.turn, request, next.signal) });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(next.input.event.event).toMatchObject({ kind: 'wait_command_completed', id,
+    repositoryDirectory: f.repositoryDirectory, goalId: goalRecord().id, status: 'succeeded', exitCode: 0,
+    outputTail: `${cwd}\n` });
+  expect(execute).toHaveBeenCalledOnce();
+  expect((JSON.parse(execute.mock.calls[0]![0].prompt) as { event: unknown }).event).toEqual(next.input.event.event);
   await f.runner.finish(next, outcome);
   await f.dispatcher.drain();
   expect(f.runner.calls).toHaveLength(2);
