@@ -7,7 +7,7 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { getManagerOutputSchema } from './turnResponse.js';
-import { createManagerTurnExecutor } from './turnExecutor.js';
+import { createManagerTurnExecutor, type ManagerTurnInput } from './turnExecutor.js';
 import type { ProviderType } from '../../infra/providers/types.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
@@ -50,9 +50,13 @@ export function createConversationRuntime(configDirectory: string): Conversation
       if (existing?.contextKey === contextKey) return existing;
       if (existing !== undefined) { await existing.dispose(); entries.delete(id); }
       const turnScope = new TurnToolScope();
-      let activeTurn: { patrol: boolean; signal: AbortSignal } | undefined;
+      let activeTurn: { patrol: boolean; signal: AbortSignal; requestDaemon: ManagerTurnInput['requestDaemon'] } | undefined;
       const mcp = await connectManagerMcp(cwd, identity, plan.ctx.mcpServers, {
         turnScope,
+        requestDaemon: (request) => {
+          if (activeTurn?.requestDaemon === undefined || activeTurn.signal.aborted) throw new Error('Active daemon turn required');
+          return activeTurn.requestDaemon(request);
+        },
         conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined : { patrol: activeTurn.patrol },
       });
       try {
@@ -65,7 +69,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
           contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
             turnScope.begin(turn.abortSignal);
-            activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal };
+            activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal, requestDaemon: turn.requestDaemon };
             try { return await executor.execute(turn); }
             finally { await turnScope.end(); activeTurn = undefined; }
           } }, dispose: mcp.dispose };

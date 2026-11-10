@@ -26,15 +26,14 @@ const digest = (value: unknown): string => createHash('sha256').update(JSON.stri
 
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
-  private readonly goalReader = new WatchGoalReader();
-
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations,
-    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>) {}
+    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
+    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {}
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {

@@ -1,3 +1,4 @@
+import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import type { ManagerAssignmentIdentity } from './assignment.js';
 import { withManagerAssignment } from './assignment.js';
@@ -25,6 +26,7 @@ const addRepositoryTools = new Set([
 ]);
 
 export interface ManagerTurnInput {
+  requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   prompt: string;
   sessionId: string | undefined;
   abortSignal: AbortSignal;
