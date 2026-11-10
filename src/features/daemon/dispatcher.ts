@@ -551,7 +551,9 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   private handleControl(notice: Extract<DispatcherNotice, { kind: 'control' }>, effects: DispatcherEffect[]): void {
     const { event, response } = notice;
     if (event.kind === 'stop') {
-      if (this.shutdown !== undefined) { response.reply = this.shutdown.reply; return; }
+      if (this.shutdown !== undefined && (this.shutdown.phase !== 'closed' || this.shutdown.errors.length === 0)) {
+        response.reply = this.shutdown.reply; return;
+      }
       this.shutdown = { reply: response.reply, phase: 'runner', errors: [] };
       for (const active of this.active.values()) if (active.phase !== 'settling') this.interrupt(active, 'shutdown', effects);
       effects.push(effect(() => this.dependencies.runner.close(), (result) => ({ kind: 'runner_closed', result })));

@@ -213,6 +213,18 @@ Pausing also stops running tasks, which remain as retryable failures. On resume,
 
 Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available.
 
+## Commands for waiting on external state
+
+The manager-only `takt_wait_command` is available in conversations with a daemon request route. It registers a one-line shell command with the daemon and immediately returns its registration ID. Examples include `gh run watch <id> --exit-status`, `gh pr checks <n> --watch`, and `until curl -sf …; do sleep 30; done`. Arguments are `command`, a `description` of what is being awaited, an absolute directory `cwd` inside an assigned repository, and optional `goalId` and `timeoutSeconds`. Subdirectories are preserved as the execution directory. The timeout defaults to 3600 seconds and cannot exceed 86400 seconds. To match the daemon's event admission capacity, at most 32 registrations across the daemon may be running or awaiting completion delivery or retry. New registrations fail with an error at capacity and can be retried once completion delivery frees a slot.
+
+The manager may end its turn after registering. The daemon keeps requests in memory and delivers one `wait_command_completed` event to the requesting conversation after success, failure, timeout, or cancellation caused by a stopped goal. The event contains the registration ID, description, optional goal, status, exit code (`null` when unavailable), signal, elapsed milliseconds, and the last 16 KiB of combined stdout/stderr.
+
+On Windows, if natural exit cannot be distinguished from termination after a Job stop or handle close, the daemon records a stop error and retains the registration, monitoring, and pending deliveries without sending a completion event. A matching Job termination code or successful handle close alone does not establish cancellation or timeout. Daemon shutdown fails at its shared 15-second deadline and can be retried. An unresolved exit cause remains incomplete after retries.
+
+An optional `goalId` must identify an active goal in the selected repository. The daemon checks for goal pause or abort every five seconds and stops the command's process tree. Timeouts also stop the process tree. Daemon shutdown stops requests and their child processes and, when possible, delivers a `cancelled` completion event to the requesting conversation. Registrations are not rerun on restart. During startup patrol, the manager checks current state and registers again if needed.
+
+The daemon executes these commands directly, bypassing the manager's `auto` AI permission review. Use waiting commands only; do not use operations that change state. This usage restriction is described by the tool and is not enforced mechanically.
+
 ## Integration and completion
 
 Manager splits work into independently checkable results. Work that does not need each other's results or share change targets runs in parallel within specified ordering and concurrency limits. Human constraints carry into each instruction, with one owner for checks performed once per goal.

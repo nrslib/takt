@@ -1,3 +1,4 @@
+import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitCommand.js';
 import { z } from 'zod/v4';
 import { ConversationActivitySchema, ConversationTextSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
@@ -51,6 +52,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
+  WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
@@ -84,6 +86,7 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  WaitCommandInputSchema.extend({ kind: z.literal('wait_command') }).strict(),
   z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
   z.object({ kind: z.literal('save_conversation'), change }).strict(),
   z.object({ kind: z.literal('accept_director_message'), eventId: id, requestId: id, conversationId: id, occurredAt: z.iso.datetime(), text, origin: DirectorMessageOriginSchema }).strict(),
@@ -96,6 +99,7 @@ const admission = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('wait_command_registered'), id: z.uuid() }).strict(),
   z.object({ kind: z.literal('state_saved'), version, duplicate: z.boolean() }).strict(),
   z.object({ kind: z.literal('event_accepted'), admission }).strict(),
   z.object({ kind: z.literal('notification_saved'), notificationId: id }).strict(),

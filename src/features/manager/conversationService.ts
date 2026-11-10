@@ -168,6 +168,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              requestDaemon: io.request,
               ...(verification === undefined ? {} : { verify: verification }),
               sessionId: patrol ? undefined : state.current.session.sessionId ?? undefined,
               assignment: assignment.kind === 'daemon' ? undefined : identityOf(assignment),
