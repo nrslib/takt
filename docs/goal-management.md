@@ -206,7 +206,7 @@ The manager may end its turn after registering. The daemon keeps requests in mem
 
 On Windows, if natural exit cannot be distinguished from termination after a Job stop or handle close, the daemon records a stop error and retains the registration, monitoring, and pending deliveries without sending a completion event. A matching Job termination code or successful handle close alone does not establish cancellation or timeout. Daemon shutdown fails at its shared 15-second deadline and can be retried. An unresolved exit cause remains incomplete after retries.
 
-An optional `goalId` must identify an active goal in the selected repository. The daemon checks for goal pause or abort every five seconds and stops the command's process tree. Timeouts also stop the process tree. Daemon shutdown stops children and discards registrations; restarting does not rerun them. During startup patrol, the manager checks current state and registers again if needed.
+An optional `goalId` must identify an active goal in the selected repository. The daemon checks for goal pause or abort every five seconds and stops the command's process tree. Timeouts also stop the process tree. Daemon shutdown stops requests and their child processes and, when possible, delivers a `cancelled` completion event to the requesting conversation. Registrations are not rerun on restart. During startup patrol, the manager checks current state and registers again if needed.
 
 The daemon executes these commands directly, bypassing the manager's `auto` AI permission review. Use waiting commands only; do not use operations that change state. This usage restriction is described by the tool and is not enforced mechanically.
 

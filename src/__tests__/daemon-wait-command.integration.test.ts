@@ -7,10 +7,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { WatchGoalReader } from '../features/daemon/watchers/goalReader.js';
+import { WatchGoalReader } from '../features/daemon/watchers/goalReader.js';
 import { DaemonWaitCommands } from '../features/daemon/waitCommands.js';
 import * as waitCommandProcesses from '../features/daemon/waitCommandProcess.js';
-import { startDaemon } from '../features/daemon/runDaemon.js';
+import { runDaemon, startDaemon } from '../features/daemon/runDaemon.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
@@ -33,6 +33,10 @@ import * as spawnUtils from '../shared/utils/spawn.js';
 import * as daemonDiagnostics from '../infra/daemon/diagnostics.js';
 import * as executablePaths from '../shared/utils/executable-path-async.js';
 import { startWindowsWaitCommand } from '../features/daemon/windowsWaitCommand.js';
+import { DaemonLogger } from '../infra/daemon/logger.js';
+import { readDaemonOwner } from '../infra/daemon/owner.js';
+import * as turnProcessHost from '../features/daemon/turnProcessHost.js';
+import * as daemonWatchers from '../features/daemon/watchers/index.js';
 
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 vi.mock('../features/daemon/slackPorts.js', () => ({ createDaemonSlackPorts: async () => undefined }));
@@ -72,7 +76,7 @@ async function daemonFixture(options?: { workspaceAlias: boolean }) {
     repositoryDirectory = join(directory, 'saved-repository');
     await symlink(repository, repositoryDirectory, process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'),
-      JSON.stringify({ ...workspace, repositoryDirectories: [repositoryDirectory] }));
+      JSON.stringify({ ...workspace, repositoryDirectories: [join(directory, 'deleted-repository'), repositoryDirectory] }));
     assignment = { kind: 'workspace', workspaceId: workspace.id };
   }
   const runner = new ControlledTurnRunner();
@@ -145,7 +149,7 @@ it('registers through manager MCP and daemon IPC, preserves cwd, and delivers th
   expect(f.runner.calls).toHaveLength(2);
 });
 
-it('matches workspace completion to the saved assignment when its repository path differs from the real cwd', async () => {
+it('skips deleted workspace candidates in MCP and daemon matching and retains the saved repository path in completion', async () => {
   const f = await daemonFixture({ workspaceAlias: true });
   const cwd = join(f.repository, 'subdirectory'); await mkdir(cwd);
   expect(await realpath(f.repositoryDirectory)).toBe(f.repository);
@@ -955,7 +959,7 @@ it.skipIf(process.platform !== 'win32').each([
   expect(f.ingress.accept).not.toHaveBeenCalled();
 });
 
-it.skipIf(process.platform !== 'win32')('rejects Windows daemon close without delivering completion after unconfirmed close fallback', async () => {
+it.skipIf(process.platform !== 'win32')('closes the runner even when Windows daemon close rejects without delivering completion after unconfirmed close fallback', async () => {
   const errors = vi.spyOn(daemonDiagnostics, 'reportDaemonError').mockImplementation(() => {});
   const f = await daemonFixture();
   const supervisors = injectWindowsTerminateProcess('if (code == 1) { SetLastError(5); return false; }', true);
@@ -968,7 +972,7 @@ it.skipIf(process.platform !== 'win32')('rejects Windows daemon close without de
   await expect(f.close()).rejects.toBeInstanceOf(AggregateError);
   expectStopped(pids);
   expect(f.runner.calls).toHaveLength(1);
-  expect(f.runner.closed).toBe(false);
+  expect(f.runner.closed).toBe(true);
   expect(errors).toHaveBeenCalled();
 });
 
@@ -1345,6 +1349,117 @@ it('stops children and discards registrations when the daemon closes', async () 
   expectStopped(pids);
   expect(f.runner.calls).toHaveLength(2);
   expect(f.runner.calls[1]!.input.event.event).toMatchObject({ kind: 'wait_command_completed', status: 'cancelled' });
+});
+
+function shutdownCauses(error: unknown): unknown[] {
+  return error instanceof AggregateError ? error.errors.flatMap(shutdownCauses) : [error];
+}
+
+it.each(['combined', 'resources'] as const)('continues shutdown after %s failures and retries only incomplete cleanup', async (phase) => {
+  const f = await daemonFixture();
+  await f.runner.finish(f.active);
+  const waitFailure = new Error('Injected wait close failure');
+  const runnerFailure = new Error('Injected runner close failure');
+  const resourceFailure = new Error('Injected resource close failure');
+  const closeWait = vi.spyOn(DaemonWaitCommands.prototype, 'close');
+  const closeRunner = vi.spyOn(f.runner, 'close');
+  if (phase === 'combined') {
+    closeWait.mockRejectedValueOnce(waitFailure);
+    closeRunner.mockRejectedValueOnce(runnerFailure);
+  }
+  const closeResource = vi.spyOn(WatchGoalReader.prototype, 'close').mockRejectedValueOnce(resourceFailure);
+  const closeConversations = vi.spyOn(f.conversations, 'close');
+  const stop = vi.spyOn(f.dispatcher, 'control');
+
+  const outcomes = await Promise.allSettled([f.close(), f.close()]);
+  for (const outcome of outcomes) {
+    expect(outcome.status).toBe('rejected');
+    if (outcome.status === 'rejected') {
+      expect(outcome.reason).toBeInstanceOf(AggregateError);
+      expect(shutdownCauses(outcome.reason)).toEqual(expect.arrayContaining(
+        phase === 'combined' ? [waitFailure, runnerFailure, resourceFailure] : [resourceFailure]));
+    }
+  }
+  expect(stop).toHaveBeenCalledExactlyOnceWith({ kind: 'stop' });
+  expect(closeRunner).toHaveBeenCalledOnce();
+  expect(closeResource).toHaveBeenCalledOnce();
+  expect(closeConversations).toHaveBeenCalledOnce();
+  expect(await f.dispatcher.accept(input('after-stop', f.id))).toEqual({ kind: 'rejected', reason: 'stopping' });
+
+  await Promise.all([f.close(), f.close()]);
+  await f.close();
+  expect(closeWait).toHaveBeenCalledTimes(2);
+  expect(closeRunner).toHaveBeenCalledTimes(phase === 'combined' ? 2 : 1);
+  expect(closeResource).toHaveBeenCalledTimes(2);
+  expect(closeConversations).toHaveBeenCalledOnce();
+  expect(f.runner.closed).toBe(true);
+});
+
+it.each(['stop', 'delivery'] as const)('retains wait ownership after %s failure without admitting events after dispatcher stop', async (phase) => {
+  vi.spyOn(daemonDiagnostics, 'reportDaemonError').mockImplementation(() => {});
+  const f = await daemonFixture();
+  const closeWait = vi.spyOn(DaemonWaitCommands.prototype, 'close');
+  if (phase === 'stop') closeWait.mockRejectedValueOnce(new Error('Injected wait stop failure'));
+  const accept = f.dispatcher.accept.bind(f.dispatcher);
+  const admission = vi.spyOn(f.dispatcher, 'accept').mockImplementation((event) => phase === 'delivery' && event.event.kind === 'wait_command_completed'
+    ? Promise.resolve({ kind: 'rejected', reason: 'capacity' }) : accept(event));
+  const marker = join(f.directory, 'undelivered-shutdown-pids');
+  expect((await f.call({ command: waitingTree(marker) })).isError).not.toBe(true);
+  const pids = await readPids(marker, []);
+  await f.runner.finish(f.active);
+  const closeConversations = vi.spyOn(f.conversations, 'close');
+  // 停止済み dispatcher へは再配送できないため、cleanup 後も配送失敗を確認する。
+  cleanups[cleanups.indexOf(f.close)] = async () => { await expect(f.close()).rejects.toBeInstanceOf(AggregateError); };
+
+  await expect(f.close()).rejects.toBeInstanceOf(AggregateError);
+  if (phase === 'delivery') expectStopped(pids);
+  else for (const pid of pids) process.kill(pid, 0);
+  expect(f.runner.closed).toBe(true);
+  expect(closeConversations).toHaveBeenCalledOnce();
+  const registry = closeWait.mock.contexts[0] as DaemonWaitCommands;
+  expect(registry.hasWork).toBe(true);
+  expect(await f.dispatcher.accept(input('after-stop', f.id))).toEqual({ kind: 'rejected', reason: 'stopping' });
+  admission.mockImplementation(accept);
+  await expect(f.close()).rejects.toBeInstanceOf(AggregateError);
+  expectStopped(pids);
+  expect(registry.hasWork).toBe(true);
+  const events = admission.mock.calls.map(([event]) => event).filter((event) => event.event.kind === 'wait_command_completed');
+  expect(events.length).toBeGreaterThan(0);
+  expect(new Set(events.map((event) => event.eventId)).size).toBe(1);
+  expect(f.runner.calls).toHaveLength(1);
+});
+
+it.each(['success', 'failure', 'startup-stop'] as const)('reports daemon cleanup %s and removes the owner only after successful cleanup', async (outcome) => {
+  const failure = new Error('Injected wait shutdown failure');
+  if (outcome === 'failure') vi.spyOn(DaemonWaitCommands.prototype, 'close').mockRejectedValueOnce(failure);
+  const runner = new ControlledTurnRunner();
+  vi.spyOn(turnProcessHost, 'createTurnProcessHost').mockImplementation(({ bus }) => { runner.bus = bus; return runner; });
+  if (outcome === 'startup-stop') {
+    const startWatchers = daemonWatchers.startDaemonWatchers;
+    vi.spyOn(daemonWatchers, 'startDaemonWatchers').mockImplementation((options) => {
+      const watchers = startWatchers(options);
+      process.emit('SIGTERM');
+      return watchers;
+    });
+  }
+  const write = DaemonLogger.prototype.write;
+  const logs = vi.spyOn(DaemonLogger.prototype, 'write').mockImplementation(async function (this: DaemonLogger, level, message) {
+    await write.call(this, level, message);
+    if (level === 'info' && message.startsWith('Daemon started')) process.emit('SIGTERM');
+  });
+  const directory = getGlobalConfigDir();
+  if (outcome === 'failure') {
+    await expect(runDaemon()).rejects.toSatisfy((error: unknown) => shutdownCauses(error).includes(failure));
+    expect(await readDaemonOwner(directory)).toMatchObject({ pid: process.pid });
+    const diagnostics = logs.mock.calls.filter(([level]) => level === 'error').map(([, message]) => message).join('\n');
+    expect(diagnostics).toContain(failure.message);
+    expect(diagnostics).toContain('owner retained');
+    expect(diagnostics).toContain('child processes may remain');
+  } else {
+    await runDaemon();
+    expect(await readDaemonOwner(directory)).toBeUndefined();
+  }
+  expect(runner.closed).toBe(true);
 });
 
 it('observes a saved goal abort after the registering turn ends and delivers cancellation through the daemon', async () => {

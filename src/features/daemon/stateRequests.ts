@@ -8,6 +8,7 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { DaemonConversations } from './conversationState.js';
 import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { hasCode } from '../../infra/daemon/privateFile.js';
 
 export function createDaemonStateRequests(options: {
   conversations: DaemonConversations;
@@ -33,7 +34,9 @@ export function createDaemonStateRequests(options: {
       const cwd = await realpath(input.cwd);
       let repositoryDirectory: string | undefined;
       for (const directory of assignment.repositoryDirectories) {
-        const root = await realpath(directory);
+        let root: string;
+        try { root = await realpath(directory); }
+        catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
         const path = relative(root, cwd);
         if (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)) {
           repositoryDirectory = directory;

@@ -4,7 +4,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DaemonBus, TurnRunner } from '../../core/daemon/ports.js';
+import type { DaemonBus, DaemonResources, TurnRunner } from '../../core/daemon/ports.js';
 import { registerDaemonOwner, removeDaemonOwner, type DaemonOwner } from '../../infra/daemon/owner.js';
 import { readProcessOwner, AsyncProcess } from '../../infra/daemon/process.js';
 import { AsyncCommand } from '../../infra/daemon/command.js';
@@ -35,6 +35,8 @@ import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } f
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
 import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+
+class DaemonCleanupError extends AggregateError {}
 
 /** 所有権とシグナルは専用プロセス入口が所有し、ここでは部品の寿命を一元化する。 */
 export async function startDaemon(options: {
@@ -81,10 +83,17 @@ export async function startDaemon(options: {
   const maxPendingEvents = 32;
   const waitCommands = new DaemonWaitCommands({ maxRegistrations: maxPendingEvents,
     ingress: { accept: (event) => dispatcher.accept(event) }, goals: waitGoals, onError: reportDaemonError });
+  const closedResources = new Set<DaemonResources>();
+  const closeResource = async (resource: DaemonResources | undefined): Promise<void> => {
+    if (resource === undefined || closedResources.has(resource)) return;
+    await resource.close();
+    closedResources.add(resource);
+  };
   const resources = { async close() {
     await startupFinished;
-    const results = await Promise.allSettled([waitGoals.close(), waitCommandCheck?.close(), waitCommands.close(), idleCheck?.close(), patrols?.close(), watchers?.close(), slack?.close(), ipc?.close()]);
-    const delivery = await Promise.allSettled([conversations.close()]);
+    const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
+      closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
+    const delivery = await Promise.allSettled([closeResource(conversations)]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
     if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');
@@ -92,7 +101,7 @@ export async function startDaemon(options: {
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
     ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
   runner: { start(value, signal) { conversations.started(value); runner.start(value, signal); },
-    interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => runner.close() },
+    interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => closeResource(runner) },
   resources, limits: { maxPendingEvents, maxPendingBytes: 1024 * 1024 },
   onFailure: ({ phase, error }) => {
     reportDaemonError(`Daemon ${phase} failed: ${getErrorMessage(error)}`);
@@ -114,12 +123,22 @@ export async function startDaemon(options: {
     markStopped();
     input.stopAccepting(); ipc?.stopAccepting(); slack?.stopAccepting();
     if (closing === undefined) {
-      const commandsClosed = waitCommands.close();
-      // wait の配送がない shutdown は、未返答の状態更新より先にターンを中断する。
-      closing = (waitCommands.hasWork
-        ? commandsClosed.then(() => dispatcher.drain()).then(() => dispatcher.control({ kind: 'stop' })).then(() => undefined)
-        : dispatcher.control({ kind: 'stop' }).then(() => commandsClosed))
-        .catch((error: unknown) => { closing = undefined; throw error; });
+      closing = (async () => {
+        const failures: unknown[] = [];
+        const commandsClosed = waitCommands.close();
+        const hasWaitWork = waitCommands.hasWork;
+        // wait の配送がない shutdown は、未返答の状態更新より先にターンを中断する。
+        const stopped = hasWaitWork ? undefined : dispatcher.control({ kind: 'stop' })
+          .catch((error: unknown) => { failures.push(error); });
+        try { await commandsClosed; } catch (error) { failures.push(error); }
+        if (hasWaitWork) {
+          try { await dispatcher.drain(); } catch (error) { failures.push(error); }
+        }
+        try { await (stopped ?? dispatcher.control({ kind: 'stop' })); }
+        catch (error) { failures.push(error); }
+        if (failures.length > 0) throw new DaemonCleanupError(failures,
+          'Daemon cleanup failed; undelivered wait results or child processes may remain');
+      })().catch((error: unknown) => { closing = undefined; throw error; });
     }
     return closing;
   };
@@ -201,7 +220,7 @@ export async function startDaemon(options: {
   } catch (error) {
     resolveSlack(undefined);
     finishStartup();
-    try { await close(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Daemon startup and cleanup failed'); }
+    try { await close(); } catch (cleanup) { throw new DaemonCleanupError([error, cleanup], 'Daemon startup and cleanup failed'); }
     throw error;
   } finally { finishStartup(); options.signal.removeEventListener('abort', stopDuringStartup); }
 }
@@ -228,25 +247,33 @@ export async function runDaemon(): Promise<void> {
   const logger = new DaemonLogger(directory);
   const restoreErrorLog = installDaemonErrorLog((message) => logger.write('error', message));
   let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
+  let cleanupSucceeded = false;
   const failures: unknown[] = [];
   try {
     daemon = await startDaemon({ configDirectory: directory, owner, tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
     await logger.write('info', `Daemon started (${process.pid})`);
     await Promise.race([stopped, daemon.stopped]);
   } catch (error) {
+    if (daemon === undefined) cleanupSucceeded = !(error instanceof DaemonCleanupError);
     if (error !== controller.signal.reason) { reportDaemonError(error); failures.push(error); }
   } finally {
     stop();
     try {
-      await daemon?.close();
+      if (daemon !== undefined) {
+        await daemon.close();
+        cleanupSucceeded = true;
+      }
       await logger.write('info', `Daemon stopped (${process.pid})`);
     } catch (error) {
       reportDaemonError(error);
       failures.push(error);
     } finally {
+      if (!cleanupSucceeded) reportDaemonError('Daemon cleanup incomplete; owner retained, undelivered wait results or child processes may remain');
       restoreErrorLog();
       try { await logger.close(); } catch (error) { failures.push(error); }
-      try { await removeDaemonOwner(directory, owner, io); } catch (error) { failures.push(error); }
+      if (cleanupSucceeded) {
+        try { await removeDaemonOwner(directory, owner, io); } catch (error) { failures.push(error); }
+      }
       process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop);
     }
   }

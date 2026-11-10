@@ -6,6 +6,7 @@ import type { ManagerAssignment } from './startupResolution.js';
 import { z } from 'zod/v4';
 import type { McpServerConfig } from '../../core/models/index.js';
 import { isStdioServer } from '../../infra/providers/mcp/types.js';
+import { hasCode } from '../../infra/daemon/privateFile.js';
 
 export type ManagerAssignmentIdentity =
   | { readonly kind: 'repository'; readonly repositoryDirectory: string }
@@ -40,7 +41,10 @@ export async function resolveAssignedProjectRoot(cwd: string, assignment: Manage
   const root = await resolveGitRepositoryDirectory(cwd);
   if (assignment.repositoryDirectories.includes(root)) return root;
   for (const directory of assignment.repositoryDirectories) {
-    if (await realpath(directory) === root) return root;
+    let assignedRoot: string;
+    try { assignedRoot = await realpath(directory); }
+    catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
+    if (assignedRoot === root) return root;
   }
   throw new Error(`Git repository is not assigned to this manager: ${root} (cwd: ${cwd})`);
 }
