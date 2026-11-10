@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse, stringify } from 'yaml';
+import { assertManagerInputPartition } from './manager-work-split-test-helpers.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const suite = parse(readFileSync(join(repoRoot, 'eval/scenarios/manager-work-split/manager-work-split.yaml'), 'utf8'));
@@ -53,15 +54,30 @@ for (const { variant, filtered } of [{ variant: 'red', filtered: false }, { vari
       assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
       const report = JSON.parse(readFileSync(reportPath, 'utf8'));
       const selected = filtered ? suite.tests.filter(({ description }) => new RegExp(pausePattern).test(description)) : suite.tests;
-      assert.equal(selected.length, filtered ? 8 : 140);
+      assert.equal(selected.length, filtered ? 8 : 150);
       assert.equal(report.results.stats.successes, selected.length);
       assert.equal(report.results.stats.failures, 0);
       assert.equal(report.results.stats.errors, 0);
       assert.equal(report.results.results.length, selected.length);
+      const replay = [];
+      const execution = [];
       for (const { prompt, vars } of report.results.results) {
-        if (vars.case.endsWith('-execution')) continue;
+        if (!prompt.raw.startsWith('SYSTEM:\n')) {
+          const input = JSON.parse(prompt.raw);
+          assert.equal(input.case, vars.case);
+          assert.equal(input.lang, vars.lang);
+          execution.push(vars);
+          continue;
+        }
+        replay.push(vars);
         assert.equal(prompt.raw.includes(`${instructionMarker}_${vars.lang}`), variant === 'red',
           `${vars.case}/${vars.lang}: instruction override marker`);
+      }
+      if (!filtered) assertManagerInputPartition({ replay, execution });
+      else {
+        assert.equal(execution.length, 0);
+        assert.deepEqual(replay.map(({ case: caseId, lang }) => `${caseId}/${lang}`).sort(),
+          selected.map(({ vars }) => `${vars.case}/${vars.lang}`).sort());
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

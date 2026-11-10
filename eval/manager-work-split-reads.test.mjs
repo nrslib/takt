@@ -396,6 +396,7 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
   const required = new Set(['local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'verification-once', 'verification-mixed', 'unrelated-history-repair']);
   const optional = new Set(['reservation-validation', 'legacy-date-format', 'archive-test-coverage',
+    'date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth', 'review-outside-acceptance',
     'quoted-csv-fields', 'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'existing-invoice-format', 'mail-dispatch-state',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'local-env-failure-left-as-is']);
   try {
@@ -436,9 +437,9 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
         else optionallyInstructed++;
       }
     }
-    assert.equal(inspected, 40);
+    assert.equal(inspected, 50);
     assert.equal(instructed, 12);
-    assert.equal(optionallyInstructed, 22);
+    assert.equal(optionallyInstructed, 30);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

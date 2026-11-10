@@ -19,7 +19,7 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を日英17ケースで測る（Python データ処理と Web アプリを含む）',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を75ケース・日英150入力（再生71ケース・142入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
     suites: ['manager-work-split'],
   },
   {
@@ -266,7 +266,7 @@ const EXECUTION_OVERRIDES = {
   },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で日英66ケース（再生62・SDK実行4）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重を比較する明示選択の評価',
+    reason: '75ケース・日英150入力（再生71ケース・142入力を Sol Low、Opus 5、Terra Medium、Luna Max、SDK実行4ケース・8入力を Claude SDK）で操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・直し方と範囲への介入を比較する明示選択の評価',
   },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',

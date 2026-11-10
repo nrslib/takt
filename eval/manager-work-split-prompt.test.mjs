@@ -17,30 +17,43 @@ import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, goalWri
 import { prepareQuestionFacetVariants } from './fixtures/manager-question-options/facets.mjs';
 import { renderTemplate } from '../dist/shared/prompts/index.js';
 import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
+import { assertManagerInputPartition } from './manager-work-split-test-helpers.mjs';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const runLogContent = (fixture, runSlug, index) => fixture.readResults.find(({ tool, arguments: args }) =>
   tool === 'takt_get_run' && args.runSlug === runSlug && args.view === 'log' && args.stepIndex === index).result.log.content;
+function uniqueTasksFileRead(reads, cwd) {
+  const path = `${cwd}/.takt/tasks.yaml`;
+  const matches = reads.filter(({ tool, arguments: args }) => tool === 'Read' && args.file_path === path);
+  assert.equal(matches.length, 1, `${path}: expected exactly one task list file read`);
+  return matches[0];
+}
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
 const facetEnvKeys = ['TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', 'TAKT_EVAL_MANAGER_POLICY_ROOT'];
 const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
 for (const key of facetEnvKeys) delete process.env[key];
 after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 140 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 150 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 140);
+  assert.equal(suite.tests.length, 150);
+  const replay = [];
+  const execution = [];
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
     if (fixture.execution === true) {
+      execution.push(vars);
       assert.deepEqual(JSON.parse(prompt), { case: vars.case, lang: vars.lang, user: fixture.user });
       const row = suite.tests.find((entry) => entry.vars.case === vars.case && entry.vars.lang === vars.lang);
       assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
       assert.doesNotMatch(prompt, /ps -p|exit code|結果行がない|process is absent/);
       continue;
     }
+    replay.push(vars);
+    const row = suite.tests.find((entry) => entry.vars.case === vars.case && entry.vars.lang === vars.lang);
+    assert.deepEqual(row.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
     assert.match(prompt, /SYSTEM:\n/);
     assert.doesNotMatch(prompt, /\{\{include:/);
     assert.ok(prompt.includes(`Concurrency limit: ${fixture.concurrency}`));
@@ -70,6 +83,7 @@ test('assembles all 140 turn prompts without a provider call, excluding scoring 
 
     }
   }
+  assertManagerInputPartition({ replay, execution });
 });
 
 test('question expectations match choice, information and operation scenarios in both languages', () => {
@@ -424,6 +438,144 @@ test('red mode removes only the Concurrency limit suffix', () => {
   } finally { preserveEnv('TAKT_EVAL_MANAGER_OMIT_CONCURRENCY', prior); }
 });
 
+test('task list read selection requires a unique exact repository path despite matching suffixes', () => {
+  const cwd = '/workspace/project';
+  const expected = {
+    tool: 'Read', arguments: { file_path: `${cwd}/.takt/tasks.yaml` }, result: { tasks: [{ name: 'current-task' }] },
+  };
+  const otherRepository = {
+    tool: 'Read', arguments: { file_path: '/workspace/other-project/.takt/tasks.yaml' }, result: { tasks: [{ name: 'other-task' }] },
+  };
+  assert.deepEqual(uniqueTasksFileRead([otherRepository, expected], cwd), expected);
+  assert.throws(() => uniqueTasksFileRead([otherRepository], cwd), assert.AssertionError);
+  assert.throws(() => uniqueTasksFileRead([expected, otherRepository, structuredClone(expected)], cwd), assert.AssertionError);
+});
+
+test('repair approach prompts expose neutral domain identities with consistent run and path references', () => {
+  const caseNames = [
+    ['date-parser-branch-growth', 'booking-date-input'],
+    ['export-fragment-filter-growth', 'public-report-export'],
+    ['preview-request-identity-growth', 'image-preview'],
+    ['independent-causal-repairs', 'warehouse-inventory'],
+    ['review-outside-acceptance', 'sales-csv-export'],
+  ];
+  const normalize = (value) => value.toLowerCase().replace(/[\s_-]+/g, '');
+  const internalIds = caseNames.map(([caseId]) => normalize(caseId));
+  function assertNeutral(value, path) {
+    if (typeof value === 'string') {
+      for (const caseId of internalIds) assert.ok(!normalize(value).includes(caseId), `${path}: internal case ID ${caseId}`);
+      assert.doesNotMatch(value, /(?:DP|EF|PV|IN|SC)[\s_-]*0[1-4]|AC[\s_-]*[1-3]|llm[\s_-]*rubric|expected[\s_-]*question[\s_-]*type/i, path);
+    } else if (value !== null && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) {
+        assertNeutral(key, `${path} key`);
+        assertNeutral(child, `${path}.${key}`);
+      }
+    }
+  }
+  for (const lang of ['ja', 'en']) {
+    for (const [caseId, name] of caseNames) {
+      const fixture = loadManagerCase(caseId, lang);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      // Saved artifacts can also become model input through replayed reads.
+      assertNeutral(fixture, `${caseId}/${lang}/fixture`);
+      assertNeutral(prompt, `${caseId}/${lang}/prompt`);
+      const label = lang === 'ja' ? 'このターンで既に読んだ結果' : 'Results already read this turn';
+      const reads = JSON.parse(prompt.split(`${label}:\n`)[1].split('\n\n')[0]);
+      const workLog = reads.find(({ tool, arguments: args }) => tool === 'takt_get_goal'
+        && args.path === 'workLog').result.items;
+      assert.ok(workLog.length > 0, `${caseId}/${lang}: manager inspection evidence`);
+      for (const { summary, recordedAt } of workLog) {
+        const context = `${caseId}/${lang}: past manager record`;
+        const normalized = summary.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ');
+        // Scope and execution decisions belong to the evaluated turn, not its history.
+        assert.doesNotMatch(normalized.replace(/\s/g, ''), /任せ|委ね|継続|介入|範囲[内外]|判断|推奨|勧め|べき|中断|停止|範囲[^。！？]*(?:広が|拡大|変わ)/, context);
+        for (const judgment of [
+          /\b(?:continu\w*|leav\w*|delegat\w*|entrust\w*|interven\w*|recommend\w*|should|must|decid\w*|decision\w*|stop\w*|halt\w*|proceed\w*)\b/,
+          /\b(?:in|within|outside|out[\s-]+of)[\s-]+(?:acceptance[\s-]+)?scope\b/,
+          /\bscope\b[^.!?]*\b(?:expand\w*|unchanged)\b/,
+        ]) assert.doesNotMatch(normalized, judgment, context);
+        const reports = [...summary.matchAll(/\b(?:review|fix)-\d+\.md\b/g)].map(([filename]) => filename);
+        assert.ok(reports.length > 0, `${context}: inspected artifacts`);
+        for (const filename of reports) {
+          const report = fixture.runArtifacts[0].reports.find((report) => report.filename === filename);
+          assert.ok(report, `${context}: saved report ${filename}`);
+          assert.ok(reads.some(({ tool, arguments: args, result }) => tool === 'takt_get_run'
+            && args.view === 'report' && args.report === filename && result.report.content === report.content),
+          `${context}: report evidence reaches prompt`);
+          assert.ok(fixture.runArtifacts[0].sessionLog.some(({ type, content, timestamp }) => type === 'step_complete'
+            && content === report.content && Date.parse(timestamp) <= Date.parse(recordedAt)),
+          `${context}: report existed at inspection time`);
+        }
+        const evidence = reports.map((filename) => fixture.runArtifacts[0].reports
+          .find((report) => report.filename === filename).content).join('\n');
+        for (const pattern of [/\bfinding-\d+\b/g, /\b\d+\/\d+\b/g]) {
+          const facts = [...summary.matchAll(pattern)].map(([fact]) => fact);
+          assert.ok(facts.length > 0, `${context}: finding and reported test evidence`);
+          for (const fact of facts) assert.ok(evidence.includes(fact), `${context}: recorded fact ${fact}`);
+        }
+      }
+      const listed = reads.find(({ tool }) => tool === 'takt_list_tasks').result.tasks[0];
+      const saved = uniqueTasksFileRead(reads, fixture.cwd).result.tasks[0];
+      const runSlug = `run-${name}`;
+      const worktreePath = `/workspace/project/.takt/worktrees/${name}`;
+      assert.equal(listed.name, name);
+      assert.equal(listed.runSlug, runSlug);
+      for (const [key, expected] of Object.entries({
+        name, slug: name, goal_work_key: name, run_slug: runSlug,
+        branch: `takt/task/${name}`, base_branch: `takt/goal/${name}`,
+        task_dir: `.takt/tasks/${name}`, worktree_path: worktreePath,
+      })) assert.equal(saved[key], expected, `${caseId}/${lang}/${key}`);
+      const goal = reads.find(({ tool, arguments: args }) => tool === 'takt_get_goal'
+        && args.path === undefined).result.goal;
+      assert.equal(goal.branch, saved.base_branch);
+      assert.ok(reads.some(({ tool, arguments: args }) => tool === 'Read'
+        && args.file_path === `${worktreePath}/source-evidence.txt`));
+      for (const read of reads.filter(({ tool }) => tool === 'takt_get_run')) {
+        assert.equal(read.arguments.runSlug, runSlug);
+        assert.equal(read.result.runSlug, runSlug);
+      }
+      for (let index = 1; index <= 3; index++) {
+        const finding = `finding-0${index}`;
+        const review = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run'
+          && args.view === 'report' && args.report === `review-0${index}.md`).result.report.content;
+        const fix = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run'
+          && args.view === 'report' && args.report === `fix-0${index}.md`).result.report.content;
+        assert.ok(review.includes(finding), `${caseId}/${lang}: reviewed finding ${index}`);
+        assert.ok(fix.includes(finding), `${caseId}/${lang}: repaired finding ${index}`);
+      }
+      assert.doesNotMatch(prompt, /growth|independent[-_ ]causal[-_ ]repairs|review[-_ ]outside[-_ ]acceptance/i);
+    }
+  }
+});
+
+test('repair approach replays expose comparable histories and preserve individual reports', () => {
+  for (const lang of ['ja', 'en']) {
+    let reference;
+    for (const caseId of ['date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth',
+      'independent-causal-repairs', 'review-outside-acceptance']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const artifact = fixture.runArtifacts[0];
+      const start = Date.parse(artifact.meta.startTime);
+      const history = artifact.sessionLog.map(({ type, step, iteration, timestamp }) => ({
+        type, step, iteration, elapsed: timestamp === undefined ? undefined : Date.parse(timestamp) - start,
+      }));
+      reference ??= history;
+      assert.deepEqual(history, reference, `${caseId}/${lang}: comparable review and repair sequence`);
+      const completions = artifact.sessionLog.filter(({ type }) => type === 'step_complete');
+      for (const completion of completions) {
+        const reports = artifact.reports.filter(({ content }) => content === completion.content);
+        assert.equal(reports.length, 1, `${caseId}/${lang}: report for iteration ${completion.iteration}`);
+        const replay = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run'
+          && args.view === 'report' && args.report === reports[0].filename);
+        assert.equal(replay.result.report.content, completion.content);
+      }
+      assert.equal(fixture.tasks[0].status, 'running');
+      assert.equal(artifact.sessionLog.at(-1).type, 'step_start');
+      assert.ok(fixture.goal.workLog.some(({ kind }) => kind === 'patrol'));
+    }
+  }
+});
+
 test('work contents, integrated verification and constraint cases receive semantic rubrics', () => {
   const semanticCases = new Set(['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued', 'parallel-cli', 'parallel-docs-migration',
     'shared-resource', 'shared-definition', 'human-order', 'integration-check',
@@ -434,6 +586,7 @@ test('work contents, integrated verification and constraint cases receive semant
     'escalate-repeated-failure', 'escalate-not-on-first-failure',
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'conflicting-calendar-visibility', 'existing-invoice-format',
+    'date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth', 'independent-causal-repairs', 'review-outside-acceptance',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',

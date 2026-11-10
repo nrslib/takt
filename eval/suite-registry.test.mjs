@@ -12,6 +12,7 @@ import {
   selectPromptEvalSuites,
 } from './suite-registry.mjs';
 import { PREPARE_TARGET_IDS } from './scripts/prepare.mjs';
+import { assertManagerInputPartition } from './manager-work-split-test-helpers.mjs';
 
 test('registry classifies every promptfoo config exactly once', () => {
   const configs = discoverPromptEvalConfigs();
@@ -256,12 +257,19 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
   const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
   assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
-    ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
+    ['gpt-6.1-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
     ['gpt-6.1-terra', 'medium'],
     ['claude-opus-5', undefined],
   ]);
-  assert.equal(config.tests.length, 140);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 70);
+  assert.equal(config.tests.length, 150);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 75);
+  const execution = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
+  const replay = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
+  assertManagerInputPartition({ replay: replay.map(({ vars }) => vars), execution: execution.map(({ vars }) => vars) });
+  for (const row of execution) assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
+  for (const row of replay) {
+    assert.deepEqual(row.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+  }
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
@@ -269,6 +277,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'spec-review-investigation',
     'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
     'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+    'date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth', 'independent-causal-repairs', 'review-outside-acceptance',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
     'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
     'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',

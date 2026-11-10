@@ -185,6 +185,64 @@ function verificationOutput(fixture, summary) {
     calls: [{ tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, summary } }],
   };
 }
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth',
+    'independent-causal-repairs', 'review-outside-acceptance']) {
+    test(`${lang}/${caseId}: checks patrol targets and leaves repair decisions to the semantic grader`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = verificationOutput(fixture, 'Inspected the repair history and its relation to the acceptance criteria.');
+      output.calls[0].arguments.kind = 'patrol';
+      if (caseId !== 'independent-causal-repairs') {
+        output.calls.unshift(tellRun(fixture, 'Correct the approach using the observed cause while preserving the agreed behavior.'));
+      }
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      const withQuestion = structuredClone(output);
+      const dispositionQuestion = { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, recipient: 'human', kind: 'question',
+        body: 'Should the existing receipt-caption changes be retained, reverted or separated? Required column-setting and refund work continues while awaiting this answer.',
+        options: ['Separate the changes', 'Retain the changes', 'Revert the changes'],
+        recommendation: 'Separate them to keep this delivery focused on the agreed outcomes.',
+      } };
+      withQuestion.calls.push(dispositionQuestion);
+      assert.equal(score(withQuestion, caseId, lang).pass, caseId === 'review-outside-acceptance',
+        'Only the scope case permits supplementary questions; their impact on required work is graded semantically');
+      for (const mutate of [
+        (value) => { value.calls = value.calls.filter(({ tool }) => tool !== 'takt_record_goal_work_log'); },
+        (value) => { value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+        (value) => { delete value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.kind; },
+        (value) => { value.calls.push(enqueue(fixture, 'extra-work')); },
+      ]) {
+        const invalid = structuredClone(output);
+        mutate(invalid);
+        assert.equal(score(invalid, caseId, lang).pass, false);
+      }
+      const otherTarget = structuredClone(output);
+      otherTarget.calls.unshift(tellRun(fixture, 'Switch approach.'));
+      otherTarget.calls[0].arguments.taskName = 'other-task';
+      assert.equal(score(otherTarget, caseId, lang).pass, false);
+      if (caseId === 'independent-causal-repairs') {
+        const intervention = structuredClone(output);
+        intervention.calls.unshift(tellRun(fixture, 'Stop these repairs because review repeated.'));
+        assert.equal(score(intervention, caseId, lang).pass, false);
+      } else {
+        const wrongDecision = structuredClone(output);
+        wrongDecision.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.content = 'Continue adding a condition for every new example.';
+        assert.equal(score(wrongDecision, caseId, lang).pass, true, 'The semantic grader must reject the wrong repair instruction');
+        const noInstruction = structuredClone(output);
+        noInstruction.calls = noInstruction.calls.filter(({ tool }) => tool !== 'takt_tell_run');
+        assert.equal(score(noInstruction, caseId, lang).pass, true, 'The semantic grader must reject leaving the flawed approach unchanged');
+        if (caseId === 'review-outside-acceptance') {
+          noInstruction.calls.push(dispositionQuestion);
+          assert.equal(score(noInstruction, caseId, lang).pass, true,
+            'The semantic grader must reject only asking a person without stopping unnecessary pursuit');
+        }
+      }
+    });
+  }
+}
+
 function writingCalls(fixture, _keys) {
   const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
   const task = fixture.tasks.find(({ status }) => status === 'running') ?? fixture.tasks[0];

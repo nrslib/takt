@@ -36,6 +36,7 @@ ja:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -70,6 +71,7 @@ ja:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -161,6 +163,7 @@ en:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0
@@ -195,6 +198,7 @@ en:
               notifications:
                 totalCount: 0
                 returnedCount: 0
+              specifications: {}
               acceptanceCriteria:
                 totalCount: 1
                 returnedCount: 0

@@ -39,6 +39,10 @@ const patrolRequiredCases = new Set([
   'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
+const patrolApproachCases = new Set([
+  'date-parser-branch-growth', 'export-fragment-filter-growth', 'preview-request-identity-growth',
+  'independent-causal-repairs', 'review-outside-acceptance',
+]);
 const patrolRepairCases = new Set(['local-terminal-test-repair', 'local-pytest-config-repair']);
 const patrolLeaveAsIsCases = new Set(['local-env-failure-left-as-is']);
 const patrolUnrelatedRepairCases = new Set(['unrelated-history-repair']);
@@ -80,6 +84,9 @@ const caseWriteTools = {
   ...Object.fromEntries([...patrolTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_ask_goal_question'])])),
   ...Object.fromEntries([...patrolNoTellCases].map((caseId) => [caseId, new Set()])),
+  ...Object.fromEntries([...patrolApproachCases].map((caseId) => [caseId,
+    new Set(caseId === 'independent-causal-repairs' ? [] : ['takt_tell_run'])])),
+  'review-outside-acceptance': new Set(['takt_tell_run', 'takt_ask_goal_question']),
   ...Object.fromEntries([...patrolRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_enqueue_goal_task'])])),
   ...Object.fromEntries([...patrolLeaveAsIsCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...patrolUnrelatedRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
@@ -222,6 +229,10 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (patrolApproachCases.has(caseId)) {
+    return result(workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id && args.kind === 'patrol'),
+      'Record the target goal inspection; intervention or continued delegation and their reasons are graded by llm-rubric');
+  }
   if (patrolRepairCases.has(caseId) || patrolLeaveAsIsCases.has(caseId) || patrolUnrelatedRepairCases.has(caseId)) {
     if (!workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
       return result(false, 'Record the repair decision and its reason in the target goal work log');

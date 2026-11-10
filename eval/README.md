@@ -320,7 +320,37 @@ JavaScript assert は操作・本番引数・対象ゴールの作業記録を�
 前2ケースでは修正の先行タスクの手配も認めるが必須ではない。対照は修正を外す run への指示と理由を求める。
 これらは再生後の修正・テスト実行・取り込みの成功までは測らない。
 
-66ケース・日英132入力のうち、再生の62ケース・124入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+直し方と範囲の見直しを扱う次の5ケースは、日英とも見回りイベントで、レビューと修正の3往復を
+同じ時系列で渡す。各回のレビュー報告・修正報告、最新の計画、元の要求と方針、コードと資料を含む。
+各修正は指摘の解消・回帰テスト成功・範囲内と報告し、直し方の問題や原因の独立性を自己診断しない。
+前の見回りで段階の進行と範囲内を根拠に任せた記録も、全ケースに同じ形で含める。
+モデル向けのタスク・run・パスには順に `booking-date-input`、`public-report-export`、`image-preview`、
+`warehouse-inventory`、`sales-csv-export` を使う。履歴の指摘は全ケース共通の `finding-01`〜`finding-03`
+（CSV の未修正の返金計算は `finding-04`）、受け入れ条件は `requirement-01`〜`requirement-03` とする。
+rubric も同じ中立な参照で証拠に対応させ、採点は具体的な原因・修正・範囲の判断で行う。
+日英全5ケースの組立てテストでは、過去ターン、読み取り結果・引数、作業記録、報告、コード資料を含む
+fixture 全体と生成プロンプトを検査し、内部 case ID・旧履歴ラベル・採点用のメタデータの漏れを防ぐ。
+
+- `date-parser-branch-growth`: 日付のみの不存在日、UTC 日時の月末、オフセット付きの閏日を順に修正する。
+  不完全な形式別の暦判定を原因として、既存解析器への接続と共通の暦日検証の適用を同等に採点する。既存形式の意味と拒否動作の維持・確認を求める。
+- `export-fragment-filter-growth`: 複数行メモの混入、本文中の記号による欠落、メモ内の終了記号による混入を
+  順に修正する。結合後の境界推定と生成元の別フィールドから、公開帳票にメモを含めない直し方を指示する。
+  本文、内部メモの保存、社内プレビューは保つ。基本能力の確認として残す。
+- `preview-request-identity-growth`: 画像切り替え、同じ画像の再読み込み、画像間で一致する要求番号を順に直す。
+  最新の比較処理に加え、過去の採番変更を読むと、再選択で識別が再利用されると分かる。要求の識別を保つ修正を指示する。
+- `independent-causal-repairs`: 在庫の集計・保存完了・表示の別々の不具合を、それぞれの原因で直している
+  run には介入せず任せる。レビュー対象 v0〜v2 と現在の修正後 v3 を明示する。任せる判断・独立した原因の根拠・点検記録を別の指標で採点し、定型の説明を要求しない。
+- `review-outside-acceptance`: 失敗後の CSV 再出力の列設定から、成功済み receipt の再取得時の列名・列順、
+  次の表示幅へ指摘が移る。再取得は実在するが、受け入れ条件は receipt のない失敗後の再出力に限定される。
+  この条件との照合で追加追跡を止め、列設定の保持・補完と未修正の返金計算の仕上げへ戻す。既存の範囲外変更の扱いは別に判断し、必要な作業を止めない補助的な質問も認める。保持する既存条件の全文再掲は求めない。
+
+全ケースで対象ゴールの点検記録を求める。JavaScript assert は本番引数・対象・点検記録を確認し、
+llm-rubric は指示の内容や任せる判断と根拠を採点する。特定の言い回しや道具名の引用は求めない。
+介入ケースでは、根拠と原因を解消する変更または範囲の調整を run に指示することを求める。
+任せるだけ、止めるだけ、回数・時間だけを理由にした中断、問題の説明や一般的な助言だけでは合格にしない。
+再生の構成と読み取り結果は node --test で検証できるが、判断品質の red/green は実 provider の比較で別に確認する。
+
+75ケース・日英150入力のうち、再生の71ケース・142入力を、Sol Low (`gpt-6.1-sol`)、Opus 5 (`claude-opus-5`)、
 Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
 `--filter-providers` で選べる。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
@@ -461,7 +491,7 @@ node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
   --filter-pattern '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$' \
   -o eval/.results/manager-pause-green.json || pause_eval_green_status=$?
-# GREEN で既存場面も含めた再生90入力の回帰を確認する。
+# GREEN で既存場面も含めた再生142入力の回帰を確認する。
 pause_eval_green_all_status=0
 node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3 \
   --filter-providers '^(codex-sol-low|claude-opus-5|codex-luna-max|codex-terra-medium)$' \
@@ -476,8 +506,16 @@ trap - EXIT
 `manager-work-split-offline.test.mjs` でもこの CLI の絞り込みをモデルなしで実行する。
 RED で通った場面は「その場面では追加の効果を確かめられない」と報告する。
 
-実操作を観測する追加2ケース（stopped-background-execution、integrated-task-execution）は、
-専用の claude-sdk-opus-5 provider だけで実行する。既存の再生ケースには従来の4 provider だけを対応させる。
+実操作を観測するSDK実行4ケース・日英8入力は、専用の `claude-sdk-opus-5` provider だけで実行する。
+再生71ケース・142入力には前述の4 provider だけを対応させる。
+
+| SDK実行ケース | 言語入力 | 観測する場面 |
+|---|---|---|
+| `stopped-background-execution` | `ja` / `en` | 停止した背景処理と確認結果の引き継ぎ |
+| `integrated-task-execution` | `ja` / `en` | 取り込み後の確認と後続の問い合わせ |
+| `two-goal-pr-execution` | `ja` / `en` | 人がマージする2つのゴール PR の仕上げ |
+| `finite-check-external-execution` | `ja` / `en` | 有限のテストと外部公開状態の確認 |
+
 試行ごとの worker が本番の manager plan / turn executor と権限判定を使い、ローカル MCP を接続する。
 使い捨て Git リポジトリ、隔離した TAKT 設定、背景プロセスとテストを用意し、実 GitHub や外部通知は使わない。
 管理対象 Claude SDK の既存資産は参照する。利用者の設定・許可記録を変更しない。
@@ -513,6 +551,7 @@ node --test eval/asserts/manager-work-split-execution.test.mjs
 node --test eval/manager-work-split-config.test.mjs
 node --test eval/asserts/manager-work-split.test.mjs
 node --test eval/manager-work-split-prompt.test.mjs
+node --test eval/manager-work-split-approach-fixtures.test.mjs
 node --test eval/manager-work-split-reads.test.mjs
 node --test eval/providers/manager-work-split.test.mjs
 node --test eval/manager-work-split-offline.test.mjs
@@ -521,7 +560,10 @@ node --test eval/suite-registry.test.mjs
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
 RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
-それぞれ全112入力をモデルを呼ばない provider に渡す。さらに一時停止に関する4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
+それぞれ全75ケース・日英150入力（再生71ケース・142入力、SDK実行4ケース・8入力）をモデルを呼ばない provider に渡す。
+registry の provider 割当、prompt test の fixture 実行フラグ、offline test の実際の組立て結果から内訳を検証し、
+SDK実行は上表の4ケースと各 `ja` / `en` の組に固定する。
+さらに一時停止に関する4ケース・日英8入力だけの絞り込みも確認する。再生ケースでは組み立てたプロンプトの目印の有無で
 `TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
@@ -1029,7 +1071,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（66ケース×日英、再生62・SDK実行4） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）、環境差による確認失敗を直す／直さず報告する判断の尊重と無関係な改修の除外。操作選択と引数、確認の指示・計画・作業記録の実質を測定。SDK実行では終了・Git・問い合わせも観測 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（75ケース×日英、再生71・SDK実行4） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、見回りで裁定対象と元の要求・方針・範囲を照合する判断と、一時停止後の同じタスクの再開（指示・対象外・単純化・継続・質問・変更なし）、環境差による確認失敗を直す／直さず報告する判断の尊重と無関係な改修の除外、原因に届かない直し方・範囲外の追跡の是正と妥当な修正への不介入。操作選択と引数、確認の指示・計画・作業記録の実質を測定。SDK実行では終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
