@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { createServer, type Server as HttpsServer } from 'node:https';
 import { pathToFileURL } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DeepSeekHarnessPluginResolutionError,
   resolveDeepSeekHarnessGitPlugins,
@@ -16,6 +16,7 @@ import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
 import type { DeepSeekHarnessGitPluginOption } from '../core/models/workflow-provider-options.js';
 
 let root: string;
+let temporaryRoot: string;
 let repository: string;
 let taggedCommit: string;
 let stableCommit: string;
@@ -111,8 +112,18 @@ describe('DeepSeek Harness Git plugin resolution', () => {
     git(repository, 'checkout', 'main');
   });
 
+  beforeEach(async () => {
+    temporaryRoot = await mkdtemp(path.join(root, 'tmp-'));
+    for (const key of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(key, temporaryRoot);
+  });
+
   afterEach(async () => {
-    await Promise.all(resolutions.splice(0).map((resolution) => resolution.dispose()));
+    try {
+      await Promise.all(resolutions.splice(0).map((resolution) => resolution.dispose()));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   afterAll(async () => {

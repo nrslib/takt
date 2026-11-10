@@ -1,8 +1,9 @@
+import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitCommand.js';
 import { z } from 'zod/v4';
 import { ConversationActivitySchema, ConversationTextSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
-import { ApprovalSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
-import { GoalAnswerSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
+import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
 import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from './events.js';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
@@ -19,7 +20,7 @@ const id = z.string().min(1).max(128);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
 const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, generation: version.refine((v) => v > 0) }).strict() satisfies z.ZodType<TurnIdentity>;
-const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
+const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
   revision: version, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
   interruptedMessage: text.nullable().optional(),
@@ -51,14 +52,16 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
+  WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict(),
   z.object({ kind: z.literal('inquiry_answer'), command: answerCommand }).strict(),
   z.object({ kind: z.enum(['task_completed', 'task_failed']), task, result: GoalTaskResultSchema }).strict(),
-  z.object({ kind: z.literal('director_message'), directorConversationId: id, text }).strict(),
+  z.object({ kind: z.literal('director_message'), directorConversationId: id, text, origin: DirectorMessageOriginSchema.optional(), inquiryAnswer: z.object({ questionId: id, question: text.optional(), answer: GoalAnswerSchema }).strict().optional() }).strict(),
   z.object({ kind: z.literal('goal_pr_failed'), ...repositoryGoal, expectedSha: z.string(), reason: z.string() }).strict(),
-  z.object({ kind: z.enum(['goal_registered', 'goal_resumed']), ...repositoryGoal }).strict(),
+  z.object({ kind: z.literal('goal_registered'), ...repositoryGoal }).strict(),
+  z.object({ kind: z.literal('goal_resumed'), ...repositoryGoal, origin: GoalExecutionOriginSchema.optional() }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
   z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
 ]);
@@ -83,9 +86,10 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  WaitCommandInputSchema.extend({ kind: z.literal('wait_command') }).strict(),
   z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
   z.object({ kind: z.literal('save_conversation'), change }).strict(),
-  z.object({ kind: z.literal('accept_director_message'), eventId: id, requestId: id, conversationId: id, occurredAt: z.iso.datetime(), text }).strict(),
+  z.object({ kind: z.literal('accept_director_message'), eventId: id, requestId: id, conversationId: id, occurredAt: z.iso.datetime(), text, origin: DirectorMessageOriginSchema }).strict(),
   z.object({ kind: z.literal('notify_director'), notificationId: id, message: text,
     subject: z.object({ key: id, state: text }).strict().optional() }).strict(),
   z.object({ kind: z.literal('get_delivery'), conversationId: id }).strict(),
@@ -95,6 +99,7 @@ const admission = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('wait_command_registered'), id: z.uuid() }).strict(),
   z.object({ kind: z.literal('state_saved'), version, duplicate: z.boolean() }).strict(),
   z.object({ kind: z.literal('event_accepted'), admission }).strict(),
   z.object({ kind: z.literal('notification_saved'), notificationId: id }).strict(),

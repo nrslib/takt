@@ -28,7 +28,7 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   }
   const routing = new TestRouting(directory);
   const store = new ConversationStateStore(directory);
-  const events = new FileEventStore(directory);
+  const events = new FileEventStore(directory, new DaemonRouting(directory));
   const failures: unknown[] = [];
   const onError = (error: unknown): void => { failures.push(error); };
   const conversations = new DaemonConversations(store, routing, new DaemonNotifications(directory),

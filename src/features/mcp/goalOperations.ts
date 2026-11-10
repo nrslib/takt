@@ -29,6 +29,9 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
       });
       if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };
       if (goal.status !== 'created') throw new Error('Goal cannot accept work');
+      if (deps.managerWorkflows !== undefined && !deps.managerWorkflows.some(({ name }) => name === input.workflow)) {
+        throw new Error(`Workflow "${input.workflow}" is not allowed for manager tasks. Allowed workflows: ${deps.managerWorkflows.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.workflows or manager.default_workflow in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
+      }
       if (loadWorkflowByIdentifier(input.workflow, input.cwd) === null) throw new Error(`Workflow not found: ${input.workflow}`);
       signal.throwIfAborted();
       const created = await enqueueTask({
@@ -50,7 +53,7 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
 export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDependencies) {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const workflows = listWorkflows(input.cwd).map((name) => {
+    const workflows = deps.managerWorkflows ?? listWorkflows(input.cwd).map((name) => {
       const workflow = loadWorkflowByIdentifier(name, input.cwd);
       if (workflow === null) throw new Error(`Workflow not found: ${name}`);
       return { name, description: workflow.description };

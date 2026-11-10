@@ -2,20 +2,25 @@
 
 TAKT の test、runner、script、CI 配線を実際の依存境界と観測可能な契約に基づいて確認する。
 
+light IT は `npm run test:it` で回るテスト、heavy IT は `npm run test:it:heavy` で回るテストを指す。
+
 ## 判定基準
 
 | 状況 | 判定 |
 |------|------|
 | 直接依存を test double に置き換えた個別ロジック | unit |
-| 実 filesystem、bounded storage、複数コンポーネント結合 | 軽い IT |
-| 実 child process、Git、完全な workflow engine、計測済み高負荷処理 | 重い IT |
+| 実 filesystem、bounded storage、複数コンポーネント結合 | light IT |
+| 実 child process、Git、完全な workflow engine、計測済み高負荷処理 | heavy IT |
 | 利用者の公開入口から全体を実行し、利用者可視の結果を観測 | E2E |
-| 実 process を使うが内部 client から偽 CLI を呼ぶ | 重い IT。E2E ではない |
+| 実 process を使うが内部 client から偽 CLI を呼ぶ | heavy IT。E2E ではない |
 | 速度やファイル名だけで test layer を決める | REJECT |
-| 重い IT を unit gate から除外したまま分類先へ接続しない | REJECT |
-| 重い IT を同一 runner の複数 worker で並列実行する | REJECT |
-| PR CI で重い IT を独立 runner へ分割する | OK |
-| 変更した重い IT の記録済み結果が提供されている | 対象 command、完了状態、結果が一致する範囲で証跡として扱う |
+| heavy IT を unit gate から除外したまま分類先へ接続しない | REJECT |
+| heavy parallel に入れたテストが共有パスを取り合う | REJECT |
+| PR CI で heavy IT を1 runner 内で1 workerに固定し、heavy parallel を独立 runner の6シャードと serial group ごとの runner に分離する | OK |
+| heavy IT の全件（`npm run test:it:heavy`）をローカルで実行 | REJECT。ユーザーが明示的に指示した場合だけ実行する |
+| 追加・変更した heavy IT、または今回の変更を直接検証する heavy IT 以外の heavy IT を実行 | REJECT。実行しない |
+| 追加・変更した heavy IT、または今回の変更を直接検証する heavy IT を `npm test -- <test-file>` で対象指定して実行 | OK |
+| 変更した heavy IT の記録済み結果が提供されている | 対象 command、完了状態、結果が一致する範囲で証跡として扱う |
 | test や gate の記録済み結果が提供されていない | 未確認。欠如だけを finding にしない |
 
 ## 確認範囲

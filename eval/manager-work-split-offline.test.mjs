@@ -53,7 +53,7 @@ for (const { variant, filtered } of [{ variant: 'red', filtered: false }, { vari
       assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
       const report = JSON.parse(readFileSync(reportPath, 'utf8'));
       const selected = filtered ? suite.tests.filter(({ description }) => new RegExp(pausePattern).test(description)) : suite.tests;
-      assert.equal(selected.length, filtered ? 8 : 148);
+      assert.equal(selected.length, filtered ? 8 : 172);
       assert.equal(report.results.stats.successes, selected.length);
       assert.equal(report.results.stats.failures, 0);
       assert.equal(report.results.stats.errors, 0);

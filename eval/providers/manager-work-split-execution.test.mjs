@@ -48,7 +48,9 @@ function fakeProvider(action) {
       const transport = new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } });
       await client.connect(transport);
       try {
-        const input = JSON.parse(prompt.split('\n\n')[0]);
+        const eventBody = prompt.split('\n\n').map((part) => part.trim()).find((part) => part.startsWith('{"event":'));
+        assert.ok(eventBody, 'The turn prompt must include the production event payload');
+        const input = JSON.parse(eventBody);
         assert.deepEqual(Object.keys(input), ['event', 'instruction']);
         assert.equal(input.event.kind, 'goal_resumed');
         assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(input.event)));

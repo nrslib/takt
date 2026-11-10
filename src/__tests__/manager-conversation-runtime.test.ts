@@ -102,3 +102,25 @@ it.each([false, true])('keeps the tool scope and patrol metadata active only dur
   expect(conversationTurn()).toBeUndefined();
   await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
 });
+
+it('routes MCP requests to the current turn and releases the request route when the turn ends', async () => {
+  const prepared = await runtime.resolve(assignment, signal);
+  const { requestDaemon } = doubles.connect.mock.calls[0]![3] as {
+    requestDaemon: NonNullable<import('../features/manager/turnExecutor.js').ManagerTurnInput['requestDaemon']>;
+  };
+  const request = { kind: 'wait_command' as const, command: 'gh run watch 1 --exit-status',
+    description: 'CI', cwd: '/repository', timeoutSeconds: 3600 };
+  expect(() => requestDaemon(request)).toThrow();
+  const first = vi.fn().mockResolvedValue({ kind: 'wait_command_registered', id: 'first' });
+  const second = vi.fn().mockResolvedValue({ kind: 'wait_command_registered', id: 'second' });
+  doubles.execute.mockImplementation(async () => {
+    await requestDaemon(request);
+    return { message: 'registered', summary: null };
+  });
+  for (const route of [first, second]) {
+    await prepared.executor.execute({ prompt: 'wait', sessionId: undefined, assignment: undefined,
+      abortSignal: signal, requestDaemon: route });
+    expect(route).toHaveBeenCalledExactlyOnceWith(request);
+    expect(() => requestDaemon(request)).toThrow();
+  }
+});

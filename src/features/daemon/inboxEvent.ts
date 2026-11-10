@@ -1,7 +1,6 @@
 import type { TurnEvent } from '../../core/daemon/events.js';
 import type { ManagerEvent } from '../../infra/goals/events.js';
-import { conversationId } from '../../infra/conversations/identity.js';
-import { inquiryAnswerMessage } from './inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
 
 export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): TurnEvent {
   switch (saved.kind) {
@@ -15,20 +14,19 @@ export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): T
     case 'pr_failed': return { kind: 'goal_pr_failed', repositoryDirectory: directory,
       goalId: saved.goalId, expectedSha: saved.expectedSha, reason: saved.reason };
     case 'answer': return saved.goalId === null
-      ? { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
-        text: inquiryAnswerMessage(saved.questionId, saved.answer, saved.questionBody) }
+      ? inquiryAnswerEvent(saved.questionId, saved.answer, saved.questionBody)
       : { kind: 'inquiry_answered', repositoryDirectory: directory,
         goalId: saved.goalId, questionId: saved.questionId, answer: saved.answer };
-    case 'registered': case 'resumed': return { kind: saved.kind === 'registered' ? 'goal_registered' : 'goal_resumed',
-      repositoryDirectory: directory, goalId: saved.goalId };
+    case 'registered': return { kind: 'goal_registered', repositoryDirectory: directory, goalId: saved.goalId };
+    case 'resumed': return { kind: 'goal_resumed', repositoryDirectory: directory, goalId: saved.goalId,
+      ...(saved.origin === undefined ? {} : { origin: saved.origin }) };
   }
 }
 
 export function buildManagerEventPrompt(event: TurnEvent & { unreadableGoalIds?: readonly string[] }): string {
-  return JSON.stringify({ event, instruction: event.kind === 'patrol'
+  return JSON.stringify({ event: event.kind === 'goal_resumed' ? { ...event, origin: event.origin ?? 'unknown' } : event, instruction: event.kind === 'patrol'
     ? [
-      'To support progress toward completion, read the runs\' decisions and evidence for the listed goals together. When the approach is sound, leave the work with the run and record the inspection. To uphold the agreement with the person, assess review findings during an intervention by distinguishing the requested outcomes, underlying assumptions, and proposed methods. Preserve the outcomes and checks needed under the actual conditions while adjusting additional work based on the evidence. When statements in the agreement appear to conflict, continue work following the judgment of the reviewers and the run, record the discrepancy in the work log, and inform the person. Apply changes to the agreement based on the person\'s decision.',
-      'Intervene when evidence from code, configuration, or documentation shows that effort is going into preparations for assumptions that cannot hold, a threat model that does not fit the actual entry points, trust boundaries, or execution paths, or mechanisms that do not contribute to the objective. Give the run the evidence and the adjustment needed to focus effort on the required results and checks.',
+      'Inspect the listed goals together using their current state, saved agreements, and the runs\' latest decisions and evidence. Determine the next actions for each goal and record the inspection.',
       'Report goals in unreadableGoalIds as unverified and continue inspecting those you could retrieve.',
     ].join('\n\n')
     : 'To advance the assigned goals, compare the change conveyed by this event with the current state. Decide the next work to arrange and whether to accept results based on the runs\' decisions and evidence and the saved results.' });
