@@ -13,6 +13,16 @@ import {
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 
 describe('sensitiveText', () => {
+  it.each(['Cookie', 'Set-Cookie'])('redacts quoted %s values while preserving the enclosing command and subsequent diagnosis', (header) => {
+    const text = `curl -H '${header}: sid="fixture-secret"; other="fixture-extra"' https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H '${header}: [REDACTED]' https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
   describe.each(['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user='])(
     'user option %s', (option) => {
       it.each([

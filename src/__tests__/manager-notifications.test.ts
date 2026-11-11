@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
-import { formatGoalNotification, formatGoalQuestionNotification, formatStandaloneQuestionNotification } from '../infra/goals/notifications.js';
+import { formatGoalNotification, formatGoalQuestionNotification, formatStandaloneQuestionNotification, managerTurnFailureNotification } from '../infra/goals/notifications.js';
 const doubles = vi.hoisted(() => ({ config: vi.fn(), language: vi.fn(), webhook: vi.fn(), send: vi.fn() }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
@@ -81,6 +81,7 @@ it('skips Slack delivery with no webhook while retaining saved notifications', a
 });
 
 it.each([
+  { kind: 'blocked' as const, severity: 'error' as const },
   { kind: 'blocked' as const, severity: 'warning' as const },
   { kind: 'blocked' as const, severity: undefined },
   { kind: 'custom' as const, severity: 'error' as const },
@@ -91,6 +92,26 @@ it.each([
   await sendSavedGoalNotifications('/project', goalRecord(), current, 'https://example.test/secret');
 
   expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining(body));
+});
+
+it.each(['ja', 'en'] as const)('escapes only the %s turn failure webhook while preserving the saved body and TUI text', async (language) => {
+  doubles.language.mockReturnValue(language);
+  const reason = 'failed <@U012AB3CD> <!channel> <https://example.test|details>';
+  const previous = goalRecord();
+  const failure = { ...notice, ...managerTurnFailureNotification(previous.id, new Error(reason), language) };
+  const current = { ...previous, notifications: [failure] };
+  const before = structuredClone(current);
+  const tuiText = formatGoalNotification(current, failure, language, 'project', 'tui');
+
+  await sendSavedGoalNotifications('/project', previous, current, 'https://example.test/secret');
+
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret',
+    formatGoalNotification(current, failure, language, 'project').replace(/<(?=[@!])/gu, '&lt;'));
+  expect(doubles.send.mock.calls[0]![1]).toContain('failed &lt;@U012AB3CD> &lt;!channel> <https://example.test|details>');
+  expect(current).toEqual(before);
+  expect(failure.body).toContain(reason);
+  expect(formatGoalNotification(current, failure, language, 'project', 'tui')).toBe(tuiText);
+  expect(tuiText).toContain(reason);
 });
 
 it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspace name resolved from cwd', async (language) => {

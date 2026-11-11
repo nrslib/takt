@@ -46,6 +46,17 @@ describe('conversationErrorResult', () => {
     expect(result.message).not.toMatch(/[\r\n\u2028\u2029]/u);
   });
 
+  it.each(['', '\n\tother="fixture-extra"'])('redacts a long line of Cookie candidates and keeps the following diagnosis (continuation=%j)', (continuation) => {
+    const candidates = 'Cookie: sid=fixture-secret; '.repeat(25_000);
+    const error = new Error(`${candidates}Cookie: sid="fixture-last"${continuation}\nprovider.transport: ECONNRESET`);
+
+    const result = conversationErrorResult(error, 'en');
+
+    expect(result.message).toBe(getLabel('manager.conversation.operation_failed_with_reason', 'en', {
+      reason: 'Cookie: [REDACTED] provider.transport: ECONNRESET',
+    }));
+  });
+
   it.each(['ja', 'en'] as const)('keeps classified operation and registration errors unchanged for %s', (language) => {
     const recovery = Object.assign(new Error('private provider detail'), { code: 'registration_recovery' });
     for (const error of [new ConversationError('operation_failed'), recovery]) {

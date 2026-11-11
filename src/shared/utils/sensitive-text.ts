@@ -53,7 +53,8 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
   'gi',
 );
 const HTTP_AUTHORIZATION_HEADER_REGEX = /\b(Authorization\s*:\s*)([^"'\r\n]+)/gi;
-const HTTP_COOKIE_HEADER_REGEX = /\b((?:Set-)?Cookie\s*:\s*)([^"'\r\n]+)/gi;
+// Quotes after a cookie assignment belong to its value, rather than an enclosing shell argument.
+const HTTP_COOKIE_HEADER_REGEX = /\b((?:Set-)?Cookie\s*:\s*)((?:=[ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*')|[^"'\r\n])+)/gi;
 const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@]+:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,

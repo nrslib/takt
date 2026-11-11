@@ -5,6 +5,7 @@ import { formatGoalNotification, formatStandaloneQuestionNotification, type Goal
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 import { getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/slackWebhook.js';
 import { escapeSlackMentions } from '../../shared/utils/slackText.js';
+import { getLabel } from '../../shared/i18n/index.js';
 
 export function resolveManagerNotificationOptions(cwd: string): {
   policy: GoalNotificationPolicy; webhookUrl: string | undefined; mainMerge: 'auto' | 'approve';
@@ -26,11 +27,14 @@ export async function sendSavedGoalNotifications(
   if (!webhookUrl) return;
   const language = resolveConfigValue(cwd, 'language');
   const project = basename(cwd);
+  const turnFailurePrefix = getLabel('manager.turnFailureNotification', language).split('\n')[0]!;
   const sent = new Set(previous.notifications?.map((notification) => notification.id));
   for (const notification of current.notifications ?? []) {
     if (sent.has(notification.id)) continue;
     const message = formatGoalNotification(current, notification, language, project);
-    await sendSlackNotification(webhookUrl, notification.kind === 'blocked' && notification.severity === 'error'
+    const turnFailure = notification.kind === 'blocked' && notification.severity === 'error'
+      && notification.body.startsWith(turnFailurePrefix);
+    await sendSlackNotification(webhookUrl, turnFailure
       ? escapeSlackMentions(message) : message);
   }
 }
