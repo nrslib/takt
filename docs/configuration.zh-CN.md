@@ -506,7 +506,7 @@ manager:
     - takt-default
 ```
 
-在项目与全局两层都未设置 `manager.workflows` 时，默认只允许 `default` 和 `simple`，并根据 `language` 提供日文或英文的使用说明。显式的纯名称元素不补充说明。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
+在项目与全局两层都未设置 `manager.workflows` 时，候选项为 `default` 和 `simple`。manager 根据 `language` 获取上述日文或英文的使用说明，并选择适合任务的 workflow。显式的纯名称元素不补充说明。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
 
 manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.workflow` / `merge-prepare`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
 
