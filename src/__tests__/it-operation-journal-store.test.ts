@@ -286,7 +286,7 @@ function expectConcurrentLoss(
   expectedDetail: string,
 ): void {
   const { name, message } = parseChildError(result);
-  expect(name).toBe('OperationJournalConflictError');
+  expect(name, message).toBe('OperationJournalConflictError');
   if (message.includes(LOCK_SWAP_CONFLICT)) {
     return;
   }
