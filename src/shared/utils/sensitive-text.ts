@@ -52,9 +52,17 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
   String.raw`((?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
   'gi',
 );
-const HTTP_AUTHORIZATION_HEADER_REGEX = /\b(Authorization\s*:\s*)([^"'\r\n]+)/gi;
-// Quotes after a cookie assignment belong to its value, rather than an enclosing shell argument.
-const HTTP_COOKIE_HEADER_REGEX = /\b((?:Set-)?Cookie\s*:\s*)((?:=[ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*')|[^"'\r\n])+)/gi;
+const HTTP_HEADER_QUOTED_VALUE_PATTERN = String.raw`"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'`;
+// Quotes after an assignment belong to the header value, rather than an enclosing shell argument.
+const HTTP_HEADER_VALUE_PATTERN = String.raw`(?:=[ \t]*(?:${HTTP_HEADER_QUOTED_VALUE_PATTERN})|[^"'\r\n])+`;
+const HTTP_AUTHORIZATION_HEADER_REGEX = new RegExp(
+  String.raw`\b(Authorization\s*:\s*)((?:[A-Za-z]+[ \t]+(?:${HTTP_HEADER_QUOTED_VALUE_PATTERN}))|${HTTP_HEADER_VALUE_PATTERN})`,
+  'gi',
+);
+const HTTP_COOKIE_HEADER_REGEX = new RegExp(
+  String.raw`\b((?:Set-)?Cookie\s*:\s*)(${HTTP_HEADER_VALUE_PATTERN})`,
+  'gi',
+);
 const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@]+:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,

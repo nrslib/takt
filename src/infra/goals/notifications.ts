@@ -17,7 +17,7 @@ export function appendGoalNotification(goal: Goal, input: GoalNotificationInput,
 }
 
 export function managerTurnFailureNotification(goalId: string, error: unknown, language: Language): GoalNotificationInput {
-  return { kind: 'blocked', severity: 'error', body: getLabel('manager.turnFailureNotification', language, {
+  return { kind: 'blocked', severity: 'error', source: 'manager_turn_failure', body: getLabel('manager.turnFailureNotification', language, {
     goalId, reason: normalizeErrorReason(error),
   }) };
 }

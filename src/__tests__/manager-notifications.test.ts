@@ -94,11 +94,12 @@ it.each([
   expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining(body));
 });
 
-it.each(['ja', 'en'] as const)('escapes only the %s turn failure webhook while preserving the saved body and TUI text', async (language) => {
+it.each(['ja', 'en'] as const)('escapes only the %s turn failure webhook after a locale change while preserving the saved body and TUI text', async (language) => {
   doubles.language.mockReturnValue(language);
   const reason = 'failed <@U012AB3CD> <!channel> <https://example.test|details>';
   const previous = goalRecord();
-  const failure = { ...notice, ...managerTurnFailureNotification(previous.id, new Error(reason), language) };
+  const storedLanguage = language === 'ja' ? 'en' : 'ja';
+  const failure = { ...notice, ...managerTurnFailureNotification(previous.id, new Error(reason), storedLanguage) };
   const current = { ...previous, notifications: [failure] };
   const before = structuredClone(current);
   const tuiText = formatGoalNotification(current, failure, language, 'project', 'tui');

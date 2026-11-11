@@ -59,6 +59,19 @@ describe('notifyManagerTurnFailure', () => {
       { name: 'authorization with a credential continuation followed by a reason',
         raw: 'Authorization: Bearer abc\n fixture-secret\nprovider.transport: ECONNRESET',
         expected: 'Authorization: Bearer [REDACTED] provider.transport: ECONNRESET' },
+      ...['Digest', 'Bearer', 'Basic'].flatMap((scheme) => [
+        { name: `${scheme} authorization with quoted parameters`,
+          raw: `Authorization: ${scheme} realm="fixture-secret", nonce="fixture-extra"\nprovider.transport: ECONNRESET`,
+          expected: `Authorization: ${scheme} [REDACTED] provider.transport: ECONNRESET` },
+        { name: `${scheme} authorization with folded quoted parameters`,
+          raw: `Authorization: ${scheme} realm="fixture-secret",\r\n\tnonce="fixture-extra"\r\nprovider.transport: ECONNRESET`,
+          expected: `Authorization: ${scheme} [REDACTED] provider.transport: ECONNRESET` },
+      ]),
+      ...['Bearer', 'Basic'].map((scheme) => ({
+        name: `${scheme} authorization with a quoted credential`,
+        raw: `Authorization: ${scheme} "fixture-secret"\nprovider.transport: ECONNRESET`,
+        expected: `Authorization: ${scheme} [REDACTED] provider.transport: ECONNRESET`,
+      })),
       ...['\n', '\r\n', '\r', '\v', '\f', '\u0085', '\u2028', '\u2029'].flatMap((separator) => [
         { name: `authorization followed by a reason (${JSON.stringify(separator)})`,
           raw: `Authorization: Bearer abc${separator}provider.transport: ECONNRESET`,

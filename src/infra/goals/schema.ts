@@ -84,6 +84,7 @@ export const GoalNotificationInputSchema = z.object({
   kind: z.enum(MANAGER_NOTIFICATION_KINDS),
   body: z.string().refine((value) => value.trim().length > 0),
   severity: z.enum(['info', 'warning', 'error']).optional(),
+  source: z.literal('manager_turn_failure').optional(),
 }).strict();
 // Existing callers may construct questions without kind; parsing always supplies it.
 export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {

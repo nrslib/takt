@@ -13,6 +13,26 @@ import {
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 
 describe('sensitiveText', () => {
+  it.each([
+    ['Digest', 'realm="fixture-secret", nonce="fixture-extra"'],
+    ['Bearer', 'realm="fixture-secret"'],
+    ['Basic', 'realm="fixture-secret"'],
+    ['Bearer', '"fixture-secret"'],
+    ['Basic', '"fixture-secret"'],
+    ['Digest', "realm='fixture-secret', nonce='fixture-extra'"],
+    ['Bearer', "'fixture-secret'"],
+    ['Basic', "'fixture-secret'"],
+  ])('redacts quoted Authorization %s %s while preserving command quotes and diagnosis', (scheme, value) => {
+    const quote = value.includes('"') ? "'" : '"';
+    const text = `curl -H ${quote}Authorization: ${scheme} ${value}${quote} https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H ${quote}Authorization: ${scheme} [REDACTED]${quote} https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
   it.each(['Cookie', 'Set-Cookie'])('redacts quoted %s values while preserving the enclosing command and subsequent diagnosis', (header) => {
     const text = `curl -H '${header}: sid="fixture-secret"; other="fixture-extra"' https://example.test\nprovider.transport: ECONNRESET`;
 

@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { notifyManagerTurnFailure } from '../features/manager/turnFailureNotification.js';
+import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const webhookUrl = 'https://example.test/notify';
@@ -51,11 +53,32 @@ it.each([
   if (withGoal) {
     const saved = await store.get(goal.id);
     expect(saved.notifications).toHaveLength(1);
-    expect(saved.notifications![0]).toMatchObject({ kind: 'blocked', severity: 'error' });
+    expect(saved.notifications![0]).toMatchObject({ kind: 'blocked', severity: 'error', source: 'manager_turn_failure' });
     expect(saved.notifications![0]!.body).toContain(reason);
     expect(notice).toBeUndefined();
   } else {
     expect(notice).toContain(reason);
     expect(await store.list()).toEqual({ goals: [], errors: [] });
   }
+});
+
+it.each(['ja', 'en'] as const)('preserves mentions after the %s turn failure prefix in an ordinary MCP blocked error', async (language) => {
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), `language: ${language}\nmanager:\n  notifications:\n    blocked: true\n`);
+  const store = new GoalStore(cwd);
+  const goal = goalRecord();
+  await store.create(goal);
+  const prefix = getLabel('manager.turnFailureNotification', language).split('\n')[0]!;
+  const body = `${prefix}\n${reason}`;
+
+  const result = await notifyTaktGoal({ cwd, goalId: goal.id, kind: 'blocked', severity: 'error', body }, {}, new AbortController().signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(fetchMock).toHaveBeenCalledExactlyOnceWith(webhookUrl, expect.objectContaining({ method: 'POST' }));
+  const payload = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as { text: string };
+  expect(payload.text).toContain(body);
+  expect(payload.text).not.toContain('&lt;');
+  const saved = await store.get(goal.id);
+  expect(saved.notifications).toHaveLength(1);
+  expect(saved.notifications![0]!.body).toBe(body);
+  expect(saved.notifications![0]!.source).toBeUndefined();
 });
