@@ -2220,6 +2220,7 @@ describe('shallow clone fallback', () => {
   function setupShallowCloneMock(options: {
     shallowError: boolean;
     otherError?: string;
+    shallowMessage?: string;
   }): { cloneCalls: string[][] } {
     const cloneCalls: string[][] = [];
 
@@ -2242,7 +2243,7 @@ describe('shallow clone fallback', () => {
 
         if (hasReference && options.shallowError) {
           const err = new Error('clone failed');
-          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(`fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(options.shallowMessage ?? `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           throw err;
         }
 
@@ -2286,7 +2287,7 @@ describe('shallow clone fallback', () => {
     return { cloneCalls };
   }
 
-  function setupAbortableShallowCloneMock(): { cloneCalls: string[][] } {
+  function setupAbortableShallowCloneMock(shallowMessage?: string): { cloneCalls: string[][] } {
     const cloneCalls: string[][] = [];
 
     mockSpawn.mockImplementation((_cmd, args) => {
@@ -2320,7 +2321,7 @@ describe('shallow clone fallback', () => {
           return;
         }
         if (isCloneCommand(argsArr) && argsArr.includes('--reference')) {
-          child.stderr.emit('data', `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
+          child.stderr.emit('data', shallowMessage ?? `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           child.emit('close', 1);
           return;
         }
@@ -2447,6 +2448,30 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[1]).not.toContain('--dissociate');
     expect(cloneCalls[1]).toContain('--no-local');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  const newlineReferenceError = "fatal: reference repository '/work/my\nproject' is shallow\n";
+
+  it('should fall back when the shallow reference path contains a newline', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: true, shallowMessage: newlineReferenceError });
+
+    createSharedClone(linkedWorktreePath, { worktree: '/tmp/newline-reference', taskSlug: 'newline-reference' });
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[1]).not.toContain('--reference');
+  });
+
+  it('should fall back in the abortable clone when the shallow reference path contains a newline', async () => {
+    const { cloneCalls } = setupAbortableShallowCloneMock(newlineReferenceError);
+
+    await createSharedCloneAbortable(linkedWorktreePath, {
+      worktree: '/tmp/newline-reference-abortable',
+      taskSlug: 'newline-reference',
+      branch: 'feature/local-branch',
+    });
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[1]).not.toContain('--reference');
   });
 
   // A destination path may contain newlines, which can put a shallow-looking line in the middle of

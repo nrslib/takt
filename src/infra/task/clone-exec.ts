@@ -86,10 +86,10 @@ function getExecErrorStderr(error: unknown): string {
 }
 
 // Git quotes the reference path into the message ("reference repository '<path>' is shallow");
-// the unquoted wording is kept for output that omits the path. The match is anchored to a whole
-// line so that other messages which merely embed a path (for example the "destination path '...'
-// already exists" error) cannot be mistaken for it.
-const SHALLOW_REFERENCE_PATTERN = /^fatal: reference repository (?:'.*' )?is shallow\s*$/m;
+// the unquoted wording is kept for output that omits the path. The quoted path may itself contain
+// newlines. The match is anchored to a `fatal:` line; a destination that already holds files is
+// protected separately (see destinationHasContent), so a look-alike never causes a deletion.
+const SHALLOW_REFERENCE_PATTERN = /^fatal: reference repository (?:'[\s\S]*?' )?is shallow\s*$/m;
 
 export function isShallowReferenceError(message: string): boolean {
   return SHALLOW_REFERENCE_PATTERN.test(message);

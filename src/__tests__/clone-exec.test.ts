@@ -52,6 +52,7 @@ it.each([
   ['the unquoted wording', 'fatal: reference repository is shallow'],
   ['the quoted path wording', "fatal: reference repository '/work/project' is shallow"],
   ['a path with spaces and quotes', `fatal: reference repository '/work/my "project's" dir' is shallow\n`],
+  ['a reference path that contains a newline', "fatal: reference repository '/work/my\nproject' is shallow\n"],
 ])('detects a shallow reference repository from %s', (_label, stderr) => {
   expect(isShallowReferenceError(stderr)).toBe(true);
 });
