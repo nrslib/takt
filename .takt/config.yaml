@@ -47,3 +47,9 @@ workflow_overrides:
         - "Run `npm test` and verify unit tests pass. On failure, quote the failing output in your report and return needs_fix"
         - "Run `npm run test:it` and verify integration tests pass. On failure, quote the failing output in your report and return needs_fix"
         - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass. On failure, quote the failing output in your report and return needs_fix"
+
+manager:
+  workflows:
+    - default
+    - simple
+    - takt-default
