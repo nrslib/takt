@@ -42,6 +42,8 @@ export interface RemoteRepository {
   readonly hostname: string;
   /** Hostname plus a non-default port, kept only for http(s) remotes where it is the web port. */
   readonly webHost: string;
+  /** Scheme of the web endpoint: the remote's own for http(s), otherwise `https`. */
+  readonly webScheme: 'http' | 'https';
   /** Repository path without surrounding slashes or `.git`, e.g. `group/sub/project`. */
   readonly path: string;
 }
@@ -77,8 +79,10 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
     const path = normalizeRepositoryPathForIdentity(parsed.pathname);
     if (path === undefined) return undefined;
     const hostname = parsed.hostname.toLowerCase();
-    const webHost = WEB_REMOTE_URL_PROTOCOLS.has(parsed.protocol) ? parsed.host.toLowerCase() : hostname;
-    return { hostname, webHost, path };
+    const isWeb = WEB_REMOTE_URL_PROTOCOLS.has(parsed.protocol);
+    const webHost = isWeb ? parsed.host.toLowerCase() : hostname;
+    const webScheme = parsed.protocol === 'http:' ? 'http' : 'https';
+    return { hostname, webHost, webScheme, path };
   }
 
   const match = SCP_LIKE_URL_REGEX.exec(trimmed);
@@ -86,7 +90,7 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
   const path = normalizeRepositoryPathForIdentity(match[2]);
   if (path === undefined) return undefined;
   const hostname = match[1].toLowerCase();
-  return { hostname, webHost: hostname, path };
+  return { hostname, webHost: hostname, webScheme: 'https', path };
 }
 
 /**

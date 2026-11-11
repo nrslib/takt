@@ -497,7 +497,7 @@ When a pipeline or interactive session checks out a PR in the current directory,
 A task with `worktree: true` runs in a clone without an `origin` remote, so `gh` and `glab` cannot find the repository from git remotes there. TAKT reads the project root's `origin` and names the repository for the agent steps, command quality gates, and system `command` inputs of such a task:
 
 - GitHub: `GH_REPO=OWNER/REPO`, or `HOST/OWNER/REPO` for a host other than `github.com` (also for `github.com` when `GH_HOST` is set).
-- GitLab: `GITLAB_REPO=https://HOST/GROUP/.../PROJECT`. When `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, or `OAUTH_TOKEN` is set, `GITLAB_REPO` is added only if `GITLAB_HOST` (or `GITLAB_URI` / `GL_HOST`) names the same host, because glab sends an environment token to the host in `GITLAB_REPO`.
+- GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`, where the scheme is the origin's (`http` stays `http`; an ssh origin gives `https`). When `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, or `OAUTH_TOKEN` is set, `GITLAB_REPO` is added only if `GITLAB_HOST` (or `GITLAB_URI` / `GL_HOST`) names the same scheme, host, and effective port (80 for `http`, 443 for `https`; a value without a scheme is read as `https`), because glab sends an environment token to the endpoint in `GITLAB_REPO`.
 
 A variable you already set is never overridden. No remote and no credential is added, and the URL's user name or token is never used. Nothing is added for a task that runs in the project root, when `origin` is missing or not a recognised URL, or when the provider is unknown. System `command` inputs run without `HOME`, so `gh` / `glab` there still need their own authentication.
 

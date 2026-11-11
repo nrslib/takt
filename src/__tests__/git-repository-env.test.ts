@@ -31,15 +31,15 @@ beforeEach(() => {
 
 describe('parseRemoteRepositoryUrl', () => {
   it.each([
-    ['git@github.com:owner/repo.git', { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' }],
-    ['github.com:owner/repo', { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' }],
-    ['ssh://git@github.example.com/owner/repo.git', { hostname: 'github.example.com', webHost: 'github.example.com', path: 'owner/repo' }],
-    ['ssh://git@gitlab.example.com:2222/group/sub/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', path: 'group/sub/project' }],
-    ['https://github.com/owner/repo', { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' }],
-    ['https://github.com/owner/repo.git/', { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' }],
-    ['https://user:secret-token@GitLab.Example.com/group/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', path: 'group/project' }],
-    ['https://oauth2@gitlab.example.com:8443/a/b/c/d.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com:8443', path: 'a/b/c/d' }],
-    ['  https://github.com/owner/repo.git\n', { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' }],
+    ['git@github.com:owner/repo.git', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['github.com:owner/repo', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['ssh://git@github.example.com/owner/repo.git', { hostname: 'github.example.com', webHost: 'github.example.com', webScheme: 'https', path: 'owner/repo' }],
+    ['ssh://git@gitlab.example.com:2222/group/sub/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https', path: 'group/sub/project' }],
+    ['https://github.com/owner/repo', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['https://github.com/owner/repo.git/', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['https://user:secret-token@GitLab.Example.com/group/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https', path: 'group/project' }],
+    ['https://oauth2@gitlab.example.com:8443/a/b/c/d.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com:8443', webScheme: 'https', path: 'a/b/c/d' }],
+    ['  https://github.com/owner/repo.git\n', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
   ])('parses %s', (url, expected) => {
     expect(parseRemoteRepositoryUrl(url)).toEqual(expected);
   });
@@ -89,9 +89,9 @@ describe('detectVcsProviderFromHostname', () => {
 });
 
 describe('buildRepositoryIdentityEnv', () => {
-  const github = { hostname: 'github.com', webHost: 'github.com', path: 'owner/repo' };
-  const ghe = { hostname: 'github.example.com', webHost: 'github.example.com', path: 'owner/repo' };
-  const gitlab = { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', path: 'group/sub/project' };
+  const github = { hostname: 'github.com', webHost: 'github.com', webScheme: 'https' as const, path: 'owner/repo' };
+  const ghe = { hostname: 'github.example.com', webHost: 'github.example.com', webScheme: 'https' as const, path: 'owner/repo' };
+  const gitlab = { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https' as const, path: 'group/sub/project' };
 
   it('sets GH_REPO without a host for github.com', () => {
     expect(buildRepositoryIdentityEnv(github, 'github', {})).toEqual({ GH_REPO: 'owner/repo' });
@@ -149,6 +149,19 @@ describe('buildRepositoryIdentityEnv', () => {
       .toEqual({ GITLAB_REPO: 'https://gitlab.example.com:8443/group/project' });
     expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com:443' }))
       .toEqual({ GITLAB_REPO: 'https://gitlab.example.com/group/sub/project' });
+  });
+
+  it('keeps the scheme of an http origin in GITLAB_REPO and in the token comparison', () => {
+    const httpOrigin = parseRemoteRepositoryUrl('http://gitlab.example.com/group/project.git')!;
+
+    expect(buildRepositoryIdentityEnv(httpOrigin, 'gitlab', {}))
+      .toEqual({ GITLAB_REPO: 'http://gitlab.example.com/group/project' });
+    // an http host configured for the token matches an http origin
+    expect(buildRepositoryIdentityEnv(httpOrigin, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'http://gitlab.example.com' }))
+      .toEqual({ GITLAB_REPO: 'http://gitlab.example.com/group/project' });
+    // an https host (also the default for a bare host) must not match an http origin
+    expect(buildRepositoryIdentityEnv(httpOrigin, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com' })).toEqual({});
+    expect(buildRepositoryIdentityEnv(httpOrigin, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com' })).toEqual({});
   });
 
   it('sets GITLAB_REPO when a GitLab token is set for the same host', () => {

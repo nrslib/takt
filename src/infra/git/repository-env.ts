@@ -29,7 +29,7 @@ function isSet(env: NodeJS.ProcessEnv, key: string): boolean {
 }
 
 // glab sends the token to the exact scheme, host and effective port of GITLAB_REPO, so compare all
-// three. A value without a scheme is read as https, which is also the scheme of the URL built below.
+// three. A value without a scheme is read as https.
 function endpointOf(value: string): string {
   try {
     const url = new URL(value.includes('://') ? value : `https://${value}`);
@@ -38,6 +38,12 @@ function endpointOf(value: string): string {
   } catch {
     return '';
   }
+}
+
+// Scheme and host (with a non-default port) that glab is told to use. An http origin stays http, so a
+// token configured for an http host is not matched against, or sent to, an https endpoint.
+function webEndpoint(remote: RemoteRepository): string {
+  return `${remote.webScheme}://${remote.webHost}`;
 }
 
 function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
@@ -57,11 +63,11 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
-    if (configuredHost === undefined || endpointOf(configuredHost) !== endpointOf(remote.webHost)) return {};
+    if (configuredHost === undefined || endpointOf(configuredHost) !== endpointOf(webEndpoint(remote))) return {};
   }
   // The URL form keeps the host and nested groups unambiguous: glab treats a
   // plain `host/group/project` as a group path unless the host is configured.
-  return { GITLAB_REPO: `https://${remote.webHost}/${remote.path}` };
+  return { GITLAB_REPO: `${webEndpoint(remote)}/${remote.path}` };
 }
 
 /**
