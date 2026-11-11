@@ -5,6 +5,7 @@ import { ConversationFrameDecoder, conversationTransferFrames, encodeConversatio
 import { SnapshotChanges, snapshotItemKey, orderSnapshotItems } from '../features/manager/snapshotChanges.js';
 import type { SnapshotValue, ConversationState } from '../features/manager/conversationPort.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { MAX_CONVERSATION_TEXT_BYTES } from '../shared/types/conversation-activity.js';
 
 function fixture() {
   const record = conversationRecord('/repository');
@@ -23,6 +24,56 @@ function fixture() {
   };
   return { receiver, observer, state, metadata, event, frames };
 }
+
+it.each(['コードを読む', 'あ'.repeat(256)])('receives bounded Bash descriptions through output transfers: %s', async (description) => {
+  const { receiver, observer, metadata, frames } = fixture();
+  const operationId = randomUUID();
+  const output = { kind: 'activity', operationId, generation: 1, activity: { kind: 'tool', tool: 'Bash', description } };
+  for (const frame of await frames(metadata(5, 2, operationId), [output], 'output')) receiver.receive(frame);
+  expect(observer.output).toHaveBeenCalledExactlyOnceWith(output, expect.objectContaining({ operationId }));
+});
+
+it('receives bounded intermediate text and rejects overflow and extra fields', async () => {
+  const operationId = randomUUID();
+  const output = { kind: 'turn_text', operationId, generation: 1, message: 'a'.repeat(MAX_CONVERSATION_TEXT_BYTES) };
+  const f = fixture();
+  for (const frame of await f.frames(f.metadata(5, 2, operationId), [output], 'output')) f.receiver.receive(frame);
+  expect(f.observer.output).toHaveBeenCalledExactlyOnceWith(output, expect.objectContaining({ operationId }));
+  for (const invalid of [
+    { ...output, message: 'あ'.repeat(Math.ceil(MAX_CONVERSATION_TEXT_BYTES / 3)) },
+    { ...output, command: 'private command' },
+  ]) {
+    const f = fixture();
+    const values = await f.frames(f.metadata(5, 2, operationId), [invalid], 'output');
+    expect(() => { for (const frame of values) f.receiver.receive(frame); }).toThrow();
+    expect(f.observer.output).not.toHaveBeenCalled();
+  }
+});
+
+it('preserves a known turn start time through a running snapshot', async () => {
+  const f = fixture();
+  const state = { ...f.state, running: { operationId: randomUUID(), kind: 'turn', generation: 1, startedAt: Date.now() - 65000 } };
+  const read = f.metadata(state.revision, 2, state.running.operationId);
+  for (const frame of await f.frames(read, [{ kind: 'state', state }])) f.receiver.receive(frame);
+  expect(f.observer.state).toHaveBeenCalledExactlyOnceWith(state, read);
+});
+
+it.each([
+  { kind: 'tool', tool: 'Bash', description: 'あ'.repeat(257) },
+  { kind: 'tool', tool: 'Bash', description: 'line\nline' },
+  { kind: 'tool', tool: 'Bash', description: '\u001b[31mred' },
+  { kind: 'tool', tool: 'Bash', description: 'line\u2028line' },
+  { kind: 'tool', tool: 'Bash', description: 42 },
+  { kind: 'tool', tool: 'Bash', description: 'safe', input: { command: 'private' } },
+  { kind: 'tool', tool: 'Read', description: 'private input' },
+])('rejects invalid descriptions and tool inputs at the TUI receiver: %#', async (activity) => {
+  const { receiver, observer, metadata, frames } = fixture();
+  const operationId = randomUUID();
+  const output = { kind: 'activity', operationId, generation: 1, activity };
+  const values = await frames(metadata(5, 2, operationId), [output], 'output');
+  expect(() => { for (const frame of values) receiver.receive(frame); }).toThrow();
+  expect(observer.output).not.toHaveBeenCalled();
+});
 
 it('validates and delivers a user message with the matching operation identity', async () => {
   const { receiver, observer, metadata, frames } = fixture();
@@ -284,10 +335,10 @@ it('uses canonical inquiry identity and preserves assignment repository order an
   expect(snapshotItemKey(inquiry)).toBe(snapshotItemKey({ kind: 'inquiry', inquiry: { ...inquiry.inquiry,
     target: { repositoryDirectory: '/second', goalId: 'goal' } } }));
   const values: Exclude<SnapshotValue, { kind: 'state' }>[] = [
-    { kind: 'goal', goal: { id: 'a', objective: 'Second', repositoryDirectory: '/second', status: 'created', executionStatus: 'active' } },
+    { kind: 'goal', goal: { awaitingHumanMerge: false, id: 'a', objective: 'Second', repositoryDirectory: '/second', status: 'created', executionStatus: 'active' } },
     inquiry,
     { kind: 'assignment', assignment: { kind: 'repository', repositoryDirectory: '/first', repositoryDirectories: ['/first', '/second'] } },
-    { kind: 'goal', goal: { id: 'z', objective: 'First', repositoryDirectory: '/first', status: 'created', executionStatus: 'active' } },
+    { kind: 'goal', goal: { awaitingHumanMerge: false, id: 'z', objective: 'First', repositoryDirectory: '/first', status: 'created', executionStatus: 'active' } },
     { kind: 'inquiry', inquiry: { ...inquiry.inquiry, question: { ...question, id: randomUUID(), createdAt: '2026-01-01T00:00:00Z' } } },
   ];
   expect(orderSnapshotItems(new Map(values.map((value) => [snapshotItemKey(value), value])))).toEqual([
@@ -305,7 +356,7 @@ it('accepts empty deltas and validates changed repositories against the complete
   expect(observer.read).toHaveBeenLastCalledWith('complete', delta.transferId, 'delta');
   const invalid = { ...metadata(4, 1), mode: 'delta' as const };
   receiver.expectRead(invalid);
-  const goal = { kind: 'goal', goal: { id: randomUUID(), objective: 'Outside', repositoryDirectory: '/other', status: 'created', executionStatus: 'active' } };
+  const goal = { kind: 'goal', goal: { awaitingHumanMerge: false, id: randomUUID(), objective: 'Outside', repositoryDirectory: '/other', status: 'created', executionStatus: 'active' } };
   const values = await frames(invalid, [goal]);
   expect(() => values.forEach((frame) => receiver.receive(frame))).toThrow('Display repository outside assignment');
 });

@@ -8,6 +8,7 @@ import { TaskRunner } from '../../infra/task/index.js';
 import { loadRunSessionPage } from '../interactive/runSessionReader.js';
 import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
 import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
+import type { ManagerWorkflow } from '../manager/workflowSelection.js';
 import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
 import {
@@ -39,6 +40,7 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  managerWorkflows?: readonly ManagerWorkflow[];
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
@@ -219,7 +221,7 @@ export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: strin
   const root = fs.realpathSync(allowedProjectRoot);
   const target = fs.realpathSync(cwd);
   const relative = path.relative(root, target);
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+  if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
     return;
   }
 

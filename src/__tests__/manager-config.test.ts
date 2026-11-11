@@ -6,8 +6,72 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
+it.each([
+  { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
+  { global: ['default'], project: ['simple'], expected: ['simple'] },
+  { global: 'all', project: [], expected: [] },
+  { global: ['default'], project: 'all', expected: 'all' },
+])('replaces the global manager workflow selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { workflows: global } });
+  doubles.project.mockReturnValue({ manager: { workflows: project } });
+  expect(resolveManagerConfig('/project').workflows).toEqual(expected);
+});
+it.each(['all', [], ['default', { simple: 'Small changes' }, 'takt-default']])('accepts manager workflows %j at both scopes', (workflows) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { workflows } }).manager?.workflows).toEqual(workflows);
+  }
+});
+it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ default: 'one', simple: 'two' }], [{ default: 1 }]])(
+  'rejects malformed manager workflows %j at both scopes', (workflows) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { workflows } }).success).toBe(false);
+    }
+  },
+);
 it('defaults to automatic execution without inventing a default workflow', () => {
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+});
+it.each([
+  { project: {}, global: {}, expected: 'auto' },
+  { project: {}, global: { permission: 'full' }, expected: 'full' },
+  { project: { permission: 'auto' }, global: { permission: 'full' }, expected: 'auto' },
+  { project: { permission: 'full' }, global: { providerPermissions: { codex: 'auto' } }, expected: 'auto' },
+  { project: { providerPermissions: { codex: 'full' } }, global: { providerPermissions: { codex: 'auto' } }, expected: 'full' },
+  { project: { permission: 'full', providerPermissions: { claude: 'auto' } }, global: {}, expected: 'full' },
+])('resolves manager permission from provider overrides before shared defaults: %j', ({ project, global, expected }) => {
+  doubles.project.mockReturnValue({ manager: project });
+  doubles.global.mockReturnValue({ manager: global });
+  expect(resolveManagerConfig('/project', 'codex').permission).toBe(expected);
+  expect(doubles.project).toHaveBeenCalledWith('/project');
+});
+it.each(['claude', 'claude-sdk'] as const)('treats both Claude permission keys as aliases for %s', (provider) => {
+  const alias = provider === 'claude' ? 'claude-sdk' : 'claude';
+  doubles.global.mockReturnValue({ manager: { permission: 'full', providerPermissions: { [alias]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [alias]: 'full' } } });
+  doubles.global.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto', [alias]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
+});
+it.each(['auto', 'full'])('accepts manager permission %s at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { permission, provider_permissions: { claude: permission, codex: permission } } }).manager)
+      .toMatchObject({ permission, provider_permissions: { claude: permission, codex: permission } });
+  }
+});
+it.each(['edit', 'readonly', 'AUTO', '', ' ', null, 1, true, {}])('rejects invalid manager permission %j at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { permission } }).success).toBe(false);
+    expect(schema.safeParse({ manager: { provider_permissions: { codex: permission } } }).success).toBe(false);
+  }
+});
+it.each([null, 'auto', ['auto']])('rejects invalid provider permissions map %j', (provider_permissions) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { provider_permissions } }).success).toBe(false);
+  }
 });
 it.each([1, 60, 900, 1800])('accepts manager patrol interval %s in seconds', (patrol_interval) => {
   expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);

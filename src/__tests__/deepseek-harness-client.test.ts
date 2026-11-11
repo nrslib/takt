@@ -130,7 +130,7 @@ const SUPPORTED_RUNTIME = (
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
 const ASYNC_WAIT_TIMEOUT_MS = 30_000;
 const offlineManagedNpmCache = process.env.TAKT_DSH_OFFLINE_NPM_CACHE;
-const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', managedPackageRootEnvironmentKey] as const;
+const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', 'TMPDIR', 'TEMP', 'TMP', managedPackageRootEnvironmentKey] as const;
 const savedEnvironment = new Map<string, string | undefined>();
 let temporaryRoot: string;
 let localApis: LocalApi[] = [];
@@ -416,6 +416,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     managedModuleLoads.mockClear();
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-client-sdk-'));
+    for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = temporaryRoot;
     process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
     process.env.TAKT_CONFIG_DIR = join(temporaryRoot, 'takt');
     process.env.PI_CODING_AGENT_DIR = join(temporaryRoot, 'pi-agent');

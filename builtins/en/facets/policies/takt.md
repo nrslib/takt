@@ -16,8 +16,8 @@ Provide one source of truth for independent judgments about takt.
 
 ### Provider Integration
 
-| Criteria | Judgment |
-|----------|----------|
+| Rule | Decision |
+|---|---|
 | SDK-specific error handling leaking outside Provider | REJECT |
 | Errors not propagated to AgentResponse.error | REJECT |
 | Session key collision between providers | REJECT |

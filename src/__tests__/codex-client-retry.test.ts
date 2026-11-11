@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { interpolateMcpEnv, McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
+import { CODEX_SPAWN_OPTIONS, type CodexSpawnEnvironment } from '../infra/codex/types.js';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -170,6 +171,40 @@ describe('CodexClient retry', () => {
     tempRoots.clear();
   });
 
+  it.each([undefined, false, true].flatMap((aiReviewPermissions) =>
+    (['takt', 'codex'] as const).map((permissionControl) => ({ aiReviewPermissions, permissionControl })),
+  ))('configures AI permission review only when requested (auto=$aiReviewPermissions, control=$permissionControl)', async ({ aiReviewPermissions, permissionControl }) => {
+    runPlans = Array.from({ length: 2 }, () => ({ type: 'events' as const, events: [
+      { type: 'thread.started', thread_id: 'thread-permissions' },
+      { type: 'turn.completed' },
+    ] }));
+    const client = new CodexClient();
+    for (const sessionId of [undefined, 'thread-permissions']) {
+      const result = await client.call('manager', 'continue', {
+        cwd: projectDirectory, permissionMode: 'full', aiReviewPermissions, sessionId,
+        networkAccess: false, permissionControl,
+      });
+      expect(result.status).toBe('done');
+    }
+    for (const options of [startThreadCalls[0], resumeThreadCalls[0]?.options]) {
+      expect(options?.approvalPolicy).toBe(aiReviewPermissions ? 'on-request' : 'never');
+      if (aiReviewPermissions) {
+        expect(options).toMatchObject({ sandboxMode: 'workspace-write', networkAccessEnabled: true });
+      } else if (permissionControl === 'codex') {
+        expect(options).not.toHaveProperty('sandboxMode');
+        expect(options).not.toHaveProperty('networkAccessEnabled');
+      } else {
+        expect(options).toMatchObject({ sandboxMode: 'danger-full-access', networkAccessEnabled: false });
+      }
+    }
+    for (const options of codexConstructorCalls) {
+      if (aiReviewPermissions) expect(options?.config).toHaveProperty('approvals_reviewer', 'auto_review');
+      else expect(options?.config).not.toHaveProperty('approvals_reviewer');
+      expect((options?.env as CodexSpawnEnvironment)[CODEX_SPAWN_OPTIONS]?.execArgs)
+        .toEqual(aiReviewPermissions || permissionControl === 'takt' ? ['--ignore-rules'] : []);
+    }
+  });
+
   it.each(['turn.failed', 'error', 'exception'] as const)('classifies a confirmed resume rejection from %s through both provider entrances', async (source) => {
     const sessionId = '00000000-0000-4000-8000-000000000099';
     const diagnostic = `Error: thread/resume: thread/resume failed: no rollout found for thread id ${sessionId} (code -32600)`;
@@ -308,7 +343,7 @@ describe('CodexClient retry', () => {
       ] }];
       const onStream = vi.fn();
       const pending = new CodexClient().call('coder', 'original prompt', {
-        cwd: '/tmp', model: 'gpt-5.4', permissionMode: 'readonly',
+        cwd: '/tmp', model: 'gpt-5.4', permissionMode: 'readonly', networkAccess: true,
         outputSchema: { type: 'object' }, onStream,
       });
       await vi.advanceTimersByTimeAsync(999);
@@ -324,7 +359,16 @@ describe('CodexClient retry', () => {
       expect(runPlanIndex).toBe(3);
       expect(runStreamedInputs).toEqual(['original prompt', 'original prompt', 'original prompt']);
       for (const options of [...startThreadCalls, ...resumeThreadCalls.map((call) => call.options)]) {
-        expect(options).toMatchObject({ model: 'gpt-5.4', sandboxMode: 'read-only' });
+        expect(options).toMatchObject({ model: 'gpt-5.4' });
+        expect(options).not.toHaveProperty('sandboxMode');
+        expect(options).not.toHaveProperty('networkAccessEnabled');
+      }
+      expect(codexConstructorCalls).toHaveLength(3);
+      for (const options of codexConstructorCalls) {
+        expect(options?.config).toMatchObject({
+          default_permissions: 'takt-readonly-network',
+          permissions: { 'takt-readonly-network': { extends: ':read-only', network: { enabled: true } } },
+        });
       }
       const terminal = onStream.mock.calls.filter(([event]) => event.type === 'result');
       expect(terminal).toHaveLength(1);

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { buildManagerEventPrompt } from '../features/daemon/inboxEvent.js';
+
+const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 import type { ConversationRuntime, PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { DaemonStateRequest } from '../core/daemon/processProtocol.js';
 import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
@@ -11,7 +13,6 @@ import type { AssistantCliOverrides } from '../core/config/provider-resolution.j
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
-import * as labels from '../shared/i18n/index.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
@@ -24,7 +25,8 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+const doubles = vi.hoisted(() => ({ readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
@@ -53,6 +55,7 @@ function fixture() {
   const controller = new AbortController();
   const io = { signal: controller.signal, request, progress: vi.fn() };
   const input = turnStart(); input.state.version = version;
+  input.state.session.contextKey = 'context';
   return { service, execute, resolve, request, controller, io, input };
 }
 
@@ -102,6 +105,7 @@ function conversationFixture() {
 afterEach(() => { vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.readTasks.mockResolvedValue([]);
   doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
@@ -133,13 +137,12 @@ it('resumes the session and interrupted message from restored state in a new con
 });
 
 it.each([
-  { language: 'ja' as const, recipient: 'human', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'human', explanation: /interrupt/i },
-  { language: 'ja' as const, recipient: 'event', explanation: /中断/ },
-  { language: 'en' as const, recipient: 'event', explanation: /interrupt/i },
-])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, explanation }) => {
+  { language: 'ja' as const, recipient: 'human', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'human', interruptedHumanSource: /human message received in an interrupted turn/i },
+  { language: 'ja' as const, recipient: 'event', interruptedHumanSource: /中断したターンで受け取った人の発言/ },
+  { language: 'en' as const, recipient: 'event', interruptedHumanSource: /human message received in an interrupted turn/i },
+])('prepends the localized interrupted human message to a $recipient turn in $language', async ({ language, recipient, interruptedHumanSource }) => {
   const f = conversationFixture();
-  const getLabel = vi.spyOn(labels, 'getLabel');
   f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
   const text = '  interrupted {value}\noriginal text  ';
   const controller = new AbortController(); f.interruptNext(controller);
@@ -148,15 +151,10 @@ it.each([
   await f.run(recipient === 'human' ? humanMessage('current request')
     : { kind: 'director_message', text: 'current request', directorConversationId: 'director' });
   const prompt = f.execute.mock.calls[1]![0].prompt;
-  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(explanation);
+  expect(prompt.slice(0, prompt.indexOf(text))).toMatch(interruptedHumanSource);
   expect(prompt).toContain(text);
   expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf('current request'));
-  expect(getLabel.mock.calls.some((call, index) => {
-    const result = getLabel.mock.results[index];
-    return call[1] === language && result?.type === 'return' && result.value.length > 0
-      && prompt.indexOf(result.value) >= 0 && prompt.indexOf(result.value) < prompt.indexOf('current request');
-  })).toBe(true);
-  if (recipient === 'event') expect(prompt.indexOf('Speaker:')).toBeGreaterThan(prompt.indexOf('current request'));
+  if (recipient === 'event') expect(turnData(prompt)).toMatchObject({ origin: 'unknown', directorConversationId: 'director' });
 });
 
 it('clears interrupted context after one completed message turn', async () => {
@@ -167,7 +165,8 @@ it('clears interrupted context after one completed message turn', async () => {
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('second continuation'));
-  expect(f.execute.mock.calls[2]![0].prompt).toBe('second continuation');
+  expect(turnData(f.execute.mock.calls[2]![0].prompt)).toMatchObject({ text: 'second continuation', speaker: { namespace: 'human', id: 'test' } });
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted request');
 });
 
 it.each([true, false])('retains undelivered interrupted context through /verify with mode=%s and delivers it on the next message', async (mode) => {
@@ -198,7 +197,7 @@ it.each([true, false])('retains undelivered interrupted context through /verify 
   expect(call.mock.calls.at(-1)![0]).toContain('undelivered requirements');
   expect(f.state().interruptedMessage).toBeNull();
   await f.run(humanMessage('next request'));
-  expect(call.mock.calls.at(-1)![0]).toBe('next request');
+  expect(turnData(call.mock.calls.at(-1)![0]).text).toBe('next request');
 });
 
 it.each(['failed', 'error'] as const)('returns the completed %s verification with interruption and keeps undelivered context', async (verdict) => {
@@ -232,7 +231,7 @@ it('keeps prompts unchanged across completed turns with no interruption', async 
   const f = conversationFixture();
   await f.run(humanMessage('first request'));
   await f.run(humanMessage('second request'));
-  expect(f.execute.mock.calls.map(([turn]) => turn.prompt)).toEqual(['first request', 'second request']);
+  expect(f.execute.mock.calls.map(([turn]) => turnData(turn.prompt).text)).toEqual(['first request', 'second request']);
 });
 
 it('passes interrupted context without a session when no session was saved before interruption', async () => {
@@ -287,7 +286,7 @@ it('retains the interrupted human message through an interrupted event turn and 
   expect(f.execute.mock.calls[2]![0].prompt).not.toContain('interrupted event');
   expect(f.state()).toMatchObject({ interruptedMessage: null });
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[3]![0].prompt).toBe('next human request');
+  expect(turnData(f.execute.mock.calls[3]![0].prompt).text).toBe('next human request');
 });
 
 it('does not save an interrupted event as a human message', async () => {
@@ -295,7 +294,10 @@ it('does not save an interrupted event as a human message', async () => {
   const controller = new AbortController(); f.interruptNext(controller);
   await f.run({ kind: 'director_message', text: 'interrupted event', directorConversationId: 'director' }, controller);
   await f.run(humanMessage('next human request'));
-  expect(f.execute.mock.calls[1]![0]).toMatchObject({ prompt: 'next human request', sessionId: 'shared-session' });
+  expect(f.execute.mock.calls[1]![0]).toMatchObject({ sessionId: 'shared-session' });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({
+    speaker: { namespace: 'human', id: 'test' }, text: 'next human request',
+  });
 });
 
 it('retains interrupted context when an executor error leaves delivery unconfirmed', async () => {
@@ -377,7 +379,7 @@ it.each([
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: {
     kind: 'notice', message: getLabel(label, 'en', { goalId }),
   } });
-  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal);
+  expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal, 'human');
   expect(doubles.invalidate).toHaveBeenCalledTimes(status === 'aborted' ? 1 : 0);
   expect(f.execute).not.toHaveBeenCalled();
 });
@@ -531,11 +533,11 @@ it('inspects active patrol goals together without resuming or updating the conve
   expect(outcome.change?.proposal).toBeUndefined();
   expect(f.request).not.toHaveBeenCalled();
   const turn = f.execute.mock.calls[0]![0];
-  expect(JSON.parse(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
+  expect(turnData(turn.prompt)).toMatchObject({ event: { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] },
     instruction: expect.any(String) });
-  expect(turn.prompt).toBe(buildManagerEventPrompt({
+  expect(turnData(turn.prompt)).toEqual(JSON.parse(buildManagerEventPrompt({
     kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id],
-  }));
+  })));
   expect(turn).toMatchObject({ patrol: true, sessionId: undefined, recovery: { context: 'saved-goal-memory' } });
   expect(doubles.updateGoal).not.toHaveBeenCalled();
   expect(doubles.notify).not.toHaveBeenCalled();
@@ -554,7 +556,7 @@ it.each(['completed', 'failed', 'interrupted'] as const)('preserves the conversa
     : { kind: 'completed', result: { kind: status === 'failed' ? 'error' : 'reply' } });
   const turn = f.execute.mock.calls[1]![0];
   expect(turn.sessionId).toBeUndefined();
-  expect(JSON.parse(turn.prompt).event.kind).toBe('patrol');
+  expect(turnData(turn.prompt).event.kind).toBe('patrol');
   expect(turn.prompt).not.toContain('undelivered human request');
   expect(f.state().session).toEqual(before.session);
   expect(f.state().interruptedMessage).toBe('undelivered human request');
@@ -584,6 +586,25 @@ it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not
   expect(f.resolve).not.toHaveBeenCalled();
 });
 
+it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed'] as const)('includes awaiting-merge goals with %s merge work and rechecks before executing', async (status) => {
+  const f = fixture();
+  const merging = { ...goalRecord(), status: 'awaiting_merge' };
+  const waiting = { ...merging, id: randomUUID() };
+  doubles.getGoal.mockImplementation(async (id: string) => id === merging.id ? merging : waiting);
+  doubles.readTasks.mockResolvedValue([
+    { goal_id: merging.id, merge_task: true, status },
+    { goal_id: waiting.id, status: 'running' },
+  ]);
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [merging.id, waiting.id] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(doubles.readTasks).toHaveBeenCalledExactlyOnceWith('/repository');
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([merging.id]);
+  doubles.readTasks.mockResolvedValue([{ goal_id: merging.id, merge_task: true, status: 'completed' }]);
+  f.execute.mockClear();
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
 it('delivers pr_conflicting for an awaiting-merge goal to the manager', async () => {
   const f = fixture();
   const goal = { ...goalRecord(), status: 'awaiting_merge' };
@@ -595,8 +616,41 @@ it('delivers pr_conflicting for an awaiting-merge goal to the manager', async ()
   f.input.event.event = { kind: 'watch_observation', observation };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'watch_observation', observation });
   expect(f.execute.mock.calls[0]![0].patrol).toBe(false);
+});
+
+it('continues patrolling ordinary active goals while excluding awaiting-merge goals when tasks cannot be read', async () => {
+  const f = fixture();
+  const active = goalRecord();
+  const waiting = { ...active, id: randomUUID(), status: 'awaiting_merge' };
+  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : waiting);
+  doubles.readTasks.mockRejectedValue(new Error('Invalid tasks YAML'));
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, waiting.id] };
+
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event.goalIds).toEqual([active.id]);
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it('interrupts without reporting or executing when a task read fails after cancellation', async () => {
+  const f = fixture();
+  const reading = deferred<void>();
+  const tasks = deferred<never>();
+  doubles.readTasks.mockImplementation(() => { reading.resolve(); return tasks.promise; });
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] };
+
+  const outcome = f.service.execute(f.input, f.io);
+  await reading.promise;
+  f.controller.abort();
+  tasks.reject(new Error('Invalid tasks YAML'));
+
+  expect(await outcome).toMatchObject({ kind: 'interrupted' });
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(f.io.progress).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
 });
 
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
@@ -610,7 +664,7 @@ it.each([true, false])('reports unreadable goals and continues the patrol with r
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: readable ? [unreadable, active.id] : [unreadable] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
   expect(f.execute).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
     goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
   expect(doubles.notify).not.toHaveBeenCalled();
 });
@@ -737,4 +791,44 @@ it('rejects a verification proposal whose repository has left the workspace', as
   } };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_assignment' } });
   expect(f.resolve).not.toHaveBeenCalled(); expect(doubles.formalSpec).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('delivers a saved goal question and its human answer in %s', async (language) => {
+  const f = conversationFixture();
+  const questionId = randomUUID();
+  const answer = { text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const goal = { ...goalRecord(), questions: [{ id: questionId, kind: 'question' as const, recipient: 'human' as const,
+    body: 'Continue verification of X?', status: 'answered' as const, answer }] };
+  doubles.getGoal.mockResolvedValue(goal);
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  await f.run({ kind: 'inquiry_answered', repositoryDirectory: '/repository', goalId: goal.id, questionId, answer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',
+    goalId: goal.id, questionId, question: goal.questions[0]!.body, answer });
+});
+
+it('distinguishes a structured standalone answer from similar director text', async () => {
+  const f = conversationFixture();
+  const answer = { text: 'Wait on X.', source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' };
+  const inquiryAnswer = { questionId: randomUUID(), question: 'Continue X?', answer };
+  const text = 'A person answered a standalone inquiry. Wait on X.';
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text, inquiryAnswer });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...inquiryAnswer });
+  await f.run({ kind: 'director_message', directorConversationId: 'director', text });
+  expect(turnData(f.execute.mock.calls[1]![0].prompt)).toEqual({ text, origin: 'unknown', directorConversationId: 'director' });
+  expect(f.execute.mock.calls[1]![0].sessionId).toBe('session-after');
+});
+
+it.each(['ja', 'en'] as const)('delivers structured origins and treats missing origins as unknown in %s', async (language) => {
+  const f = conversationFixture();
+  f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
+  for (const origin of ['human', 'manager', undefined] as const) {
+    await f.run({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin });
+    const data = turnData(f.execute.mock.lastCall![0].prompt);
+    expect(data.event).toEqual({ kind: 'goal_resumed', goalId: goalRecord().id, repositoryDirectory: '/repository', origin: origin ?? 'unknown' });
+  }
+  for (const origin of ['human', 'director', undefined] as const) {
+    const text = 'The human says stop.';
+    await f.run({ kind: 'director_message', directorConversationId: 'director', text, origin });
+    expect(turnData(f.execute.mock.lastCall![0].prompt)).toEqual({ text, directorConversationId: 'director', origin: origin ?? 'unknown' });
+  }
 });

@@ -3,7 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSharedClone } from '../infra/task/clone.js';
+import { createSharedClone, createSharedCloneAbortable } from '../infra/task/clone.js';
+import { fetchBaseBranchIntoIsolatedClone, fetchBaseBranchIntoIsolatedCloneAbortable } from '../infra/task/clone-exec.js';
 import { materializePullRequestBase } from '../infra/task/git.js';
 
 const tempDirs: string[] = [];
@@ -156,6 +157,47 @@ function forceRewriteBase(
 }
 
 describe('shared clone generated metadata isolation', () => {
+  it.each(['sync', 'abortable'] as const)('clones a source with a commit-graph and operates independently afterward (%s)', async (mode) => {
+    const tempDir = createTempDir();
+    const sourceRepo = createSourceRepo(tempDir);
+    const clonePath = path.join(tempDir, 'graph-clone');
+    runGit(sourceRepo, ['branch', '-M', 'main']);
+    runGit(sourceRepo, ['commit-graph', 'write', '--reachable']);
+    runGit(sourceRepo, ['commit-graph', 'verify']);
+    const sourceGraph = path.join(sourceRepo, '.git', 'objects', 'info', 'commit-graph');
+    const graphBefore = fs.readFileSync(sourceGraph);
+    const options = { worktree: clonePath, taskSlug: 'graph-isolation', baseBranch: 'main' };
+
+    const result = mode === 'sync'
+      ? createSharedClone(sourceRepo, options)
+      : await createSharedCloneAbortable(sourceRepo, options);
+
+    expect(fs.readFileSync(path.join(result.path, 'README.md'), 'utf8')).toBe('initial\n');
+    expect(fs.readFileSync(sourceGraph)).toEqual(graphBefore);
+    expect(fs.existsSync(path.join(result.path, '.git', 'objects', 'info', 'alternates'))).toBe(false);
+    expect(runGit(result.path, ['config', '--local', '--get-regexp', '^core\\.']).toString())
+      .not.toMatch(/core\.commitgraph/i);
+
+    fs.writeFileSync(path.join(sourceRepo, 'fetched.txt'), 'after clone\n');
+    runGit(sourceRepo, ['add', 'fetched.txt']);
+    const tree = runGit(sourceRepo, ['write-tree']).toString().trim();
+    const nextHead = runGit(sourceRepo, ['commit-tree', tree, '-p', 'HEAD', '-m', 'after clone']).toString().trim();
+    runGit(sourceRepo, ['update-ref', 'refs/remotes/origin/main', nextHead]);
+    runGit(sourceRepo, ['commit-graph', 'write', '--reachable']);
+    if (mode === 'sync') {
+      fetchBaseBranchIntoIsolatedClone(sourceRepo, result.path, 'main');
+    } else {
+      await fetchBaseBranchIntoIsolatedCloneAbortable(sourceRepo, result.path, 'main');
+    }
+    fs.renameSync(sourceRepo, path.join(tempDir, 'moved-source'));
+
+    runGit(result.path, ['checkout', 'main']);
+    runGit(result.path, ['merge', '--ff-only', 'refs/takt/base/main']);
+    expect(runGit(result.path, ['rev-parse', 'HEAD']).toString().trim()).toBe(nextHead);
+    expect(fs.readFileSync(path.join(result.path, 'fetched.txt'), 'utf8')).toBe('after clone\n');
+    runGit(result.path, ['fsck', '--no-dangling']);
+  });
+
   it('materializes the latest custom PR base and remote head into exact isolated refs', () => {
     const fixture = createPullRequestRepoFixture();
     const result = createPullRequestClone(fixture);

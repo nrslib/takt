@@ -27,6 +27,7 @@ ja:
             notificationCount: 0
             truncated: true
             omissions:
+              specifications: {}
               objective:
                 totalBytes: 48
               questions:
@@ -61,6 +62,7 @@ ja:
             notificationCount: 0
             truncated: true
             omissions:
+              specifications: {}
               objective:
                 totalBytes: 48
               questions:
@@ -152,6 +154,7 @@ en:
             notificationCount: 0
             truncated: true
             omissions:
+              specifications: {}
               objective:
                 totalBytes: 44
               questions:
@@ -186,6 +189,7 @@ en:
             notificationCount: 0
             truncated: true
             omissions:
+              specifications: {}
               objective:
                 totalBytes: 38
               questions:

@@ -734,7 +734,7 @@ describe('manager questions, answers and notifications through production bounda
   function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve', completedOnly = false): void {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'language: en', 'branch_name_strategy: romaji', 'manager:',
-      '  auto_run: false', `  main_merge: ${mode}`,
+      '  auto_run: false', '  workflows: [safe]', `  main_merge: ${mode}`,
       ...((disabled === undefined && !completedOnly) ? [] : ['  notifications:',
         ...(disabled === undefined ? [] : [`    ${disabled}: false`]),
         ...(completedOnly ? ['    awaiting_merge: false'] : [])]),
@@ -970,7 +970,7 @@ describe('manager questions, answers and notifications through production bounda
   it('exposes the manager question and notification tools while preserving the read-only tool set', async () => {
     const added = ['takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
     const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-    expect(names).toEqual([...TAKT_MCP_MANAGER_TOOL_NAMES].sort());
+    expect(names).toEqual(TAKT_MCP_MANAGER_TOOL_NAMES.filter((name) => name !== 'takt_wait_command').sort());
     expect(names).toEqual(expect.arrayContaining(added));
     const server = createTaktMcpServer({}, { toolSet: 'read-only', allowedProjectRoot: cwd });
     const reader = new Client({ name: 'question-read-only-test', version: '1.0.0' });
@@ -1253,7 +1253,7 @@ describe('manager questions, answers and notifications through production bounda
     const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
     const project = basename(cwd);
     const status = [getLabel('manager.assignmentHeading', 'en', { name: project }),
-      getLabel('manager.counts', 'en', { goals: '1', questions: '0' })].join(' | ');
+      getLabel('manager.counts', 'en', { goals: '1', awaiting: '0', questions: '0' })].join(' | ');
     const customHeading = getLabel('manager.notificationHeadings.custom', 'en', { project });
     const blockedHeading = getLabel('manager.notificationHeadings.blocked', 'en', { project });
     const goalLine = getLabel('manager.notificationGoal', 'en', { objective: goalRecord().objective, id: goalId.slice(0, 8) });

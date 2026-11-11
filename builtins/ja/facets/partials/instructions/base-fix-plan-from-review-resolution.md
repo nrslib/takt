@@ -8,6 +8,8 @@
 {report:review-resolution.md}
 
 履歴は、現在採用されている問題について以前の修正方針で不足していた前提を特定する場合だけ参照してください。過去のレポートから修正対象を追加または再開しないでください。
+各採用問題に対応する修正履歴がある場合に限り、review-resolution.md の当該問題の修正の経過と、そこに示された計画・修正・検証の固定版を読んでください。方式の比較では、元の要求・受入条件が定める条件と、以前の実装が持ち込んだ前提を分けて計画に記録してください。
+
 {{include:instructions/review-report-history}}
 
 {{include:instructions/fix-plan-common}}

@@ -20,6 +20,7 @@ edit: false
 persona: planner
 policy:
   - process-deviation
+  - repair-strategy
   - contract-change
   - $param: plan_policy
 knowledge:

@@ -318,6 +318,10 @@ test('finished tasks require an explicit completion time and preserve it in save
 test('task completion, integration records and new pause-case run evidence follow execution order', () => {
   for (const { case: caseId, lang, fixture } of fixtures) {
     if (fixture.turn !== 'event') continue;
+    if (caseId === 'self-record-not-human-stop') {
+      const stopRecord = fixture.additionalGoals[0].workLog[0];
+      assert.ok(Date.parse(stopRecord.recordedAt) < Date.parse(fixture.event.createdAt), `${caseId}/${lang}: self-record must precede the next event`);
+    }
     for (const task of fixture.tasks) {
       const label = `${caseId}/${lang}/${task.name}`;
       if (task.startedAt !== undefined) assert.ok(Date.parse(task.createdAt) <= Date.parse(task.startedAt), label);
@@ -391,7 +395,7 @@ function cloneWorkingLocations(cwd, fixture, source) {
   }
 }
 
-test('patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
+test('running patrol fixtures support real run retrieval and all accepted live instructions from valid clones', async () => {
   const root = mkdtempSync(join(tmpdir(), 'takt-manager-tell-contract-'));
   const required = new Set(['local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'verification-once', 'verification-mixed', 'unrelated-history-repair']);
@@ -408,6 +412,7 @@ test('patrol fixtures support real run retrieval and all accepted live instructi
       if (fixture.event?.kind !== 'patrol') continue;
       const cwd = join(root, caseId, lang);
       const task = fixture.tasks.find(({ status }) => status === 'running');
+      if (task === undefined) continue;
       assert.equal(task.worktree, true);
       cloneWorkingLocations(cwd, fixture, source);
       const records = saveTasks(cwd, fixture);
@@ -532,4 +537,12 @@ test('pause fixtures, including before-start interruptions, and first failures a
     invalidateAllResolvedConfigCache();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('normalizing saved state reads preserves a single tasks artifact across replay input kinds', () => {
+  const fixture = fixtures.find(({ case: caseId, lang }) => caseId === 'human-quotes-review-stop' && lang === 'ja').fixture;
+  const first = managerStateReads(fixture);
+  const second = managerStateReads({ ...fixture, readResults: first });
+  assert.deepEqual(second, first);
+  assert.equal(second.filter(({ tool, arguments: args }) => tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`).length, 1);
 });

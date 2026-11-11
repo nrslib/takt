@@ -1,3 +1,6 @@
+import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
+import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
+import { jsonResult } from './response.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -40,6 +43,13 @@ import {
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
+import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
+import { withConfigSnapshot } from '../../infra/config/configSnapshot.js';
+import { loadProjectConfig, loadProjectConfigTraceState } from '../../infra/config/project/projectConfig.js';
+import { invalidateGlobalConfigCache, loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
+import { loadGlobalConfigTraceState } from '../../infra/config/global/globalConfigCore.js';
 import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
@@ -89,7 +99,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
   'takt_remove_goal_task',
-  'takt_stop_goal_task',
+  'takt_stop_goal_task', 'takt_wait_command',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
   'takt_merge_goal_pr',
@@ -104,6 +114,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
 import type { TurnToolScope } from '../daemonTurn/toolScope.js';
 
 export interface TaktMcpServerOptions {
+  requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   turnScope?: TurnToolScope;
   managerAssignment?: ManagerAssignmentIdentity;
   allowedProjectRoot?: string;
@@ -130,6 +141,14 @@ export function createTaktMcpServer(
   options: TaktMcpServerOptions = {},
 ): McpServer {
   const operationDeps = buildMcpOperationDependencies(deps, options);
+  const withWorkflowConfig = <T>(cwd: string, action: () => T): T => {
+    invalidateGlobalConfigCache();
+    const snapshot = {
+      projectDir: cwd, project: loadProjectConfig(cwd), global: loadGlobalConfig(),
+      projectTrace: loadProjectConfigTraceState(cwd), globalTrace: loadGlobalConfigTraceState(),
+    };
+    return withConfigSnapshot(snapshot, action);
+  };
   const globalConfigDirectory = getGlobalConfigDir();
   let managerIdentity: ManagerAssignmentIdentity = options.managerAssignment ?? { kind: 'repository', repositoryDirectory: operationDeps.allowedProjectRoot! };
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
@@ -138,7 +157,7 @@ export function createTaktMcpServer(
   const withTurn = (action: () => Promise<CallToolResult>): Promise<CallToolResult> => options.turnScope === undefined
     ? action() : options.turnScope.run(action);
   const turnSignal = (signal: AbortSignal): AbortSignal => options.turnScope === undefined ? signal : options.turnScope.signal(signal);
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, configScope?: 'workflow'): Promise<CallToolResult> => {
     try { return await withTurn(async () => {
       const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
       const currentDeps = assignment !== undefined
@@ -146,13 +165,23 @@ export function createTaktMcpServer(
         : operationDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
-      try { return await action(currentDeps, assignment); }
-      finally {
-        if (launchAfterOperation && operationDeps.readOnly !== true) {
-          const { ensureManagerRun } = await import('../manager/autoRun.js');
-          await ensureManagerRun(projectCwd);
+      const useWorkflowConfig = configScope === 'workflow' && options.toolSet === 'manager';
+      const execute = async (): Promise<CallToolResult> => {
+        try {
+          const deps = useWorkflowConfig ? {
+            ...currentDeps,
+            managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,
+          } : currentDeps;
+          return await action(deps, assignment);
         }
-      }
+        finally {
+          if (launchAfterOperation && operationDeps.readOnly !== true) {
+            const { ensureManagerRun } = await import('../manager/autoRun.js');
+            await ensureManagerRun(projectCwd);
+          }
+        }
+      };
+      return useWorkflowConfig ? withWorkflowConfig(projectCwd, execute) : execute();
     }); } catch (error) { return errorResult(errorContext, error); }
   };
   const server = new McpServer({
@@ -167,6 +196,19 @@ export function createTaktMcpServer(
     catch (error) { return errorResult('Workspace operation failed', error); }
   };
   const workspaceRetrieval = 'Responses fit 64 KiB, with explicit truncation. Managers can read the current workspace with takt_list_tasks view workspace and offset/limit (1-50), or path name or repositoryDirectories.N (saved index) and textOffset/maxBytes for text. cwd must be absolute and does not select the workspace.';
+  const requestDaemon = options.requestDaemon;
+  if (options.toolSet === 'manager' && requestDaemon !== undefined) {
+    server.registerTool('takt_wait_command', {
+      title: 'Wait for an external state change',
+      description: 'Register a one-line shell command that waits, such as gh run watch --exit-status or gh pr checks --watch. Use only waiting commands; do not use state-changing operations. The daemon runs it directly without auto AI permission review. Returns a registration id immediately; completion arrives as a wait_command_completed event, so you may end the turn after registering. cwd must be an absolute directory inside an assigned repository. Optional goalId must belong to that repository and be active; pausing or aborting it stops the command. timeoutSeconds defaults to 3600 and is at most 86400. Completion includes status, exit code, duration and the last 16 KiB of combined stdout/stderr. The daemon allows 32 running or awaiting-delivery registrations in total; at capacity, registration fails until completion delivery frees a slot. Daemon shutdown stops requests and their child processes and, when possible, delivers a cancelled completion event to the requesting conversation. Registrations are not rerun on restart. Check state during startup patrol and register again if needed.',
+      inputSchema: WaitCommandInputSchema,
+    }, (input) => operation(input.cwd, 'Wait command registration failed', async () => {
+      const reply = await requestDaemon({ kind: 'wait_command', ...input });
+      if (reply.kind === 'error') throw new Error(reply.message);
+      if (reply.kind !== 'wait_command_registered') throw new Error('Unexpected wait command reply');
+      return jsonResult({ id: reply.id });
+    }, false));
+  }
   if (options.toolSet === 'manager') {
     const connection = options.goalExecutionConnection;
     if (connection !== undefined) {
@@ -215,7 +257,7 @@ export function createTaktMcpServer(
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
-  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps)));
+  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, 'workflow'));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',
     description: 'Choose a candidate with takt_list_workflows, then read its steps here to confirm what the task will do. Accepts a workflow name, scope reference or path. Returns description, step names, descriptions, kinds, wait, system_inputs, effects, rules and resolved workflow_call targets. Follow a target with its getInput to preserve parent context and arguments. Responses fit 64 KiB, with explicit truncation; use offset/limit for steps.',
@@ -273,7 +315,7 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained. Workflow names, scope references and paths are accepted. autoPr and shouldPublishBranchToOrigin default to false and may be specified on submission. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false, 'workflow'));
     server.registerTool('takt_requeue_goal_task', {
       title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
       inputSchema: requeueGoalTaskInputSchema,
@@ -297,7 +339,7 @@ export function createTaktMcpServer(
       inputSchema: removeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task removal failed', (deps) => removeTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_complete_goal', {
-      title: 'Complete a reviewed goal', description: 'Publish the reviewed goal SHA and acceptance evidence as a PR to the saved target branch for both approve and auto; provide humanChecks. Finish the PR with takt_merge_goal_pr. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Complete a reviewed goal', description: 'Publish the reviewed goal SHA and acceptance evidence as a PR to the saved target branch for both approve and auto; provide humanChecks. For awaiting_merge without a saved PR, retry the same expectedSha to reuse saved evidence and humanChecks; supply humanChecks only if it was not saved. If the goal branch tip has advanced, review the new tip again and resubmit with new expectedSha, summary, and humanChecks. To correct evidence already included in the target, call takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip; without corrections use takt_check_goal_completion. For evidence not yet included, use takt_reopen_goal with a reason before resubmitting. Update existing PR text separately. Finish the PR with takt_merge_goal_pr. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: completeGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
@@ -306,7 +348,7 @@ export function createTaktMcpServer(
       inputSchema: mergeGoalPrInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {
-      title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target; use takt_check_goal_completion for an included SHA. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
+      title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target. To correct evidence for an included SHA while awaiting_merge, call takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal reopen failed', (deps) => reopenTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_check_goal_completion', {

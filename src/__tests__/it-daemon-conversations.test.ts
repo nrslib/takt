@@ -96,7 +96,7 @@ it('executes provider calls in a conversation child and saves its result in the 
   } finally { await fixture.cleanup(); }
 });
 
-it.each(['ja', 'en'] as const)('displays transient thinking and tool activity from the real turn child (%s)', async (lang) => {
+it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the real turn child without replaying or saving text (%s)', async (lang) => {
   const fixture = managerDaemonFixture(lang, ['Activity completed'], true);
   try {
     const tui = await fixture.start(fixture.repository, undefined);
@@ -104,12 +104,18 @@ it.each(['ja', 'en'] as const)('displays transient thinking and tool activity fr
     await submitManagerText(tui, 'Show current activity');
     await waitForManager(tui, getLabel('tui.ui.extendedThinking', lang));
     fixture.useTool();
-    await waitForManager(tui, 'ActivityToolUnique');
+    await waitForManager(tui, '見回りの予定のコードを読む');
+    const beforeReconnect = await tui.frame();
+    expect(beforeReconnect).toContain('コードを読んでいるところです。');
+    expect(beforeReconnect.indexOf('コードを読んでいるところです。')).toBeLessThan(beforeReconnect.indexOf('見回りの予定のコードを読む'));
     expect(await tui.frame()).not.toContain('private-');
     await tui.exit();
     const reconnected = await fixture.start(fixture.repository, undefined);
-    await waitForManager(reconnected, 'ActivityToolUnique');
-    expect(await reconnected.frame()).not.toContain('private-');
+    await waitForManager(reconnected, '見回りの予定のコードを読む');
+    const during = await reconnected.frame();
+    expect(during).not.toContain('private-');
+    expect(during).not.toContain('コードを読んでいるところです。');
+    expect(during.split('\n').find((row) => row.includes('見回りの予定のコードを読む'))).toMatch(/\b\d+(?:m\d{2})?s\b/u);
     const owner = (await readDaemonOwner(fixture.directory))!;
     const calls = fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
     expect(calls).toHaveLength(1);
@@ -119,11 +125,13 @@ it.each(['ja', 'en'] as const)('displays transient thinking and tool activity fr
     await waitForManager(reconnected, 'Activity completed');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 10000 });
     const frame = await reconnected.frame();
-    expect(frame).not.toContain('ActivityToolUnique');
+    expect(frame).not.toContain('見回りの予定のコードを読む');
+    expect(frame).not.toContain('調べがつきました。');
+    expect(frame.split('Activity completed')).toHaveLength(2);
     expect(frame).not.toContain(getLabel('tui.ui.extendedThinking', lang));
     expect(frame).not.toContain('private-');
     const saved = JSON.stringify(await fixture.state());
-    expect(saved).not.toContain('ActivityToolUnique');
+    for (const transient of ['見回りの予定のコードを読む', 'コードを読んでいるところです。', '調べがつきました。']) expect(saved).not.toContain(transient);
     expect(saved).not.toContain('private-');
     await reconnected.exit();
   } finally { fixture.release(); await fixture.cleanup(); }
@@ -420,7 +428,7 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
   const expectProposalFrame = (frame: string, updated: boolean): void => {
     const rows = stripVTControlCharacters(frame).split('\n');
     const heading = getLabel('manager.assignmentHeading', language, { name: basename(fixture.repository) });
-    const status = [heading, getLabel('manager.counts', language, { goals: '0', questions: '0' })].join(' | ');
+    const status = [heading, getLabel('manager.counts', language, { goals: '0', awaiting: '0', questions: '0' })].join(' | ');
     expect(rows.filter((row) => row.trim() === status)).toHaveLength(1);
     expect(rows.filter((row) => row.trim() !== '').at(-1)?.trim()).toBe(status);
     const confirmation = getLabel('manager.summary.confirmation', language);
@@ -585,7 +593,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) }), { timeout: 30000 });
     const operationId = (await fixture.state())!.turn!.operationId;
     await tui.ready(operationId);
-    await waitForManager(tui, 'Working');
+    await waitForManager(tui, getLabel('tui.ui.thinking', 'en'));
     tui.key('\x1b[27u');
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'request', pid: tui.child.pid, command: 'abort_turn', operationId,

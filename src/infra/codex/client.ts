@@ -29,10 +29,7 @@ import {
   AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
-import {
-  mapToCodexSandboxMode,
-  CodexCallOptions,
-} from './types.js';
+import type { CodexCallOptions } from './types.js';
 import { buildCodexSessionConfig } from './session-config.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from './mcp-isolation.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
@@ -339,28 +336,6 @@ export class CodexClient {
   private async callWithSdk(
     agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex'],
   ): Promise<AgentResponse> {
-    const readOnlyStep = options.executionPhase === 1 && options.edit === false;
-    const threadOptions = {
-      ...(options.model ? { model: options.model } : {}),
-      workingDirectory: options.cwd,
-      skipGitRepoCheck: true,
-      ...(options.permissionControl === 'codex' && options.executionPhase !== 2
-          && !readOnlyStep
-        ? {}
-        : {
-            sandboxMode: readOnlyStep || options.executionPhase === 2 || options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
-              ? mapToCodexSandboxMode(options.permissionMode)
-              : 'workspace-write' as const,
-            ...(options.mcpOnlySideEffects
-              ? { networkAccessEnabled: false, webSearchMode: 'disabled' as const }
-              : options.networkAccess === undefined
-              ? {}
-              : { networkAccessEnabled: options.networkAccess }),
-          }),
-      // TAKT runs Codex non-interactively — there is no human to approve escalations.
-      // Force `never` so Codex cannot wait for an approval that no caller can provide.
-      approvalPolicy: 'never' as const,
-    };
     let threadId = options.sessionId;
 
     const fullPrompt = options.systemPrompt
@@ -397,6 +372,12 @@ export class CodexClient {
       return errorResponse;
     }
     const { config: codexConfig, env: codexEnvironment } = sessionConfig;
+    const threadOptions = {
+      ...(options.model ? { model: options.model } : {}),
+      workingDirectory: options.cwd,
+      skipGitRepoCheck: true,
+      ...sessionConfig.permissionThreadOptions,
+    };
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
     try {

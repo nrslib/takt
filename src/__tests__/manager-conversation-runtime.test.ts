@@ -39,16 +39,31 @@ it('passes the current attachment provider and model overrides to plan resolutio
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it.each(['model', 'prompt', 'mcp', 'language'] as const)('replaces setup and invalidates its context key when %s changes', async (change) => {
+it.each(['model', 'prompt', 'mcp', 'language', 'permission'] as const)('replaces setup and invalidates its context key when %s changes', async (change) => {
   const first = await runtime.resolve(assignment, signal);
   if (change === 'model') plan.ctx.model = 'model-B';
   if (change === 'prompt') plan.strategy.systemPrompt = 'manager-B';
   if (change === 'mcp') plan.ctx.mcpServers = { extra: { command: 'node', args: ['server.js'] } };
   if (change === 'language') plan.ctx.lang = 'ja';
+  if (change === 'permission') plan.ctx.aiReviewPermissions = true;
   const second = await runtime.resolve(assignment, signal);
   expect(second.contextKey).not.toBe(first.contextKey); expect(second.executor).not.toBe(first.executor);
   expect(doubles.dispose).toHaveBeenCalledOnce();
   expect(doubles.dispose.mock.invocationCallOrder[0]).toBeLessThan(doubles.connect.mock.invocationCallOrder[1]!);
+});
+
+it.each([true, false])('passes resolved AI permission review to preflight (%s)', async (aiReviewPermissions) => {
+  plan.ctx.aiReviewPermissions = aiReviewPermissions;
+  await runtime.resolve(assignment, signal);
+  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'full', aiReviewPermissions }));
+});
+
+it.each([
+  { repositories: ['/first', '/second'], cwd: '/first' },
+  { repositories: [], cwd: '/config/workspaces/workspace-1' },
+])('uses the workspace manager cwd for configuration: %j', async ({ repositories, cwd }) => {
+  await runtime.resolve({ kind: 'workspace', workspaceId: 'workspace-1', name: 'workspace', repositoryDirectories: repositories }, signal);
+  expect(doubles.plan).toHaveBeenCalledWith(cwd, { repositoryDirectories: repositories });
 });
 
 it('disposes MCP after failed preflight and permits another preparation', async () => {
@@ -86,4 +101,26 @@ it.each([false, true])('keeps the tool scope and patrol metadata active only dur
   gate.resolve(); await execution;
   expect(conversationTurn()).toBeUndefined();
   await expect(turnScope.run(async () => 'outside')).rejects.toThrow();
+});
+
+it('routes MCP requests to the current turn and releases the request route when the turn ends', async () => {
+  const prepared = await runtime.resolve(assignment, signal);
+  const { requestDaemon } = doubles.connect.mock.calls[0]![3] as {
+    requestDaemon: NonNullable<import('../features/manager/turnExecutor.js').ManagerTurnInput['requestDaemon']>;
+  };
+  const request = { kind: 'wait_command' as const, command: 'gh run watch 1 --exit-status',
+    description: 'CI', cwd: '/repository', timeoutSeconds: 3600 };
+  expect(() => requestDaemon(request)).toThrow();
+  const first = vi.fn().mockResolvedValue({ kind: 'wait_command_registered', id: 'first' });
+  const second = vi.fn().mockResolvedValue({ kind: 'wait_command_registered', id: 'second' });
+  doubles.execute.mockImplementation(async () => {
+    await requestDaemon(request);
+    return { message: 'registered', summary: null };
+  });
+  for (const route of [first, second]) {
+    await prepared.executor.execute({ prompt: 'wait', sessionId: undefined, assignment: undefined,
+      abortSignal: signal, requestDaemon: route });
+    expect(route).toHaveBeenCalledExactlyOnceWith(request);
+    expect(() => requestDaemon(request)).toThrow();
+  }
 });

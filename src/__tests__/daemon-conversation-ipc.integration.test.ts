@@ -7,6 +7,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { Client } from './helpers/conversation-ipc-client.js';
 import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
 import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { humanTurnText } from './helpers/daemon-turn.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { isConversationIpcReady } from '../features/daemon/conversationReadiness.js';
 import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../features/daemon/conversationFrames.js';
@@ -140,6 +141,92 @@ it('finishes each output transfer before newer state on both attachments', async
       expect(observer.output.mock.calls.filter(([output]) => output.kind === 'notice').map(([output]) => output)).toEqual([notice]);
     }
   } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
+});
+
+it.each([false, true])('keeps queued text ordered and suppresses it after interruption while the socket writer is blocked: %s', async (interrupted) => {
+  const connection = await authenticated();
+  const open = await opened(connection);
+  await connection.items(open.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let blocked = false;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string } };
+    if (!blocked && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      blocked = true; await gate;
+    }
+    await write(socket, value);
+  });
+  const operationId = '11111111-1111-4111-8111-111111111111';
+  const version = { revision: connection.latestState()!.revision, stateSequence: 10, operationId };
+  const controller = new AbortController();
+  const sending = service.deliver(selected.conversationId, { kind: 'notice', id: 'blocked', message: 'notice' }, { ...version, operationId: null });
+  const pending: Promise<void>[] = [sending];
+  try {
+    await vi.waitFor(() => expect(blocked).toBe(true));
+    for (const [index, message] of ['first', 'second'].entries()) pending.push(service.deliver(selected.conversationId,
+      { kind: 'turn_text', operationId, generation: 1, message }, { ...version, stateSequence: 11 + index }, controller.signal));
+    pending.push(service.deliver(selected.conversationId, { kind: 'result', operationId,
+      result: { kind: 'reply', message: 'final' } }, { ...version, stateSequence: 13 }));
+    if (interrupted) controller.abort();
+    resume(); await Promise.all(pending);
+    const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+    await vi.waitFor(() => {
+      observer.output.mockClear();
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      for (const frame of connection.frames) if (frame.type === 'event') receiver.receive(frame);
+      expect(observer.output).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'result' }), expect.anything());
+    });
+    expect(observer.output.mock.calls.flatMap(([output]) => output.kind === 'turn_text' ? [output.message] : []))
+      .toEqual(interrupted ? [] : ['first', 'second']);
+  } finally { resume(); await Promise.all(pending); writing.mockRestore(); }
+});
+
+it('reports an interrupted started text transfer and still delivers the terminal result', async () => {
+  const connection = await authenticated();
+  const open = await opened(connection);
+  await connection.items(open.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const write = conversationFrames.writeConversationFrame;
+  let startedTransferId: string | undefined;
+  let blocked = false;
+  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
+    const frame = value as { output?: { kind: string; purpose?: string; transferId: string } };
+    if (frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') startedTransferId = frame.output.transferId;
+    if (!blocked && frame.output?.kind === 'transfer_data' && frame.output.transferId === startedTransferId) {
+      blocked = true;
+      await gate;
+    }
+    await write(socket, value);
+  });
+  const operationId = '11111111-1111-4111-8111-111111111111';
+  const version = { revision: connection.latestState()!.revision, stateSequence: 10, operationId };
+  const controller = new AbortController();
+  const sendingText = service.deliver(selected.conversationId,
+    { kind: 'turn_text', operationId, generation: 1, message: 'intermediate text' }, version, controller.signal);
+  try {
+    await vi.waitFor(() => expect(blocked).toBe(true));
+    const transferId = startedTransferId!;
+    await vi.waitFor(() => expect(connection.frames.some(({ output }) => output?.kind === 'transfer_start'
+      && output.transferId === transferId)).toBe(true));
+    const result = { kind: 'result' as const, operationId, result: { kind: 'reply' as const, message: 'final' } };
+    const sendingResult = service.deliver(selected.conversationId, result, { ...version, stateSequence: 11 });
+    controller.abort();
+    resume();
+    await sendingText;
+    await sendingResult;
+    await vi.waitFor(() => expect(connection.frames.some(({ output }) => output?.kind === 'transfer_error'
+      && output.transferId === transferId)).toBe(true));
+    const textFrames = connection.frames.filter(({ output }) => output?.transferId === transferId).map(({ output }) => output?.kind);
+    expect(textFrames).toEqual(['transfer_start', 'transfer_data', 'transfer_error']);
+    expect(connection.frames.some(({ output }) => output?.kind === 'transfer_end' && output.transferId === transferId)).toBe(false);
+    const resultTransferId = connection.frames.filter(({ output }) => output?.kind === 'transfer_start'
+      && output.purpose === 'output' && output.transferId !== transferId).at(-1)?.output?.transferId;
+    expect(resultTransferId).toBeDefined();
+    expect(await connection.items(resultTransferId!)).toEqual([result]);
+  } finally { resume(); await Promise.allSettled([sendingText]); writing.mockRestore(); }
 });
 
 it.each(['notice', 'activity'] as const)('coalesces activity per connection while a slow TUI %s write is blocked without disconnecting it', async (kind) => {
@@ -456,7 +543,7 @@ it('closes an unauthenticated submit without side effects and preserves the auth
     expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: 'reply' } });
   });
   expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe(params.command.text);
+  expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(params.command.text);
   await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
   expect(service.attachmentCount).toBe(1);
@@ -500,7 +587,7 @@ it.each([7, 9])('transfers all %i large goals in directory order without the arr
     const value = await authenticated(); const result = await opened(value);
     const items = (await value.items(result.read.transferId)) as Array<{ kind: string; goal: unknown }>;
     expect(items.filter(({ kind }) => kind === 'goal').map(({ goal }) => goal)).toEqual(goals.map((goal) => ({ id: goal.id,
-      objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, repositoryDirectory: repository })));
+      objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository })));
     expect(list).not.toHaveBeenCalled();
     expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
   } finally { list.mockRestore(); }
@@ -552,7 +639,7 @@ it('queues a simultaneous message and completes both operations after both clien
   expect(input!.abortSignal.aborted).toBe(false); expect(fixture.activeOperationCount).toBe(1);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(['accepted', 'queued']);
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
   expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
   const saved = (await new ConversationStateStore(directory).read(selected.conversationId))?.record;
@@ -616,10 +703,10 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
     for (const [index, id] of requestIds.slice(1).entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
     expect(value.socket.destroyed).toBe(false);
     expect(written).toHaveBeenCalledTimes(count);
-    expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
+    expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(requestIds[0]);
     release!(); await fixture.settled();
     expect(fixture.activeOperationCount).toBe(0);
-    expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual(requestIds);
+    expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual(requestIds);
     expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })).sort((a, b) => requestIds.indexOf(a.id) - requestIds.indexOf(b.id)))
       .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
@@ -642,10 +729,10 @@ it('accepts a complete message spanning input batches and queues concurrent mess
   for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
   await fixture.executing(1);
     expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe(text);
+  expect(humanTurnText(execute.mock.calls[0]![0].prompt)).toBe(text);
   release!(); await fixture.settled();
   expect(fixture.activeOperationCount).toBe(0);
-  expect(execute.mock.calls.map(([input]) => input.prompt)).toEqual([text, 'second', 'third']);
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
 
@@ -675,7 +762,7 @@ it('reports a failed display read as incomplete and permits a complete refresh a
   saveGoal(goal);
   const repaired = (await value.request('snapshot', { attachmentId: first.attachmentId })).result!;
   expect((await value.items(repaired.read.transferId))).toContainEqual({ kind: 'goal', goal: {
-    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, repositoryDirectory: repository,
+    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository,
   } });
   expect(service.attachmentCount).toBe(1);
 });
@@ -709,7 +796,7 @@ it('stops pulling display payloads under real socket backpressure and closes the
         await gate;
         for (let index = 0; index < 256; index++) {
           pulled++;
-          yield { kind: 'goal' as const, goal: { ...goalRecord(), objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
+          yield { kind: 'goal' as const, goal: { ...goalRecord(), awaitingHumanMerge: false, objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
         }
       } finally { closed++; await iterator.return?.(); }
     })();

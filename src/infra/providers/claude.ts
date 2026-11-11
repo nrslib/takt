@@ -39,6 +39,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     skillsEnabled,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
+    aiReviewPermissions: options.aiReviewPermissions,
     onStream: options.onStream,
     onActivity: options.onActivity,
     onPermissionRequest: options.onPermissionRequest,

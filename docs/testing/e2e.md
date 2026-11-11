@@ -329,7 +329,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Model override（`e2e/specs/model-override.e2e.ts`）
   - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
 - Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
-  - 目的: 不正引数・存在しない workflow・不正 YAML など代表エラーケースを確認。
+  - 目的: workflow パスの欠落、不正 YAML、`--pipeline` の入力不足を確認。廃止済み `--create-worktree` の拒否は `e2e/specs/worktree.e2e.ts` で確認する。
 - Quiet mode（`e2e/specs/quiet-mode.e2e.ts`）
   - 目的: `--quiet` でAIストリーム出力が抑制されることを確認。
 - Catalog command（`e2e/specs/cli-catalog.e2e.ts`）
@@ -340,8 +340,8 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 削除済みの `takt switch` が unknown command になることを確認。
 - Clear sessions command（`e2e/specs/cli-clear.e2e.ts`）
   - 目的: `takt clear` でセッション情報が削除されることを確認。
-- Help command（`e2e/specs/cli-help.e2e.ts`）
-  - 目的: `takt --help` と `takt run --help` / `takt watch --help` の表示内容に加え、`--ignore-exceed` が `run` と `watch` の両方に表示されることを確認。
+- CLI バージョンと端末要件（`e2e/specs/cli-help.e2e.ts`）
+  - 目的: `--version` がパッケージのバージョンと一致すること、および端末のない `make` が成果物を作成せず拒否されることを確認。
 - Eject builtin workflows（`e2e/specs/eject.e2e.ts`）
   - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別eject、不正なfacet type（prototype由来名・改行/C1制御文字）の安全なstderr出力を確認。
 - Workflow authoring CLI（`e2e/specs/cli-workflow-authoring.e2e.ts`）

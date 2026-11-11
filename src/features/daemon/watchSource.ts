@@ -11,7 +11,7 @@ import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
 import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
-import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks } from './watchers/state.js';
+import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type WatchTask } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
@@ -20,20 +20,20 @@ import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
+import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
-  private readonly goalReader = new WatchGoalReader();
-
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations,
-    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>) {}
+    private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
+    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {}
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -105,8 +105,12 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async patrolGoalIds(repositoryDirectory: string): Promise<readonly string[]> {
     const ids: string[] = [];
+    // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
+    let tasks: readonly WatchTask[] = [];
+    try { tasks = await readWatchTasks(repositoryDirectory); }
+    catch (error) { this.onError(error); }
     for await (const goal of readWatchGoals(repositoryDirectory, this.onError, this.goalReader)) {
-      if (goal.executionStatus === 'active' && goal.status !== 'completed' && goal.status !== 'awaiting_merge') ids.push(goal.id);
+      if (isGoalPatrolCandidate(goal, tasks)) ids.push(goal.id);
     }
     return ids;
   }

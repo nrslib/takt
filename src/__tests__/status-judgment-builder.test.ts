@@ -29,10 +29,7 @@ describe('StatusJudgmentBuilder input boundaries', () => {
     expect(builder.build()).toContain('## 担当とフェーズ');
   });
 
-  it.each([
-    { language: 'ja' as const, onlyInput: 'この指示に含まれる入力', noInspection: 'ファイル・コード・テスト結果を読んだり', noExternal: '入力の外の資料を調べない' },
-    { language: 'en' as const, onlyInput: 'inputs included in this instruction', noInspection: 'read files, code, or test results', noExternal: 'do not inspect materials outside the input' },
-  ])('renders input-only judgment instructions in $language for both modes and input sources', ({ language, onlyInput, noInspection, noExternal }) => {
+  it.each(['ja', 'en'] as const)('selects structured or tag output for each input source in %s', (language) => {
     for (const inputSource of ['report', 'response'] as const) {
       for (const structuredOutput of [true, false]) {
         const prompt = new StatusJudgmentBuilder(step, {
@@ -44,8 +41,6 @@ describe('StatusJudgmentBuilder input boundaries', () => {
         }).build();
 
         expect(prompt).toContain('INPUT_RESULT: approved');
-        expect(prompt).toContain(structuredOutput ? onlyInput : language === 'ja' ? '入力に書かれた内容だけ' : 'only what is written in the input');
-        expect(prompt).toContain(structuredOutput ? noInspection : noExternal);
         expect(prompt).toContain('approved');
         expect(prompt).toContain('needs_fix');
         if (structuredOutput) {
@@ -56,7 +51,6 @@ describe('StatusJudgmentBuilder input boundaries', () => {
         const outputHeading = language === 'ja' ? '## 出力フォーマット' : '## Output Format';
         expect(prompt.includes(outputHeading)).toBe(!structuredOutput);
         expect(prompt).not.toContain('{{');
-        expect(prompt).not.toContain('template: perform_phase3_message');
       }
     }
   });

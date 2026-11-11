@@ -499,6 +499,59 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `until: prepare` は `merge-prepare` を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
 
+## manager がタスクに使う workflow
+
+グローバルの `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` の `manager.workflows` で、新しい開発タスクに使える workflow を指定します。project の値は global の一覧全体を置き換えます。各要素は名前の文字列か、`{ 名前: 使い分けの説明 }` の1対だけを持つオブジェクトです。`workflow_categories.workflows` と同じ記法です。
+
+```yaml
+manager:
+  workflows:
+    - default: 普通の機能追加や不具合の修正。計画からレビューまで一通り行う
+    - simple: 1〜2 ファイルで済む小さな修正。軽い流れで進める
+    - takt-default
+  default_workflow: default
+```
+
+両方で省略した場合は `default` と `simple` が既定となり、上記の使い分けの説明を `language` に合わせて日本語または英語で返します。名前だけを明示した要素には説明を補いません。`manager.default_workflow` は一覧になくても選べます。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
+
+manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.workflow` / `merge-prepare`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
+
+## manager のツール権限
+
+プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` に設定します。
+
+```yaml
+manager:
+  permission: full
+  provider_permissions:
+    claude: auto
+```
+
+`manager.permission` は `auto`（既定）または `full` を指定します。
+`manager.provider_permissions` はプロバイダ名から同じ値への対応表で、既定は空です。
+この例では Claude だけ AI による権限審査を使い、他は全権限で実行します。
+
+解決順は project の該当プロバイダ設定 → global の該当プロバイダ設定 → project の
+`permission` → global の `permission` → `auto` です。manager のターンで実際に解決された
+プロバイダ名を使います。`claude` と `claude-sdk` は同一視し、同じ階層に両方あれば実際の
+プロバイダ名と一致するキーを優先します。リポジトリ担当はそのリポジトリの設定を使います。
+workspace 担当は登録済みリポジトリの先頭、未登録なら workspace 専用ディレクトリの設定を
+使い、`auto_run` など既存の manager 設定と同じ規則で解決します。
+
+- **Claude（`claude` / `claude-sdk`）**: `auto` は SDK の `permissionMode: auto` を使い、
+  権限チェックを迂回しません。分類器がツール呼び出しを許可・拒否します。
+  `full` は従来どおり `bypassPermissions` です。
+- **Codex**: `auto` は `workspace-write`、`approvalPolicy: on-request`、
+  `approvals_reviewer = "auto_review"` を使います。`gh` などのためネットワークを有効にし、
+  権限拡張の要求を AI が審査します。人がいない実行でも承認できます。
+  `full` は従来どおり `danger-full-access` と `approvalPolicy: never` です。
+- **その他のプロバイダ**: この AI 審査の仕組みがないため、`auto` も `full` と同じ動作です。
+
+manager の MCP ツールは既存の承認許可リストを維持し、どちらのモードでも確認なしで使えます。
+AI 審査が拒否した操作は、ツール結果として manager に返ります。TAKT が拒否から人への質問を
+機械的に作ることはありません。対象は manager のターンだけで、workflow の step や run の
+権限は変更しません。
+
 ## Slack で manager と会話する
 
 会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録する」または「登録せずに会話に戻る」で操作でき、古い版のボタンは使えません。
@@ -1627,6 +1680,8 @@ provider_options:
     network_access: true
 ```
 
+TAKT が権限を管理する Phase 1 では、書き込みを禁止したまま通信を許可できます。`edit: false` の step と `permission_mode: readonly` に解決された呼び出しが対象です。`permission_control: codex` では Codex 側で通信を設定してください。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は常に `read-only` sandbox を使い、`network_access: true` でも通信を禁止します。
+
 OpenCode はネイティブのサンドボックスを持ちません。TAKT は `webfetch` / `websearch` ツールの権限を抽象化レイヤーで制御し、同じキーで設定できます。
 
 ```yaml
@@ -1664,7 +1719,16 @@ runtime profile、legacy の `provider_routing`、project・global の `provider
 
 #### Codex の permission control (`permission_control`)
 
-Codex はデフォルトで TAKT の permission mode マッピングを使います。これは `permission_control: takt` と同じで、解決済みの TAKT `permission_mode` を Codex SDK の `sandboxMode` へ渡します。`network_access` を指定した場合は `networkAccessEnabled` にも渡します。省略時は Codex の既定値（`false`）を維持します。
+Codex の権限はデフォルトで TAKT が管理します。これは `permission_control: takt` と同じです。書き込み可否と `network_access` を別々に解決します。Phase 1 では `edit: false` または解決済みの `permission_mode: readonly` により書き込みを禁止します。`permission_mode: full` でも `edit: false` が優先されます。
+
+| 書き込み | `network_access` | Codex に渡す設定 |
+|---|---|---|
+| 許可 | `true` | `workspace-write` sandbox（`full` なら `danger-full-access`）と `networkAccessEnabled: true` |
+| 許可 | `false` / 未指定 | 従来の sandbox マッピング。明示した `false` は渡し、未指定なら Codex の既定値を維持 |
+| 禁止 | `true` | sandbox フラグを渡さず、`:read-only` を継承して `network.enabled=true` にした `takt-readonly-network` 権限プロファイルを `--config` で渡す |
+| 禁止 | `false` / 未指定 | `read-only` sandbox |
+
+TAKT が権限を管理する場合は、書き込み可能な step を含むすべての `codex exec` に `--ignore-rules` を付けます。新規セッションと `exec ... resume <id>` の両方が対象です。これにより、サンドボックス外でのコマンド実行を許可する利用者・プロジェクトの execpolicy `.rules` ファイルを読み込ませません。`permission_control: codex` ではルールを利用者の設定に委ねます。ただし Phase 2、`strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）、MCP のみに副作用を許可するモードは常に `--ignore-rules` を付け、書き込みと通信を禁止します。Phase 2 またはこれらの内部呼び出しで `config_profile` を指定した場合は `--ignore-rules` と `--profile <name>` の両方を渡します。補助コマンドの `mcp list` / `mcp get` には exec 用のフラグを付けません。
 
 Codex 側へ権限制御を委譲する場合だけ、明示的に opt-in します。
 
@@ -1681,7 +1745,7 @@ provider_options:
 
 `permission_control: codex` ではサンドボックスとネットワークの権限を Codex の設定に委ねます。この場合、TAKT の `network_access` は Codex の実効権限に反映されません。非対話実行の `approvalPolicy: never` は引き続き適用されるため、使用する Codex の設定を確認してください。`reasoning_effort`、`fast_mode`、`skills` は通常どおり適用されます。
 
-ただし、Phase 2 と、`edit: false` を明示した step の Phase 1 では、TAKT が `read-only` sandbox を渡します。Codex の Phase 1 では、解決された permission mode にかかわらずこの sandbox を使用し、`permission_control: codex` でも適用されます。この場合は `network_access` も通常の TAKT 管理時と同じ扱いになります。
+Phase 1 の `permission_control: codex` では `edit: false` や `permission_mode: readonly` でも TAKT の sandbox・ネットワーク指定を省略し、実効権限を Codex の設定に委ねます。`strict-readonly` を指定しない構造化呼び出しにも同じ規則を適用します。Phase 2 と `strict-readonly` で動く TAKT の内部呼び出し（隔離された構造化呼び出しなど）は例外で、権限の委譲時も TAKT が管理し、常に `read-only` sandbox と `networkAccessEnabled: false` を渡します。MCP のみに副作用を許可するモードも `read-only` sandbox を維持し、通信と Web 検索を明示的に禁止します。このモードと `permission_control: codex` は併用できません。
 
 Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
 

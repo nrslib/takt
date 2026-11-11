@@ -6,9 +6,11 @@ import type {
   DaemonStateOwner, EventStore, StoredEvent, TurnRunner,
 } from '../../core/daemon/ports.js';
 import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
+import { MAX_PROCESS_PENDING_REQUESTS } from '../../core/daemon/processProtocol.js';
 import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply } from './dispatcherMailbox.js';
 import { createTurnQueues } from './turnQueues.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -34,7 +36,7 @@ interface ActiveTurn {
   interruption: 'requested' | 'shutdown' | 'restart' | undefined;
   launchPending: boolean;
   requests: Map<number, Reply<DaemonStateReply>>;
-  progress: Map<number, Reply<void>>;
+  progress: Map<number, { reply: Reply<void>; message: ConversationProgress; ordered: boolean }>;
   phase: 'starting' | 'reading' | 'running' | 'settling';
   result?: TurnResult;
   save: 'waiting' | 'saving' | 'failed';
@@ -174,7 +176,11 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         if (active === undefined || response === undefined) break;
         active.progress.delete(notice.id);
         if (!notice.result.ok) this.failure('progress', active.event, notice.result.error, effects);
-        response.resolve();
+        response.reply.resolve();
+        if (response.ordered) {
+          const next = [...active.progress.entries()].find(([, pending]) => pending.ordered);
+          if (next !== undefined) this.deliverProgress(active, effects, next[0]);
+        }
         break;
       }
       case 'request': this.handleRequest(notice, effects); break;
@@ -423,15 +429,29 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
       const outcome = active.interruption !== undefined && message.outcome.kind !== 'interrupted' ? { kind: 'interrupted' as const } : message.outcome;
       active.finishReply = response;
       this.finish(active, outcome, effects);
-    } else if (active.interruption !== undefined || active.event.event.kind === 'patrol' && typeof message.message === 'string') {
+    } else if (active.interruption !== undefined || active.event.event.kind === 'patrol'
+      && (typeof message.message === 'string' || message.message.kind === 'turn_text')) {
       // 見回りは完了結果だけを表示し、後から中断したターンの途中結果を残さない。
       response.resolve();
     } else {
       const id = ++this.nextId;
-      active.progress.set(id, response);
-      const { turn } = active;
-      effects.push(effect(() => this.dependencies.conversations.progress(turn, message.message), (result) => ({ kind: 'progress_delivered', turn, id, result })));
+      const waiting = [...active.progress.values()].some((pending) => pending.ordered);
+      const ordered = waiting || typeof message.message !== 'string' && message.message.kind === 'turn_text';
+      if (ordered && active.progress.size >= MAX_PROCESS_PENDING_REQUESTS) {
+        response.reject(new Error('Turn progress capacity exceeded'));
+        return;
+      }
+      active.progress.set(id, { reply: response, message: message.message, ordered });
+      if (!waiting) this.deliverProgress(active, effects, id);
     }
+  }
+
+  private deliverProgress(active: ActiveTurn, effects: DispatcherEffect[], id: number): void {
+    const { message } = active.progress.get(id)!;
+    const { turn, abort } = active;
+    effects.push(effect(async () => {
+      if (!abort.signal.aborted) await this.dependencies.conversations.progress(turn, message, abort.signal);
+    }, (result) => ({ kind: 'progress_delivered', turn, id, result })));
   }
 
   private handleRequest(notice: Extract<DispatcherNotice, { kind: 'request' }>, effects: DispatcherEffect[]): void {
@@ -531,7 +551,9 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
   private handleControl(notice: Extract<DispatcherNotice, { kind: 'control' }>, effects: DispatcherEffect[]): void {
     const { event, response } = notice;
     if (event.kind === 'stop') {
-      if (this.shutdown !== undefined) { response.reply = this.shutdown.reply; return; }
+      if (this.shutdown !== undefined && (this.shutdown.phase !== 'closed' || this.shutdown.errors.length === 0)) {
+        response.reply = this.shutdown.reply; return;
+      }
       this.shutdown = { reply: response.reply, phase: 'runner', errors: [] };
       for (const active of this.active.values()) if (active.phase !== 'settling') this.interrupt(active, 'shutdown', effects);
       effects.push(effect(() => this.dependencies.runner.close(), (result) => ({ kind: 'runner_closed', result })));

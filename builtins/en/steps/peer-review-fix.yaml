@@ -16,6 +16,7 @@ tags:
 edit: true
 persona: coder
 policy:
+  - repair-strategy
   - contract-change
   - $param: fix_policy
 knowledge:

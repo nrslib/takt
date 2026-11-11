@@ -1,19 +1,15 @@
-# Review Finding Decisions
+Separate validity/repair need. Repair requirement/acceptance breaches, change regressions, required consumer migration. Merge unvisited consumers sharing an accepted problem's cause/condition/acceptance criteria. Out-of-scope premises alone: expansion; judge in-scope breaches. Await grounded external-only criteria only after current repairs/necessary local checks pass.
 
-Decide separately whether a submitted finding is technically correct and whether the current change must repair it. Select only necessary repairs.
+# Finding decisions
 
 ## Decision Criteria
 
-For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, use the normal rows, including violations of the original requirement or acceptance criteria and regressions.
+For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, follow the opening guidance to judge violations of the original requirement or acceptance criteria, regressions, and similar issues.
 
 | Situation | Treatment |
 |-----------|-----------|
 | The finding assumes inputs, states, or quantities outside “Scope of inputs used for counterexamples”. Or it asks only for measures against those premises (locks, mutual exclusion, validation against tampering, new limits, etc.) | Unnecessary expansion. If the same finding also establishes a violation under applicable premises, judge only that violation |
 | For a repaired problem, repairs to current code and in-environment verification needed to close its acceptance criteria are complete; the only unmet criteria are confirmations grounded in the requirements or existing project contracts that cannot be observed in this execution environment (another execution environment, an external service, a physical device, human confirmation, etc.) | Awaiting external confirmation (not a repair target) |
-| Direct violation of the original requirement or acceptance criteria | Repair |
-| Regression introduced by the current diff or repair | Repair |
-| Current consumers must migrate for a changed contract to work | Repair |
-| An unvisited consumer has the same cause, condition, and acceptance criteria as a problem already selected for repair | Merge into the same problem and repair |
 | A real separate problem whose necessity cannot be derived from the current request or repair | Outside this task |
 | No requirement makes the current behavior defective and the finding asks only for a stronger mechanism or guarantee | Unnecessary expansion |
 | The finding seeks only protection against a threat that pre-change documentation or knowledge explicitly placed outside the scope of protection, with the actor and method identified. The requirement does not call for a change to that contract. The actor, conditions for initiation or consent, scope of inputs, processing that interprets or executes inputs, effective permissions and credentials, and reachable protected assets have not changed, and no existing defense is bypassed or omitted | Unnecessary expansion |

@@ -123,8 +123,7 @@ export async function prepareCodexMcpIsolation(
   delete ambientConfig.mcp_servers;
   const isolationConfig: NonNullable<CodexOptions['config']> = {
     ...ambientConfig,
-    sandbox_mode: 'read-only', approval_policy: 'never',
-    sandbox_workspace_write: { network_access: false }, web_search: 'disabled', notify: [],
+    approval_policy: 'never', notify: [],
     ...(options.baseUrl === undefined ? {} : { openai_base_url: options.baseUrl }),
     ...(options.model === undefined ? {} : { model: options.model }),
     features: {

@@ -44,6 +44,8 @@ vi.mock('../infra/goals/pull-request.js', async (original) => ({
 }));
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
+const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goal branch tip/i;
+const advancedTipCorrection = /(?:if|when)[^.]*tip[^.]*advanced[^.]*review[^.]*new expectedSha[^.]*summary[^.]*humanChecks/i;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const now = '2026-10-19T03:00:00.000Z';
 const earlier = '2026-10-19T01:00:00.000Z';
@@ -835,12 +837,19 @@ it.each(['created', 'completed'] as const)('rejects reopening a %s goal without 
   expect(doubles.update).not.toHaveBeenCalled();
 });
 
-it('rejects an included approval SHA and directs the manager to check completion', async () => {
+it.each([sourceSha, 'c'.repeat(40)])('rejects an included approval SHA and explains correction when the tip is %s', async (goalTip) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
   const before = structuredClone(goal);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? goalTip : targetSha);
   doubles.contentIncluded.mockResolvedValue(true);
   doubles.update.mockClear();
-  await expect(reopenGoal('/project', goal.id, '追加の修正', undefined)).rejects.toThrow('takt_check_goal_completion');
+  const reopening = reopenGoal('/project', goal.id, '追加の修正', undefined);
+  await expect(reopening).rejects.toThrow(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+  await expect(reopening).rejects.toThrow(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+  await expect(reopening).rejects.toThrow(/expectedSha/);
+  await expect(reopening).rejects.toThrow(/summary/);
+  await expect(reopening).rejects.toThrow(sameTipCorrection);
+  await expect(reopening).rejects.toThrow(advancedTipCorrection);
   expect(goal).toEqual(before);
   expect(doubles.update).not.toHaveBeenCalled();
 });
@@ -920,15 +929,16 @@ it('does not save a reopen after cancellation during the containment check', asy
 });
 
 it.each([
-  { finalTarget: targetSha, included: false },
-  { finalTarget: 'c'.repeat(40), included: true },
-  { finalTarget: 'd'.repeat(40), included: false },
-])('checks target $finalTarget at save time and rejects only included approvals', async ({ finalTarget, included }) => {
+  { finalTarget: targetSha, included: false, goalTip: sourceSha },
+  { finalTarget: 'c'.repeat(40), included: true, goalTip: sourceSha },
+  { finalTarget: 'c'.repeat(40), included: true, goalTip: 'd'.repeat(40) },
+  { finalTarget: 'd'.repeat(40), included: false, goalTip: sourceSha },
+])('checks target $finalTarget at save time with tip $goalTip and rejects only included approvals', async ({ finalTarget, included, goalTip }) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
   const before = structuredClone(goal);
   const reason = '追加の修正';
   let currentTarget = targetSha;
-  doubles.sha.mockImplementation(async () => currentTarget);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? goalTip : currentTarget);
   doubles.contentIncluded.mockClear();
   let finishCheck!: (included: boolean) => void;
   let checkStarted!: () => void;
@@ -949,7 +959,12 @@ it.each([
   expect(doubles.contentIncluded).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, targetSha, undefined);
   finishCheck(false);
   if (included) {
-    await expect(reopening).rejects.toThrow('takt_check_goal_completion');
+    await expect(reopening).rejects.toThrow(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+    await expect(reopening).rejects.toThrow(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+    await expect(reopening).rejects.toThrow(/expectedSha/);
+    await expect(reopening).rejects.toThrow(/summary/);
+    await expect(reopening).rejects.toThrow(sameTipCorrection);
+    await expect(reopening).rejects.toThrow(advancedTipCorrection);
     expect(goal).toEqual(before);
   } else {
     const result = await reopening;
@@ -1014,13 +1029,64 @@ it.each(['before final check', 'after final check'])(
   },
 );
 
+it('instructs the manager to review an advanced goal tip and resubmit all completion evidence', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => /(?:advanc|tip.*chang|new.*tip)/i.test(text));
+  expect(instruction).toBeDefined();
+  expect(instruction).toMatch(/(?:review|recheck|re-check|verify)/i);
+  for (const input of ['takt_complete_goal', 'expectedSha', 'summary', 'humanChecks']) {
+    expect(instruction).toContain(input);
+  }
+});
+
+it('distinguishes evidence correction from checking completion after the approved SHA is included', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => /already.*(?:includ|merg)/i.test(text));
+  expect(instruction).toBeDefined();
+  expect(instruction).toMatch(/(?:correct|revis|updat)[^.]*takt_complete_goal/i);
+  expect(instruction).toMatch(/(?:unchanged|without|no correction|as.is|otherwise)[^.]*takt_check_goal_completion/i);
+  expect(instruction).toMatch(sameTipCorrection);
+  expect(instruction).toMatch(advancedTipCorrection);
+  for (const input of ['takt_complete_goal', 'expectedSha', 'summary', 'takt_check_goal_completion']) {
+    expect(instruction).toContain(input);
+  }
+});
+
+it.each(['configured', 'missing'] as const)('rejects a retry without saved or supplied human checks before publication with a %s origin', async (origin) => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  delete goal.pullRequest;
+  delete goal.completion!.humanChecks;
+  const before = structuredClone(goal);
+  const actual = await vi.importActual<typeof import('../infra/goals/pull-request.js')>('../infra/goals/pull-request.js');
+  vi.mocked(prepareGoalPullRequest).mockClear().mockImplementation(actual.prepareGoalPullRequest);
+  if (origin === 'configured') {
+    publication.git.mockResolvedValue({ output: Buffer.from('https://github.com/example/project.git\n'), code: 0, truncated: false });
+  } else {
+    publication.git.mockRejectedValue(new Error('No such remote origin'));
+  }
+  doubles.update.mockClear();
+  vi.mocked(saveManagerEvent).mockClear();
+
+  await expect(completeGoal('/project', goal.id, sourceSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja'))
+    .rejects.toThrow(/humanChecks.*(?:provide|supply).*takt_complete_goal/i);
+
+  expect(goal).toEqual(before);
+  expect(goal.pullRequest).toBeUndefined();
+  expect(prepareGoalPullRequest).not.toHaveBeenCalled();
+  expect(publication.git).not.toHaveBeenCalled();
+  expect(publication.create).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(saveManagerEvent).not.toHaveBeenCalled();
+});
+
 it('saves PR recovery instructions and the failure reason when a PR is unavailable, then recovers on retry', async () => {
   vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('origin unavailable'));
   const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   expect(result).toMatchObject({ status: 'awaiting_merge', goal });
   expect(goal.pullRequest).toBeUndefined();
-  expect(goal.completion?.instructions.join('\n')).toContain('takt_merge_goal_pr');
-  expect(goal.completion?.instructions.join('\n')).not.toContain('git merge');
+  expect(goal.completion?.goalSha).toBe(sourceSha);
   expect(goal.workLog.at(-1)?.summary).toContain('origin unavailable');
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
   const completion = structuredClone(goal.completion);
@@ -1028,6 +1094,21 @@ it('saves PR recovery instructions and the failure reason when a PR is unavailab
   expect(goal.pullRequest).toMatchObject({ number: 1950 });
   expect(goal.completion).toEqual({ ...completion, summary: 'new evidence' });
   expect(goal.notifications?.map((notification) => notification.kind)).toEqual(['blocked', 'awaiting_merge']);
+});
+
+it('does not pass saved human checks when resubmitting a different reviewed SHA', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Saved checks', 'ja');
+  const previous = structuredClone(goal);
+  const nextSha = 'c'.repeat(40);
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? nextSha : targetSha);
+  const missingChecks = new Error('human checks are required');
+  vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(missingChecks);
+
+  await expect(completeGoal('/project', goal.id, nextSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja'))
+    .rejects.toBe(missingChecks);
+
+  expect(prepareGoalPullRequest).toHaveBeenLastCalledWith('/project', previous,
+    expect.objectContaining({ goalSha: nextSha }), undefined, 'ja', undefined, expect.any(Function));
 });
 
 it('refreshes the completion and notifies the first PR failure on a repeated completion request', async () => {

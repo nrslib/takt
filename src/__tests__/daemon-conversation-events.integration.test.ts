@@ -46,10 +46,10 @@ import { saveManagerEvent } from '../infra/goals/events.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
-import { inquiryAnswerMessage } from '../features/daemon/inquiryAnswerMessage.js';
+import { inquiryAnswerEvent } from '../features/daemon/inquiryAnswerEvent.js';
 import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
 
-const directorSpeaker = `Speaker: ${JSON.stringify({ namespace: 'agent', id: 'director' })}`;
+const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: async () => ({
   get initializingCount() { return ipc.initializingCount; }, stopAccepting() {}, async close() {},
@@ -135,8 +135,7 @@ it.each([
   expect(errors).not.toHaveBeenCalled();
   await watcher.close();
   const turn = await f.runner.started(2);
-  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
-    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
+  const expected = inquiryAnswerEvent(question.id, saved.answer!, question.body);
   expect(turn.input.event.event).toEqual(expected);
   const restored = await new FileEventStore(f.directory).restore();
   const storedEvents = [];
@@ -147,7 +146,7 @@ it.each([
   if (message.kind !== 'start_turn') throw new Error('Expected a manager turn');
   expect(await perform(turn, message.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Answer received' } });
   expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
+  expect(turnData(execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...expected.inquiryAnswer });
   expect(await readdir(inbox)).toEqual([]);
   const after = await f.conversations.snapshot(f.id);
   const remaining = [];
@@ -187,8 +186,8 @@ it.each([
   const [question] = await new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository }).list();
   expect(question!.answerPublicationPending).toBeUndefined();
   const turn = await f.runner.started(1);
-  const expected = inquiryAnswerMessage(question!.id, question!.answer!, body);
-  expect(turn.input.event.event).toEqual({ kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }), text: expected });
+  const expected = inquiryAnswerEvent(question!.id, question!.answer!, body);
+  expect(turn.input.event.event).toEqual(expected);
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
     message: 'Answer received', summary: null, sessionId: 'startup-answer', assignment: undefined,
   });
@@ -201,7 +200,7 @@ it.each([
   const outcome = await service.execute(message.input, { signal: turn.signal, progress() {},
     request: (request) => f.dispatcher.request(turn.turn, request, turn.signal) });
   await f.runner.finish(turn, outcome);
-  expect(execute.mock.calls[0]![0].prompt).toBe([expected, directorSpeaker].join('\n\n'));
+  expect(turnData(execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...expected.inquiryAnswer });
   expect(await readdir(inbox)).toEqual([]);
 });
 
@@ -286,8 +285,8 @@ it.each([
     }
     await finishAnswers();
     const saved = await store.get(question.id);
-    const expected = [inquiryAnswerMessage(question.id, saved.answer!, question.body), directorSpeaker].join('\n\n');
-    expect.soft(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected]);
+    const expected = { goalId: null, ...inquiryAnswerEvent(question.id, saved.answer!, question.body).inquiryAnswer };
+    expect.soft(execute.mock.calls.map(([value]) => turnData(value.prompt))).toEqual([expected]);
     expect.soft(retryReceipt).toEqual(firstReceipt);
     expect(saved.answerPublicationPending).toBeUndefined();
     expect(await readdir(inbox)).toEqual([]);
@@ -299,8 +298,8 @@ it.each([
     const [next] = await readdir(inbox);
     expect(await receive(next!)).not.toEqual(firstReceipt);
     await finishAnswers();
-    expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual([expected,
-      [inquiryAnswerMessage(other.id, answered.answer!, other.body), directorSpeaker].join('\n\n')]);
+    expect(execute.mock.calls.map(([value]) => turnData(value.prompt))).toEqual([expected,
+      { goalId: null, ...inquiryAnswerEvent(other.id, answered.answer!, other.body).inquiryAnswer }]);
   } finally {
     release.resolve();
     await answering;
@@ -327,7 +326,7 @@ it('retains a standalone answer after storage rejection and consumes it after su
   await receiveInboxChange(change, files, f.conversations, { accept });
   expect(accept.mock.calls[1]![0]).toEqual(accept.mock.calls[0]![0]);
   const turn = await f.runner.started(1);
-  expect(turn.input.event.event).toMatchObject({ kind: 'director_message', text: inquiryAnswerMessage(question.id, answered.answer!, question.body) });
+  expect(turn.input.event.event).toMatchObject(inquiryAnswerEvent(question.id, answered.answer!, question.body));
   await f.runner.finish(turn);
   expect(f.runner.calls).toHaveLength(1);
   await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -391,8 +390,7 @@ it.each([
   const saved = await store.get(question.id);
   expect(saved.operation).toEqual(question.operation);
   const next = await f.runner.started(2);
-  const expected = { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
-    text: inquiryAnswerMessage(question.id, saved.answer!, question.body) };
+  const expected = inquiryAnswerEvent(question.id, saved.answer!, question.body);
   expect(next.input.event).toMatchObject({ conversationId: id, event: expected });
   const restored = [];
   for await (const record of (await new FileEventStore(f.directory).restore()).pending) restored.push(record.event.event);
@@ -400,7 +398,7 @@ it.each([
   const ipc = parseDaemonProcessMessage(JSON.parse(JSON.stringify({ protocolVersion: 1, launchId: 'workspace', kind: 'start_turn', input: next.input })), 'workspace');
   if (ipc.kind !== 'start_turn') throw new Error('Expected next turn');
   expect(await perform(next, ipc.input)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
-  expect(execute.mock.calls[0]![0].prompt).toBe([expected.text, directorSpeaker].join('\n\n'));
+  expect(turnData(execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...expected.inquiryAnswer });
   expect(f.runner.calls).toHaveLength(2);
 });
 
@@ -429,8 +427,7 @@ it('publishes distinct saved workspace answers once and preserves their events o
   const answers = restored.filter(({ event }) => event.kind === 'director_message' && event.text.includes('standalone inquiry'));
   expect(answers).toHaveLength(2);
   for (const question of questions) expect(answers).toContainEqual(expect.objectContaining({ conversationId: id,
-    event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
-      text: inquiryAnswerMessage(question.id, question.answer!, question.body) } }));
+    event: inquiryAnswerEvent(question.id, question.answer!, question.body) }));
   expect(new Set(answers.map(({ eventId }) => eventId)).size).toBe(2);
   for (const event of answers) {
     expect(event.eventId).toContain(workspace.id);
@@ -449,8 +446,8 @@ it('publishes distinct saved workspace answers once and preserves their events o
       request: (request) => f.dispatcher.request(next.turn, request, next.signal) });
     await f.runner.finish(next, outcome);
   }
-  expect(execute.mock.calls.map(([value]) => value.prompt)).toEqual(questions.map((question) =>
-    [inquiryAnswerMessage(question.id, question.answer!, question.body), directorSpeaker].join('\n\n')));
+  expect(execute.mock.calls.map(([value]) => turnData(value.prompt))).toEqual(questions.map((question) =>
+    ({ goalId: null, ...inquiryAnswerEvent(question.id, question.answer!, question.body).inquiryAnswer })));
   accepted(await f.dispatcher.accept(input('publish-settled-answer', id)));
   const repeat = await f.runner.started(4);
   expect(await f.dispatcher.request(repeat.turn, { kind: 'publish_workspace_inquiry_answer', questionId: questions[0]!.id }, repeat.signal)).toEqual(receipts[0]);
@@ -682,6 +679,7 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
   const committed = deferred<void>();
   const releaseReply = deferred<void>();
   const replied = deferred<void>();
+  const shutdownStarted = deferred<void>();
   const envelope = { protocolVersion: 1 as const, launchId: 'manager-invalidation-race' };
   const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>(async () => ({
     message: 'continued', summary: null, sessionId: 'next-session', assignment: undefined,
@@ -702,14 +700,14 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
         const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
         const invalidation = message.request.kind === 'save_conversation' && message.request.change.session?.sessionId === null;
         if (invalidation) {
-          expect(reply).toMatchObject({ kind: 'state_saved', version: 2 });
+          expect(reply).toMatchObject({ kind: 'state_saved', version: 3 });
           committed.resolve();
           await releaseReply.promise;
         }
         await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
         if (invalidation) replied.resolve();
       } else if (message.kind === 'turn_finished') {
-        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 1,
+        expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 2,
           interruptedMessage: 'interrupted during invalidation' } });
         await f.runner.finish(active, message.outcome);
       }
@@ -718,18 +716,26 @@ it('keeps a committed session invalidation when shutdown interrupts its reply to
   cleanups.push(() => runtime.disconnect());
   await runtime.receive({ ...envelope, kind: 'initialize', conversationId: f.id,
     assignment: active.input.state.assignment, configDirectory: f.directory });
-  f.runner.beforeClose = () => runtime.receive({ ...envelope, kind: 'shutdown' });
+  f.runner.beforeClose = () => {
+    const stopping = runtime.receive({ ...envelope, kind: 'shutdown' });
+    shutdownStarted.resolve();
+    return stopping;
+  };
   await runtime.receive({ ...envelope, kind: 'start_turn', input: active.input });
   let committedError: unknown;
   try {
     await committed.promise;
   } catch (error) { committedError = error; }
-  finally { releaseReply.resolve(); }
-  await f.close();
+  finally {
+    const stopping = f.close();
+    await shutdownStarted.promise;
+    releaseReply.resolve();
+    await stopping;
+  }
   if (committedError !== undefined) throw committedError;
   await replied.promise;
   expect((await new ConversationStateStore(f.directory).read(f.id))?.state).toMatchObject({
-    version: 3, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',
+    version: 4, session: { sessionId: null }, interruptedMessage: 'interrupted during invalidation',
   });
   const restarted = await fixture();
   const child = await conversationProcess(restarted, execute);
@@ -1019,7 +1025,7 @@ it.each([true, false])('defers a paused task result across restart and handles i
   const resumedPath = join(inbox, (await readdir(inbox))[0]!);
   await receiveInboxChange({ target, path: resumedPath, removed: false, generation: 'resume', value: {} }, files, f.conversations, restarted);
   const resumed = await runner.started(3);
-  expect(resumed.input.event.event.kind).toBe('goal_resumed');
+  expect(resumed.input.event.event).toMatchObject({ kind: 'goal_resumed', origin: 'human' });
   await perform(resumed);
   const retried = await runner.started(4);
   expect(retried.input.event).toEqual(completion.input.event);
@@ -1186,9 +1192,10 @@ it.each<TurnOutcome>([
   accepted(await f.dispatcher.accept(input('director-turn', director)));
   const call = await f.runner.started(1);
   expect(await f.dispatcher.request(call.turn, { kind: 'get_delivery', conversationId: f.id }, call.signal)).toMatchObject({ kind: 'delivery', conversationId: f.id, connectedPorts: ['tui'] });
-  const request = { kind: 'accept_director_message' as const, conversationId: f.id, eventId: 'director-input', requestId: 'director-input', text: 'inspect', occurredAt: '2026-11-03T00:00:00Z' };
+  const request = { kind: 'accept_director_message' as const, conversationId: f.id, eventId: 'director-input', requestId: 'director-input', text: 'inspect', origin: 'human' as const, occurredAt: '2026-11-03T00:00:00Z' };
   expect(await f.dispatcher.request(call.turn, request, call.signal)).toMatchObject({ kind: 'event_accepted', admission: { kind: 'accepted' } });
   const manager = await f.runner.started(2);
+  expect(manager.input.event.event).toMatchObject({ kind: 'director_message', text: request.text, origin: request.origin });
   await f.runner.finish(manager, outcome);
   const saved = [];
   for await (const notice of f.conversations.notifications.iterate()) saved.push(notice);
@@ -1237,7 +1244,7 @@ it('reads legacy proposal, session and accepted human/director queues while pres
   read.complete();
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
   expect(items).toContainEqual({ kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-    executionStatus: goal.executionStatus, repositoryDirectory: f.repository } });
+    executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: f.repository } });
   expect(JSON.parse(await readFile(join(f.repository, '.takt', 'goals', goal.id, 'goal.json'), 'utf8'))).toEqual(goal);
   expect((await new ConversationStateStore(f.directory).read(f.id))!.record.directorMessages).toEqual([]);
 });

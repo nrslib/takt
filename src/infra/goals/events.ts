@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { GoalStore } from './store.js';
-import { GoalAnswerSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.js';
 
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
@@ -13,7 +13,7 @@ export const ManagerEventSchema = z.discriminatedUnion('kind', [
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
-  z.object({ ...common, kind: z.literal('resumed') }).strict(),
+  z.object({ ...common, kind: z.literal('resumed'), origin: GoalExecutionOriginSchema.optional() }).strict(),
   // 旧受け箱の読取専用。新しい見回りは daemon の TurnEvent として受け付ける。
   z.object({ ...common, kind: z.literal('patrol') }).strict(),
 ]);

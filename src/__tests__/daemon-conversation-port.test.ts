@@ -217,9 +217,9 @@ it('admits director messages through the bus and waits for durable admission wit
   const request = vi.fn(() => saved.promise);
   const turn = { conversationId: 'director', operationId: 'turn', generation: 8 };
   const signal = new AbortController().signal;
-  const pending = tellDirectorManager({ bus: { request }, turn }, 'manager', 'inspect goal', signal);
+  const pending = tellDirectorManager({ bus: { request }, turn }, 'manager', 'inspect goal', 'human', signal);
   expect(request).toHaveBeenCalledExactlyOnceWith(turn, expect.objectContaining({ kind: 'accept_director_message',
-    conversationId: 'manager', text: 'inspect goal', eventId: expect.any(String), requestId: expect.any(String) }), signal);
+    conversationId: 'manager', text: 'inspect goal', origin: 'human', eventId: expect.any(String), requestId: expect.any(String) }), signal);
   saved.resolve({ kind: 'event_accepted', admission: { kind: 'accepted', eventId: 'event', operationId: 'admitted', acceptedSequence: 4 } });
   expect(await pending).toMatchObject({ kind: 'accepted', operationId: 'admitted', acceptedSequence: 4, managerId: 'manager' });
 });
@@ -227,9 +227,9 @@ it('does not resend a rejected director message or submit after cancellation', a
   const request = vi.fn(async (): Promise<DaemonStateReply> => ({ kind: 'event_accepted', admission: { kind: 'rejected', reason: 'storage' } }));
   const turn = { conversationId: 'director', operationId: 'turn', generation: 8 };
   const controller = new AbortController();
-  expect(await tellDirectorManager({ bus: { request }, turn }, 'manager', 'once', controller.signal)).toEqual({ kind: 'rejected', reason: 'storage' });
+  expect(await tellDirectorManager({ bus: { request }, turn }, 'manager', 'once', 'director', controller.signal)).toEqual({ kind: 'rejected', reason: 'storage' });
   controller.abort();
-  await expect(tellDirectorManager({ bus: { request }, turn }, 'manager', 'cancelled', controller.signal)).rejects.toThrow();
+  await expect(tellDirectorManager({ bus: { request }, turn }, 'manager', 'cancelled', 'director', controller.signal)).rejects.toThrow();
   expect(request).toHaveBeenCalledOnce();
 });
 

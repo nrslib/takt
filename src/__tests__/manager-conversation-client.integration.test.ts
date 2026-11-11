@@ -14,7 +14,7 @@ import { ConversationIpcClient } from '../features/manager/conversationIpcClient
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import * as frames from '../features/daemon/conversationFrames.js';
 import * as goalService from '../infra/goals/service.js';
-import type { SnapshotItem, SnapshotRead } from '../features/manager/conversationPort.js';
+import type { ConversationDelivery, SnapshotItem, SnapshotRead } from '../features/manager/conversationPort.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 import { answerInquiry, createInquiry } from '../infra/goals/inquiry.js';
@@ -36,7 +36,7 @@ import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
-import { deferred } from './helpers/daemon-turn.js';
+import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
@@ -90,7 +90,43 @@ beforeEach(async () => {
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
 
-it('shows provider activity through daemon IPC at width 80 and clears it without saving it or adding transcript entries', async () => {
+it('refreshes human merge wait and ongoing counts through IPC when finishing work runs, fails and is retried', async () => {
+  const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
+    goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  saveGoal(goal);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const check = async (awaiting: boolean) => {
+    await waitFor(() => {
+      expect(displayedGoals(client)).toMatchObject([{ id: goal.id, awaitingHumanMerge: awaiting }]);
+      expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', {
+        goals: awaiting ? '0' : '1', awaiting: awaiting ? '1' : '0', questions: '0',
+      }));
+    });
+  };
+  await check(true);
+  for (const { statuses, awaiting } of [
+    { statuses: ['pending'], awaiting: false },
+    { statuses: ['running'], awaiting: false },
+    { statuses: ['failed'], awaiting: false },
+    { statuses: ['exceeded'], awaiting: false },
+    { statuses: ['pr_failed'], awaiting: false },
+    { statuses: ['failed', 'pending'], awaiting: false },
+    { statuses: ['failed', 'completed'], awaiting: true },
+  ]) {
+    writeFileSync(join(repository, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: statuses.map((status, index) => ({
+      name: `finishing-work-${index}`, goal_id: goal.id, merge_task: true, status,
+      created_at: '2026-11-08T00:00:00.000Z', started_at: null, completed_at: null,
+    })) }));
+    await client.refresh(); await complete();
+    await check(awaiting);
+  }
+});
+
+it.each([false, true])('delivers Bash descriptions and ordered text through IPC with final JSON streamed=%s without saving transient output or sending it to Slack', async (streamFinal) => {
+  const prose = 'コードを読んでいるところです。';
   const useTool = deferred<void>();
   const respond = deferred<void>();
   const finish = deferred<void>();
@@ -98,14 +134,20 @@ it('shows provider activity through daemon IPC at width 80 and clears it without
     options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
     options.onStream!({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
     await useTool.promise;
-    options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
-    options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'ActivityToolUnique', input: { command: 'private-input-marker' } } });
+    options.onStream!({ type: 'text', data: { text: prose.slice(0, 7) } });
+    options.onStream!({ type: 'text', data: { text: prose.slice(7) } });
+    options.onStream!({ type: 'tool_use', data: { id: 'activity-tool', tool: 'Bash', input: {
+      description: '見回りの予定のコードを読む', command: 'private-input-marker', timeout: 1000,
+    } } });
     await respond.promise;
     options.onStream!({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
-    options.onStream!({ type: 'text', data: { text: 'private-partial-marker' } });
+    options.onStream!({ type: 'text', data: { text: '調べがつきました。' } });
     await finish.promise;
-    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
-      structuredOutput: { message: 'Final activity reply', summary: null } };
+    const structuredOutput = { message: 'Final activity reply', summary: null };
+    if (streamFinal) options.onStream!({ type: 'text', data: { text: JSON.stringify(structuredOutput) } });
+    return { persona: 'manager', status: 'done',
+      content: `${prose}\n調べがつきました。\n${JSON.stringify(structuredOutput)}`,
+      timestamp: new Date(), structuredOutput };
   });
   const executor = createManagerTurnExecutor(repository, {
     ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup: () => ({ call }) }) },
@@ -117,6 +159,10 @@ it('shows provider activity through daemon IPC at width 80 and clears it without
   const writes = vi.spyOn(daemonFiles, 'writePrivateFile');
   const savedResults = vi.spyOn(fixture.events, 'saveResult');
   await client.connect(); await complete();
+  const selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve(assignment);
+  const slack = { deliver: vi.fn<ConversationDelivery['deliver']>(async () => ({ kind: 'delivered' })) };
+  const slackOpen = await service.open({ ...selected, binding: { ...selected.binding, port: 'slack' } }, slack);
+  slackOpen.read.cancel();
   const app = await snapshotView();
   const transcript = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
   const activities = () => outputs.mock.calls.map(([value]) => value).filter((value) => value.kind === 'activity');
@@ -127,40 +173,347 @@ it('shows provider activity through daemon IPC at width 80 and clears it without
     await waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.extendedThinking', 'en')));
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }]);
     useTool.resolve();
-    await waitFor(() => expect(app.lastFrame()).toContain('ActivityToolUnique'));
-    const activityRow = app.lastFrame()!.split('\n').find((row) => row.includes('ActivityToolUnique'))!;
-    expect(activityRow).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ActivityToolUnique$/u);
+    await waitFor(() => expect(app.lastFrame()).toContain('見回りの予定のコードを読む'));
+    const activityRow = app.lastFrame()!.split('\n').find((row) => row.includes('見回りの予定のコードを読む'))!;
+    expect(activityRow).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 見回りの予定のコードを読む.*\b\d+s\b/u);
     expect(measureWidth(activityRow)).toBeLessThanOrEqual(80);
-    expect(activities()).toHaveLength(2);
-    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }]);
+    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
+      { role: 'assistant', content: prose }]);
+    const beforeTool = outputs.mock.calls.map(([output]) => output);
+    const beforeIndex = beforeTool.findIndex((output) => output.message === prose);
+    expect(beforeIndex).toBeGreaterThanOrEqual(0);
+    expect(beforeIndex).toBeLessThan(beforeTool.findIndex((output) => output.kind === 'activity' && output.activity.kind === 'tool'));
     // A periodic snapshot must not clear the active tool from the same running turn.
     await client.refresh(); await complete();
-    expect(app.lastFrame()).toContain('ActivityToolUnique');
+    expect(app.lastFrame()).toContain('見回りの予定のコードを読む');
     respond.resolve();
     await waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.responding', 'en')));
     finish.resolve();
     await fixture.settled();
     await waitFor(() => {
       expect(app.lastFrame()).toContain('Final activity reply');
-      expect(app.lastFrame()).not.toContain('ActivityToolUnique');
+      expect(app.lastFrame()).not.toContain('見回りの予定のコードを読む');
       expect(app.lastFrame()).not.toContain(getLabel('tui.ui.responding', 'en'));
     });
-    expect(activities().map((output) => output.activity).filter((activity) => activity.kind !== 'waiting')).toEqual([
-      { kind: 'thinking' }, { kind: 'tool', tool: 'ActivityToolUnique' }, { kind: 'responding' },
+    expect(activities()[0].activity).toEqual({ kind: 'thinking' });
+    expect(activities().filter((output) => output.activity.kind === 'tool').map((output) => output.activity)).toEqual([
+      { kind: 'tool', tool: 'Bash', description: '見回りの予定のコードを読む' },
     ]);
-    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' }, { role: 'assistant', content: 'Final activity reply' }]);
+    expect(activities().at(-1).activity).toEqual({ kind: 'responding' });
+    expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
+      { role: 'assistant', content: prose },
+      { role: 'assistant', content: 'Final activity reply' }]);
+    const delivered = outputs.mock.calls.map(([output]) => output);
+    expect(delivered.filter((output) => output.kind === 'turn_text').map((output) => output.message)).toEqual([
+      prose,
+    ]);
+    expect(delivered.filter((output) => output.kind === 'result')).toHaveLength(1);
+    const finalIndex = delivered.findIndex((output) => output.kind === 'result' && output.result.message === 'Final activity reply');
+    const textIndex = delivered.findIndex((output) => output.message === prose);
+    expect(textIndex).toBeGreaterThanOrEqual(0);
+    expect(textIndex).toBeLessThan(finalIndex);
+    const transientKinds = new Set(delivered.filter((output) =>
+      [prose, '調べがつきました。'].includes(output.message)).map((output) => output.kind));
+    const slackOutputs = slack.deliver.mock.calls.map((args) => args[1]);
+    expect(slackOutputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'Final activity reply' } }));
+    for (const output of slackOutputs) {
+      expect(output).not.toMatchObject({ kind: 'activity' });
+      expect(transientKinds.has(output.kind)).toBe(false);
+      const json = JSON.stringify(output);
+      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
+    }
     const read = await fixture.dispatcher.snapshot(client.getSnapshot().state!.conversationId);
     const items = [];
     for await (const item of read.items) items.push(item);
     read.cancel();
     for (const persisted of [writes.mock.calls, savedResults.mock.calls, items, client.getSnapshot()]) {
       const json = JSON.stringify(persisted);
-      expect(json).not.toContain('ActivityToolUnique');
+      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
       expect(json).not.toContain('private-');
-      expect(json).not.toContain('"activity"');
+      JSON.parse(json, (key, value: unknown) => {
+        expect(key).not.toBe('activity');
+        return value;
+      });
     }
     expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-');
-  } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); }
+  } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); service.detach(slackOpen.attachmentId); }
+});
+
+it('does not transfer text after interruption during its conversation read', async () => {
+  const controller = new AbortController();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const outputs = vi.fn(); client.onOutput(outputs);
+  await client.connect(); await complete();
+  const conversationId = client.getSnapshot().state!.conversationId;
+  const read = fixture.store.read.bind(fixture.store);
+  vi.spyOn(fixture.store, 'read').mockImplementationOnce(async (id) => {
+    entered.resolve(); await release.promise; return read(id);
+  });
+  const progress = fixture.conversations.progress({ conversationId, operationId: randomUUID(), generation: 1 },
+    { kind: 'turn_text', message: '本文を配送しない' }, controller.signal);
+  try {
+    await entered.promise;
+    controller.abort();
+    release.resolve(); await progress;
+    expect(outputs.mock.calls.filter(([output]) => output.kind === 'turn_text')).toEqual([]);
+  } finally { release.resolve(); await progress; }
+});
+
+it('suppresses patrol text while showing its Bash description and elapsed time on the connected screen', async () => {
+  const finish = deferred<void>();
+  const goal: Goal = { ...goalRecord(), executionStatus: 'active' };
+  saveGoal(goal);
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '見回りの途中の文' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'patrol', tool: 'Bash', input: { description: '見回りの状態を調べる' } } });
+    await finish.promise;
+    options.onStream!({ type: 'text', data: { text: '見回りの終了前の文' } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), structuredOutput: { message: 'Patrol final reply', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'patrol-text', executor });
+  const outputs = vi.fn(); client.onOutput(outputs);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  try {
+    expect(await fixture.dispatcher.accept({ conversationId: client.getSnapshot().state!.conversationId,
+      eventId: randomUUID(), requestId: randomUUID(), source: 'daemon', occurredAt: new Date().toISOString(),
+      event: { kind: 'patrol', repositoryDirectory: repository, goalIds: [goal.id] } })).toMatchObject({ kind: 'accepted' });
+    await waitFor(() => expect(call).toHaveBeenCalledOnce());
+    await waitFor(() => {
+      const row = app.lastFrame()!.split('\n').find((line) => line.includes('見回りの状態を調べる'));
+      expect(row).toBeDefined();
+      expect(row).toMatch(/\b\d+s\b/u);
+    });
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(app.lastFrame()).toContain('Patrol final reply'));
+    const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    for (const message of ['見回りの途中の文', '見回りの終了前の文']) {
+      expect(outputs.mock.calls.map(([output]) => output.message)).not.toContain(message);
+      expect(transcript.map((entry) => entry.content)).not.toContain(message);
+    }
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('keeps already displayed text but suppresses buffered and late text after interruption of the same turn', async () => {
+  const finish = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: '中断前に表示する文' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'before', tool: 'Bash', input: {} } });
+    options.onStream!({ type: 'text', data: { text: '中断時に未確定の文' } });
+    await finish.promise;
+    options.onStream!({ type: 'tool_use', data: { id: 'after', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'text', data: { text: '中断後に届く文' } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), structuredOutput: { message: 'Cancelled final reply', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'interrupt-text', executor });
+  const outputs = vi.fn(); client.onOutput(outputs);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const transcript = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  try {
+    expect(await client.submit({ kind: 'message', text: 'Interrupt the running turn' })).toMatchObject({ kind: 'accepted' });
+    await waitFor(() => expect(transcript()).toContainEqual({ role: 'assistant', content: '中断前に表示する文' }));
+    const running = client.getSnapshot().state!.running!;
+    expect(await client.submit({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation! })).toMatchObject({ kind: 'accepted' });
+    const deliveredBefore = outputs.mock.calls.length;
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    expect(transcript()).toContainEqual({ role: 'assistant', content: '中断前に表示する文' });
+    for (const message of ['中断時に未確定の文', '中断後に届く文', 'Cancelled final reply']) {
+      expect(transcript().map((entry) => entry.content)).not.toContain(message);
+      expect(outputs.mock.calls.slice(deliveredBefore).map(([output]) => output.message)).not.toContain(message);
+    }
+    expect(app.lastFrame()).toContain('中断前に表示する文');
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([false, true])('displays next-turn text once after an interrupted turn with its running state delayed=%s', async (delayed) => {
+  const finishFirst = deferred<void>();
+  const emitText = deferred<void>();
+  const finishNext = deferred<void>();
+  const reading = deferred<void>();
+  const releaseRunning = deferred<void>();
+  const message = '次のターンを調べています。';
+  execute.mockImplementationOnce(async (input) => {
+    input.onText!('中断前に表示する文');
+    await finishFirst.promise;
+    return { message: 'Interrupted reply', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  execute.mockImplementationOnce(async (input) => {
+    await emitText.promise;
+    input.onText!(message);
+    await finishNext.promise;
+    return { message: 'Next turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const outputs = vi.fn(); client.onOutput(outputs);
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const transcript = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  const textEntries = () => transcript().filter((entry) => entry.role === 'assistant' && entry.content === message);
+  try {
+    await client.submit({ kind: 'message', text: 'Start the first turn' });
+    await waitFor(() => {
+      expect(client.getSnapshot().state?.running).not.toBeNull();
+      expect(transcript()).toContainEqual({ role: 'assistant', content: '中断前に表示する文' });
+    });
+    const first = client.getSnapshot().state!.running!;
+    expect(await client.submit({ kind: 'abort_turn', operationId: first.operationId, generation: first.generation! })).toMatchObject({ kind: 'accepted' });
+    finishFirst.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true }));
+    await waitFor(() => expect(app.lastFrame()).toContain('Turn interrupted'));
+
+    const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
+    vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
+      const read = await snapshot(id);
+      reading.resolve();
+      await releaseRunning.promise;
+      return read;
+    });
+    const accepted = await client.submit({ kind: 'message', text: 'Start the next turn' });
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
+    await reading.promise;
+    if (!delayed) {
+      releaseRunning.resolve();
+      await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
+    }
+    emitText.resolve();
+    await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'turn_text', operationId: accepted.operationId, message,
+    })));
+    if (delayed) expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true });
+    await waitFor(() => expect(textEntries()).toEqual([{ role: 'assistant', content: message }]));
+    releaseRunning.resolve();
+    await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
+    expect(textEntries()).toHaveLength(1);
+    finishNext.resolve(); await fixture.settled();
+    await waitFor(() => expect(app.lastFrame()).toContain('Next turn completed'));
+    expect(textEntries()).toHaveLength(1);
+    expect(transcript()).toContainEqual({ role: 'assistant', content: '中断前に表示する文' });
+    expect(transcript().findIndex((entry) => entry.content === message))
+      .toBeLessThan(transcript().findIndex((entry) => entry.content === 'Next turn completed'));
+  } finally {
+    finishFirst.resolve(); emitText.resolve(); releaseRunning.resolve(); finishNext.resolve(); await fixture.settled();
+  }
+});
+
+it.each([false, true])('preserves next-turn text while settling with a snapshot before text delivery=%s', async (refreshBeforeText) => {
+  const finishFirst = deferred<void>();
+  const emitText = deferred<void>();
+  const finishNext = deferred<void>();
+  const deliveringText = deferred<void>();
+  const releaseText = deferred<void>();
+  const finished = deferred<void>();
+  const message = '次のターンを調べています。';
+  execute.mockImplementationOnce(async (input) => {
+    input.onText!('中断前に表示する文');
+    await finishFirst.promise;
+    return { message: 'Interrupted reply', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  execute.mockImplementationOnce(async (input) => {
+    await emitText.promise;
+    input.onText!(message);
+    await finishNext.promise;
+    return { message: 'Next turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const outputs = vi.fn(); client.onOutput(outputs);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  const transcript = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  const assistantEntries = () => transcript().filter((entry) => entry.role === 'assistant');
+  await waitFor(() => expect(assistantEntries()).toHaveLength(1));
+  const initialEntries = [...assistantEntries()];
+  const id = client.getSnapshot().state!.conversationId;
+  const readState = async () => {
+    const read = await fixture.dispatcher.snapshot(id);
+    try {
+      for await (const item of read.items) {
+        if (item.kind === 'state') return { operationId: read.operationId, state: item.state };
+      }
+      throw new Error('Snapshot state was not delivered');
+    } finally { read.cancel(); }
+  };
+  try {
+    await client.submit({ kind: 'message', text: 'Start the first turn' });
+    await waitFor(() => {
+      expect(client.getSnapshot().state?.running).not.toBeNull();
+      expect(assistantEntries()).toEqual([...initialEntries, { role: 'assistant', content: '中断前に表示する文' }]);
+    });
+    const first = client.getSnapshot().state!.running!;
+    expect(await client.submit({ kind: 'abort_turn', operationId: first.operationId, generation: first.generation! })).toMatchObject({ kind: 'accepted' });
+    finishFirst.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true }));
+    await waitFor(() => expect(app.lastFrame()).toContain('Turn interrupted'));
+    expect((await readState()).state).toMatchObject({ running: null, interrupted: true });
+
+    const deliver = service.deliver.bind(service);
+    vi.spyOn(service, 'deliver').mockImplementation(async (conversationId, output, version, signal) => {
+      if (output.kind === 'turn_text' && output.message === message) {
+        deliveringText.resolve();
+        await releaseText.promise;
+      }
+      await deliver(conversationId, output, version, signal);
+    });
+    const post = fixture.dispatcher.post.bind(fixture.dispatcher);
+    vi.spyOn(fixture.dispatcher, 'post').mockImplementation((event) => {
+      const pending = post(event);
+      if (event.kind === 'turn_finished') finished.resolve();
+      return pending;
+    });
+    const apply = vi.spyOn(fixture.conversations, 'apply');
+    const accepted = await client.submit({ kind: 'message', text: 'Start the next turn' });
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
+    await waitFor(() => expect(client.getSnapshot().state).toMatchObject({
+      running: { operationId: accepted.operationId }, interrupted: false,
+    }));
+    const started = await readState();
+    expect(started.operationId).toBe(accepted.operationId);
+    emitText.resolve();
+    await deliveringText.promise;
+    finishNext.resolve();
+    await finished.promise;
+    const settling = await readState();
+    expect(settling).toMatchObject({ operationId: null, state: { running: { operationId: accepted.operationId } } });
+    expect(apply).not.toHaveBeenCalled();
+    expect(outputs).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_text', message }));
+    expect(assistantEntries()).toEqual([...initialEntries, { role: 'assistant', content: '中断前に表示する文' }]);
+    if (refreshBeforeText) await refreshSnapshot(client, connections[0]!);
+    const beforeText = client.getSnapshot().state!;
+    releaseText.resolve();
+    await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'turn_text', operationId: accepted.operationId, message,
+    })));
+    await fixture.settled();
+    await waitFor(() => expect(app.lastFrame()).toContain('Next turn completed'));
+    if (!refreshBeforeText) await refreshSnapshot(client, connections[0]!);
+    expect({
+      startedInterrupted: started.state.interrupted,
+      settlingInterrupted: settling.state.interrupted,
+      clientBeforeText: { operationId: beforeText.running?.operationId ?? null, interrupted: beforeText.interrupted },
+      entries: assistantEntries(),
+    }).toEqual({
+      startedInterrupted: false,
+      settlingInterrupted: false,
+      clientBeforeText: { operationId: refreshBeforeText ? null : accepted.operationId, interrupted: false },
+      entries: [
+        ...initialEntries,
+        { role: 'assistant', content: '中断前に表示する文' },
+        { role: 'assistant', content: message },
+        { role: 'assistant', content: 'Next turn completed' },
+      ],
+    });
+    expect(outputs.mock.calls.filter(([output]) => output.kind === 'turn_text' && output.message === message)).toHaveLength(1);
+    expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: false });
+  } finally {
+    finishFirst.resolve(); emitText.resolve(); finishNext.resolve(); releaseText.resolve(); await fixture.settled();
+  }
 });
 
 it('shows the latest early activity when a connected TUI finally receives the delayed running state', async () => {
@@ -251,9 +604,13 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
   });
   const connections = observeIpcConnections();
   await client.connect(); await complete();
+  const beforeTurn = Date.now();
   await client.submit({ kind: 'message', text: 'Start before attaching' });
   await fixture.executing(1);
   await readingThinking.promise;
+  await waitFor(() => expect(client.getSnapshot().state?.running?.startedAt).toBeGreaterThanOrEqual(beforeTurn));
+  const startedAt = client.getSnapshot().state!.running!.startedAt;
+  expect(startedAt).toBeLessThanOrEqual(Date.now());
   client.close();
   client = new ConversationIpcClient(assignment, { provider: 'mock' });
   const outputs = vi.fn();
@@ -261,6 +618,7 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
   const activities = () => outputs.mock.calls.map(([output]) => output).filter((output) => output.kind === 'activity');
   try {
     await client.connect(); await complete();
+    expect(client.getSnapshot().state?.running?.startedAt).toBe(startedAt);
     await waitFor(() => expect(activities()).toHaveLength(1));
     expect(activities()[0]).toMatchObject({ activity: { kind: 'tool', tool: 'ReconnectTool' } });
     releaseThinking.resolve();
@@ -270,11 +628,13 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
     const app = await snapshotView();
     await waitFor(() => expect(app.lastFrame()).toContain('ReconnectTool'));
     await client.refresh(); await complete();
+    expect(client.getSnapshot().state?.running?.startedAt).toBe(startedAt);
     expect(activities()).toHaveLength(1);
     connections[1]!.socket.destroy();
     await waitFor(() => expect(activities()).toHaveLength(2));
     await waitFor(() => {
       expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+      expect(client.getSnapshot().state?.running?.startedAt).toBe(startedAt);
       expect(app.lastFrame()).toContain('ReconnectTool');
     });
     finish.resolve();
@@ -474,7 +834,7 @@ it('connects to the current daemon when the previous daemon stops during assignm
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const outputs: unknown[] = []; client.onOutput((output) => outputs.push(output));
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
-  const generate = vi.fn(async () => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
+  const generate = vi.fn(async (_input: ManagerTurnInput) => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
   const registration = vi.spyOn(goalService, 'registerReservedGoal');
   await client.connect(); await complete();
@@ -505,7 +865,7 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   expect((await new ConversationStateStore(directory).read(record.id))?.record).toMatchObject({
     pending: { revision: 5, summary }, approval: null, running: null,
   });
-  expect(generate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: getLabel('manager.goSummaryRequest', 'en') }));
+  expect(humanTurnText(generate.mock.calls[0]![0].prompt)).toBe(getLabel('manager.goSummaryRequest', 'en'));
   expect(registration).not.toHaveBeenCalled();
   expect((await new GoalStore(repository).list()).goals).toEqual([]);
   registration.mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
@@ -817,7 +1177,7 @@ it('retains the corrupt-record diagnostic and incomplete status until a repaired
   await client.refresh(); await complete();
   expect(client.getSnapshot().items.filter((item) => item.kind === 'goal')).toEqual([
     { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-      executionStatus: goal.executionStatus, repositoryDirectory: repository } },
+      executionStatus: goal.executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository } },
   ]);
   expect(client.getSnapshot().items.some((item) => item.kind === 'display_event' && item.event.message.includes(file))).toBe(false);
 });
@@ -844,11 +1204,11 @@ it.each([7, 9])('restores the exact IDs, order and objectives of %i large goals 
   for (const goal of [...goals].reverse()) saveGoal(goal);
   await client.connect(); await complete();
   expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []))
-    .toEqual(goals.map(({ id, objective, status, executionStatus }) => ({ id, objective, status, executionStatus, repositoryDirectory: repository })));
+    .toEqual(goals.map(({ id, objective, status, executionStatus }) => ({ id, objective, status, executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository })));
   const { selection } = await displayedSelection('\x07', 'goal');
   if (selection.kind !== 'goal') throw new Error('Expected goal selection');
   expect(selection.candidates).toEqual(goals.map(({ id, objective, status, executionStatus }) => ({
-    id, objective, status, executionStatus, repositoryDirectory: repository,
+    id, objective, status, executionStatus, awaitingHumanMerge: false, repositoryDirectory: repository,
   })));
 });
 
@@ -891,7 +1251,7 @@ it('forwards attachment overrides into the daemon runtime and delivers the compl
   expect(result.kind).toBe('accepted');
   await waitFor(() => expect(output).toHaveBeenCalledWith(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'finished' } })));
   expect(doubles.resolve).toHaveBeenCalledWith(assignment, expect.any(AbortSignal), { provider: 'mock', model: 'chosen-model' });
-  expect(execute).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'continue' }));
+  expect(execute.mock.calls.map(([input]) => humanTurnText(input.prompt))).toContain('continue');
   expect(client.getSnapshot().state).toMatchObject({ running: null, revision: 5 });
 });
 
@@ -1018,7 +1378,7 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect(inquiries).toHaveLength(30);
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) })];
+    getLabel('manager.counts', 'en', { goals: String(goals.length), awaiting: '0', questions: String(inquiries.length) })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   const bytes = observation.bytes;
 
@@ -1067,7 +1427,7 @@ it('[SCN-SNAP-DELTA-P1] hides appended work logs while displaying the changed go
 
   expect.soft(received.items.filter((item) => item.kind !== 'state')).toEqual([
     { kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
-      executionStatus: 'paused', repositoryDirectory: repository } },
+      executionStatus: 'paused', awaitingHumanMerge: false, repositoryDirectory: repository } },
     { kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
       message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } },
   ]);
@@ -1102,7 +1462,7 @@ it('[SCN-SNAP-DELTA-P2] updates a paused goal and removes its answered inquiry w
   await vi.waitFor(() => {
     expect(app.lastFrame()).not.toContain('Snapshot goal 1');
     expect(app.lastFrame()).toContain('Snapshot goal 2');
-    expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', questions: '1' }));
+    expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '1' }));
   });
   app.stdin.write('\x1b[27u');
   await vi.waitFor(() => expect(app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.answer', 'en')));
@@ -1140,7 +1500,7 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
     const received = connections[1]!.snapshots[0]!;
     expect(received.items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual([goal!.id, added.id]);
     expect.soft(received.items.map((item) => item.kind).filter((kind) => !['state', 'assignment', 'goal', 'inquiry'].includes(kind))).toEqual([]);
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', questions: '1' })));
+    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '1' })));
     expect(app.lastFrame()).not.toContain(duringDisconnect.summary);
     expect(app.lastFrame()).not.toContain(disconnectedNotification.body);
     const notification = { id: randomUUID(), recordedAt: new Date().toISOString(),
@@ -1228,7 +1588,7 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   await client.connect(); await complete();
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
-    getLabel('manager.counts', 'en', { goals: '2', questions: '2' })];
+    getLabel('manager.counts', 'en', { goals: '2', awaiting: '0', questions: '2' })];
   await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join(' | ')));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
   await openSnapshotMenu(app, 'answer', connections[0]!);
@@ -1295,7 +1655,7 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   const received = await refreshSnapshot(client, connections[0]!);
 
   expect(received.items).toContainEqual({ kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
-    executionStatus: 'paused', repositoryDirectory: repository } });
+    executionStatus: 'paused', awaitingHumanMerge: false, repositoryDirectory: repository } });
   expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'notification', notification.id]),
     message: formatGoalNotification(goal!, notification, 'en', 'repository', 'tui') } });
   expect(displayedInquiries(client)).toEqual([previousInquiries[1]]);

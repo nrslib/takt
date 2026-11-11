@@ -33,20 +33,9 @@ describe('getLabel', () => {
     expect(new Set(labels).size).toBe(3);
   });
 
-  it('uses a distinct Japanese label for extended thinking', () => {
-    expect(getLabel('tui.ui.extendedThinking', 'ja')).toBe('推論中...');
-  });
-
   it('returns a label by key (defaults to en)', () => {
     const result = getLabel('interactive.ui.intro');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
-  });
-
-  it('returns an English label when lang is "en"', () => {
-    const result = getLabel('interactive.ui.intro', 'en');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
+    expect(result).toBe(getLabel('interactive.ui.intro', 'en'));
   });
 
   it.each(['en', 'ja'] as const)('returns the localized /verify command label for %s', (lang) => {

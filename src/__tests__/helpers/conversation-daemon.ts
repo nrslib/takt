@@ -28,11 +28,11 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   }
   const routing = new TestRouting(directory);
   const store = new ConversationStateStore(directory);
-  const events = new FileEventStore(directory);
+  const events = new FileEventStore(directory, new DaemonRouting(directory));
   const failures: unknown[] = [];
   const onError = (error: unknown): void => { failures.push(error); };
   const conversations = new DaemonConversations(store, routing, new DaemonNotifications(directory),
-    (id, output, version) => input.deliver(id, output, version), onError);
+    (id, output, version, signal) => input.deliver(id, output, version, signal), onError);
   let executions = 0;
   const executionWaiters = new Map<number, Array<() => void>>();
   const business = createConversationTurnService(directory, { ...runtime, async resolve(...args) {

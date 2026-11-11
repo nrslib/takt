@@ -11,7 +11,7 @@ const question = (index = 1): Extract<SnapshotItem, { kind: 'inquiry' }> => ({
       recipient: 'human', status: 'pending', body: 'Choose output ' + index, options: ['CSV', 'JSON'] } },
 });
 const goal = (executionStatus: 'active' | 'paused' = 'active'): Extract<SnapshotItem, { kind: 'goal' }> => ({
-  kind: 'goal', goal: { id: goalRecord().id, objective: 'Control goal', status: 'created', executionStatus, repositoryDirectory: cwd },
+  kind: 'goal', goal: { awaitingHumanMerge: false, id: goalRecord().id, objective: 'Control goal', status: 'created', executionStatus, repositoryDirectory: cwd },
 });
 function mounted(items: Exclude<SnapshotItem, { kind: 'state' | 'remove' }>[]) {
   const client = new ManagerClientDouble();
