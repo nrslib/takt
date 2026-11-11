@@ -335,6 +335,41 @@ it.each(['ja', 'en'] as const)('keeps a classified operation failure label uncha
     expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
   } finally { await port.close(); }
 });
+it.each(['resolve', 'open', 'submit', 'rejected', 'result'] as const)('escapes failure mentions at the Slack %s boundary while preserving links', async (stage) => {
+  const labels = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
+  vi.mocked(getLabel).mockImplementation(labels.getLabel);
+  const { port, input, client, resolveAssignment } = fixture('en');
+  const reason = 'failed <@U012AB3CD> <!channel> <!here> <!everyone> <!subteam^S0123|team> <https://example.test/path?q=1&x=2|details>';
+  const error = new Error(reason);
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  if (stage === 'resolve') resolveAssignment.mockRejectedValue(error);
+  else if (stage === 'open') vi.mocked(input.open).mockRejectedValue(error);
+  else if (stage === 'submit') vi.mocked(input.submit).mockRejectedValue(error);
+  else if (stage === 'rejected') vi.mocked(input.submit).mockResolvedValue({ kind: 'error', code: 'operation_failed', message: reason });
+  else vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+
+  try {
+    await port.receive(endpoint, 'check');
+    if (stage === 'result') {
+      vi.mocked(client.postThreadMessage).mockClear();
+      await port.delivery.deliver(conversationId({ kind: 'repository', repositoryDirectory: '/canonical' }), {
+        kind: 'result', operationId: 'operation', result: { kind: 'error', code: 'operation_failed', message: reason },
+      }, { revision: 0, stateSequence: 1, operationId: 'operation' });
+    }
+
+    expect(client.postThreadMessage).toHaveBeenCalledOnce();
+    const [, message, blocks] = vi.mocked(client.postThreadMessage).mock.calls[0]!;
+    const sent = [message, ...(blocks ?? []).flatMap((block) => block.type === 'markdown' ? [block.text] : [])];
+    for (const text of sent) {
+      expect(text).not.toMatch(/<[@!]/u);
+      expect(text).toContain('&lt;@U012AB3CD>');
+      expect(text).toContain('&lt;!channel>');
+      expect(text).toContain('<https://example.test/path?q=1&x=2|details>');
+      expect(text.replace(/&lt;/gu, '<')).toContain(reason);
+    }
+    expect(input.submit).toHaveBeenCalledTimes(stage === 'resolve' || stage === 'open' ? 0 : 1);
+  } finally { await port.close(); }
+});
 it('stops receiving and releases accepted attachments on close without posting notices', async () => {
   const { port, input, client } = fixture();
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });

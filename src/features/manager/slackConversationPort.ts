@@ -24,6 +24,11 @@ export interface SlackEndpoint extends SlackThread { teamId: string; userId: str
 
 const MARKDOWN_MESSAGE_LIMIT = 12_000;
 
+function escapeSlackMentions(text: string): string {
+  // Escape mention introducers while preserving Slack link syntax and visible text.
+  return text.replace(/<(?=[@!])/gu, '&lt;');
+}
+
 export function createSlackConversationPort(options: {
   repositoryDirectory: string; configDirectory: string; resolveAssignment(): Promise<ManagerAssignment>; channelId: string; input: ConversationInput; client: SlackClient; language: 'ja' | 'en';
 }) {
@@ -177,7 +182,7 @@ export function createSlackConversationPort(options: {
               { name: formatGoalName(goal.objective), id: goal.id, branch: goal.branch }));
           }
           if (output.result.kind !== 'reply' && output.result.kind !== 'notice' && output.result.kind !== 'error') return { kind: 'delivered' };
-          const text = output.result.message;
+          const text = output.result.kind === 'error' ? escapeSlackMentions(output.result.message) : output.result.message;
           const blocks: MarkdownBlock[] | undefined = text.length <= MARKDOWN_MESSAGE_LIMIT ? [{ type: 'markdown', text }] : undefined;
           return await options.client.postThreadMessage(target.endpoint, text, blocks);
         } finally { detach(target.attachmentId); }
@@ -223,11 +228,11 @@ export function createSlackConversationPort(options: {
         attachmentId = undefined;
         await options.client.postThreadMessage(endpoint, options.language === 'ja' ? '受け付けて保存しました。' : 'Accepted and saved.');
       } else {
-        const message = submission.message;
+        const message = escapeSlackMentions(submission.message);
         await options.client.postThreadMessage(endpoint, message);
       }
     } catch (error) {
-      await options.client.postThreadMessage(endpoint, conversationErrorResult(error, options.language).message);
+      await options.client.postThreadMessage(endpoint, escapeSlackMentions(conversationErrorResult(error, options.language).message));
     } finally {
       admitted();
       if (attachmentId !== undefined) detach(attachmentId);

@@ -146,8 +146,9 @@ export function formatGoalNotification(
       ? goal.completion.summary : notification.body;
     if (destination === 'tui' && notification.kind !== 'question') {
       const bodyLines = source.split('\n');
-      lines.push(bodyLines.slice(0, 3).join('\n'));
-      if (bodyLines.length > 3) {
+      const visibleLines = notification.kind === 'blocked' && notification.severity === 'error' ? 4 : 3;
+      lines.push(bodyLines.slice(0, visibleLines).join('\n'));
+      if (bodyLines.length > visibleLines) {
         lines.push(getLabel('manager.notificationDigestHint', language));
       }
     } else {

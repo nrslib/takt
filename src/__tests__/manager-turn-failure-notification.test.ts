@@ -39,6 +39,14 @@ describe('notifyManagerTurnFailure', () => {
       { name: 'ANSI-obfuscated sensitive key', raw: 'failed api_\u001b[31mtoken\u001b[0m=fixture-secret', expected: 'failed api_token=[REDACTED]' },
       { name: 'secret longer than the display limit', raw: `token=${'s'.repeat(600)} readable`, expected: 'token=[REDACTED] readable' },
       { name: 'terminal controls', raw: '\u001b[?25lfailed\u001b[?25h\u0007\u009b31m\u001b]52;c;payload\u0007', expected: 'failed' },
+      ...['\n', '\r\n', '\r', '\v', '\f', '\u0085', '\u2028', '\u2029'].flatMap((separator) => [
+        { name: `authorization followed by a reason (${JSON.stringify(separator)})`,
+          raw: `Authorization: Bearer abc${separator}provider.transport: ECONNRESET`,
+          expected: 'Authorization: Bearer [REDACTED] provider.transport: ECONNRESET' },
+        { name: `folded authorization followed by a reason (${JSON.stringify(separator)})`,
+          raw: `Authorization: Bearer${separator}abc${separator}provider.transport: ECONNRESET`,
+          expected: 'Authorization: Bearer [REDACTED] provider.transport: ECONNRESET' },
+      ]),
       ...[
         ['LF', '\n'], ['CRLF', '\r\n'], ['CR', '\r'], ['VT', '\v'], ['FF', '\f'],
         ['NEL', '\u0085'], ['LS', '\u2028'], ['PS', '\u2029'], ['TAB', '\t'],
