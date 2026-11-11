@@ -87,6 +87,31 @@ beforeEach(() => {
 });
 
 describe('AI call output ownership', () => {
+  it('should assign a fresh stream call identity when retrying a stale interactive session', async () => {
+    const ctx = createContext();
+    ctx.sessionId = 'stale-session';
+    let attempt = 0;
+    vi.spyOn(ctx.provider, 'setup').mockReturnValue({
+      call: async (_prompt, options) => {
+        attempt += 1;
+        options.onStream?.({ type: 'tool_use', data: { id: 'item_0', tool: 'Read', input: { file_path: 'file.txt' } } });
+        options.onStream?.({ type: 'tool_result', data: { id: 'item_0', content: 'done', isError: false } });
+        return { persona: 'interactive', status: attempt === 1 ? 'error' : 'done', content: 'answer', timestamp: new Date() };
+      },
+    });
+    const events: StreamEvent[] = [];
+    const outcome = await callAIWithRetry('prompt', 'system', ['Read'], '/repo', ctx, {
+      outputMode: 'silent', persistSession: false, onStream: (event) => events.push(event),
+    });
+    expect(outcome.result?.success).toBe(true);
+    expect(events).toHaveLength(4);
+    expect(events[0]!.toolActivity?.callId).toEqual(expect.any(String));
+    expect(events[0]!.toolActivity?.callId).toBe(events[1]!.toolActivity?.callId);
+    expect(events[2]!.toolActivity?.callId).toBe(events[3]!.toolActivity?.callId);
+    expect(events[0]!.toolActivity?.callId).not.toBe(events[2]!.toolActivity?.callId);
+    expect(events.map((event) => 'id' in event.data ? event.data.id : undefined)).toEqual(['item_0', 'item_0', 'item_0', 'item_0']);
+  });
+
   it.each(['external abort', 'SIGINT'] as const)('should notify the caller once for %s before the provider settles', async (source) => {
     let settle!: (value: { persona: string; status: 'done'; content: string; timestamp: Date }) => void;
     const entered = vi.fn();

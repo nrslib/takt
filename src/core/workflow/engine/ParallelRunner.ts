@@ -1325,6 +1325,8 @@ export class ParallelRunner {
       }),
     );
 
+    parallelLogger?.flush();
+
     if (restartRequested || hasPendingOutsideDelivery(liveIntervention, liveDelivery)) {
       if (liveIntervention === undefined) {
         throw new Error('Live intervention restart requested without a live intervention channel');
@@ -1868,6 +1870,8 @@ export class ParallelRunner {
     const options: ParallelLoggerOptions = {
       subStepNames,
       parentOnStream: this.deps.engineOptions.onStream,
+      toolDisplayMode: this.deps.engineOptions.toolDisplayMode,
+      quiet: this.deps.engineOptions.streamQuiet,
       progressInfo: {
         iteration,
         maxSteps,
