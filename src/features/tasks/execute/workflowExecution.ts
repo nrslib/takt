@@ -8,7 +8,7 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
-import { resolveRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
+import { withRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -122,28 +122,6 @@ function serializeObservabilityForNestedRuns(observability: {
     session_log_exporter: observability.sessionLogExporter,
     usage_events_phase: observability.usageEventsPhase,
   });
-}
-
-/**
- * A task in a clone has no `origin`, so `gh` / `glab` cannot find the
- * repository there. Name it from the project root's origin. A task in the
- * project root keeps its remotes and the CLIs' own choice (for example
- * `gh repo set-default`), so nothing is added there.
- */
-function withRepositoryIdentityEnv(
-  childProcessEnv: Readonly<Record<string, string>> | undefined,
-  cwd: string,
-  projectCwd: string,
-  ambientEnv: NodeJS.ProcessEnv,
-): Readonly<Record<string, string>> | undefined {
-  if (cwd === projectCwd) {
-    return childProcessEnv;
-  }
-  const identityEnv = resolveRepositoryIdentityEnv(projectCwd, ambientEnv);
-  if (Object.keys(identityEnv).length === 0) {
-    return childProcessEnv;
-  }
-  return { ...childProcessEnv, ...identityEnv };
 }
 
 function resolveNestedChildProcessEnv(observability: {

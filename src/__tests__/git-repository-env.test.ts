@@ -21,6 +21,7 @@ import {
 import {
   buildRepositoryIdentityEnv,
   resolveRepositoryIdentityEnv,
+  withRepositoryIdentityEnv,
 } from '../infra/git/repository-env.js';
 
 beforeEach(() => {
@@ -201,5 +202,53 @@ describe('resolveRepositoryIdentityEnv', () => {
     mockExecFileSync.mockReturnValue('git@ghe.corp.example:owner/repo.git\n');
 
     expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({});
+  });
+});
+
+describe('withRepositoryIdentityEnv', () => {
+  const origin = () => mockExecFileSync.mockReturnValue('git@github.com:owner/repo.git\n');
+
+  it('adds the repository identity to a task that runs in a clone', () => {
+    origin();
+
+    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toEqual({
+      GH_REPO: 'owner/repo',
+    });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/project' }),
+    );
+  });
+
+  it('leaves the environment untouched for a task in the project root', () => {
+    origin();
+    const env = { TAKT_OBSERVABILITY: '{}' };
+
+    expect(withRepositoryIdentityEnv(env, '/project', '/project', {})).toBe(env);
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('merges with the observability variables and keeps them', () => {
+    origin();
+
+    expect(withRepositoryIdentityEnv({ TAKT_OBSERVABILITY: '{}' }, '/clones/task', '/project', {})).toEqual({
+      TAKT_OBSERVABILITY: '{}',
+      GH_REPO: 'owner/repo',
+    });
+  });
+
+  it('returns the original environment when there is nothing to add', () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('no origin');
+    });
+    const env = { TAKT_OBSERVABILITY: '{}' };
+
+    expect(withRepositoryIdentityEnv(env, '/clones/task', '/project', {})).toBe(env);
+    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toBeUndefined();
+  });
+
+  it('does not override a variable the caller already set', () => {
+    origin();
+
+    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', { GH_REPO: 'other/repo' })).toBeUndefined();
   });
 });

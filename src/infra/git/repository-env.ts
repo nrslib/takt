@@ -96,3 +96,25 @@ export function resolveRepositoryIdentityEnv(
   const provider = resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProviderFromHostname(remote.hostname);
   return buildRepositoryIdentityEnv(remote, provider, ambientEnv);
 }
+
+/**
+ * A task in a clone has no `origin`, so `gh` / `glab` cannot find the
+ * repository there. Name it from the project root's origin. A task in the
+ * project root keeps its remotes and the CLIs' own choice (for example
+ * `gh repo set-default`), so nothing is added there.
+ */
+export function withRepositoryIdentityEnv(
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+  cwd: string,
+  projectCwd: string,
+  ambientEnv: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> | undefined {
+  if (cwd === projectCwd) {
+    return childProcessEnv;
+  }
+  const identityEnv = resolveRepositoryIdentityEnv(projectCwd, ambientEnv);
+  if (Object.keys(identityEnv).length === 0) {
+    return childProcessEnv;
+  }
+  return { ...childProcessEnv, ...identityEnv };
+}
