@@ -16,7 +16,7 @@ Recheck the gaps claimed by the latest completion verification, correct the supp
 2. Do not split problems with the same cause, condition, and acceptance criteria based only on physical code locations or file paths
 3. Determine why the previous evidence missed each gap: an unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated completion report
 4. When the observation or detection method itself failed, recheck every obligation closed with the same assumption, search method, or evidence
-5. When the same condition repeatedly fails on different paths, do not patch only the reported path. Repair all affected paths at a shared change point or prevent the violation through the type or state structure
+5. Reconcile the planned method with the rechecked shared cause and current code, and record the actual method and evidence in the repair report
 6. Correct the verification method, then implement and recheck items previously marked complete under the same premise and every incomplete item in the plan
 7. Check whether existing failure examples detect the established gap, and add or update them only as needed. Record the evidence used and the unverified scope
 

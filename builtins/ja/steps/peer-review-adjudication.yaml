@@ -15,9 +15,11 @@ persona: review-adjudicator
 policy:
   - process-deviation
   - review-adjudication
+  - repair-strategy
   - architecture
   - takt
   - contract-change
+  - review
   - $param: review_policy_additions
 knowledge:
   - architecture
