@@ -62,16 +62,27 @@ describe('TUI editor state', () => {
       expect(state.cursor).toBe(5);
     });
 
-    it('should splice a multi-line paste into the middle of the buffer', () => {
-      const state = press(editorAt('xy', 1), { kind: 'insert', text: 'A\nB' });
-      expect(state.text).toBe('xA\nBy');
-      expect(state.cursor).toBe(4);
+    it.each([
+      { name: 'LF', raw: 'A\nB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'CRLF', raw: 'A\r\nB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'CR', raw: 'A\rB', expected: 'xA\nBy', cursor: 4 },
+      { name: 'mixed CRLF, CR and LF', raw: 'A\r\nB\rC\nD', expected: 'xA\nB\nC\nDy', cursor: 8 },
+    ])('should normalize $name line breaks when pasting into the middle of the buffer', ({ raw, expected, cursor }) => {
+      const state = press(editorAt('xy', 1), { kind: 'insert', text: raw });
+      expect(state.text).toBe(expected);
+      expect(state.cursor).toBe(cursor);
+    });
+
+    it('should strip NUL and preserve tabs while normalizing pasted CR line breaks', () => {
+      const state = press(editorAt('xy', 1), { kind: 'insert', text: 'A\x00\rB\tC' });
+      expect(state.text).toBe('xA\nB\tCy');
+      expect(state.cursor).toBe(6);
     });
 
     it('should strip ANSI escapes from the inserted text', () => {
-      const state = press(createEditorState(''), { kind: 'insert', text: '\x1b[31mred\x1b[0m' });
-      expect(state.text).toBe('red');
-      expect(state.cursor).toBe(3);
+      const state = press(editorAt('xy', 1), { kind: 'insert', text: '\x1b[31mred\x1b[0m' });
+      expect(state.text).toBe('xredy');
+      expect(state.cursor).toBe(4);
     });
 
     it('should leave the state alone when the text sanitizes down to nothing', () => {

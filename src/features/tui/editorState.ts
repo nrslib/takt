@@ -127,7 +127,7 @@ export function replaceEditorText(state: EditorState, text: string): EditorState
  * as multiple rows rather than as one run-on line.
  */
 function insertAtCursor(state: EditorState, raw: string): EditorState {
-  const inserted = toDisplayText(raw);
+  const inserted = toDisplayText(raw.replace(/\r\n?/g, '\n'));
   if (inserted.length === 0) {
     return state;
   }
