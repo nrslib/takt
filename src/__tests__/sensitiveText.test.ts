@@ -74,6 +74,50 @@ describe('sensitiveText', () => {
       expect(sanitizeSensitiveTextWithKnownValues(text, text))
         .toBe('token=' + quote + '[REDACTED]' + quote + ' https://example.test/path');
     });
+
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'c2VjcmV0=='],
+      ['Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+      ['Set-Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+    ])('collects the JSON-escaped %s credential without collecting the following URL', (header, value, credential) => {
+      const command = 'token=' + quote + 'metadata ' + header + ': ' + value + quote + ' https://example.test/path';
+      const source = JSON.stringify({ command });
+      const expected = JSON.stringify({ command: 'token=' + quote + '[REDACTED]' + quote + ' https://example.test/path' });
+
+      const collected = collectSensitiveStringValues(source);
+
+      expect(collected.values.has(credential)).toBe(true);
+      expect([...collected.values].some((candidate) => candidate.includes('example.test/path'))).toBe(false);
+      expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', source))
+        .toBe('echoed [REDACTED] https://example.test/path');
+      expect(sanitizeSensitiveText(source)).toBe(expected);
+      expect(sanitizeSensitiveTextWithKnownValues(source, source)).toBe(expected);
+    });
+  });
+
+  it.each([
+    'metadata \\"quoted\\" ',
+    'metadata \\\\ ',
+    'metadata \\\\\\"quoted\\\\\\" ',
+  ])('keeps JSON assignment boundaries after escaped metadata: %s', (metadata) => {
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
+  });
+
+  it('bounds header collection inside a long JSON-escaped assignment', () => {
+    const metadata = 'metadata \\"quoted\\" \\\\ '.repeat(4_096);
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
   });
 
   it.each(['\n', '\r\n'])('keeps the following diagnosis after an unterminated quoted header (%j)', (separator) => {

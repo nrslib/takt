@@ -28,12 +28,15 @@ const SENSITIVE_KEY_NAME_REGEX = new RegExp(
   'i',
 );
 const SENSITIVE_QUOTED_VALUE_PATTERN = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
+// JSON doubles shell backslashes: runs of 4n+3 before a quote stay inside
+// the value, while 4n+1 closes it. The alternatives consume disjoint runs.
+const JSON_ESCAPED_QUOTED_VALUE_PATTERN = String.raw`\\"(?:[^"\\]|\\{4}|\\{1,3}[^"\\]|\\{3}")*\\"`;
 const SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX = new RegExp(
-  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*)(${SENSITIVE_QUOTED_VALUE_PATTERN})`,
+  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*)(${JSON_ESCAPED_QUOTED_VALUE_PATTERN}|${SENSITIVE_QUOTED_VALUE_PATTERN})`,
   'gi',
 );
 const SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(
-  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)([^"'[{,\s}\]]+)(["']?)`,
+  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)(?!\\")([^"'[{,\s}\]]+)(["']?)`,
   'gi',
 );
 const SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(
@@ -197,7 +200,7 @@ export function sanitizeSensitiveText(text: string): string {
   const sanitized = text
     .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
     .replace(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, (_match, prefix: string, quotedValue: string) => {
-      const quote = quotedValue[0];
+      const quote = quotedValue.startsWith('\\"') ? '\\"' : quotedValue[0];
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
     .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
@@ -257,7 +260,7 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     const quotedValue = match[2]!;
     addSensitiveValue(values, quotedValue);
     // Embedded credentials stay within the assignment's quote boundary.
-    collectHttpHeaderSensitiveValues(quotedValue.slice(1, -1), values);
+    collectHttpHeaderSensitiveValues(stripMatchingQuotes(quotedValue), values);
   }
   addMatches(text, SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
@@ -353,6 +356,9 @@ function addCookieValues(values: Set<string>, value: string): void {
 }
 
 function stripMatchingQuotes(value: string): string {
+  if (value.length >= 4 && value.startsWith('\\"') && value.endsWith('\\"')) {
+    return value.slice(2, -2);
+  }
   const first = value[0];
   return value.length >= 2 && (first === '"' || first === "'") && value.at(-1) === first
     ? value.slice(1, -1)
