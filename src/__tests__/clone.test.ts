@@ -39,6 +39,7 @@ vi.mock('node:fs', () => ({
     realpathSync: vi.fn((value: string) => value),
     existsSync: vi.fn(),
     rmSync: vi.fn(),
+    readdirSync: vi.fn(),
     unlinkSync: vi.fn(),
     accessSync: vi.fn(),
     constants: { W_OK: 2 },
@@ -55,6 +56,7 @@ vi.mock('node:fs', () => ({
   realpathSync: vi.fn((value: string) => value),
   existsSync: vi.fn(),
   rmSync: vi.fn(),
+  readdirSync: vi.fn(),
   unlinkSync: vi.fn(),
   accessSync: vi.fn(),
   constants: { W_OK: 2 },
@@ -2445,6 +2447,36 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[1]).not.toContain('--dissociate');
     expect(cloneCalls[1]).toContain('--no-local');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  // A destination path may contain newlines, which can put a shallow-looking line in the middle of
+  // git's "destination path ... already exists" error. That error must neither retry nor delete.
+  const destinationExistsError = "fatal: destination path '/tmp/before\nfatal: reference repository 'p' is shallow\nafter' already exists and is not an empty directory.";
+
+  it('should not retry or delete an existing destination whose path mimics the shallow error', () => {
+    vi.mocked(fs.readdirSync).mockReturnValue(['existing'] as never);
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false, otherError: destinationExistsError });
+
+    expect(() => createSharedClone(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-destination',
+      taskSlug: 'existing-destination',
+    })).toThrow('Git clone failed');
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('should not retry or delete an existing destination in the abortable clone either', async () => {
+    vi.mocked(fs.readdirSync).mockReturnValue(['existing'] as never);
+    const { cloneCalls } = setupAbortableCloneFailureMock(destinationExistsError);
+
+    await expect(createSharedCloneAbortable(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-destination-abortable',
+      taskSlug: 'existing-destination',
+    })).rejects.toThrow('Git clone failed');
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
   });
 
   it('should sanitize non-shallow clone errors before throwing', () => {
