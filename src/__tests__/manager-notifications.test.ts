@@ -80,6 +80,19 @@ it('skips Slack delivery with no webhook while retaining saved notifications', a
   expect(doubles.send).not.toHaveBeenCalled();
 });
 
+it.each([
+  { kind: 'blocked' as const, severity: 'warning' as const },
+  { kind: 'blocked' as const, severity: undefined },
+  { kind: 'custom' as const, severity: 'error' as const },
+])('preserves mention syntax for non-failure $kind notifications (severity=$severity)', async ({ kind, severity }) => {
+  const body = '<@U012AB3CD> <!channel> <https://example.test|details>';
+  const current = { ...goalRecord(), notifications: [{ ...notice, kind, severity, body }] };
+
+  await sendSavedGoalNotifications('/project', goalRecord(), current, 'https://example.test/secret');
+
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining(body));
+});
+
 it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspace name resolved from cwd', async (language) => {
   doubles.language.mockReturnValue(language);
   const current = { ...goalRecord(), notifications: [notice] };

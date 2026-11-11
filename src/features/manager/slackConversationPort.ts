@@ -8,6 +8,7 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { SlackClient, SlackThread, SlackDeliveryResult } from '../../infra/slack/client.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { escapeSlackMentions } from '../../shared/utils/slackText.js';
 import { conversationErrorResult } from './conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, ConversationPort, ConversationCommand, QuestionTarget } from './conversationPort.js';
 import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiryBindings.js';
@@ -23,11 +24,6 @@ export const SLACK_GOAL_DISMISS = 'takt_goal_dismiss';
 export interface SlackEndpoint extends SlackThread { teamId: string; userId: string }
 
 const MARKDOWN_MESSAGE_LIMIT = 12_000;
-
-function escapeSlackMentions(text: string): string {
-  // Escape mention introducers while preserving Slack link syntax and visible text.
-  return text.replace(/<(?=[@!])/gu, '&lt;');
-}
 
 export function createSlackConversationPort(options: {
   repositoryDirectory: string; configDirectory: string; resolveAssignment(): Promise<ManagerAssignment>; channelId: string; input: ConversationInput; client: SlackClient; language: 'ja' | 'en';

@@ -488,6 +488,7 @@
     "src/__tests__/manager-task-events.test.ts",
     "src/__tests__/manager-turn-executor.test.ts",
     "src/__tests__/manager-turn-failure-notification.test.ts",
+    "src/__tests__/manager-turn-failure-webhook.integration.test.ts",
     "src/__tests__/manager-turn-response.test.ts",
     "src/__tests__/manager-view.test.ts",
     "src/__tests__/manager-workflow-selection.test.ts",

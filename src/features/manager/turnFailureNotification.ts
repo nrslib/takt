@@ -4,6 +4,7 @@ import type { Goal } from '../../infra/goals/schema.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { basename } from 'node:path';
 import { sendSlackNotification } from '../../shared/utils/slackWebhook.js';
+import { escapeSlackMentions } from '../../shared/utils/slackText.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
@@ -24,7 +25,7 @@ export async function notifyManagerTurnFailure(cwd: string, goalId: string | und
         getLabel('manager.notificationHumanHeadings.blocked', language, { project: basename(cwd), context: '' }),
         getLabel('manager.conversationFailureNotification', language, { reason }),
       ].join('\n');
-      if (webhookUrl) await sendSlackNotification(webhookUrl, message);
+      if (webhookUrl) await sendSlackNotification(webhookUrl, escapeSlackMentions(message));
       return message;
     }
     const notification = managerTurnFailureNotification(goalId, error, language);
