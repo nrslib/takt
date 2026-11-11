@@ -131,6 +131,22 @@ describe('buildRepositoryIdentityEnv', () => {
     expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.com' })).toEqual({});
   });
 
+  it('compares the port too when a GitLab token is set', () => {
+    const withPort = parseRemoteRepositoryUrl('https://gitlab.example.com:8443/group/project.git')!;
+
+    // same hostname, different port: glab would send the token to the other port
+    expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com:9999' })).toEqual({});
+    // the origin has a port, the configured host does not
+    expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com' })).toEqual({});
+    // the origin has no port, the configured host names one
+    expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com:8443' })).toEqual({});
+    // same port, and a default port written out is the same host
+    expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com:8443' }))
+      .toEqual({ GITLAB_REPO: 'https://gitlab.example.com:8443/group/project' });
+    expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com:443' }))
+      .toEqual({ GITLAB_REPO: 'https://gitlab.example.com/group/sub/project' });
+  });
+
   it('sets GITLAB_REPO when a GitLab token is set for the same host', () => {
     expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', {
       OAUTH_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com',
@@ -246,9 +262,32 @@ describe('withRepositoryIdentityEnv', () => {
     expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toBeUndefined();
   });
 
-  it('does not override a variable the caller already set', () => {
+  it('keeps a repository variable the caller already set, and it wins over the derived one', () => {
     origin();
 
-    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', { GH_REPO: 'other/repo' })).toBeUndefined();
+    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', { GH_REPO: 'other/repo' })).toEqual({
+      GH_REPO: 'other/repo',
+    });
+  });
+
+  it('keeps the caller\'s repository variables even when the origin yields nothing', () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('no origin');
+    });
+
+    expect(withRepositoryIdentityEnv({ TAKT_OBSERVABILITY: '{}' }, '/clones/task', '/project', {
+      GITLAB_REPO: 'https://gitlab.example.com/group/project',
+      GITLAB_TOKEN: 'secret',
+      HOME: '/home/user',
+    })).toEqual({
+      TAKT_OBSERVABILITY: '{}',
+      GITLAB_REPO: 'https://gitlab.example.com/group/project',
+    });
+  });
+
+  it('does not carry a caller-set repository variable into the project root', () => {
+    const env = { TAKT_OBSERVABILITY: '{}' };
+
+    expect(withRepositoryIdentityEnv(env, '/project', '/project', { GH_REPO: 'other/repo' })).toBe(env);
   });
 });

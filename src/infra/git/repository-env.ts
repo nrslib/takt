@@ -8,6 +8,7 @@
  */
 
 import { resolveConfigValue } from '../config/resolveConfigValue.js';
+import { REPOSITORY_IDENTITY_ENV_KEYS } from '../../shared/utils/repository-identity-env.js';
 import {
   detectVcsProviderFromHostname,
   getOriginRemoteUrl,
@@ -27,9 +28,10 @@ function isSet(env: NodeJS.ProcessEnv, key: string): boolean {
   return value !== undefined && value !== '';
 }
 
-function hostnameOf(value: string): string {
+// Host plus a non-default port: glab sends the token to the exact host and port of GITLAB_REPO.
+function hostOf(value: string): string {
   try {
-    return new URL(value.includes('://') ? value : `https://${value}`).hostname.toLowerCase();
+    return new URL(value.includes('://') ? value : `https://${value}`).host.toLowerCase();
   } catch {
     return '';
   }
@@ -52,7 +54,7 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
-    if (configuredHost === undefined || hostnameOf(configuredHost) !== remote.hostname) return {};
+    if (configuredHost === undefined || hostOf(configuredHost) !== remote.webHost) return {};
   }
   // The URL form keeps the host and nested groups unambiguous: glab treats a
   // plain `host/group/project` as a group path unless the host is configured.
@@ -97,6 +99,15 @@ export function resolveRepositoryIdentityEnv(
   return buildRepositoryIdentityEnv(remote, provider, ambientEnv);
 }
 
+function presetRepositoryIdentityEnv(ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of REPOSITORY_IDENTITY_ENV_KEYS) {
+    const value = ambientEnv[key];
+    if (value !== undefined && value !== '') env[key] = value;
+  }
+  return env;
+}
+
 /**
  * A task in a clone has no `origin`, so `gh` / `glab` cannot find the
  * repository there. Name it from the project root's origin. A task in the
@@ -112,7 +123,9 @@ export function withRepositoryIdentityEnv(
   if (cwd === projectCwd) {
     return childProcessEnv;
   }
-  const identityEnv = resolveRepositoryIdentityEnv(projectCwd, ambientEnv);
+  // Command gates and system `command` inputs get only what is in this snapshot, so a repository
+  // variable the caller set is carried over as is, and wins over a derived one.
+  const identityEnv = { ...resolveRepositoryIdentityEnv(projectCwd, ambientEnv), ...presetRepositoryIdentityEnv(ambientEnv) };
   if (Object.keys(identityEnv).length === 0) {
     return childProcessEnv;
   }
