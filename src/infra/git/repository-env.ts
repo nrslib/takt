@@ -60,11 +60,11 @@ function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
 
 function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
   if (isSet(ambientEnv, 'GITLAB_REPO')) return {};
-  // glab sends a token from the environment to the host named by GITLAB_REPO.
-  // When such a token is present, name the repository only if the caller's
-  // own host variable already points at the same endpoint, so we never add a
-  // host the caller did not configure for that token. glab's own config
-  // (`api_host`, `api_protocol`) can still redirect the API; this cannot see it.
+  // With a token in the environment, name the repository only if the caller's own host variable
+  // already points at the same endpoint, so we never add a host the caller did not configure for
+  // that token. This is an environment-level check: by default glab sends the token to the host
+  // named by GITLAB_REPO, but its own config (`api_host`, `api_protocol`) can redirect the API, and
+  // this cannot see that.
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
