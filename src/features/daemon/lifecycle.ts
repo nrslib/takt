@@ -11,7 +11,8 @@ import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { ensurePrivateDirectory } from '../../infra/daemon/privateFile.js';
 import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
-import { isConversationIpcReady } from './conversationReadiness.js';
+import { connectConversationIpc } from './conversationReadiness.js';
+import type { Socket } from 'node:net';
 
 const PROCESS_WAIT_MS = 5_000;
 // 子の終了猶予（5秒）に加え、強制終了・保存・watcher/IPC の後片付けを待つ。
@@ -40,7 +41,13 @@ export async function stopDaemon(): Promise<void> {
   log.info('Daemon exit confirmed', { pid: owner.pid });
 }
 
-export async function ensureDaemon(): Promise<void> {
+export function ensureDaemon(options: { retainConnection: true }): Promise<Socket>;
+export function ensureDaemon(): Promise<void>;
+export async function ensureDaemon(options?: { retainConnection: true }): Promise<Socket | void> {
+  const handoff = (socket: Socket): Socket | void => {
+    if (options?.retainConnection) return socket;
+    socket.destroy();
+  };
   const directory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
   const cliPath = daemonEntryPath();
   const args = [cliPath];
@@ -53,7 +60,8 @@ export async function ensureDaemon(): Promise<void> {
           await removeDaemonOwner(directory, owner, io());
           break;
         }
-        if (await isConversationIpcReady(directory, owner)) return;
+        const socket = await connectConversationIpc(directory, owner);
+        if (socket !== undefined) return handoff(socket);
         await delay(PROCESS_POLL_MS);
       }
       if (await isDaemonOwnerRunning(owner, io())) throw new Error('Daemon IPC readiness was not confirmed');
@@ -64,35 +72,37 @@ export async function ensureDaemon(): Promise<void> {
   const logs = join(directory, 'logs');
   await ensurePrivateDirectory(logs);
   const descriptor = await open(join(logs, `daemon-start-${randomUUID()}.log`), 'wx', 0o600);
+  let child: ReturnType<typeof spawn>;
   try {
     const env = buildChildProcessEnv();
     env.TAKT_CONFIG_DIR = directory;
-    const child = spawn(process.execPath, args, {
+    child = spawn(process.execPath, args, {
       cwd: directory, detached: true, shell: false, stdio: ['ignore', descriptor.fd, descriptor.fd], env,
     });
     await new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });
     });
-    const deadline = Date.now() + PROCESS_WAIT_MS;
-    while (Date.now() < deadline) {
-      const started = await readDaemonOwner(directory);
-      // A concurrent caller may have started the same daemon first; the child then exits as the loser.
-      if (started !== undefined && await isDaemonOwnerRunning(started, io())
-        && (started.pid === child.pid || (started.version === packageVersion && started.cliPath === cliPath))) {
-        if (await isConversationIpcReady(directory, started)) {
-          log.info('Daemon startup confirmed', { pid: started.pid });
-          return;
-        }
-      } else if (child.exitCode !== null || child.signalCode !== null) {
-        break;
-      }
-      await delay(PROCESS_POLL_MS);
-    }
-    throw new Error('Daemon startup was not confirmed; see the global logs directory');
   } finally {
     await descriptor.close();
   }
+  const deadline = Date.now() + PROCESS_WAIT_MS;
+  while (Date.now() < deadline) {
+    const started = await readDaemonOwner(directory);
+    // A concurrent caller may have started the same daemon first; the child then exits as the loser.
+    if (started !== undefined && await isDaemonOwnerRunning(started, io())
+      && (started.pid === child.pid || (started.version === packageVersion && started.cliPath === cliPath))) {
+      const socket = await connectConversationIpc(directory, started);
+      if (socket !== undefined) {
+        log.info('Daemon startup confirmed', { pid: started.pid });
+        return handoff(socket);
+      }
+    } else if (child.exitCode !== null || child.signalCode !== null) {
+      break;
+    }
+    await delay(PROCESS_POLL_MS);
+  }
+  throw new Error('Daemon startup was not confirmed; see the global logs directory');
 }
 
 /** 手動起動も daemon 専用入口に入り、端末・シグナル・終了状態を引き継ぐ。 */

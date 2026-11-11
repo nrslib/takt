@@ -1,12 +1,10 @@
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { resolveCurrentManagerAssignment } from './assignment.js';
-import { createConnection, type Socket } from 'node:net';
+import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { conversationIpcEndpoint, DaemonIpcStateSchema, ipcStateMatchesOwner, readDaemonIpcState,
-  resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
-import { isDaemonOwnerRunning, readDaemonOwner } from '../../infra/daemon/owner.js';
+import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
@@ -151,12 +149,6 @@ export class ConversationIpcClient {
         : this.assignment, configDirectory);
     const resolved = await port.resolve(selected);
     if (this.closed) return;
-    await ensureDaemon();
-    if (this.closed) return;
-    const owner = await readDaemonOwner(configDirectory);
-    const state = await readDaemonIpcState(configDirectory);
-    if (owner === undefined || state === undefined || !await isDaemonOwnerRunning(owner, { signal: new AbortController().signal, timeoutMs: 5000 }) || !ipcStateMatchesOwner(state, owner)
-      || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
       this.items.clear();
@@ -211,10 +203,12 @@ export class ConversationIpcClient {
       });
     }
     this.resolved = resolved;
-    const socket = createConnection(state.endpoint);
+    const socket = await ensureDaemon({ retainConnection: true });
+    if (this.closed) { socket.destroy(); return; }
     this.socket = socket;
+    if (socket.destroyed) throw new Error('Daemon disconnected before opening conversation');
     const decoder = new ConversationFrameDecoder();
-    let authenticated = false;
+    this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {
       if (this.socket !== socket || socket.destroyed) return;
       try {
@@ -231,7 +225,6 @@ export class ConversationIpcClient {
               catch (error) { pending.reject(error instanceof Error ? error : new Error('Invalid IPC response')); throw error; }
             }
           } else {
-            if (!authenticated) throw new Error('IPC event before authentication');
             this.receiver!.receive(value);
           }
         }
@@ -239,17 +232,7 @@ export class ConversationIpcClient {
     });
     socket.on('error', (error) => { if (this.socket === socket) this.disconnect(error); });
     socket.once('close', () => { if (this.socket === socket) this.disconnect(new Error('Daemon disconnected')); });
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { socket.destroy(); reject(new Error('IPC connection timed out')); }, 5_000);
-      socket.once('connect', () => { clearTimeout(timer); resolve(); });
-      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
-    });
-    await this.request('hello', { capability: state.capability }, (value) => {
-      const hello = z.object({ owner: DaemonIpcStateSchema.shape.owner }).strict().parse(value);
-      if (!ipcStateMatchesOwner({ ...state, owner: hello.owner }, owner)) throw new Error('Daemon hello identity mismatch');
-      this.receiver!.authenticated();
-      authenticated = true;
-    });
+    socket.resume();
     await this.requestRead('open', { ...resolved, ...(this.agentOverrides === undefined ? {} : { agentOverrides: this.agentOverrides }) }, (value) => {
       const result = z.object({ attachmentId: z.uuid(), read: ConversationReadMetadataSchema }).strict().parse(value);
       this.attachmentId = result.attachmentId;
@@ -294,6 +277,9 @@ export class ConversationIpcClient {
   }
 
   private disconnect(error: Error): void {
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.destroy();
     for (const pending of this.requests.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this.requests.clear();
     this.attachmentId = undefined;
