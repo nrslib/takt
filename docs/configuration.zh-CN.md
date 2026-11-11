@@ -493,7 +493,7 @@ workflow_system_commands:
 
 `worktree: true` 的任务在没有 `origin` remote 的 clone 中运行，因此 `gh` 和 `glab` 无法从 git remote 确定仓库。TAKT 读取项目根目录的 `origin`，并为该任务的 agent 步骤、命令质量门禁和 system `command` 输入提供仓库：
 
-- GitHub：`GH_REPO=OWNER/REPO`；`github.com` 以外的主机为 `HOST/OWNER/REPO`（设置了 `GH_HOST` 时 `github.com` 也带主机）。
+- GitHub：`GH_REPO=HOST/OWNER/REPO`。由于 gh 的默认主机不一定是 `github.com`，主机（包括 `github.com`）总是会写明。仅供 ssh 使用的主机 `ssh.github.com` 和 `altssh.gitlab.com` 分别按 `github.com` 和 `gitlab.com` 处理。设置了 `GH_ENTERPRISE_TOKEN` 或 `GITHUB_ENTERPRISE_TOKEN` 时，仅当 `GH_HOST` 指向同一主机才写明 GitHub Enterprise Server 的主机，以免该 token 被指向调用方未为其配置的主机。
 - GitLab：`GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`，其中 scheme 取自 origin（`http` 保持 `http`，ssh 的 origin 为 `https`）。设置了 `GITLAB_TOKEN`、`GITLAB_ACCESS_TOKEN` 或 `OAUTH_TOKEN` 时，仅当 `GITLAB_HOST`（或 `GITLAB_URI` / `GL_HOST`）指向相同的 scheme、主机和实际端口（`http` 为 80，`https` 为 443；不带 scheme 的值按 `https` 处理）才添加，以免 TAKT 指定与 token 所配置的主机不同的主机。这只比较环境变量：glab 的协议和 API 主机由它自身的配置（`api_protocol`、`api_host`）决定，而不是这些变量中的 scheme，TAKT 无法看到该配置。
 
 已经设置的变量不会被覆盖。不会添加 remote 或凭据，也不会使用 URL 中的用户名或 token。在项目根目录运行的任务、`origin` 不存在或无法识别、provider 未知时，不添加任何变量。system `command` 输入在没有 `HOME` 的环境中运行，其中的 `gh` / `glab` 仍需自行认证。

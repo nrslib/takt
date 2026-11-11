@@ -492,7 +492,7 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `worktree: true` のタスクは `origin` リモートのない clone で動くため、そこでは `gh` や `glab` が git リモートからリポジトリを特定できません。TAKT はプロジェクトルートの `origin` を読み、そのタスクのエージェントのステップ、コマンドの品質ゲート、system の `command` 入力にリポジトリを渡します。
 
-- GitHub: `GH_REPO=OWNER/REPO`。`github.com` 以外のホストでは `HOST/OWNER/REPO`（`GH_HOST` が設定されているときは `github.com` でも付けます）。
+- GitHub: `GH_REPO=HOST/OWNER/REPO`。gh の既定のホストが `github.com` とは限らないため、`github.com` でもホストを必ず付けます。ssh 専用のホスト `ssh.github.com` と `altssh.gitlab.com` は、それぞれ `github.com` と `gitlab.com` として扱います。`GH_ENTERPRISE_TOKEN` または `GITHUB_ENTERPRISE_TOKEN` が設定されているときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを付けます。呼び出し側がそのトークンのために設定していないホストへ、トークンを向けないためです。
 - GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`。スキームは origin のものです（`http` は `http` のまま、ssh の origin は `https`）。`GITLAB_TOKEN`、`GITLAB_ACCESS_TOKEN`、`OAUTH_TOKEN` のいずれかが設定されているときは、`GITLAB_HOST`（または `GITLAB_URI` / `GL_HOST`）が同じスキーム、ホスト、実効ポート（`http` は 80、`https` は 443。スキームのない値は `https` とみなします）を指す場合に限って付けます。トークンを設定したホストとは別のホストを TAKT が指定しないようにするためです。比較するのは環境変数だけで、glab はプロトコルと API のホストを、これらの変数のスキームではなく自身の設定（`api_protocol`、`api_host`）から決めます。TAKT はその設定を見られません。
 
 利用者がすでに設定している変数は上書きしません。リモートや認証情報は追加せず、URL に含まれるユーザー名やトークンも使いません。プロジェクトルートで動くタスク、`origin` がないか URL として認識できない場合、プロバイダーが分からない場合は何も追加しません。system の `command` 入力は `HOME` なしで動くため、そこでの `gh` / `glab` には別途認証が必要です。

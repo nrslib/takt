@@ -18,6 +18,8 @@ import {
 import type { VcsProviderType } from './detect.js';
 
 const GITHUB_DEFAULT_HOST = 'github.com';
+// gh sends these to a GitHub Enterprise Server host (`gh help environment`).
+const GITHUB_ENTERPRISE_TOKEN_KEYS = ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'] as const;
 // glab reads a token from these variables (`glab config --help`, `token` key).
 const GITLAB_ENV_TOKEN_KEYS = ['GITLAB_TOKEN', 'GITLAB_ACCESS_TOKEN', 'OAUTH_TOKEN'] as const;
 // glab reads its default host from these variables, first one set wins.
@@ -50,12 +52,24 @@ function webEndpoint(remote: RemoteRepository): string {
   return `${remote.webScheme}://${remote.webHost}`;
 }
 
+function isGitHubEnterpriseServer(hostname: string): boolean {
+  return hostname !== GITHUB_DEFAULT_HOST && !hostname.endsWith('.ghe.com');
+}
+
 function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
   if (isSet(ambientEnv, 'GH_REPO') || remote.path.split('/').length !== 2) return {};
-  // OWNER/REPO resolves against GH_HOST when it is set, so name github.com then.
-  // webHost keeps a non-default http(s) port, which gh uses as part of the API host.
-  const needsHost = remote.webHost !== GITHUB_DEFAULT_HOST || isSet(ambientEnv, 'GH_HOST');
-  return { GH_REPO: needsHost ? `${remote.webHost}/${remote.path}` : remote.path };
+  // gh uses GH_ENTERPRISE_TOKEN for whichever Enterprise Server host a command targets. With such a token
+  // in the environment, name an Enterprise Server host only if the caller's own GH_HOST already points at
+  // it, so we never aim that token at a host the caller did not configure for it.
+  if (GITHUB_ENTERPRISE_TOKEN_KEYS.some((key) => isSet(ambientEnv, key)) && isGitHubEnterpriseServer(remote.hostname)) {
+    const configuredHost = ambientEnv.GH_HOST;
+    if (!isSet(ambientEnv, 'GH_HOST') || configuredHost === undefined
+      || endpointOf(configuredHost) !== endpointOf(remote.webHost)) return {};
+  }
+  // Always name the host, github.com included: gh's default host is not necessarily github.com (for
+  // example when only one Enterprise Server host is logged in), and webHost keeps a non-default http(s)
+  // port, which gh uses as part of the API host.
+  return { GH_REPO: `${remote.webHost}/${remote.path}` };
 }
 
 function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {

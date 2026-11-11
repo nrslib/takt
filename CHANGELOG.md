@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Tasks that run in a clone (`worktree: true`) now name the project's repository for `gh` and `glab`, which cannot find it from git remotes there because the clone has no `origin`. TAKT reads the project root's `origin` and passes `GH_REPO` or `GITLAB_REPO` to agent steps, command quality gates, and system `command` inputs, without adding a remote or a credential and without overriding a variable you set. `GITLAB_REPO` is skipped while a GitLab token is set in the environment unless `GITLAB_HOST` names the same host. See [Repository identity in clones](docs/configuration.md#repository-identity-in-clones).
+- Tasks that run in a clone (`worktree: true`) now name the project's repository for `gh` and `glab`, which cannot find it from git remotes there because the clone has no `origin`. TAKT reads the project root's `origin` and passes `GH_REPO` or `GITLAB_REPO` to agent steps, command quality gates, and system `command` inputs, without adding a remote or a credential and without overriding a variable you set. `GITLAB_REPO` is skipped while a GitLab token is set in the environment unless `GITLAB_HOST` names the same host, and a GitHub Enterprise Server host is skipped while an Enterprise token is set unless `GH_HOST` names it. See [Repository identity in clones](docs/configuration.md#repository-identity-in-clones).
 
 ### Changed
 

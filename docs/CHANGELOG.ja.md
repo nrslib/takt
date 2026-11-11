@@ -10,7 +10,7 @@
 
 ### Added
 
-- clone で動くタスク（`worktree: true`）で、`gh` と `glab` にプロジェクトのリポジトリを渡すようにしました。clone には `origin` がないため、これらの CLI は git リモートからリポジトリを特定できませんでした。TAKT はプロジェクトルートの `origin` を読み、エージェントのステップ、コマンドの品質ゲート、system の `command` 入力に `GH_REPO` または `GITLAB_REPO` を渡します。リモートや認証情報は追加せず、利用者が設定した変数は上書きしません。環境変数に GitLab のトークンがあるときは、`GITLAB_HOST` が同じホストを指す場合に限って `GITLAB_REPO` を渡します。詳しくは [clone でのリポジトリの指定](configuration.ja.md#clone-でのリポジトリの指定) を参照してください。
+- clone で動くタスク（`worktree: true`）で、`gh` と `glab` にプロジェクトのリポジトリを渡すようにしました。clone には `origin` がないため、これらの CLI は git リモートからリポジトリを特定できませんでした。TAKT はプロジェクトルートの `origin` を読み、エージェントのステップ、コマンドの品質ゲート、system の `command` 入力に `GH_REPO` または `GITLAB_REPO` を渡します。リモートや認証情報は追加せず、利用者が設定した変数は上書きしません。環境変数に GitLab のトークンがあるときは、`GITLAB_HOST` が同じホストを指す場合に限って `GITLAB_REPO` を渡し、GitHub Enterprise のトークンがあるときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを渡します。詳しくは [clone でのリポジトリの指定](configuration.ja.md#clone-でのリポジトリの指定) を参照してください。
 
 ### Changed
 

@@ -36,6 +36,17 @@ const REPOSITORY_PATH_SEGMENT_REGEX = /^[\w.-]+$/;
 // `github.com-work`, which name a host only through ~/.ssh/config.
 const TOP_LEVEL_LABEL_REGEX = /^(?:[a-z]{2,63}|xn--[a-z0-9-]+)$/;
 
+// Hosts that only serve git over ssh (typically on port 443), mapped to the host that serves the web
+// and the API. Naming the ssh host to gh / glab would send API calls to a host that does not exist.
+const SSH_ONLY_HOST_ALIASES: Readonly<Record<string, string>> = {
+  'ssh.github.com': 'github.com',
+  'altssh.gitlab.com': 'gitlab.com',
+};
+
+function canonicalSshHost(hostname: string): string {
+  return SSH_ONLY_HOST_ALIASES[hostname] ?? hostname;
+}
+
 /** Repository location parsed from a git remote URL, without any userinfo. */
 export interface RemoteRepository {
   /** Lower-case hostname without port. */
@@ -78,8 +89,8 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
     if (!REMOTE_URL_PROTOCOLS.has(parsed.protocol) || parsed.hostname === '') return undefined;
     const path = normalizeRepositoryPathForIdentity(parsed.pathname);
     if (path === undefined) return undefined;
-    const hostname = parsed.hostname.toLowerCase();
     const isWeb = WEB_REMOTE_URL_PROTOCOLS.has(parsed.protocol);
+    const hostname = isWeb ? parsed.hostname.toLowerCase() : canonicalSshHost(parsed.hostname.toLowerCase());
     const webHost = isWeb ? parsed.host.toLowerCase() : hostname;
     const webScheme = parsed.protocol === 'http:' ? 'http' : 'https';
     return { hostname, webHost, webScheme, path };
@@ -89,7 +100,7 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
   if (match?.[1] === undefined || match[2] === undefined) return undefined;
   const path = normalizeRepositoryPathForIdentity(match[2]);
   if (path === undefined) return undefined;
-  const hostname = match[1].toLowerCase();
+  const hostname = canonicalSshHost(match[1].toLowerCase());
   return { hostname, webHost: hostname, webScheme: 'https', path };
 }
 

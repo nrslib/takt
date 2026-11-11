@@ -40,6 +40,12 @@ describe('parseRemoteRepositoryUrl', () => {
     ['https://user:secret-token@GitLab.Example.com/group/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https', path: 'group/project' }],
     ['https://oauth2@gitlab.example.com:8443/a/b/c/d.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com:8443', webScheme: 'https', path: 'a/b/c/d' }],
     ['  https://github.com/owner/repo.git\n', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    // ssh-only hosts are read as the host that serves the web and the API
+    ['ssh://git@ssh.github.com:443/owner/repo.git', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['git@ssh.github.com:owner/repo.git', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
+    ['ssh://git@altssh.gitlab.com:443/group/project.git', { hostname: 'gitlab.com', webHost: 'gitlab.com', webScheme: 'https', path: 'group/project' }],
+    // but only for ssh remotes: an https URL names the host it says
+    ['https://ssh.github.com/owner/repo.git', { hostname: 'ssh.github.com', webHost: 'ssh.github.com', webScheme: 'https', path: 'owner/repo' }],
   ])('parses %s', (url, expected) => {
     expect(parseRemoteRepositoryUrl(url)).toEqual(expected);
   });
@@ -93,8 +99,43 @@ describe('buildRepositoryIdentityEnv', () => {
   const ghe = { hostname: 'github.example.com', webHost: 'github.example.com', webScheme: 'https' as const, path: 'owner/repo' };
   const gitlab = { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https' as const, path: 'group/sub/project' };
 
-  it('sets GH_REPO without a host for github.com', () => {
-    expect(buildRepositoryIdentityEnv(github, 'github', {})).toEqual({ GH_REPO: 'owner/repo' });
+  it('names the host in GH_REPO even for github.com, since gh may default to another host', () => {
+    expect(buildRepositoryIdentityEnv(github, 'github', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
+  });
+
+  it('names github.com for the official ssh-over-443 remote', () => {
+    const remote = parseRemoteRepositoryUrl('ssh://git@ssh.github.com:443/owner/repo.git')!;
+
+    expect(buildRepositoryIdentityEnv(remote, 'github', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
+  });
+
+  describe('with a GitHub Enterprise token in the environment', () => {
+    const server = parseRemoteRepositoryUrl('https://ghe.example.com/owner/repo.git')!;
+
+    it.each(['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])('skips an Enterprise Server host when %s is set without GH_HOST', (key) => {
+      expect(buildRepositoryIdentityEnv(server, 'github', { [key]: 'x' })).toEqual({});
+    });
+
+    it('skips an Enterprise Server host that GH_HOST does not name', () => {
+      expect(buildRepositoryIdentityEnv(server, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_HOST: 'other.example.com' })).toEqual({});
+      expect(buildRepositoryIdentityEnv(server, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_HOST: 'ghe.example.com:8443' })).toEqual({});
+    });
+
+    it('names the Enterprise Server host that GH_HOST names', () => {
+      expect(buildRepositoryIdentityEnv(server, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_HOST: 'GHE.example.com' }))
+        .toEqual({ GH_REPO: 'ghe.example.com/owner/repo' });
+    });
+
+    it('does not restrict github.com or a ghe.com tenant, which use GH_TOKEN', () => {
+      const tenant = parseRemoteRepositoryUrl('https://acme.ghe.com/owner/repo.git')!;
+
+      expect(buildRepositoryIdentityEnv(github, 'github', { GH_ENTERPRISE_TOKEN: 'x' })).toEqual({ GH_REPO: 'github.com/owner/repo' });
+      expect(buildRepositoryIdentityEnv(tenant, 'github', { GH_ENTERPRISE_TOKEN: 'x' })).toEqual({ GH_REPO: 'acme.ghe.com/owner/repo' });
+    });
+
+    it('keeps a GH_REPO the caller set', () => {
+      expect(buildRepositoryIdentityEnv(server, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_REPO: 'mine/repo' })).toEqual({});
+    });
   });
 
   it('prefixes the host for another GitHub host', () => {
@@ -245,7 +286,7 @@ describe('withRepositoryIdentityEnv', () => {
     origin();
 
     expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toEqual({
-      GH_REPO: 'owner/repo',
+      GH_REPO: 'github.com/owner/repo',
     });
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/project' }),
@@ -265,7 +306,7 @@ describe('withRepositoryIdentityEnv', () => {
 
     expect(withRepositoryIdentityEnv({ TAKT_OBSERVABILITY: '{}' }, '/clones/task', '/project', {})).toEqual({
       TAKT_OBSERVABILITY: '{}',
-      GH_REPO: 'owner/repo',
+      GH_REPO: 'github.com/owner/repo',
     });
   });
 
