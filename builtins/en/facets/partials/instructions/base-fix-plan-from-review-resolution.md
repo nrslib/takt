@@ -8,7 +8,7 @@ Do not reintroduce an excluded concern as optional work, adjacent cleanup, or an
 {report:review-resolution.md}
 
 Consult history only to identify an assumption missing from an earlier remediation of a problem accepted in the current decision. Do not add or reopen repair targets from old reports.
-When repair history exists, read the repair history in review-resolution.md and its fixed-version plan, repair, and verification references, and record the required conditions and assumptions introduced by the earlier implementation for the method comparison.
+When repair history exists, read the repair history in review-resolution.md and its fixed-version plan, repair, and verification references. For the method comparison, separately record conditions from the original requirements and acceptance criteria, and assumptions introduced by the earlier implementation.
 
 {{include:instructions/review-report-history}}
 
