@@ -52,17 +52,7 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
   String.raw`((?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
   'gi',
 );
-const HTTP_HEADER_QUOTED_VALUE_PATTERN = String.raw`"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'`;
-// Quotes after an assignment belong to the header value, rather than an enclosing shell argument.
-const HTTP_HEADER_VALUE_PATTERN = String.raw`(?:=[ \t]*(?:${HTTP_HEADER_QUOTED_VALUE_PATTERN})|[^"'\r\n])+`;
-const HTTP_AUTHORIZATION_HEADER_REGEX = new RegExp(
-  String.raw`\b(Authorization\s*:\s*)((?:[A-Za-z]+[ \t]+(?:${HTTP_HEADER_QUOTED_VALUE_PATTERN}))|${HTTP_HEADER_VALUE_PATTERN})`,
-  'gi',
-);
-const HTTP_COOKIE_HEADER_REGEX = new RegExp(
-  String.raw`\b((?:Set-)?Cookie\s*:\s*)(${HTTP_HEADER_VALUE_PATTERN})`,
-  'gi',
-);
+const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@]+:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
@@ -118,25 +108,90 @@ const SENSITIVE_KEY_FRAGMENTS = [
 const TRAILING_ASSIGNMENT_REGEX = /(?:^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)\s*[:=]\s*(?:(?:bearer|basic)\s*)?[^\r\n]*$/i;
 const TRAILING_KEY_FRAGMENT_REGEX = /[A-Za-z0-9_.-]+$/;
 
+interface HttpHeaderValue {
+  start: number;
+  end: number;
+  scheme: string | undefined;
+}
+
+type ShellHeaderQuote = "'" | '"' | '\\"';
+
+function* httpHeaderValues(text: string): Generator<HttpHeaderValue> {
+  const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
+  const authScheme = /([A-Za-z]+)[ \t]+/y;
+  for (let match = headers.exec(text); match !== null; match = headers.exec(text)) {
+    const start = headers.lastIndex;
+    authScheme.lastIndex = start;
+    const scheme = match[1]!.toLowerCase() === 'authorization' ? authScheme.exec(text) : null;
+    const credentialStart = scheme === null ? start : authScheme.lastIndex;
+    const enclosingQuote = text[match.index - 1];
+    const shellQuote = enclosingQuote === '"' && text[match.index - 2] === '\\'
+      ? '\\"'
+      : enclosingQuote === '"' || enclosingQuote === "'" ? enclosingQuote : undefined;
+    const end = httpHeaderValueEnd(text, credentialStart, shellQuote);
+    if (end > start) {
+      yield { start, end, scheme: scheme?.[1] };
+    }
+    // Consumed values can contain header-like text; never restart a scan inside them.
+    headers.lastIndex = end;
+  }
+}
+
+function httpHeaderValueEnd(text: string, start: number, shellQuote: ShellHeaderQuote | undefined): number {
+  let valueQuote: string | undefined;
+  let previousNonSpace: string | undefined;
+  let cursor = start;
+  while (cursor < text.length) {
+    const char = text[cursor]!;
+    if (char === '\r' || char === '\n') break;
+    if (shellQuote === '\\"' && char === '\\') {
+      let slashEnd = cursor + 1;
+      while (text[slashEnd] === '\\') slashEnd += 1;
+      // JSON doubles shell backslashes and adds one before a quote.
+      if (text[slashEnd] === '"' && (slashEnd - cursor) % 4 === 1) return slashEnd - 1;
+      cursor = slashEnd;
+      if (text[cursor] === '"') cursor += 1;
+      continue;
+    }
+    if (char === '\\' && shellQuote !== "'" && text[cursor + 1] !== '\r' && text[cursor + 1] !== '\n') {
+      cursor = Math.min(cursor + 2, text.length);
+      continue;
+    }
+    if (shellQuote !== undefined) {
+      if (char === shellQuote || (shellQuote === '\\"' && char === '"')) break;
+    } else if (valueQuote !== undefined) {
+      if (char === valueQuote) valueQuote = undefined;
+    } else if (char === '"' || char === "'") {
+      if (cursor !== start && previousNonSpace !== '=') break;
+      valueQuote = char;
+    }
+    if (char !== ' ' && char !== '\t') previousNonSpace = char;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function redactHttpHeaders(text: string): string {
+  const parts: string[] = [];
+  let copiedThrough = 0;
+  for (const { start, end, scheme } of httpHeaderValues(text)) {
+    parts.push(text.slice(copiedThrough, start), scheme === undefined ? REDACTED_VALUE : scheme + ' ' + REDACTED_VALUE);
+    copiedThrough = end;
+  }
+  parts.push(text.slice(copiedThrough));
+  return parts.join('');
+}
+
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
-  return text
+  const sanitized = text
     .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
     .replace(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, (_match, prefix: string, quotedValue: string) => {
       const quote = quotedValue[0];
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
-    .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`)
-    .replace(HTTP_AUTHORIZATION_HEADER_REGEX, (_match, prefix: string, value: string) => {
-      const leadingWhitespaceLength = value.length - value.trimStart().length;
-      const leadingWhitespace = value.slice(0, leadingWhitespaceLength);
-      const trimmed = value.slice(leadingWhitespaceLength);
-      const authScheme = /^([A-Za-z]+)\s+/.exec(trimmed);
-      return authScheme
-        ? `${prefix}${leadingWhitespace}${authScheme[1]} ${REDACTED_VALUE}`
-        : `${prefix}${leadingWhitespace}${REDACTED_VALUE}`;
-    })
-    .replace(HTTP_COOKIE_HEADER_REGEX, `$1${REDACTED_VALUE}`)
+    .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
+  return redactHttpHeaders(sanitized)
     .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
@@ -195,8 +250,11 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values);
   addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
-  addMatches(text, HTTP_AUTHORIZATION_HEADER_REGEX, 2, values, true);
-  addMatches(text, HTTP_COOKIE_HEADER_REGEX, 2, values, true);
+  for (const { start, end } of httpHeaderValues(text)) {
+    const value = text.slice(start, end);
+    addSensitiveValue(values, value);
+    addCredentialComponents(values, value);
+  }
   addMatches(text, URL_USERINFO_CREDENTIALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);

@@ -13,6 +13,96 @@ import {
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 
 describe('sensitiveText', () => {
+  describe.each(["'", '"'])('shell header enclosed in %s', (quote) => {
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'Basic [REDACTED]'],
+      ['Authorization', 'Bearer fixture-secret==', 'Bearer [REDACTED]'],
+      ['Cookie', 'sid=fixture-secret==; other=fixture-extra', '[REDACTED]'],
+      ['Set-Cookie', 'sid=fixture-secret==; Path=/', '[REDACTED]'],
+    ])('keeps the URL after a padded %s value', (header, value, expected) => {
+      const command = 'curl -H ' + quote + header + ': ' + value + quote;
+      const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+
+      expect(sanitizeSensitiveText(command + suffix))
+        .toBe('curl -H ' + quote + header + ': ' + expected + quote + suffix);
+    });
+  });
+
+  it.each([
+    ['Authorization', 'Digest username=\\"alice\\", response=\\"fixture-secret\\"', 'Digest [REDACTED]'],
+    ['Authorization', 'Bearer \\"fixture-secret\\"', 'Bearer [REDACTED]'],
+    ['Authorization', 'Basic \\"fixture-secret\\"', 'Basic [REDACTED]'],
+    ['Authorization', 'Bearer fixture-secret\\\\', 'Bearer [REDACTED]'],
+    ['Cookie', 'sid=\\"fixture-secret\\"; other=\\"fixture-extra\\"', '[REDACTED]'],
+    ['Set-Cookie', 'sid=\\"fixture-secret\\"; Path=/', '[REDACTED]'],
+  ])('handles escaped quotes and backslash pairs in a double-quoted %s argument', (header, value, expected) => {
+    const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+    const command = 'curl -H "' + header + ': ' + value + '"';
+
+    expect(sanitizeSensitiveText(command + suffix)).toBe('curl -H "' + header + ': ' + expected + '"' + suffix);
+    expect(sanitizeSensitiveText(JSON.stringify({ command: command + suffix })))
+      .toBe(JSON.stringify({ command: 'curl -H "' + header + ': ' + expected + '"' + suffix }));
+  });
+
+  it('treats a backslash as literal inside a single-quoted shell header', () => {
+    const command = "curl -H 'Cookie: sid=fixture-secret\\' 'https://example.test/path'";
+
+    expect(sanitizeSensitiveText(command)).toBe("curl -H 'Cookie: [REDACTED]' 'https://example.test/path'");
+  });
+
+  it('redacts quoted sensitive assignments before interpreting embedded header text', () => {
+    const text = 'token="metadata Authorization: Basic c2VjcmV0==" https://example.test/path';
+
+    expect(sanitizeSensitiveText(text)).toBe('token="[REDACTED]" https://example.test/path');
+  });
+
+  it.each(['\n', '\r\n'])('keeps the following diagnosis after an unterminated quoted header (%j)', (separator) => {
+    const command = 'curl -H "Authorization: Digest response=\\"fixture-secret\\"';
+
+    expect(sanitizeSensitiveText(command + separator + 'provider.transport: ECONNRESET'))
+      .toBe('curl -H "Authorization: Digest [REDACTED]' + separator + 'provider.transport: ECONNRESET');
+  });
+
+  it('redacts a long escaped header and preserves the next argument and diagnosis', () => {
+    const parameters = 'response=\\"fixture-secret\\", '.repeat(4_096);
+    const command = 'curl -H "Authorization: Digest ' + parameters + 'nonce=\\"fixture-extra\\""';
+    const suffix = " 'https://example.test/path'\nprovider.transport: ECONNRESET";
+
+    expect(sanitizeSensitiveText(command + suffix))
+      .toBe('curl -H "Authorization: Digest [REDACTED]"' + suffix);
+  });
+
+  it.each([
+    ["curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'", 'c2VjcmV0=='],
+    ["curl -H 'Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+    ["curl -H 'Set-Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+  ])('collects the credential without collecting a subsequent URL: %s', (command, credential) => {
+    expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', { command }))
+      .toBe('echoed [REDACTED] https://example.test/path');
+  });
+
+  it.each([
+    {
+      command: "curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'",
+      expected: "curl -H 'Authorization: Basic [REDACTED]' 'https://example.test/path'",
+      secrets: ['c2VjcmV0=='],
+    },
+    {
+      command: String.raw`curl -H "Authorization: Digest username=\"alice\", response=\"fixture-secret\""`,
+      expected: 'curl -H "Authorization: Digest [REDACTED]"',
+      secrets: ['alice', 'fixture-secret'],
+    },
+  ])('redacts the complete shell header without consuming subsequent arguments: $command', ({ command, expected, secrets }) => {
+    expect(sanitizeSensitiveText(command)).toBe(expected);
+
+    const sanitized = sanitizeSensitiveText(`${command} --verbose\nprovider.transport: ECONNRESET`);
+
+    expect(sanitized).toBe(`${expected} --verbose\nprovider.transport: ECONNRESET`);
+    for (const secret of secrets) {
+      expect(sanitized).not.toContain(secret);
+    }
+  });
+
   it.each([
     ['Digest', 'realm="fixture-secret", nonce="fixture-extra"'],
     ['Bearer', 'realm="fixture-secret"'],
