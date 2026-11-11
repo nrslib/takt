@@ -229,6 +229,14 @@ describe('detectVcsProvider', () => {
       // Then
       expect(result).toBeUndefined();
     });
+
+    it('ホスト名のラベルが github / gitlab のセルフホストは検出する', () => {
+      mockExecFileSync.mockReturnValue('git@github.company.com:org/repo.git\n');
+      expect(detectVcsProvider()).toBe('github');
+
+      mockExecFileSync.mockReturnValue('https://gitlab.company.com/org/repo.git\n');
+      expect(detectVcsProvider()).toBe('gitlab');
+    });
   });
 
   describe('エラーケース', () => {
@@ -334,8 +342,8 @@ describe('detectVcsProvider', () => {
       // When
       const result = detectVcsProvider('/tmp/worktree');
 
-      // Then: セルフホストは undefined
-      expect(result).toBeUndefined();
+      // Then: ホスト名のラベル gitlab で検出する
+      expect(result).toBe('gitlab');
       expect(mockExecFileSync).toHaveBeenNthCalledWith(
         1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/tmp/worktree' }),
       );

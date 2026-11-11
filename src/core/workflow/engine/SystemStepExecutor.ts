@@ -18,6 +18,7 @@ import type { ProviderType, StreamCallback } from '../../../shared/types/provide
 interface SystemStepExecutorDeps extends PrMergeOptions {
   readonly task: string;
   readonly projectCwd: string;
+  readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly getCwd: () => string;
   readonly getContextDirectory?: () => string;
   readonly taskContext?: {
@@ -103,6 +104,7 @@ export class SystemStepExecutor {
       cwd,
       contextDirectory: this.deps.getContextDirectory?.(),
       projectCwd: this.deps.projectCwd,
+      childProcessEnv: this.deps.childProcessEnv,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
       runtimeState: this.runtimeState,

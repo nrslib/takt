@@ -14,6 +14,7 @@ const ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'traceparent',
   'tracestate',
+  'GH_REPO',
 ] as const;
 
 let originalEnv: Map<string, string | undefined>;
@@ -118,5 +119,44 @@ describe('nested observability child process env', () => {
     });
 
     expect(second).toBe(first);
+  });
+
+  it('Given repository identity in childProcessEnv, When picking nested env, Then keeps it for providers and command gates', () => {
+    const childProcessEnv = { GH_REPO: 'owner/repo', GITLAB_REPO: 'https://gitlab.example.com/a/b/c' };
+
+    expect(pickNestedObservabilityEnv(childProcessEnv)).toEqual(childProcessEnv);
+    expect(pickCommandGateNestedObservabilityEnv(childProcessEnv)).toEqual(childProcessEnv);
+  });
+
+  it('Given only repository identity, When building child env snapshot, Then keeps ambient observability env', () => {
+    const env = buildEnvWithNestedObservabilitySnapshot({
+      PATH: '/usr/bin',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
+      traceparent: TRACEPARENT,
+    }, { GH_REPO: 'owner/repo' });
+
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
+      traceparent: TRACEPARENT,
+      GH_REPO: 'owner/repo',
+    });
+  });
+
+  it('Given repository identity differs, When fingerprinting child env, Then fingerprint differs', () => {
+    expect(getNestedObservabilityEnvFingerprint({ GH_REPO: 'owner/one' }))
+      .not.toBe(getNestedObservabilityEnvFingerprint({ GH_REPO: 'owner/two' }));
+  });
+
+  it('Given repository identity, When applying process env temporarily, Then restores it afterwards', async () => {
+    delete process.env.GH_REPO;
+    process.env.traceparent = TRACEPARENT;
+
+    await runWithNestedObservabilityProcessEnv({ GH_REPO: 'owner/repo' }, async () => {
+      expect(process.env.GH_REPO).toBe('owner/repo');
+      expect(process.env.traceparent).toBe(TRACEPARENT);
+    });
+
+    expect(process.env.GH_REPO).toBeUndefined();
   });
 });
