@@ -28,10 +28,13 @@ function isSet(env: NodeJS.ProcessEnv, key: string): boolean {
   return value !== undefined && value !== '';
 }
 
-// Host plus a non-default port: glab sends the token to the exact host and port of GITLAB_REPO.
-function hostOf(value: string): string {
+// glab sends the token to the exact scheme, host and effective port of GITLAB_REPO, so compare all
+// three. A value without a scheme is read as https, which is also the scheme of the URL built below.
+function endpointOf(value: string): string {
   try {
-    return new URL(value.includes('://') ? value : `https://${value}`).host.toLowerCase();
+    const url = new URL(value.includes('://') ? value : `https://${value}`);
+    const port = url.port || (url.protocol === 'http:' ? '80' : '443');
+    return `${url.protocol}//${url.hostname.toLowerCase()}:${port}`;
   } catch {
     return '';
   }
@@ -54,7 +57,7 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
-    if (configuredHost === undefined || hostOf(configuredHost) !== remote.webHost) return {};
+    if (configuredHost === undefined || endpointOf(configuredHost) !== endpointOf(remote.webHost)) return {};
   }
   // The URL form keeps the host and nested groups unambiguous: glab treats a
   // plain `host/group/project` as a group path unless the host is configured.

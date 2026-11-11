@@ -140,6 +140,10 @@ describe('buildRepositoryIdentityEnv', () => {
     expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com' })).toEqual({});
     // the origin has no port, the configured host names one
     expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.example.com:8443' })).toEqual({});
+    // an explicit http scheme is another endpoint even when URL.host drops its default port
+    expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'http://gitlab.example.com:80' })).toEqual({});
+    expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'http://gitlab.example.com' })).toEqual({});
+    expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'http://gitlab.example.com:8443' })).toEqual({});
     // same port, and a default port written out is the same host
     expect(buildRepositoryIdentityEnv(withPort, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'https://gitlab.example.com:8443' }))
       .toEqual({ GITLAB_REPO: 'https://gitlab.example.com:8443/group/project' });
