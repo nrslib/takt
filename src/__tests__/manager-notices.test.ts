@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { iterateTestDisplayEvents } from './helpers/manager-display-items.js';
-import { formatGoalNotification } from '../infra/goals/notifications.js';
+import { formatGoalNotification, managerTurnFailureNotification } from '../infra/goals/notifications.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -57,6 +57,30 @@ it('omits work logs and filters disabled, question and old notifications', async
 });
 
 describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
+  it('shows the failure reason alongside the complete resume guidance', () => {
+    const goal = goalRecord();
+    const notification = managerTurnFailureNotification(goal.id, new Error('provider.transport: ECONNRESET token=fixture-secret'), lang);
+
+    const message = formatGoalNotification(goal, notification, lang, 'fixture', 'tui');
+
+    expect(message).toContain('provider.transport: ECONNRESET');
+    expect(message).toContain('token=[REDACTED]');
+    expect(message).not.toContain('fixture-secret');
+    const guidance = notification.body.split('\n').find((line) => line.includes('Ctrl+G'))!;
+    expect(guidance).toBeDefined();
+    expect(message).toContain(guidance);
+    expect(message).toContain(getLabel('manager.notificationBlockedAction', lang, { project: 'fixture' }));
+  });
+
+  it('keeps the three-line limit for other notification kinds even at error severity', () => {
+    const body = 'one\ntwo\nthree\nfour';
+    const message = formatGoalNotification(goalRecord(), { kind: 'custom', severity: 'error', body }, lang, 'fixture', 'tui');
+
+    expect(message).toContain('one\ntwo\nthree');
+    expect(message).not.toContain('four');
+    expect(message).toContain(getLabel('manager.notificationDigestHint', lang));
+  });
+
   it.each(['progress', 'awaiting_merge', 'completed', 'blocked', 'custom'] as const)(
     'keeps exactly three complete body lines and an omission hint without retired keys for %s', (kind) => {
       const body = ['first ' + 'e\u0301'.repeat(701) + '  ', '', 'third line  ', 'fourth line', 'fifth line'].join('\n');

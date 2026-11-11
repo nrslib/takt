@@ -147,7 +147,7 @@ export const withdrawStandaloneInquiryInputSchema = standaloneInquiryIdentityInp
 export type ListStandaloneInquiriesInput = z.infer<typeof listStandaloneInquiriesInputSchema>;
 export type WithdrawStandaloneInquiryInput = z.infer<typeof withdrawStandaloneInquiryInputSchema>;
 export const notifyGoalInputSchema = goalWriteInputSchema.extend({
-  ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
+  ...GoalNotificationInputSchema.omit({ source: true }).shape, kind: z.enum(['blocked', 'custom']),
 });
 export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
 export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;

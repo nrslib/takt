@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ManagerNotificationKind } from '../../core/models/config-types.js';
 import type { Language } from '../../core/models/types.js';
-import { getErrorMessage } from '../../shared/utils/error.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
+import { normalizeErrorReason } from '../../shared/utils/errorReason.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { GoalNotificationInputSchema, type Goal, type GoalNotificationInput, type GoalQuestion } from './schema.js';
 
@@ -18,8 +17,8 @@ export function appendGoalNotification(goal: Goal, input: GoalNotificationInput,
 }
 
 export function managerTurnFailureNotification(goalId: string, error: unknown, language: Language): GoalNotificationInput {
-  return { kind: 'blocked', severity: 'error', body: getLabel('manager.turnFailureNotification', language, {
-    goalId, reason: sanitizeSensitiveText(getErrorMessage(error)),
+  return { kind: 'blocked', severity: 'error', source: 'manager_turn_failure', body: getLabel('manager.turnFailureNotification', language, {
+    goalId, reason: normalizeErrorReason(error),
   }) };
 }
 
@@ -147,8 +146,9 @@ export function formatGoalNotification(
       ? goal.completion.summary : notification.body;
     if (destination === 'tui' && notification.kind !== 'question') {
       const bodyLines = source.split('\n');
-      lines.push(bodyLines.slice(0, 3).join('\n'));
-      if (bodyLines.length > 3) {
+      const visibleLines = notification.kind === 'blocked' && notification.severity === 'error' ? 4 : 3;
+      lines.push(bodyLines.slice(0, visibleLines).join('\n'));
+      if (bodyLines.length > visibleLines) {
         lines.push(getLabel('manager.notificationDigestHint', language));
       }
     } else {
