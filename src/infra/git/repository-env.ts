@@ -28,8 +28,11 @@ function isSet(env: NodeJS.ProcessEnv, key: string): boolean {
   return value !== undefined && value !== '';
 }
 
-// glab sends the token to the exact scheme, host and effective port of GITLAB_REPO, so compare all
-// three. A value without a scheme is read as https.
+// Endpoint (scheme, host, effective port) named by the caller's host variable, to compare with the one
+// we are about to name. glab takes the protocol and the API host from its own config (`api_protocol`,
+// `api_host`), not from these variables, so this only keeps us from naming a host other than the one
+// the caller configured; it cannot promise where glab finally sends the token. A value without a
+// scheme is read as https.
 function endpointOf(value: string): string {
   try {
     const url = new URL(value.includes('://') ? value : `https://${value}`);
@@ -40,8 +43,9 @@ function endpointOf(value: string): string {
   }
 }
 
-// Scheme and host (with a non-default port) that glab is told to use. An http origin stays http, so a
-// token configured for an http host is not matched against, or sent to, an https endpoint.
+// Scheme and host (with a non-default port) that the repository is named on. An http origin stays http
+// and is compared as a different endpoint from https, which is the cautious reading of an
+// environment-level check: glab itself ignores the URL scheme.
 function webEndpoint(remote: RemoteRepository): string {
   return `${remote.webScheme}://${remote.webHost}`;
 }
@@ -58,8 +62,9 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (isSet(ambientEnv, 'GITLAB_REPO')) return {};
   // glab sends a token from the environment to the host named by GITLAB_REPO.
   // When such a token is present, name the repository only if the caller's
-  // own host variable already points at the same host, so the token never
-  // reaches a host it was not meant for.
+  // own host variable already points at the same endpoint, so we never add a
+  // host the caller did not configure for that token. glab's own config
+  // (`api_host`, `api_protocol`) can still redirect the API; this cannot see it.
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
