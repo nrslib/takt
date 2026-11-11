@@ -53,6 +53,7 @@
 - Codex の読み取り専用の step で、ファイルへの書き込みを禁じたまま `network_access: true` による通信を許可できるようにしました (#2014)。TAKT が権限を管理するときは、制限を迂回できる利用者の許可ルールを無視します。`permission_control: codex` のときは Phase 1 の sandbox と通信の判断を Codex に委ねます。
 - Retry・Requeue・Instruct・段階の選択でワークフローを途中から再開するときに、前の段階の system context・effects の結果・構造化出力を読み戻すようにしました (#2015)。コンテキスト不足の失敗を防ぎ、前の段階を流し直さずに済みます。子ワークフローの結果は同じ呼び出しの続きのときだけ引き継ぎます。
 - ゴールの PR の仕上げタスクで、レビュー役にゴールの範囲外の指示を渡すようにし、base ブランチから取り込んだ変更をレビュー対象から外しました (#2019)。レビューでは PR の累積差分と、未コミット・未追跡の変更を対象にします。
+- manager の起動時に、readiness 確認で認証済みの daemon IPC 接続を最初の会話の open まで保持するようにしました。確認と open の間に daemon が idle 終了し、`Daemon IPC identity mismatch` になる競合を防ぎます (#2030)。
 
 ### Internal
 

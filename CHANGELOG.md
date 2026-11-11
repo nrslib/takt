@@ -53,6 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Codex read-only steps can now use `network_access: true` without gaining filesystem write access (#2014). TAKT-managed permissions ignore user allow rules that could bypass these restrictions, while `permission_control: codex` leaves Phase 1 sandbox and network decisions to Codex.
 - Resuming a workflow partway through with Retry, Requeue, Instruct, or step selection restores the preceding steps' system contexts, effect results, and structured outputs (#2015). This prevents missing-context errors and avoids rerunning earlier steps; child workflow results are restored only for the same invocation.
 - Goal PR finishing tasks now pass the goal's out-of-scope instructions to reviewers, and PR reviews exclude changes merged in from the base branch (#2019). Reviews cover the PR's cumulative diff plus uncommitted and untracked changes instead.
+- Manager startup now keeps the authenticated daemon IPC connection through the first conversation open, preventing the daemon from idling out between the readiness check and open and causing `Daemon IPC identity mismatch` (#2030).
 
 ### Internal
 
