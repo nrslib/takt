@@ -494,6 +494,17 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it('routes Epic filesystem storage to light IT and real Git lifecycle scenarios to heavy IT', () => {
+    const storage = 'src/__tests__/epic-storage.integration.test.ts';
+    const lifecycle = 'src/__tests__/it-workspace-epics.test.ts';
+    expect(lightIntegrationConfig.test?.include).toContain(storage);
+    expect(heavyParallelIntegrationConfig.test?.exclude).toContain(storage);
+    expect(selectNpmTestRuns([storage, lifecycle])).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', storage] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', lifecycle] },
+    ]);
+  });
+
   it('should type-check every test on the whitelist, and only tests that exist', () => {
     const testsConfigPath = new URL('../../tsconfig.tests.json', import.meta.url);
     // The file carries the rule as comments, which JSON.parse does not take.
@@ -504,6 +515,9 @@ describe('release verification wiring', () => {
     const listed = (JSON.parse(raw) as { include: string[] }).include;
 
     expect(listed.length).toBeGreaterThan(0);
+    expect(listed).toContain('src/__tests__/epic-schema.test.ts');
+    expect(listed).toContain('src/__tests__/epic-storage.integration.test.ts');
+    expect(listed).toContain('src/__tests__/it-workspace-epics.test.ts');
     expect(listed).toContain('src/__tests__/initialization.test.ts');
     expect(listed).toContain('src/__tests__/it-live-intervention-engine.test.ts');
     expect(listed).toContain('src/__tests__/it-live-intervention-task-spec.test.ts');
