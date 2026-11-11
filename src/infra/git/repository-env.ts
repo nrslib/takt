@@ -38,8 +38,9 @@ function hostnameOf(value: string): string {
 function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
   if (isSet(ambientEnv, 'GH_REPO') || remote.path.split('/').length !== 2) return {};
   // OWNER/REPO resolves against GH_HOST when it is set, so name github.com then.
-  const needsHost = remote.hostname !== GITHUB_DEFAULT_HOST || isSet(ambientEnv, 'GH_HOST');
-  return { GH_REPO: needsHost ? `${remote.hostname}/${remote.path}` : remote.path };
+  // webHost keeps a non-default http(s) port, which gh uses as part of the API host.
+  const needsHost = remote.webHost !== GITHUB_DEFAULT_HOST || isSet(ambientEnv, 'GH_HOST');
+  return { GH_REPO: needsHost ? `${remote.webHost}/${remote.path}` : remote.path };
 }
 
 function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv): Record<string, string> {

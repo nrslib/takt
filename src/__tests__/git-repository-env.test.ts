@@ -137,6 +137,32 @@ describe('buildRepositoryIdentityEnv', () => {
   });
 });
 
+describe('buildRepositoryIdentityEnv GH_REPO host', () => {
+  it('keeps the web port of a GitHub Enterprise Server origin', () => {
+    const remote = parseRemoteRepositoryUrl('https://ghe.example.com:8443/owner/repo.git');
+
+    expect(buildRepositoryIdentityEnv(remote!, 'github', {})).toEqual({
+      GH_REPO: 'ghe.example.com:8443/owner/repo',
+    });
+  });
+
+  it('does not add a port for an ssh origin, whose port is not the web port', () => {
+    const remote = parseRemoteRepositoryUrl('ssh://git@ghe.example.com:2222/owner/repo.git');
+
+    expect(buildRepositoryIdentityEnv(remote!, 'github', {})).toEqual({
+      GH_REPO: 'ghe.example.com/owner/repo',
+    });
+  });
+
+  it('names github.com explicitly when GH_HOST points elsewhere', () => {
+    const remote = parseRemoteRepositoryUrl('https://github.com/owner/repo.git');
+
+    expect(buildRepositoryIdentityEnv(remote!, 'github', { GH_HOST: 'ghe.example.com' })).toEqual({
+      GH_REPO: 'github.com/owner/repo',
+    });
+  });
+});
+
 describe('resolveRepositoryIdentityEnv', () => {
   it('reads origin of the project root', () => {
     mockExecFileSync.mockReturnValue('git@github.example.com:owner/repo.git\n');
