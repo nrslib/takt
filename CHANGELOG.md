@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Manager can read a workflow's steps, transitions, and called workflows with `takt_get_workflow` before delegating work to a task (#1991).
 - The manager TUI shows what manager is doing during a turn: thinking, responding, or the tool in use (#1990).
 - Manager is notified when a PR waiting for merge becomes conflicting, once per conflict (#1995).
+- Manager can be restricted to selected workflows for new development tasks with `manager.workflows`, including a usage description for each candidate and an optional `manager.default_workflow` (#2020). The default candidates are `default` and `simple`; `workflows: all` keeps all workflows available. Existing task resumes, PR finishing, child workflow calls, and manual CLI use are not restricted.
+- Manager can register a one-line waiting command, such as `gh run watch --exit-status`, with `takt_wait_command` (#2024). The daemon runs it independently of the manager turn and returns a completion event with the exit status and the last 16 KiB of output. Commands time out after one hour by default, can wait up to 24 hours, and stop when their goal is paused or aborted or the daemon shuts down.
 
 ### Changed
 
@@ -31,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Rewrote the manager facets around judging by the goal's purpose as a development lead (#2004). Manager asks with separate choices for each option and the reason for asking, does not resume work until the reason for stopping is resolved, and does not decide an unsettled scope by itself (#1979, #1982). It dismisses review findings only when they are truly out of scope or ask for defenses against impossible premises (#1993), and it does not wait for external state changes within a turn (#1991).
 - Caccia judges findings with the PR's purpose in mind, and its conclusion (complete or abort) and abort reason now reach the judgment and the outer processing (#1994, #1998). Requesting goal completion again updates the existing PR description.
 - Updated the Pi SDK to 1.5.0 (#1956).
+- Manager permissions now default to `auto`, which uses provider-side AI review for Claude and Codex, instead of always granting full access (#2017). Set `manager.permission: full` to restore unrestricted execution, or override individual providers with `manager.provider_permissions`. Other providers continue to run with full permissions.
+- The manager TUI displays interim text during a turn, the current Bash description or tool name, and elapsed time (#2013). Long activity labels are truncated so the elapsed time remains visible; these transient updates are not posted to Slack.
+- Manager patrol times are saved per repository, so a due patrol is queued as soon as the daemon starts and restarting the daemon does not reset the interval (#2011). Goals with pending, running, or failed PR-finishing tasks remain patrol targets; only goals actually waiting for a human merge are excluded and counted separately in the status line (#2012, #2016).
+- Manager turn inputs now identify whether they came from a person, director, a saved inquiry answer, an event, a patrol, or the runtime (#2022). This prevents tool cancellations, environment notices, run reports, and manager's own records from being mistaken for human instructions, including after daemon restarts.
+- Builtin review and fix workflows reconsider the assumptions behind an earlier repair when the same in-scope problem recurs through a confirmed shared mechanism (#2021). Repair history, alternative methods, and verification results are carried through adjudication, planning, fixing, and final verification.
 
 ### Fixed
 
@@ -42,12 +49,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The TUI loads the React production build, so long-running manager TUIs no longer accumulate performance entries, print `MaxPerformanceEntryBufferExceededWarning`, and grow in memory (#2003).
 - The SDK update prompt is shown outside the TUI instead of inside it, where the screen looked stuck on "thinking" (#1977). A failed or declined SDK installation from `/provider` no longer ends the conversation.
 - In the manager TUI, a goal proposal taller than the terminal no longer piles up the same screen in the scrollback on every redraw (#1952), and the confirmation box no longer stays on screen after **Register goal** is selected (#1980).
+- Task workspaces created with a Git reference clone now disable commit-graph reading during cloning, avoiding checkout failures caused by a Git bug after the reference repository's commit-graph is rebuilt (#2010).
+- Codex read-only steps can now use `network_access: true` without gaining filesystem write access (#2014). TAKT-managed permissions ignore user allow rules that could bypass these restrictions, while `permission_control: codex` leaves Phase 1 sandbox and network decisions to Codex.
+- Resuming a workflow partway through with Retry, Requeue, Instruct, or step selection restores the preceding steps' system contexts, effect results, and structured outputs (#2015). This prevents missing-context errors and avoids rerunning earlier steps; child workflow results are restored only for the same invocation.
+- Goal PR finishing tasks now pass the goal's out-of-scope instructions to reviewers, and PR reviews exclude changes merged in from the base branch (#2019). Reviews cover the PR's cumulative diff plus uncommitted and untracked changes instead.
 
 ### Internal
 
 - Added the repository-only `takt-prompt-engineering` workflow for facet changes and before/after eval comparison (#1951), along with manager eval cases.
 - Resolved npm audit vulnerabilities (#1959) and fixed flaky tests in CI and on macOS (#1958, #1966, #1967, #1976, #2002).
 - Fixed the `runtime.prepare` provider E2E workflow to use `edit: true`, since Codex runs `edit: false` steps in a read-only sandbox.
+- Local heavy integration tests now use half the available CPUs, capped at four workers (#2018). Removed redundant test coverage while retaining the underlying behavior checks (#2025).
 
 ## [0.74.0] - 2026-11-02
 
