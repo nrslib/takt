@@ -118,8 +118,18 @@ type ShellHeaderQuote = "'" | '"' | '\\"';
 
 function* httpHeaderValues(text: string): Generator<HttpHeaderValue> {
   const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
+  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
+  let quotedAssignment = quotedAssignments.next().value;
   const authScheme = /([A-Za-z]+)[ \t]+/y;
   for (let match = headers.exec(text); match !== null; match = headers.exec(text)) {
+    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
+      quotedAssignment = quotedAssignments.next().value;
+    }
+    if (quotedAssignment !== undefined && quotedAssignment.index <= match.index) {
+      // Quoted assignments use the same boundary as display redaction.
+      headers.lastIndex = quotedAssignment.index + quotedAssignment[0].length;
+      continue;
+    }
     const start = headers.lastIndex;
     authScheme.lastIndex = start;
     const scheme = match[1]!.toLowerCase() === 'authorization' ? authScheme.exec(text) : null;
@@ -243,22 +253,31 @@ export function hasPotentialSensitiveTextSuffix(text: string): boolean {
 
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
   addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
-  addMatches(text, SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, 2, values);
+  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
+    const quotedValue = match[2]!;
+    addSensitiveValue(values, quotedValue);
+    // Embedded credentials stay within the assignment's quote boundary.
+    collectHttpHeaderSensitiveValues(quotedValue.slice(1, -1), values);
+  }
   addMatches(text, SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values);
   addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
+  collectHttpHeaderSensitiveValues(text, values);
+  addMatches(text, URL_USERINFO_CREDENTIALS_REGEX, 2, values, true);
+  addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
+  addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
+  addMatches(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, true);
+}
+
+function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): void {
   for (const { start, end } of httpHeaderValues(text)) {
     const value = text.slice(start, end);
     addSensitiveValue(values, value);
     addCredentialComponents(values, value);
   }
-  addMatches(text, URL_USERINFO_CREDENTIALS_REGEX, 2, values, true);
-  addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
-  addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
-  addMatches(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, true);
 }
 
 function hasUnterminatedPrivateKeyBlock(text: string): boolean {
