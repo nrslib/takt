@@ -28,8 +28,8 @@ it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blan
     }
   },
 );
-it('defaults to automatic execution without inventing a default workflow', () => {
-  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+it('defaults to automatic execution and requires approval for main merges', () => {
+  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, mainMerge: 'approve' });
 });
 it.each([
   { project: {}, global: {}, expected: 'auto' },
@@ -84,20 +84,20 @@ it.each([0, -1, 0.5, '1800', null, Number.POSITIVE_INFINITY])('rejects invalid m
 it.each([0, 600, 900, -1, 0.5, '600'])('ignores removed director patrol setting %s', (patrol_interval) => {
   expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(true);
 });
-it('resolves project and global settings separately for each field', () => {
+it('resolves project auto run before the global setting', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });
-  doubles.global.mockReturnValue({ manager: { autoRun: true, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, defaultWorkflow: 'global-workflow', mainMerge: 'approve' });
-  doubles.project.mockReturnValue({ manager: { defaultWorkflow: 'project-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: 'project-workflow', mainMerge: 'approve' });
+  doubles.global.mockReturnValue({ manager: { autoRun: true } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, mainMerge: 'approve' });
+  doubles.project.mockReturnValue({});
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, mainMerge: 'approve' });
 });
 it.each(['auto', 'approve'])('uses repository main merge permission %s', (mainMerge) => {
   doubles.project.mockReturnValue({ manager: { mainMerge } });
   expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge });
 });
 it('does not inherit global permission to merge into main', () => {
-  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false, defaultWorkflow: 'global-workflow' });
+  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false });
 });
 
 const notificationKinds = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
