@@ -160,9 +160,10 @@ export function createTaktMcpServer(
   const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, configScope?: 'workflow'): Promise<CallToolResult> => {
     try { return await withTurn(async () => {
       const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
+      const scopedDeps = { ...operationDeps, turnOperationId: options.turnScope?.operationId };
       const currentDeps = assignment !== undefined
-        ? { ...operationDeps, allowedProjectRoot: await resolveAssignedProjectRoot(cwd, assignment) }
-        : operationDeps;
+        ? { ...scopedDeps, allowedProjectRoot: await resolveAssignedProjectRoot(cwd, assignment) }
+        : scopedDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
       const useWorkflowConfig = configScope === 'workflow' && options.toolSet === 'manager';
