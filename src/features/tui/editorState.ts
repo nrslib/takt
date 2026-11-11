@@ -76,7 +76,7 @@ export function createEditorState(text: string): EditorState {
 export function applyEditorKey(state: EditorState, key: EditorKey): EditorState {
   switch (key.kind) {
     case 'insert':
-      return insertAtCursor(state, key.text);
+      return insertAtCursor(state, normalizeUnbracketedLineBreaks(key.text));
     case 'paste':
       return insertAtCursor(state, key.text, true);
     case 'newline':
@@ -140,6 +140,19 @@ function insertAtCursor(state: EditorState, raw: string, normalizeLineBreaks = f
     text: state.text.slice(0, state.cursor) + inserted + state.text.slice(state.cursor),
     cursor: state.cursor + inserted.length,
   };
+}
+
+/**
+ * Unbracketed text can arrive as one input chunk. Treat embedded CRs as line
+ * breaks, while leaving a final CR for the display sanitizer to strip: IMEs can
+ * include that byte in their committed text.
+ */
+function normalizeUnbracketedLineBreaks(raw: string): string {
+  if (!raw.includes('\r')) {
+    return raw;
+  }
+  const normalized = raw.replace(/\r\n?/gu, '\n');
+  return raw.endsWith('\r') ? `${normalized.slice(0, -1)}\r` : normalized;
 }
 
 function deleteBeforeCursor(state: EditorState): EditorState {

@@ -629,7 +629,11 @@ export function ConversationView({
     updateEditor(applyEditorKey(editorRef.current, { kind: 'insert', text }));
   }, [updateEditor]);
 
-  const { routeInput: routeImagePasteInput, captureClipboard: captureClipboardImage } = useImagePaste({
+  const {
+    routeInput: routeImagePasteInput,
+    flushPending: flushPendingImagePasteText,
+    captureClipboard: captureClipboardImage,
+  } = useImagePaste({
     sink: conversation,
     lang,
     insertAtCaret,
@@ -642,6 +646,7 @@ export function ConversationView({
     if (exitedRef.current || cancellingRef.current) {
       return;
     }
+    flushPendingImagePasteText();
     updateEditor(applyEditorKey(editorRef.current, { kind: 'paste', text }));
   });
 

@@ -2647,6 +2647,41 @@ describe('ConversationView', () => {
     }
   });
 
+  it('should preserve embedded CR line breaks from an unbracketed input chunk', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write('first\rsecond');
+      await flushFrames();
+      expect(view.lastFrame()).toContain('second');
+      expect(conversation.submitCalls).toHaveLength(0);
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe('first\nsecond');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('should insert a pending image prefix before text from a bracketed paste', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write(']');
+      await flushFrames();
+      view.stdin.write('\x1b[200~abc\x1b[201~');
+      await flushFrames();
+      expect(view.lastFrame()).toContain(visiblePromptLine(']abc'));
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe(']abc');
+    } finally {
+      view.unmount();
+    }
+  });
+
   it('refreshes workflow status without replacing the conversation and stops on unmount', async () => {
     vi.useFakeTimers();
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);

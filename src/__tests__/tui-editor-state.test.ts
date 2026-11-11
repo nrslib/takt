@@ -73,6 +73,15 @@ describe('TUI editor state', () => {
       expect(state.cursor).toBe(cursor);
     });
 
+    it.each([
+      { name: 'CR', raw: 'first\rsecond' },
+      { name: 'CRLF', raw: 'first\r\nsecond' },
+    ])('should preserve embedded $name line breaks in unbracketed input chunks', ({ raw }) => {
+      const state = press(createEditorState(''), { kind: 'insert', text: raw });
+      expect(state.text).toBe('first\nsecond');
+      expect(state.cursor).toBe('first\nsecond'.length);
+    });
+
     it('should strip a trailing CR from committed text without creating an empty line', () => {
       const state = press(createEditorState(''), { kind: 'insert', text: 'やあ、てすと\r' });
       expect(state.text).toBe('やあ、てすと');
