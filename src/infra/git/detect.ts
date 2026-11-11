@@ -174,25 +174,8 @@ function extractRepositoryPath(url: string): string | undefined {
  * @returns hostname string or `undefined` if unavailable
  */
 export function getRemoteHostname(cwd: string): string | undefined {
-  let output: string;
-  try {
-    output = String(
-      execFileSync('git', ['remote', 'get-url', 'origin'], {
-        cwd,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }),
-    );
-  } catch {
-    return undefined;
-  }
-
-  const url = output.trim();
-  if (!url) {
-    return undefined;
-  }
-
-  return extractHostname(url);
+  const url = getOriginRemoteUrl(cwd);
+  return url === undefined ? undefined : extractHostname(url);
 }
 
 /**
@@ -202,20 +185,10 @@ export function getRemoteHostname(cwd: string): string | undefined {
  * routing text such as "owner/private-repo" and "private-repo" can be redacted.
  */
 export function getRemoteRepositoryIdentifiers(cwd: string): string[] {
-  let output: string;
-  try {
-    output = String(
-      execFileSync('git', ['remote', 'get-url', 'origin'], {
-        cwd,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }),
-    );
-  } catch {
-    return [];
-  }
+  const url = getOriginRemoteUrl(cwd);
+  if (url === undefined) return [];
 
-  const repositoryPath = extractRepositoryPath(output.trim());
+  const repositoryPath = extractRepositoryPath(url);
   if (repositoryPath === undefined) return [];
   const repositoryName = repositoryPath.split('/').at(-1);
   return repositoryName === undefined || repositoryName === repositoryPath
