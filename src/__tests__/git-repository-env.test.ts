@@ -212,6 +212,25 @@ describe('buildRepositoryIdentityEnv', () => {
   });
 });
 
+describe('hostnames that collide with Object.prototype properties', () => {
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'])('treats %s as an ordinary host', (name) => {
+    const remote = parseRemoteRepositoryUrl(`git@${name}:owner/repo.git`)!;
+
+    expect(remote).toEqual({ hostname: name.toLowerCase(), webHost: name.toLowerCase(), webScheme: 'https', path: 'owner/repo' });
+    expect(detectVcsProviderFromHostname(name)).toBeUndefined();
+    expect(typeof remote.hostname).toBe('string');
+  });
+
+  it('builds GH_REPO from such a host when the provider is forced, even with an Enterprise token', () => {
+    const remote = parseRemoteRepositoryUrl('git@constructor:owner/repo.git')!;
+
+    expect(buildRepositoryIdentityEnv(remote, 'github', {})).toEqual({ GH_REPO: 'constructor/owner/repo' });
+    expect(buildRepositoryIdentityEnv(remote, 'github', { GH_ENTERPRISE_TOKEN: 'x' })).toEqual({});
+    expect(buildRepositoryIdentityEnv(remote, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_HOST: 'constructor' }))
+      .toEqual({ GH_REPO: 'constructor/owner/repo' });
+  });
+});
+
 describe('buildRepositoryIdentityEnv GH_REPO host', () => {
   it('keeps the web port of a GitHub Enterprise Server origin', () => {
     const remote = parseRemoteRepositoryUrl('https://ghe.example.com:8443/owner/repo.git');

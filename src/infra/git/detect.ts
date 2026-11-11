@@ -43,8 +43,13 @@ const SSH_ONLY_HOST_ALIASES: Readonly<Record<string, string>> = {
   'altssh.gitlab.com': 'gitlab.com',
 };
 
+// Own properties only: a hostname such as `constructor` or `__proto__` must not reach Object.prototype.
+function ownValue<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 function canonicalSshHost(hostname: string): string {
-  return SSH_ONLY_HOST_ALIASES[hostname] ?? hostname;
+  return ownValue(SSH_ONLY_HOST_ALIASES, hostname) ?? hostname;
 }
 
 /** Repository location parsed from a git remote URL, without any userinfo. */
@@ -118,7 +123,7 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
  */
 export function detectVcsProviderFromHostname(hostname: string): VcsProviderType | undefined {
   const host = hostname.toLowerCase().replace(/\.$/, '');
-  const exact = HOST_MAP[host];
+  const exact = ownValue(HOST_MAP, host);
   if (exact !== undefined) return exact;
   if (GITHUB_HOSTED_SUFFIXES.some((suffix) => host.endsWith(suffix))) return 'github';
 
