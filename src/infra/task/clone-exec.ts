@@ -129,8 +129,10 @@ function runIsolatedGitCommandAbortable(
 function destinationHasContent(clonePath: string): boolean {
   try {
     return fs.readdirSync(clonePath).length > 0;
-  } catch {
-    return false;
+  } catch (error) {
+    // Only a missing destination is known to be ours to create. Anything else (an existing regular file
+    // gives ENOTDIR, an unreadable directory EACCES) means something is there, so it is not cleaned up.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }
 

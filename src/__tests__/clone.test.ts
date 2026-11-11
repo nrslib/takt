@@ -113,6 +113,9 @@ beforeEach(() => {
   vi.mocked(fs.lstatSync).mockImplementation(() => {
     throw Object.assign(new Error('missing'), { code: 'ENOENT' });
   });
+  vi.mocked(fs.readdirSync).mockImplementation(() => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+  });
   let randomByteValue = 1;
   mockRandomBytes.mockImplementation((size: number) => {
     const value = Buffer.alloc(size, randomByteValue);
@@ -2501,6 +2504,31 @@ describe('shallow clone fallback', () => {
     })).rejects.toThrow('Git clone failed');
 
     expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an existing regular file (ENOTDIR)', 'ENOTDIR'],
+    ['an unreadable directory (EACCES)', 'EACCES'],
+  ])('should not retry or delete a destination that cannot be listed: %s', async (_label, code) => {
+    vi.mocked(fs.readdirSync).mockImplementation(() => {
+      throw Object.assign(new Error('cannot list'), { code });
+    });
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false, otherError: destinationExistsError });
+
+    expect(() => createSharedClone(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-file-destination',
+      taskSlug: 'existing-file',
+    })).toThrow('Git clone failed');
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+
+    const abortable = setupAbortableCloneFailureMock(destinationExistsError);
+    await expect(createSharedCloneAbortable(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-file-destination-abortable',
+      taskSlug: 'existing-file',
+    })).rejects.toThrow('Git clone failed');
+    expect(abortable.cloneCalls).toHaveLength(1);
     expect(fs.rmSync).not.toHaveBeenCalled();
   });
 
