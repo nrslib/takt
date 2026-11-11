@@ -57,7 +57,7 @@ describe('TUI editor state', () => {
     });
 
     it('should keep the newlines of a multi-line paste and leave the caret after it', () => {
-      const state = press(createEditorState(''), { kind: 'insert', text: 'a\nb\nc' });
+      const state = press(createEditorState(''), { kind: 'paste', text: 'a\nb\nc' });
       expect(state.text).toBe('a\nb\nc');
       expect(state.cursor).toBe(5);
     });
@@ -67,14 +67,20 @@ describe('TUI editor state', () => {
       { name: 'CRLF', raw: 'A\r\nB', expected: 'xA\nBy', cursor: 4 },
       { name: 'CR', raw: 'A\rB', expected: 'xA\nBy', cursor: 4 },
       { name: 'mixed CRLF, CR and LF', raw: 'A\r\nB\rC\nD', expected: 'xA\nB\nC\nDy', cursor: 8 },
-    ])('should normalize $name line breaks when pasting into the middle of the buffer', ({ raw, expected, cursor }) => {
-      const state = press(editorAt('xy', 1), { kind: 'insert', text: raw });
+    ])('should normalize $name line breaks when inserting a multi-line paste into the middle of the buffer', ({ raw, expected, cursor }) => {
+      const state = press(editorAt('xy', 1), { kind: 'paste', text: raw });
       expect(state.text).toBe(expected);
       expect(state.cursor).toBe(cursor);
     });
 
+    it('should strip a trailing CR from committed text without creating an empty line', () => {
+      const state = press(createEditorState(''), { kind: 'insert', text: 'やあ、てすと\r' });
+      expect(state.text).toBe('やあ、てすと');
+      expect(state.cursor).toBe('やあ、てすと'.length);
+    });
+
     it('should strip NUL and preserve tabs while normalizing pasted CR line breaks', () => {
-      const state = press(editorAt('xy', 1), { kind: 'insert', text: 'A\x00\rB\tC' });
+      const state = press(editorAt('xy', 1), { kind: 'paste', text: 'A\x00\rB\tC' });
       expect(state.text).toBe('xA\nB\tCy');
       expect(state.cursor).toBe(6);
     });

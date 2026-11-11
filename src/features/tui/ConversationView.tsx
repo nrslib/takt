@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useInput, usePaste, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
 import { formatElapsedTime, truncateStatusText } from './statusText.js';
 import {
@@ -638,6 +638,13 @@ export function ConversationView({
     isStopped: () => exitedRef.current || cancellingRef.current,
   });
 
+  usePaste((text) => {
+    if (exitedRef.current || cancellingRef.current) {
+      return;
+    }
+    updateEditor(applyEditorKey(editorRef.current, { kind: 'paste', text }));
+  });
+
   const applyLocalCommand = useCallback((command: TuiLocalCommand, text: string) => {
     switch (command.kind) {
       case 'cancel':
@@ -889,8 +896,7 @@ export function ConversationView({
       return;
     }
     // Ctrl+V pastes the clipboard image, the same gesture the readline editor
-    // offered. A terminal's own text paste arrives as ordinary input and is
-    // inserted with its line breaks intact, so it never reaches this branch.
+    // offered. Terminal text pastes arrive on the separate usePaste channel.
     if (key.ctrl && input === 'v') {
       captureClipboardImage();
       return;

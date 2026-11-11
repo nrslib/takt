@@ -45,6 +45,7 @@ export interface EditorDraft {
 
 export type EditorKey =
   | { readonly kind: 'insert'; readonly text: string }
+  | { readonly kind: 'paste'; readonly text: string }
   | { readonly kind: 'newline' }
   | { readonly kind: 'backspace' }
   | { readonly kind: 'delete' }
@@ -76,6 +77,8 @@ export function applyEditorKey(state: EditorState, key: EditorKey): EditorState 
   switch (key.kind) {
     case 'insert':
       return insertAtCursor(state, key.text);
+    case 'paste':
+      return insertAtCursor(state, key.text, true);
     case 'newline':
       return insertAtCursor(state, '\n');
     case 'backspace':
@@ -122,12 +125,13 @@ export function replaceEditorText(state: EditorState, text: string): EditorState
 }
 
 /**
- * Pasted text arrives straight from the terminal, so it is sanitized before it
- * reaches the buffer. Line breaks survive: a multi-line paste is meant to land
- * as multiple rows rather than as one run-on line.
+ * Text arrives straight from the terminal, so it is sanitized before it reaches
+ * the buffer. Paste line endings are normalized first; ordinary inserted text
+ * keeps the existing display sanitizer's control-character behavior.
  */
-function insertAtCursor(state: EditorState, raw: string): EditorState {
-  const inserted = toDisplayText(raw.replace(/\r\n?/g, '\n'));
+function insertAtCursor(state: EditorState, raw: string, normalizeLineBreaks = false): EditorState {
+  const normalized = normalizeLineBreaks ? raw.replace(/\r\n?/gu, '\n') : raw;
+  const inserted = toDisplayText(normalized);
   if (inserted.length === 0) {
     return state;
   }

@@ -2630,6 +2630,23 @@ describe('ConversationView', () => {
     }
   });
 
+  it('should normalize CR line breaks from a bracketed paste without submitting it', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write('\x1b[200~first\rsecond\x1b[201~');
+      await flushFrames();
+      expect(view.lastFrame()).toContain('second');
+      expect(conversation.submitCalls).toHaveLength(0);
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe('first\nsecond');
+    } finally {
+      view.unmount();
+    }
+  });
+
   it('refreshes workflow status without replacing the conversation and stops on unmount', async () => {
     vi.useFakeTimers();
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);

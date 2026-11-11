@@ -51,14 +51,14 @@ export function useManagerInput({
     edit(next);
     slashCompletion.reset();
   };
-  const insertText = (text: string): void => {
+  const insertText = (text: string, kind: 'insert' | 'paste' = 'insert'): void => {
     if (exiting.current || savingAnswer.current) return;
     if (selection.selection !== null) return;
     if (abortTarget !== null) { onInputUnavailable(); return; }
     if (answerTarget !== null) questionAnswer.switchToFreeText();
-    editDraft(applyEditorKey(editorRef.current, { kind: 'insert', text }));
+    editDraft(applyEditorKey(editorRef.current, { kind, text }));
   };
-  usePaste(insertText);
+  usePaste((text) => insertText(text, 'paste'));
   useInput((input, key) => {
     if (exiting.current) return;
     if (key.ctrl && input === 'c') {
