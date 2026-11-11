@@ -61,6 +61,7 @@ it.each([
   ['an empty message', ''],
   ['a shallow source repository', 'fatal: source repository is shallow, reject to clone.'],
   ['a path that merely mentions shallow', "fatal: reference repository '/work/project' is missing; is shallow"],
+  ['a destination path that embeds the shallow wording', "fatal: destination path '/work/reference repository 'p' is shallow' already exists and is not an empty directory."],
 ])('does not treat %s as a shallow reference error', (_label, stderr) => {
   expect(isShallowReferenceError(stderr)).toBe(false);
 });
