@@ -1176,7 +1176,11 @@ export class TeamLeaderRunner {
       }
       throw error;
     } finally {
-      executionAbortScope.dispose();
+      try {
+        parallelLogger?.flush();
+      } finally {
+        executionAbortScope.dispose();
+      }
     }
     const { plannedParts, partResults } = executionResult;
     if (singleCorrectionPartIds !== undefined) {

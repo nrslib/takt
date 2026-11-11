@@ -2,19 +2,40 @@
  * Tests for StreamDisplay progress info feature
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { StreamDisplay, type ProgressInfo } from '../shared/ui/index.js';
 
 describe('StreamDisplay', () => {
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  it.each(['response body', 'response body\n'])('should finish the response line before flushing unfinished tool output for %j', (body) => {
+    const output: string[] = [];
+    consoleLogSpy.mockImplementation((...args) => { output.push(args.map(String).join(' ') + '\n'); });
+    stdoutWriteSpy.mockImplementation((chunk) => { output.push(String(chunk)); return true; });
+    const display = new StreamDisplay('coder', false, undefined, 'expanded');
+    const handler = display.createHandler();
+    handler({ type: 'tool_use', data: { id: 'shell', tool: 'Bash', input: { command: 'printf pending' } } });
+    handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'pending-result' } });
+    handler({ type: 'text', data: { text: body } });
+    display.flush();
+    const rendered = output.join('');
+    expect(rendered).toContain('response body\n  Bash output: [running]\n');
+    expect(rendered.split('\n').filter((line) => line === 'response body')).toHaveLength(1);
+    expect(rendered).toContain('pending-result');
+  });
+
+  let consoleLogSpy: MockInstance<typeof console.log>;
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
+  let ttyDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });
 
   afterEach(() => {
+    if (ttyDescriptor) Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor);
+    else Reflect.deleteProperty(process.stdout, 'isTTY');
     consoleLogSpy.mockRestore();
     stdoutWriteSpy.mockRestore();
   });
@@ -102,15 +123,16 @@ describe('StreamDisplay', () => {
       expect(stdoutWriteSpy).toHaveBeenCalledWith('Red background');
     });
 
-    it('should strip ANSI codes from thinking before writing to stdout', () => {
+    it('should show thinking progress without displaying the hidden content', () => {
       const display = new StreamDisplay('test-agent', false);
       display.showThinking('\x1b[31mColored thinking\x1b[0m');
 
-      // chalk.gray.italic wraps the stripped text, so check it does NOT contain raw ANSI
-      const writtenText = stdoutWriteSpy.mock.calls[0]?.[0] as string;
-      expect(writtenText).not.toContain('\x1b[41m');
+      display.flushThinking();
+      const writtenText = consoleLogSpy.mock.calls.map((args) => args.join(' ')).join('\n')
+        + stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(writtenText).toMatch(/thinking/i);
+      expect(writtenText).not.toContain('Colored thinking');
       expect(writtenText).not.toContain('\x1b[31m');
-      expect(writtenText).toContain('Colored thinking');
     });
 
     it('should accumulate stripped text in textBuffer', () => {
@@ -126,15 +148,17 @@ describe('StreamDisplay', () => {
       expect(stdoutWriteSpy).toHaveBeenCalledWith(' Green');
     });
 
-    it('should accumulate stripped text in thinkingBuffer', () => {
+    it('should keep repeated thinking chunks private when flushing', () => {
       const display = new StreamDisplay('test-agent', false);
       display.showThinking('\x1b[31mThought 1\x1b[0m');
       display.showThinking('\x1b[32m Thought 2\x1b[0m');
 
       display.flushThinking();
 
-      // Verify stripped text was written (wrapped in chalk styling)
-      expect(stdoutWriteSpy).toHaveBeenCalledTimes(2);
+      const output = consoleLogSpy.mock.calls.map((args) => args.join(' ')).join('\n')
+        + stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(output).toMatch(/thinking/i);
+      expect(output).not.toMatch(/Thought [12]/);
     });
 
     it('should not strip ANSI from text that has no ANSI codes', () => {
@@ -148,6 +172,7 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       display.showToolUse('Bash', { command: 'ls' });
       display.showToolOutput('\x1b[32mgreen output\x1b[0m\n');
+      display.flush();
 
       const outputLine = consoleLogSpy.mock.calls.find(
         (call) => typeof call[0] === 'string' && (call[0] as string).includes('green output'),
@@ -161,6 +186,7 @@ describe('StreamDisplay', () => {
       display.showToolUse('Bash', { command: 'ls' });
       display.showToolOutput('\x1b[31mpartial');
       display.showToolOutput(' line\x1b[0m\n');
+      display.flush();
 
       const outputLine = consoleLogSpy.mock.calls.find(
         (call) => typeof call[0] === 'string' && (call[0] as string).includes('partial line'),
@@ -228,15 +254,14 @@ describe('StreamDisplay', () => {
       { name: 'unterminated remainder', chunks: ['one\r', '\ttwo\r'], expected: 'one\ttwo' },
     ];
 
-    describe.each(['text', 'thinking', 'tool_output'] as const)('%s events', (type) => {
+    describe.each(['text', 'tool_output'] as const)('%s events', (type) => {
       it.each(streamCases)('removes CR while preserving $name in raw output', ({ chunks, expected }) => {
         const display = new StreamDisplay('test-agent', false);
         const handler = display.createHandler();
         for (const chunk of chunks) {
           switch (type) {
             case 'text': handler({ type, data: { text: chunk } }); break;
-            case 'thinking': handler({ type, data: { thinking: chunk } }); break;
-            case 'tool_output': handler({ type, data: { output: chunk } }); break;
+            case 'tool_output': handler({ type, data: { tool: 'Bash', output: chunk } }); break;
           }
         }
         handler({ type: 'tool_result', data: { content: '', isError: false } });
@@ -269,14 +294,13 @@ describe('StreamDisplay', () => {
       expect(raw).toContain('one\ttwo');
     });
 
-    it.each(['text', 'thinking', 'tool_output'] as const)('neutralizes split OSC in %s events and preserves ordinary text', (type) => {
+    it.each(['text', 'tool_output'] as const)('neutralizes split OSC in %s events and preserves ordinary text', (type) => {
       const display = new StreamDisplay('test-agent', false);
       const handler = display.createHandler();
       for (const chunk of ['safe \x1b]52;c;', 'c2FmZQ==\x07\nnext\n', 'safe \x1b]52;c;payload\x1b', '\\\nlast\n', '\x1b]', 'ordinary\n', 'safe 52;c;', 'c2FmZQ==\n', 'tail\x1b]']) {
         switch (type) {
           case 'text': handler({ type, data: { text: chunk } }); break;
-          case 'thinking': handler({ type, data: { thinking: chunk } }); break;
-          case 'tool_output': handler({ type, data: { output: chunk } }); break;
+          case 'tool_output': handler({ type, data: { tool: 'Bash', output: chunk } }); break;
         }
       }
       display.showToolResult('', false);
@@ -284,7 +308,9 @@ describe('StreamDisplay', () => {
       const raw = consoleLogSpy.mock.calls.map((args) => args.join(' ') + '\n').join('')
         + stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk)).join('');
       expect(raw).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x07\x80-\x9f]/u);
-      for (const text of ['safe', 'next', 'last', 'ordinary', 'safe 52;c;c2FmZQ==', 'tail']) {
+      const expectedText = type === 'tool_output' ? ['safe', 'next', 'truncated']
+        : ['safe', 'next', 'last', 'ordinary', 'safe 52;c;c2FmZQ==', 'tail'];
+      for (const text of expectedText) {
         expect(raw).toContain(text);
       }
     });
@@ -352,9 +378,9 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { tool, input: { [key]: value } } });
+        handler({ type: 'tool_use', data: { id: 'tool-1', tool, input: { [key]: value } } });
         vi.advanceTimersByTime(160);
-        handler({ type: 'tool_output', data: { output: 'ordinary output\n' } });
+        handler({ type: 'tool_output', data: { tool, output: 'ordinary output\n' } });
         vi.advanceTimersByTime(80);
         const writes = stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk));
         const frames = writes.filter((chunk) => chunk.startsWith('\r  '));
@@ -381,7 +407,7 @@ describe('StreamDisplay', () => {
         const display = new StreamDisplay('test-agent', false);
         try {
           const plain = 'x'.repeat(limit + offset);
-          display.createHandler()({ type: 'tool_use', data: { tool, input: { [key]: `\x1b]52;c;payload\x07${plain}` } } });
+          display.createHandler()({ type: 'tool_use', data: { id: 'tool-1', tool, input: { [key]: `\x1b]52;c;payload\x07${plain}` } } });
           vi.advanceTimersByTime(80);
           const frame = String(stdoutWriteSpy.mock.calls[0]?.[0]);
           const body = frame.slice(1);
@@ -402,7 +428,7 @@ describe('StreamDisplay', () => {
       vi.useFakeTimers();
       const display = new StreamDisplay('test-agent', quiet);
       try {
-        display.createHandler()({ type: 'tool_use', data: { tool, input } });
+        display.createHandler()({ type: 'tool_use', data: { id: 'tool-1', tool, input } });
         vi.advanceTimersByTime(160);
         display.flush();
         expect(stdoutWriteSpy).not.toHaveBeenCalled();
@@ -418,9 +444,9 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { tool: 'CustomTool', input: {} } });
+        handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'CustomTool', input: {} } });
         vi.advanceTimersByTime(80);
-        handler({ type: 'tool_output', data: { output: 'ordinary output\n' } });
+        handler({ type: 'tool_output', data: { tool: 'CustomTool', output: 'ordinary output\n' } });
         vi.advanceTimersByTime(80);
         const frames = stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk))
           .filter((chunk) => chunk.startsWith('\r  '));
@@ -510,9 +536,9 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { tool, input: { input: 'ordinary' } } });
+        handler({ type: 'tool_use', data: { id: 'tool-1', tool, input: { input: 'ordinary' } } });
         vi.advanceTimersByTime(160);
-        handler({ type: 'tool_output', data: { output: 'ordinary output\n' } });
+        handler({ type: 'tool_output', data: { tool, output: 'ordinary output\n' } });
         vi.advanceTimersByTime(80);
         handler({ type: 'tool_result', data: { content: 'done', isError: false } });
         const frames = stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk))
@@ -545,7 +571,7 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { tool, input: {} } });
+        handler({ type: 'tool_use', data: { id: 'tool-1', tool, input: {} } });
         handler({ type: 'tool_result', data: { content, isError } });
         const result = consoleLogSpy.mock.calls.map((args) => args.join(' ')).find((line) => /[✓✗]/u.test(line))!;
         expect(result).toBeDefined();
@@ -564,8 +590,8 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        if (stored !== undefined) handler({ type: 'tool_use', data: { tool: stored, input: {} } });
-        handler({ type: 'tool_output', data: { tool: outputTool, output } });
+        if (stored !== undefined) handler({ type: 'tool_use', data: { id: 'tool-1', tool: stored, input: {} } });
+        handler({ type: 'tool_output', data: { tool: outputTool ?? stored ?? 'Bash', output } });
         handler({ type: 'tool_result', data: { content: '', isError: false } });
         const lines = consoleLogSpy.mock.calls.map((args) => args.join(' '));
         for (const line of lines) {
@@ -585,10 +611,10 @@ describe('StreamDisplay', () => {
       const display = new StreamDisplay('test-agent', false);
       try {
         const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { tool: 'Bash\x1b[2J', input: { input: 'ordinary', command: 'bash-only' } } });
+        handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash\x1b[2J', input: { input: 'ordinary', command: 'bash-only' } } });
         vi.advanceTimersByTime(80);
         handler({ type: 'tool_result', data: { content: '', isError: false } });
-        handler({ type: 'tool_use', data: { tool: 'AskUserQuestion\x1b[2J', input: { input: 'ordinary' } } });
+        handler({ type: 'tool_use', data: { id: 'tool-2', tool: 'AskUserQuestion\x1b[2J', input: { input: 'ordinary' } } });
         vi.advanceTimersByTime(80);
         handler({ type: 'tool_result', data: { content: 'returned content', isError: false } });
         const frames = stdoutWriteSpy.mock.calls.map(([chunk]) => String(chunk))
@@ -611,7 +637,7 @@ describe('StreamDisplay', () => {
     it('preserves the quiet error fallback without storing suppressed tool names', () => {
       const display = new StreamDisplay('test-agent', true);
       const handler = display.createHandler();
-      handler({ type: 'tool_use', data: { tool: 'Custom\x1b[2J', input: {} } });
+      handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'Custom\x1b[2J', input: {} } });
       handler({ type: 'tool_output', data: { tool: 'Custom\x07', output: 'suppressed\n' } });
       handler({ type: 'tool_result', data: { content: 'failed', isError: true } });
       expect(stdoutWriteSpy).not.toHaveBeenCalled();

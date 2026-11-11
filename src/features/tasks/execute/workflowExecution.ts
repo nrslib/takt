@@ -1,3 +1,4 @@
+import { isQuietMode } from '../../../shared/context.js';
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
@@ -447,6 +448,8 @@ async function executeWorkflowInternal(
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
         onStream: handleProviderStream,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        streamQuiet: isQuietMode(),
         onProviderStream: (context, event) => {
           bootstrap.providerEventLogger.logEvent(context, event);
         },
@@ -605,6 +608,8 @@ async function executeWorkflowInternal(
         out: bootstrap.out,
         prefixWriter: bootstrap.prefixWriter,
         displayRef: bootstrap.displayRef,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        flushStream: bootstrap.flushStream,
         handlerRef: bootstrap.handlerRef,
         usageEventLogger: bootstrap.usageEventLogger,
         analyticsEmitter: bootstrap.analyticsEmitter,
@@ -747,6 +752,7 @@ async function executeWorkflowInternal(
       finalizationIssues.push(...eventBridge.getFinalizationIssues());
     }
     captureError(cleanupErrors, () => bootstrap.warnIfAutoStrategyUnused());
+    captureError(cleanupErrors, () => bootstrap.flushStream());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
     await captureAsyncError(

@@ -455,6 +455,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
   'src/__tests__/taskInstructionActions.test.ts',
+  'src/__tests__/tool-activity-terminal.integration.test.ts',
   'src/__tests__/verify-across-providers.integration.test.ts',
 ]);
 
@@ -466,6 +467,8 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/tool-activity-runner-exit.integration.test.ts',
+  'src/__tests__/tool-activity-workflow.integration.test.ts',
   'src/__tests__/daemon-wait-command.integration.test.ts',
   'src/__tests__/workflow-resume-results.integration.test.ts',
   'src/__tests__/it-cli-react-production.test.ts',

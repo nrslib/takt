@@ -28,4 +28,32 @@ describe('tool input summaries', () => {
     const command = `first   second\n\t\x1b[31mthird\x1b[0m ${'x'.repeat(70)}`;
     expect(formatToolInput('Bash', { command })).toBe(`first second third ${'x'.repeat(38)}...`);
   });
+
+  it('should redact known secrets before shortening a command without changing the input', () => {
+    const secret = 'test-only-secret-value-that-crosses-the-preview-boundary';
+    const input = { command: `printf ready ${secret}`, api_key: secret };
+    const original = structuredClone(input);
+
+    const preview = formatToolInput('Bash', input);
+
+    expect(preview).toContain('printf ready');
+    expect(preview).toContain('[REDACTED]');
+    expect(preview).not.toContain('test-only-secret');
+    expect(input).toEqual(original);
+  });
+
+  it.each([
+    { api_key: 'test-only-key', query: 'safe search' },
+    { private_blob: { text: 'unselected content' }, query: 'safe search' },
+  ])('should select a safe field for an unknown tool instead of its first field', (input) => {
+    expect(formatToolInput('Custom', input)).toBe('safe search');
+  });
+
+  it.each([
+    { api_key: 'test-only-key' },
+    { private_blob: { text: 'unselected content' } },
+    { private_blob: ['unselected content'] },
+  ])('should not display arbitrary unknown tool input', (input) => {
+    expect(formatToolInput('Custom', input)).toBe('');
+  });
 });

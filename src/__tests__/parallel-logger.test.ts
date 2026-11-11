@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelLogger } from '../core/workflow/index.js';
 import type { StreamEvent } from '../core/workflow/index.js';
+import { buildTeamLeaderParallelLoggerOptions } from '../core/workflow/engine/team-leader-streaming.js';
 
 describe('ParallelLogger', () => {
   let output: string[];
@@ -14,6 +15,24 @@ describe('ParallelLogger', () => {
     vi.useRealTimers();
     output = [];
     writeFn = (text: string) => output.push(text);
+  });
+
+  it.each(['silent', 'expanded'] as const)('should preserve team leader output ownership in %s mode', (mode) => {
+    const options = buildTeamLeaderParallelLoggerOptions({ projectCwd: '/project', toolDisplayMode: mode, streamQuiet: true }, 'leader', 1, ['worker'], 1, 3);
+    const logger = new ParallelLogger({ ...options, writeFn });
+    const handler = logger.createStreamHandler('worker', 0);
+    handler({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf worker-ready' } } });
+    handler({ type: 'tool_result', data: { id: 'a', content: 'worker-result', isError: false } });
+    handler({ type: 'text', data: { text: 'quiet-response-body\n' } });
+    handler({ type: 'thinking', data: { thinking: 'private-thinking' } });
+    logger.flush();
+    if (mode === 'silent') expect(output.join('')).toBe('');
+    else {
+      expect(output.join('')).toContain('printf worker-ready');
+      expect(output.join('')).toContain('worker-result');
+    }
+    expect(output.join('')).not.toContain('quiet-response-body');
+    expect(output.join('')).not.toContain('private-thinking');
   });
 
   describe('buildPrefix', () => {
@@ -135,8 +154,9 @@ describe('ParallelLogger', () => {
         data: { content: 'File content here', isError: false },
       } as StreamEvent);
 
-      expect(output).toHaveLength(1);
-      expect(output[0]).toContain('File content here');
+      expect(output.join('')).toContain('File content here');
+      expect(output.join('')).toContain('✓');
+      for (const line of output) expect(line).toContain('[sub-a]');
     });
 
     it('should prefix multi-line tool output', () => {
@@ -150,13 +170,14 @@ describe('ParallelLogger', () => {
         type: 'tool_output',
         data: { tool: 'Bash', output: 'line1\nline2' },
       } as StreamEvent);
+      logger.flush();
 
-      expect(output).toHaveLength(2);
-      expect(output[0]).toContain('line1');
-      expect(output[1]).toContain('line2');
+      expect(output.join('')).toContain('line1');
+      expect(output.join('')).toContain('line2');
+      for (const line of output) expect(line).toContain('[sub-a]');
     });
 
-    it('should prefix thinking events', () => {
+    it('should prefix thinking progress without revealing its content', () => {
       const logger = new ParallelLogger({
         subStepNames: ['sub-a'],
         writeFn,
@@ -169,7 +190,9 @@ describe('ParallelLogger', () => {
       } as StreamEvent);
 
       expect(output).toHaveLength(1);
-      expect(output[0]).toContain('Considering options...');
+      expect(output[0]).toContain('[sub-a]');
+      expect(output[0]).toMatch(/thinking/i);
+      expect(output[0]).not.toContain('Considering options...');
     });
   });
 
@@ -392,7 +415,7 @@ describe('ParallelLogger', () => {
       expect(output[0]).not.toContain('\x1b[41m');
     });
 
-    it('should strip ANSI codes from thinking events', () => {
+    it('should keep ANSI decorated thinking content private', () => {
       const logger = new ParallelLogger({
         subStepNames: ['step-a'],
         writeFn,
@@ -405,7 +428,8 @@ describe('ParallelLogger', () => {
       } as StreamEvent);
 
       expect(output).toHaveLength(1);
-      expect(output[0]).toContain('Colored thought');
+      expect(output[0]).toMatch(/thinking/i);
+      expect(output[0]).not.toContain('Colored thought');
       expect(output[0]).not.toContain('\x1b[31m');
     });
 
@@ -420,10 +444,10 @@ describe('ParallelLogger', () => {
         type: 'tool_output',
         data: { tool: 'Bash', output: '\x1b[32mGreen output\x1b[0m' },
       } as StreamEvent);
+      logger.flush();
 
-      expect(output).toHaveLength(1);
-      expect(output[0]).toContain('Green output');
-      expect(output[0]).not.toContain('\x1b[32m');
+      expect(output.join('')).toContain('Green output');
+      expect(output.join('')).not.toContain('\x1b[32m');
     });
 
     it('should strip ANSI codes from tool_result events', () => {
@@ -438,9 +462,8 @@ describe('ParallelLogger', () => {
         data: { content: '\x1b[31mResult with ANSI\x1b[0m', isError: false },
       } as StreamEvent);
 
-      expect(output).toHaveLength(1);
-      expect(output[0]).toContain('Result with ANSI');
-      expect(output[0]).not.toContain('\x1b[31m');
+      expect(output.join('')).toContain('Result with ANSI');
+      expect(output.join('')).not.toContain('\x1b[31m');
     });
 
     it('should strip ANSI codes from buffered text across multiple events', () => {

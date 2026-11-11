@@ -261,7 +261,7 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
     error: vi.fn(),
     success: vi.fn(),
   })),
-  createPrefixedStreamHandler: vi.fn(() => vi.fn()),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 
 vi.mock('../features/tasks/execute/runMeta.js', () => ({

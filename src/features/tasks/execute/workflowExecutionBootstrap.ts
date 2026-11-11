@@ -1,3 +1,5 @@
+import { resolveToolActivityDisplayMode } from '../../../shared/ui/ToolActivityDisplay.js';
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 import { prepareWorkflowProviderEnvironment, checkResolvedWorkflowProviders } from '../../../infra/config/runtime-provider/execution-preparation.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -88,12 +90,14 @@ const log = createLogger('workflow');
 type DisplayStreamEvent = Parameters<ReturnType<StreamDisplay['createHandler']>>[0];
 
 export interface WorkflowExecutionBootstrap {
+  toolDisplayMode: ToolActivityDisplayMode;
   interactiveUserInput: boolean;
   prefixWriter: TaskPrefixWriter | undefined;
   out: ReturnType<typeof createOutputFns>;
   displayRef: { current: StreamDisplay | null };
   handlerRef: { current: ReturnType<StreamDisplay['createHandler']> | null };
   streamHandler: (event: DisplayStreamEvent) => void;
+  flushStream: () => void;
   isRetry: boolean;
   isWorktree: boolean;
   runSlug: string;
@@ -355,6 +359,8 @@ export async function createWorkflowExecutionBootstrap(
     options.initialIterationOverride,
   );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
+  const toolDisplayMode = outputMode === 'silent'
+    ? 'silent' : options.toolDisplayMode ?? resolveToolActivityDisplayMode(outputMode, process.stdout.isTTY !== true);
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
 
@@ -372,10 +378,12 @@ export async function createWorkflowExecutionBootstrap(
 
   const displayRef = { current: null as StreamDisplay | null };
   const handlerRef = { current: null as ReturnType<StreamDisplay['createHandler']> | null };
+  const prefixedHandler = outputMode !== 'silent' && prefixWriter
+    ? createPrefixedStreamHandler(prefixWriter, toolDisplayMode, isQuietMode()) : undefined;
   const streamHandler = outputMode === 'silent'
     ? (): void => {}
-    : prefixWriter
-    ? createPrefixedStreamHandler(prefixWriter)
+    : prefixedHandler
+    ? prefixedHandler
     : (event: DisplayStreamEvent): void => {
         if (!displayRef.current || event.type === 'result') {
           return;
@@ -744,11 +752,13 @@ export async function createWorkflowExecutionBootstrap(
 
   return {
     interactiveUserInput,
+    toolDisplayMode,
     prefixWriter,
     out,
     displayRef,
     handlerRef,
     streamHandler,
+    flushStream: () => prefixedHandler?.flush(),
     isRetry,
     isWorktree,
     runSlug,
