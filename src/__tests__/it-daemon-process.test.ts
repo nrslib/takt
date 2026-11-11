@@ -1,3 +1,5 @@
+import { Client } from './helpers/conversation-ipc-client.js';
+import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -66,4 +68,47 @@ it('forwards manual CLI startup and termination to the dedicated daemon process'
     const code = await exit;
     expect(code).toBe(0);
   } finally { if (cli.exitCode === null && cli.signalCode === null) cli.kill('SIGTERM'); await exit; }
+});
+
+it('hands new, concurrent and already-ready daemon connections through delayed opens and returns to idle after detach', async () => {
+  const sockets: import('node:net').Socket[] = [];
+  try {
+    const results = await Promise.allSettled([
+      lifecycle.ensureDaemon({ retainConnection: true }), lifecycle.ensureDaemon({ retainConnection: true }),
+    ]);
+    for (const result of results) if (result.status === 'fulfilled') sockets.push(result.value);
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) throw new AggregateError(failures.map((result) => result.reason), 'Daemon startup failed');
+    const directory = getGlobalConfigDir();
+    const owner = (await readDaemonOwner(directory))!;
+    const survivesIdle = async () => {
+      const readyAt = Date.now();
+      // 最初の open を送らず、実子プロセスの複数回の idle 判定をまたぐ。
+      await vi.waitFor(async () => {
+        expect(await isDaemonOwnerRunning(owner, io())).toBe(true);
+        expect(await readDaemonOwner(directory)).toEqual(owner);
+        expect(Date.now() - readyAt).toBeGreaterThanOrEqual(1500);
+      }, { timeout: 5000 });
+    };
+    await survivesIdle();
+    const selected = await createTuiConversationPort(directory, { async deliver() { return { kind: 'delivered' }; } }).resolve({ kind: 'daemon' });
+    const existing = await lifecycle.ensureDaemon({ retainConnection: true });
+    sockets.push(existing);
+    const openAndDetach = async (socket: import('node:net').Socket) => {
+      const client = new Client(socket);
+      const opened = (await client.request('open', selected)).result!;
+      expect(await client.items(opened.read.transferId)).toContainEqual(expect.objectContaining({ kind: 'state' }));
+      await client.request('detach', { attachmentId: opened.attachmentId });
+    };
+    await openAndDetach(sockets[0]!);
+    await openAndDetach(sockets[1]!);
+    // 既存 daemon から受け取った接続だけで待機する状態へ移す。
+    await survivesIdle();
+    await openAndDetach(existing);
+    await vi.waitFor(async () => {
+      expect(await isDaemonOwnerRunning(owner, io())).toBe(false);
+      expect(await readDaemonOwner(directory)).toBeUndefined();
+      expect(await readDaemonIpcState(directory)).toBeUndefined();
+    }, { timeout: 10_000 });
+  } finally { for (const socket of sockets) socket.destroy(); }
 });

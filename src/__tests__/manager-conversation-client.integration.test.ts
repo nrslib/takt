@@ -1,3 +1,4 @@
+import { connectConversationIpc } from '../features/daemon/conversationReadiness.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import * as daemonFiles from '../infra/daemon/privateFile.js';
 import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -72,6 +73,11 @@ function saveGoal(goal: Goal, goalRepository = repository) {
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  doubles.ensure.mockReset().mockImplementation(async () => {
+    const socket = await connectConversationIpc(directory, owner);
+    if (socket === undefined) throw new Error('Daemon IPC readiness failed');
+    return socket;
+  });
   vi.stubEnv('COLUMNS', '100'); vi.stubEnv('LINES', '24');
   doubles.plan.mockReturnValue({ ctx: { providerType: 'mock' } });
   directory = getGlobalConfigDir(); repository = join(directory, 'repository'); mkdirSync(repository, { recursive: true });
@@ -810,6 +816,9 @@ it('connects to the current daemon when the previous daemon stops during assignm
       server = await createConversationIpcServer(directory, owner, service);
       restarted = true;
     }
+    const socket = await connectConversationIpc(directory, owner);
+    if (socket === undefined) throw new Error('Daemon IPC readiness failed');
+    return socket;
   });
   client = new ConversationIpcClient(assignment, undefined, { reconnect: false, port: { ...port, async resolve(selected) {
     const resolved = await port.resolve(selected);
