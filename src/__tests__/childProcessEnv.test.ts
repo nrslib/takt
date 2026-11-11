@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildEnvWithNestedObservabilitySnapshot,
   getNestedObservabilityEnvFingerprint,
+  observabilitySnapshotOf,
   pickCommandGateNestedObservabilityEnv,
   pickNestedObservabilityEnv,
   runWithNestedObservabilityProcessEnv,
@@ -126,6 +127,18 @@ describe('nested observability child process env', () => {
 
     expect(pickNestedObservabilityEnv(childProcessEnv)).toEqual(childProcessEnv);
     expect(pickCommandGateNestedObservabilityEnv(childProcessEnv)).toEqual(childProcessEnv);
+  });
+
+  it('Given only repository identity, When asked for the observability snapshot, Then it is none', () => {
+    expect(observabilitySnapshotOf({ GH_REPO: 'owner/repo' })).toBeUndefined();
+    expect(observabilitySnapshotOf(undefined)).toBeUndefined();
+  });
+
+  it('Given observability settings (with or without identity), When asked for the snapshot, Then it is the snapshot', () => {
+    const withObservability = { TAKT_OBSERVABILITY: '{}', GH_REPO: 'owner/repo' };
+
+    expect(observabilitySnapshotOf(withObservability)).toBe(withObservability);
+    expect(observabilitySnapshotOf({})).toEqual({});
   });
 
   it('Given only repository identity, When building child env snapshot, Then keeps ambient observability env', () => {

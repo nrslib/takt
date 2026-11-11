@@ -45,6 +45,12 @@ function endpointOf(value: string): string {
   }
 }
 
+// Both sides must parse: two unparsable values are not "the same endpoint".
+function sameEndpoint(a: string, b: string): boolean {
+  const left = endpointOf(a);
+  return left !== '' && left === endpointOf(b);
+}
+
 // Scheme and host (with a non-default port) that the repository is named on. An http origin stays http
 // and is compared as a different endpoint from https, which is the cautious reading of an
 // environment-level check: glab itself ignores the URL scheme.
@@ -64,7 +70,7 @@ function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (GITHUB_ENTERPRISE_TOKEN_KEYS.some((key) => isSet(ambientEnv, key)) && isGitHubEnterpriseServer(remote.hostname)) {
     const configuredHost = ambientEnv.GH_HOST;
     if (!isSet(ambientEnv, 'GH_HOST') || configuredHost === undefined
-      || endpointOf(configuredHost) !== endpointOf(remote.webHost)) return {};
+      || !sameEndpoint(configuredHost, remote.webHost)) return {};
   }
   // Always name the host, github.com included: gh's default host is not necessarily github.com (for
   // example when only one Enterprise Server host is logged in), and webHost keeps a non-default http(s)
@@ -82,7 +88,7 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
     const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
-    if (configuredHost === undefined || endpointOf(configuredHost) !== endpointOf(webEndpoint(remote))) return {};
+    if (configuredHost === undefined || !sameEndpoint(configuredHost, webEndpoint(remote))) return {};
   }
   // The URL form keeps the host and nested groups unambiguous: glab treats a
   // plain `host/group/project` as a group path unless the host is configured.

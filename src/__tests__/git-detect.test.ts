@@ -85,6 +85,18 @@ describe('getRemoteHostname — hostname extraction (indirect extractHostname te
   });
 });
 
+describe('getRemoteHostname uses the same parser as the repository identity', () => {
+  it.each([
+    ['github.com:owner/repo.git', 'github.com'],
+    ['git@ssh.github.com:owner/repo.git', 'github.com'],
+    ['ssh://git@altssh.gitlab.com:443/group/project.git', 'gitlab.com'],
+  ])('%s -> %s', (url, expected) => {
+    mockExecFileSync.mockReturnValue(`${url}\n`);
+
+    expect(getRemoteHostname('/project')).toBe(expected);
+  });
+});
+
 describe('getRemoteHostname', () => {
   it('cwd を git コマンドのオプションとして渡す', () => {
     // Given

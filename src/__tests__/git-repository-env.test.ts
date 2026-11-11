@@ -89,6 +89,10 @@ describe('detectVcsProviderFromHostname', () => {
     ['github.com-work', undefined],
     ['gitlab.internal-2', undefined],
     ['bitbucket.org', undefined],
+    ['gist.github.com', 'github'],
+    ['user.github.io', undefined],
+    ['192.168.1.github', undefined],
+    ['github.co.uk', 'github'],
   ])('%s -> %s', (hostname, expected) => {
     expect(detectVcsProviderFromHostname(hostname)).toBe(expected);
   });
@@ -212,13 +216,43 @@ describe('buildRepositoryIdentityEnv', () => {
   });
 });
 
+describe('hostnames that are not plausible hosts', () => {
+  it.each([
+    'git@gitlab.evil.com#.gitlab.com:a/b',
+    'git@github.com\\evil.com:o/r',
+    'git@github.ex^ample.com:o/r',
+    'ssh://git@github.com%2Fevil/o/r',
+    'https://exa mple.com/o/r',
+  ])('rejects %s instead of putting it into an environment variable', (url) => {
+    expect(parseRemoteRepositoryUrl(url)).toBeUndefined();
+  });
+
+  it('still accepts a bracketed IPv6 host', () => {
+    expect(parseRemoteRepositoryUrl('https://[::1]:8443/o/r.git')).toMatchObject({ hostname: '[::1]', path: 'o/r' });
+  });
+});
+
+describe('token guards when a value cannot be parsed', () => {
+  it('does not treat two unparsable hosts as the same one', () => {
+    const remote = { hostname: 'github.ex^ample.com', webHost: 'github.ex^ample.com', webScheme: 'https' as const, path: 'o/r' };
+
+    expect(buildRepositoryIdentityEnv(remote, 'github', { GH_ENTERPRISE_TOKEN: 'x', GH_HOST: 'bad host' })).toEqual({});
+    expect(buildRepositoryIdentityEnv(remote, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'bad host' })).toEqual({});
+  });
+});
+
 describe('hostnames that collide with Object.prototype properties', () => {
-  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'])('treats %s as an ordinary host', (name) => {
+  it.each(['constructor', 'toString', 'hasOwnProperty', 'valueOf'])('treats %s as an ordinary host', (name) => {
     const remote = parseRemoteRepositoryUrl(`git@${name}:owner/repo.git`)!;
 
     expect(remote).toEqual({ hostname: name.toLowerCase(), webHost: name.toLowerCase(), webScheme: 'https', path: 'owner/repo' });
     expect(detectVcsProviderFromHostname(name)).toBeUndefined();
     expect(typeof remote.hostname).toBe('string');
+  });
+
+  it('does not look up __proto__ either, whatever the table', () => {
+    expect(parseRemoteRepositoryUrl('git@__proto__:owner/repo.git')).toBeUndefined();
+    expect(detectVcsProviderFromHostname('__proto__')).toBeUndefined();
   });
 
   it('builds GH_REPO from such a host when the provider is forced, even with an Enterprise token', () => {

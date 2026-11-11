@@ -32,6 +32,9 @@ const SCHEME_PREFIX_REGEX = /^[a-z][a-z0-9+.-]*:\/\//i;
 // needs two characters so that a Windows drive letter is not read as a host.
 const SCP_LIKE_URL_REGEX = /^(?:[^@/\s]+@)?([^@/:\s]{2,}):(.+)$/;
 const REPOSITORY_PATH_SEGMENT_REGEX = /^[\w.-]+$/;
+// A hostname as it can appear in a git remote: DNS characters, or a bracketed IPv6 literal. Anything else
+// (`#`, `\`, `^`, ...) is not a host takt may put into an environment variable for gh / glab.
+const HOSTNAME_REGEX = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])$/;
 // Last label of a real hostname. Rejects ssh config aliases such as
 // `github.com-work`, which name a host only through ~/.ssh/config.
 const TOP_LEVEL_LABEL_REGEX = /^(?:[a-z]{2,63}|xn--[a-z0-9-]+)$/;
@@ -96,6 +99,7 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
     if (path === undefined) return undefined;
     const isWeb = WEB_REMOTE_URL_PROTOCOLS.has(parsed.protocol);
     const hostname = isWeb ? parsed.hostname.toLowerCase() : canonicalSshHost(parsed.hostname.toLowerCase());
+    if (!HOSTNAME_REGEX.test(hostname)) return undefined;
     const webHost = isWeb ? parsed.host.toLowerCase() : hostname;
     const webScheme = parsed.protocol === 'http:' ? 'http' : 'https';
     return { hostname, webHost, webScheme, path };
@@ -106,6 +110,7 @@ export function parseRemoteRepositoryUrl(url: string): RemoteRepository | undefi
   const path = normalizeRepositoryPathForIdentity(match[2]);
   if (path === undefined) return undefined;
   const hostname = canonicalSshHost(match[1].toLowerCase());
+  if (!HOSTNAME_REGEX.test(hostname)) return undefined;
   return { hostname, webHost: hostname, webScheme: 'https', path };
 }
 
@@ -127,9 +132,13 @@ export function detectVcsProviderFromHostname(hostname: string): VcsProviderType
   if (exact !== undefined) return exact;
   if (GITHUB_HOSTED_SUFFIXES.some((suffix) => host.endsWith(suffix))) return 'github';
 
+  // GitHub Pages sites are web hosts, not git remotes.
+  if (host.endsWith('.github.io')) return undefined;
+
   const labels = host.split('.');
   if (labels.length < 2 || !TOP_LEVEL_LABEL_REGEX.test(labels.at(-1) ?? '')) return undefined;
-  const matches = PROVIDER_TYPES.filter((type) => labels.includes(type));
+  // The last label is the top-level domain: `192.168.1.github` is not a GitHub host.
+  const matches = PROVIDER_TYPES.filter((type) => labels.slice(0, -1).includes(type));
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -195,7 +204,10 @@ function extractRepositoryPath(url: string): string | undefined {
  */
 export function getRemoteHostname(cwd: string): string | undefined {
   const url = getOriginRemoteUrl(cwd);
-  return url === undefined ? undefined : extractHostname(url);
+  if (url === undefined) return undefined;
+  // The same parser as the repository identity, so detection and GH_REPO / GITLAB_REPO agree on the host
+  // (including scp-like remotes without a user and the ssh-only host aliases).
+  return parseRemoteRepositoryUrl(url)?.hostname ?? extractHostname(url);
 }
 
 /**

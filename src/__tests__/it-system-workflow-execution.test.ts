@@ -266,6 +266,40 @@ describe('system workflow execution integration', () => {
     );
   }
 
+  it('childProcessEnv を system step のサービスまで渡す', async () => {
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'identity-wiring',
+        initial_step: 'route_context',
+        max_steps: 2,
+        steps: [
+          {
+            name: 'route_context',
+            mode: 'system',
+            system_inputs: [{ type: 'task_context', source: 'current_task', as: 'task' }],
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+          },
+        ],
+      },
+      projectDir,
+    );
+    let received: Readonly<Record<string, string>> | undefined;
+
+    const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
+      ...createSystemEngineOptions(projectDir),
+      childProcessEnv: { GH_REPO: 'github.com/owner/repo' },
+      systemStepServicesFactory: (params) => {
+        received = params.childProcessEnv;
+        return createDefaultSystemStepServices(params);
+      },
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(received).toEqual({ GH_REPO: 'github.com/owner/repo' });
+  });
+
   it('system input と structured output を経由して COMPLETE できる', async () => {
     setMockScenario([
       {

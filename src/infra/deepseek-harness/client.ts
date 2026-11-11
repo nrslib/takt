@@ -9,8 +9,10 @@ import type { DeepSeekHarness, HarnessNotification } from './sdk-types.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
+  observabilitySnapshotOf,
   pickNestedObservabilityEnv,
 } from '../../shared/telemetry/index.js';
+import { pickRepositoryIdentityEnv } from '../../shared/utils/repository-identity-env.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
@@ -423,7 +425,7 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  return getNestedObservabilityEnvFingerprint(childProcessEnv ?? getAmbientEnvironment());
+  return getNestedObservabilityEnvFingerprint(observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment());
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */
@@ -440,7 +442,11 @@ function resolveProcessEnvironment(
       env[name] = value;
     }
   }
-  Object.assign(env, pickNestedObservabilityEnv(childProcessEnv ?? getAmbientEnvironment()));
+  Object.assign(
+    env,
+    pickNestedObservabilityEnv(observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment()),
+    pickRepositoryIdentityEnv(childProcessEnv),
+  );
 
   // Only the selected reference is propagated: an unselected credential variable must
   // never stand in for the reference the settings selector chose.

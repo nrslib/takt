@@ -65,6 +65,16 @@ function replacesAmbientObservabilityEnv(childProcessEnv: Readonly<Record<string
   return keys.length === 0 || keys.some((key) => !isRepositoryIdentityEnvKey(key));
 }
 
+/**
+ * The snapshot, unless it holds only repository identity variables: such a snapshot says nothing about
+ * observability, so callers that fall back to the ambient environment must still do so.
+ */
+export function observabilitySnapshotOf(
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> | undefined {
+  return childProcessEnv && replacesAmbientObservabilityEnv(childProcessEnv) ? childProcessEnv : undefined;
+}
+
 function pickStaticNestedObservabilityEnv(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv {
