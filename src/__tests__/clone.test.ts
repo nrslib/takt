@@ -2240,7 +2240,7 @@ describe('shallow clone fallback', () => {
 
         if (hasReference && options.shallowError) {
           const err = new Error('clone failed');
-          (err as unknown as { stderr: Buffer }).stderr = Buffer.from('fatal: reference repository is shallow');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(`fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           throw err;
         }
 
@@ -2318,7 +2318,7 @@ describe('shallow clone fallback', () => {
           return;
         }
         if (isCloneCommand(argsArr) && argsArr.includes('--reference')) {
-          child.stderr.emit('data', 'fatal: reference repository is shallow');
+          child.stderr.emit('data', `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           child.emit('close', 1);
           return;
         }

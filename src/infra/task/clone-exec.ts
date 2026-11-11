@@ -85,8 +85,12 @@ function getExecErrorStderr(error: unknown): string {
   return '';
 }
 
-function isShallowReferenceError(message: string): boolean {
-  return message.includes('reference repository is shallow');
+// Git quotes the reference path into the message ("reference repository '<path>' is shallow");
+// the unquoted wording is kept for output that omits the path.
+const SHALLOW_REFERENCE_PATTERN = /reference repository (?:'[^\n]*' )?is shallow/;
+
+export function isShallowReferenceError(message: string): boolean {
+  return SHALLOW_REFERENCE_PATTERN.test(message);
 }
 
 function cloneFailedError(error: unknown, attempt: 'reference' | 'direct'): Error {

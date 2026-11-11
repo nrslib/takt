@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { runGitCommandAbortable } from '../infra/task/clone-exec.js';
+import { isShallowReferenceError, runGitCommandAbortable } from '../infra/task/clone-exec.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -46,4 +46,21 @@ it('preserves the exit status of a failed Git command', async () => {
   const pending = runGitCommandAbortable('/project', ['merge-base', '--is-ancestor', 'a', 'b']);
   child.emit('close', 1);
   await expect(pending).rejects.toMatchObject({ status: 1 });
+});
+
+it.each([
+  ['the unquoted wording', 'fatal: reference repository is shallow'],
+  ['the quoted path wording', "fatal: reference repository '/work/project' is shallow"],
+  ['a path with spaces and quotes', `fatal: reference repository '/work/my "project's" dir' is shallow\n`],
+])('detects a shallow reference repository from %s', (_label, stderr) => {
+  expect(isShallowReferenceError(stderr)).toBe(true);
+});
+
+it.each([
+  ['an unrelated clone failure', "fatal: repository '/work/project' does not exist"],
+  ['an empty message', ''],
+  ['a shallow source repository', 'fatal: source repository is shallow, reject to clone.'],
+  ['a path that merely mentions shallow', "fatal: reference repository '/work/project' is missing; is shallow"],
+])('does not treat %s as a shallow reference error', (_label, stderr) => {
+  expect(isShallowReferenceError(stderr)).toBe(false);
 });

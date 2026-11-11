@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone. Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.
+
 ## [0.75.0] - 2026-11-08
 
 ### Added
