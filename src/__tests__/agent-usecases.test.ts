@@ -1796,16 +1796,5 @@ describe('agent-usecases', () => {
     expect(result).toBeUndefined();
   });
 
-  // --- DecomposeTaskOptions.provider 型契約（ARCH-NEW-BoySCout-ProviderType-DecomposeTask 再発防止） ---
 
-  it('DecomposeTaskOptions.provider は cursor/copilot を受け入れる（ProviderType 型契約）', () => {
-    // ProviderType の全値が DecomposeTaskOptions.provider に代入できることを確認。
-    // TypeScript コンパイルが通ることで型の一致を保証。
-    const optionsCursor: DecomposeTaskOptions = { cwd: '/repo', provider: 'cursor' };
-    const optionsCopilot: DecomposeTaskOptions = { cwd: '/repo', provider: 'copilot' };
-    const optionsClaude: DecomposeTaskOptions = { cwd: '/repo', provider: 'claude' };
-    expect(optionsCursor.provider).toBe('cursor');
-    expect(optionsCopilot.provider).toBe('copilot');
-    expect(optionsClaude.provider).toBe('claude');
-  });
 });

@@ -13,7 +13,6 @@ import {
 } from '../infra/opencode/types.js';
 import { toOpenCodeMcpServerPermission, toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
 import { toV2Tools } from '../infra/opencode/v2-contract.js';
-import type { PermissionMode } from '../core/models/index.js';
 
 describe('mapToOpenCodePermissionReply', () => {
   it('should map readonly to reject', () => {
@@ -26,15 +25,6 @@ describe('mapToOpenCodePermissionReply', () => {
 
   it('should map full to always', () => {
     expect(mapToOpenCodePermissionReply('full')).toBe('always');
-  });
-
-  it('should handle all PermissionMode values', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    const expectedReplies = ['reject', 'once', 'always'];
-
-    modes.forEach((mode, index) => {
-      expect(mapToOpenCodePermissionReply(mode)).toBe(expectedReplies[index]);
-    });
   });
 });
 

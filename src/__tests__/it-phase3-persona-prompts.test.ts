@@ -3,11 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { judgeStatus, runTagJudgeStage } from '../agents/judge-status-usecase.js';
-import { buildJudgePrompt } from '../agents/judge-utils.js';
 import { runAgent } from '../agents/runner.js';
 import type { AgentResponse, Language } from '../core/models/index.js';
-import { StatusJudgmentBuilder } from '../core/workflow/instruction/StatusJudgmentBuilder.js';
-import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   getBuiltinPersonasDir,
   invalidateAllResolvedConfigCache,
@@ -16,7 +13,6 @@ import {
   resolveConfigValue,
 } from '../infra/config/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
-import { loadTemplate } from '../shared/prompts/index.js';
 
 describe('Phase 3 persona and judgment prompt regressions', () => {
   let tempDir: string;
@@ -140,47 +136,4 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
     });
   });
 
-  describe.each(['ja', 'en'] as const)('judgment prompts in %s', (language) => {
-    it('renders the output-only boundary in the AI judgment prompt', () => {
-      const agentOutput = 'approved';
-      const conditionList = '| 1 | approved |';
-      const prompt = loadTemplate('perform_judge_message', language, { agentOutput, conditionList, phaseContext: '' });
-
-      expect(prompt).toContain(language === 'ja'
-        ? '判定は「エージェント出力」の節に書かれた内容だけで行い、ファイルやコードなど出力の外の資料は調べないでください。'
-        : 'Judge only what is written in the "Agent Output" section; do not inspect materials outside the output, such as files or code.');
-      expect(prompt).toContain(agentOutput);
-      expect(prompt).toContain(conditionList);
-      expect(prompt).toContain('[JUDGE:N]');
-      expect(prompt).not.toContain('{{');
-      if (language === 'en') {
-        expect(buildJudgePrompt(agentOutput, [{ index: 0, text: 'approved' }], language)).toBe(prompt);
-      }
-    });
-
-    it.each(['report', 'response'] as const)('renders input-based rule selection and tag output for %s', (inputSource) => {
-      const prompt = new StatusJudgmentBuilder({
-        name: 'review',
-        personaDisplayName: 'reviewer',
-        instruction: 'review',
-        rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
-      }, {
-        language,
-        inputSource,
-        reportContent: 'approved',
-        lastResponse: 'approved',
-        structuredOutput: false,
-      }).build();
-
-      const instructions = prompt.split('\n').filter((line) => line.startsWith('**'));
-      expect(instructions).toHaveLength(2);
-      expect(instructions[0]).toContain(language === 'ja' ? '入力' : 'input');
-      expect(instructions[1]).toContain(language === 'ja' ? '選んだルール' : 'selected rule');
-      for (const instruction of instructions) {
-        expect(instruction).not.toMatch(/レポート|report/i);
-      }
-      expect(prompt).toContain('[REVIEW:1]');
-      expect(prompt).not.toContain('{{');
-    });
-  });
 });

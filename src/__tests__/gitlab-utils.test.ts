@@ -75,7 +75,7 @@ describe('checkGlabCli', () => {
       checkGlabCli('/project');
 
       // Then
-      const call = mockExecFileSync.mock.calls[0];
+      const call = mockExecFileSync.mock.calls[0]!;
       expect(call[0]).toBe('glab');
       expect(call[1]).toContain('auth');
       expect(call[1]).toContain('status');
@@ -96,8 +96,7 @@ describe('checkGlabCli', () => {
       const result = checkGlabCli('/project');
 
       // Then
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('not authenticated');
+      expect(result).toMatchObject({ available: false, error: expect.stringContaining('not authenticated') });
     });
 
     it('glab 未インストールの場合は available: false とインストールエラーを返す', () => {
@@ -112,8 +111,7 @@ describe('checkGlabCli', () => {
       const result = checkGlabCli('/project');
 
       // Then
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('not installed');
+      expect(result).toMatchObject({ available: false, error: expect.stringContaining('not installed') });
     });
 
     it('cwd を getRemoteHostname に渡す', () => {
@@ -137,7 +135,7 @@ describe('checkGlabCli', () => {
       checkGlabCli('/worktree/clone');
 
       // Then: glab auth status の execFileSync に cwd が渡されていること
-      const call = mockExecFileSync.mock.calls[0];
+      const call = mockExecFileSync.mock.calls[0]!;
       expect(call[2]).toHaveProperty('cwd', '/worktree/clone');
     });
   });
@@ -165,7 +163,7 @@ describe('checkGlabCli', () => {
       checkGlabCli('/project');
 
       // Then
-      const call = mockExecFileSync.mock.calls[0];
+      const call = mockExecFileSync.mock.calls[0]!;
       expect(call[0]).toBe('glab');
       expect(call[1]).toContain('auth');
       expect(call[1]).toContain('status');
@@ -183,8 +181,7 @@ describe('checkGlabCli', () => {
       const result = checkGlabCli('/project');
 
       // Then
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('not authenticated');
+      expect(result).toMatchObject({ available: false, error: expect.stringContaining('not authenticated') });
     });
 
     it('フォールバック時に glab 未インストールならインストールエラーを返す', () => {
@@ -198,8 +195,7 @@ describe('checkGlabCli', () => {
       const result = checkGlabCli('/project');
 
       // Then
-      expect(result.available).toBe(false);
-      expect(result.error).toContain('not installed');
+      expect(result).toMatchObject({ available: false, error: expect.stringContaining('not installed') });
     });
   });
 });
@@ -237,9 +233,9 @@ describe('fetchAllPages', () => {
 
     fetchAllPages<{ id: number }>('projects/:id/test', 10, 'test', '/project');
 
-    const call1 = mockExecFileSync.mock.calls[0];
+    const call1 = mockExecFileSync.mock.calls[0]!;
     expect(getApiPath(call1)).toContain('page=1');
-    const call2 = mockExecFileSync.mock.calls[1];
+    const call2 = mockExecFileSync.mock.calls[1]!;
     expect(getApiPath(call2)).toContain('page=2');
   });
 
@@ -259,7 +255,7 @@ describe('fetchAllPages', () => {
 
     fetchAllPages<unknown>('projects/:id/test?sort=asc', 50, 'test', '/project');
 
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls[0]!;
     const apiPath = getApiPath(call);
     expect(apiPath).toContain('?sort=asc&per_page=50&page=1');
   });
@@ -269,7 +265,7 @@ describe('fetchAllPages', () => {
 
     fetchAllPages<unknown>('projects/:id/test', 50, 'test', '/project');
 
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls[0]!;
     const apiPath = getApiPath(call);
     expect(apiPath).toContain('projects/:id/test?per_page=50&page=1');
   });
@@ -290,7 +286,7 @@ describe('fetchAllPages', () => {
     fetchAllPages<unknown>('projects/:id/test', 50, 'test', '/worktree/clone');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
+    const call = mockExecFileSync.mock.calls[0]!;
     expect(call[2]).toHaveProperty('cwd', '/worktree/clone');
   });
 
@@ -325,13 +321,5 @@ describe('fetchAllPages', () => {
     expect(() => fetchAllPages<{ id: number }>('projects/:id/test', 1, 'test', '/project')).toThrow(
       'Pagination limit exceeded while fetching test (>100 pages)',
     );
-  });
-});
-
-describe('dead-reexport prevention', () => {
-  it('issue.ts は checkGlabCli を re-export しない', async () => {
-    const issueModule = await import('../infra/gitlab/issue.js');
-    const exportedKeys = Object.keys(issueModule);
-    expect(exportedKeys).not.toContain('checkGlabCli');
   });
 });

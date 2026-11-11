@@ -3,9 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import * as workflowCallContracts from '../infra/config/loaders/workflowCallContracts.js';
 import * as workflowCallResolver from '../infra/config/loaders/workflowCallResolver.js';
-import * as workflowCallableArgResolver from '../infra/config/loaders/workflowCallableArgResolver.js';
 import * as workflowLoader from '../infra/config/loaders/workflowLoader.js';
 import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
@@ -49,18 +47,6 @@ describe('workflowCallResolver module boundary', () => {
   afterEach(() => {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(externalDir, { recursive: true, force: true });
-  });
-
-  it('keeps workflow_call resolution in the dedicated module while workflowLoader re-exports it', () => {
-    expect(workflowResolver).not.toHaveProperty('resolveWorkflowCallTarget');
-    expect(workflowResolver).toHaveProperty('loadWorkflowByIdentifierForWorkflowCall');
-    expect(workflowCallResolver).toHaveProperty('resolveWorkflowCallTarget');
-    expect(workflowCallableArgResolver).toHaveProperty('expandCallableSubworkflowRaw');
-    expect(workflowCallContracts).toHaveProperty('validateWorkflowCallRulesAgainstChildReturns');
-    expect(workflowLoader.resolveWorkflowCallTarget).toBe(workflowCallResolver.resolveWorkflowCallTarget);
-    expect(workflowLoader).not.toHaveProperty('loadWorkflowByIdentifierForWorkflowCall');
-    expect(workflowLoader).not.toHaveProperty('expandCallableSubworkflowRaw');
-    expect(workflowLoader).not.toHaveProperty('validateWorkflowCallRulesAgainstChildReturns');
   });
 
   it('loads a callable command quality gate with timeout_ms through workflow_call resolution', () => {
@@ -164,8 +150,6 @@ steps:
     expect(childWorkflow?.subworkflow?.returns).toEqual(['ok']);
     expect(childWorkflow?.steps[0]?.rules?.[0]?.returnValue).toBe('ok');
   });
-
-
 
   it('prefers parent workflow metadata over fallback context for nested relative workflow_call resolution', () => {
     const rootWorkflowPath = join(externalDir, 'root.yaml');

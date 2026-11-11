@@ -21,6 +21,7 @@ export default tseslint.config(
           allowDefaultProject: [
             'eval/*.mjs',
             'eval/asserts/*.mjs',
+            'eval/providers/cli-review.test.mjs',
             'eval/scripts/*.mjs',
             'scripts/test-classification.mjs',
             'scripts/verify-deepseek-sdk-lock.mjs',

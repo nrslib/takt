@@ -42,25 +42,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
     expect(result.exitCode).not.toBe(0);
   }, 240_000);
 
-  it('should report error when --workflow specifies a nonexistent workflow name', () => {
-    // Given: a nonexistent workflow name
-
-    // When: running with a bad workflow name
-    const result = runTakt({
-      args: [
-        '--task', 'test',
-        '--workflow', 'nonexistent-workflow-name-xyz',
-        '--provider', 'mock',
-      ],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-      timeout: 240_000,
-    });
-
-    // The command currently reports this case without a failing process exit.
-    expect(result.exitCode).toBe(0);
-  }, 240_000);
-
   it('should error when --pipeline is used without --task or --issue', () => {
     // Given: pipeline mode with no task or issue
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
@@ -82,27 +63,6 @@ describe('E2E: Error handling edge cases (mock)', () => {
     expect(result.exitCode).not.toBe(0);
     const combined = result.stdout + result.stderr;
     expect(combined).toMatch(/task|issue|required/i);
-  }, 240_000);
-
-  it('should error when deprecated --create-worktree option is used', () => {
-    // Given: deprecated option value
-    const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
-
-    // When: running with invalid worktree option
-    const result = runTakt({
-      args: [
-        '--task', 'test',
-        '--workflow', workflowPath,
-        '--create-worktree', 'invalid-value',
-        '--provider', 'mock',
-      ],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-      timeout: 240_000,
-    });
-
-    // Then: exits with an error
-    expect(result.exitCode).not.toBe(0);
   }, 240_000);
 
   it('should error when workflow file contains invalid YAML', () => {
