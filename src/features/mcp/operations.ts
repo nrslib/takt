@@ -41,6 +41,7 @@ type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
   managerWorkflows?: readonly ManagerWorkflow[];
+  turnOperationId?: string;
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;

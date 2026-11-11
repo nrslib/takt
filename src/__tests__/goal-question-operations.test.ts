@@ -101,6 +101,22 @@ it('persists a manager event with severity before delivery', async () => {
   expect(doubles.send).toHaveBeenCalledOnce();
 });
 
+it('deduplicates a redelivered turn notification without suppressing different notifications', async () => {
+  const deps = { turnOperationId: '650e8400-e29b-41d4-a716-446655440099' };
+  const notification = { ...input, kind: 'custom' as const, body: '同じ通知', severity: 'info' as const };
+  const first = await notifyTaktGoal(notification, deps, signal);
+  const replayed = await notifyTaktGoal(notification, deps, signal);
+  await notifyTaktGoal({ ...notification, body: '別の通知' }, deps, signal);
+
+  expect(goal.notifications).toHaveLength(2);
+  expect(goal.notifications?.map((saved) => saved.body)).toEqual(['同じ通知', '別の通知']);
+  expect(new Set(goal.notifications?.map((saved) => saved.id)).size).toBe(2);
+  expect(JSON.parse(firstTextContent(replayed.content)).notificationId)
+    .toBe(JSON.parse(firstTextContent(first.content)).notificationId);
+  const [, previous, current] = doubles.send.mock.calls[1]!;
+  expect(previous.notifications).toEqual(current.notifications);
+});
+
 it('saves a maximum-length question and its complete generated notification', async () => {
   const body = 'Q'.repeat(128 * 1024);
   const options = ['CSV', 'JSON'];

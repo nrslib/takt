@@ -15,6 +15,7 @@ const __dirname = dirname(__filename);
 const provider = process.env.TAKT_E2E_PROVIDER;
 const providerEnabled = provider != null && provider !== 'mock';
 const providerIt = providerEnabled ? it : it.skip;
+const openCodeProviderIt = provider === 'opencode' ? it : it.skip;
 const mockScenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
 interface MockCallRecord {
@@ -27,6 +28,21 @@ function readMockCallRecords(path: string): MockCallRecord[] {
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as MockCallRecord);
+}
+
+function expectFirstPreparedCommand(repoPath: string, runtimeRoot: string): void {
+  const markers = join(repoPath, '.takt-e2e-markers');
+  expect(readFileSync(join(markers, 'gradle-invoked'), 'utf-8')).toBe('invoked\n');
+  expect(readFileSync(join(markers, 'npm-invoked'), 'utf-8')).toBe('invoked\n');
+  expect(readFileSync(join(markers, 'gradle-env-values'), 'utf-8')).toBe(`${join(realpathSync(runtimeRoot), 'gradle')}\n`);
+  expect(readFileSync(join(markers, 'npm-env-values'), 'utf-8')).toBe(`${join(realpathSync(runtimeRoot), 'npm')}\n`);
+  expect(existsSync(join(markers, 'gradle-env-error'))).toBe(false);
+  expect(existsSync(join(markers, 'npm-env-error'))).toBe(false);
+  const gradleTmpDirs = readFileSync(join(markers, 'gradle-tmpdir-values'), 'utf-8').trimEnd().split('\n');
+  const nodeTmpDirs = readFileSync(join(markers, 'node-tmpdir-values'), 'utf-8').trimEnd().split('\n');
+  expect(gradleTmpDirs).toHaveLength(1);
+  expect(gradleTmpDirs[0]).not.toBe('');
+  expect(nodeTmpDirs).toEqual(gradleTmpDirs);
 }
 
 // E2E更新時は docs/testing/e2e.md も更新すること
@@ -128,7 +144,9 @@ describe('E2E: runtime.prepare with provider', () => {
         '#!/usr/bin/env bash',
         'set -euo pipefail',
         'mkdir -p .takt-e2e-markers',
-        'touch .takt-e2e-markers/gradle-invoked',
+        'printf "invoked\\n" >> .takt-e2e-markers/gradle-invoked',
+        'printf "%s\\n" "${GRADLE_USER_HOME:-}" >> .takt-e2e-markers/gradle-env-values',
+        'printf "%s\\n" "${TMPDIR:-}" >> .takt-e2e-markers/gradle-tmpdir-values',
         'if [ -z "${GRADLE_USER_HOME:-}" ]; then printf "%s\\n" "GRADLE_USER_HOME is required" > .takt-e2e-markers/gradle-env-error; exit 2; fi',
         'if [ -z "${TMPDIR:-}" ]; then printf "%s\\n" "TMPDIR is required" > .takt-e2e-markers/gradle-env-error; exit 3; fi',
         'mkdir -p "$GRADLE_USER_HOME"',
@@ -148,8 +166,10 @@ describe('E2E: runtime.prepare with provider', () => {
         "const fs = require('node:fs');",
         "const path = require('node:path');",
         "fs.mkdirSync('.takt-e2e-markers', { recursive: true });",
-        "fs.writeFileSync('.takt-e2e-markers/npm-invoked', '');",
+        "fs.appendFileSync('.takt-e2e-markers/npm-invoked', 'invoked\\n');",
         "const cache = process.env.npm_config_cache;",
+        "fs.appendFileSync('.takt-e2e-markers/npm-env-values', `${cache ?? ''}\\n`);",
+        "fs.appendFileSync('.takt-e2e-markers/node-tmpdir-values', `${process.env.TMPDIR ?? ''}\\n`);",
         "const expectedCache = path.join(process.cwd(), '.takt', '.runtime', 'npm');",
         "if (cache !== expectedCache) { fs.writeFileSync('.takt-e2e-markers/npm-env-error', 'runtime npm cache is required\\n'); process.exit(2); }",
         "fs.mkdirSync(cache, { recursive: true });",
@@ -186,6 +206,28 @@ describe('E2E: runtime.prepare with provider', () => {
         '    persona: ../fixtures/agents/test-coder.md',
         '    capabilities: readonly',
         '    required_permission_mode: full',
+        '    instruction: |',
+        '      {task}',
+        '    rules:',
+        '      - condition: Task completed',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    writeFileSync(
+      join(repo.path, 'runtime-e2e-readonly-workflow.yaml'),
+      [
+        'name: runtime-e2e-readonly',
+        'description: Runtime env injection verification through a non-edit step',
+        'max_steps: 3',
+        'initial_step: execute',
+        'steps:',
+        '  - name: execute',
+        '    edit: false',
+        '    persona: ../fixtures/agents/test-coder.md',
+        '    capabilities: readonly',
+        '    required_permission_mode: readonly',
         '    instruction: |',
         '      {task}',
         '    rules:',
@@ -454,6 +496,8 @@ describe('E2E: runtime.prepare with provider', () => {
     });
 
     const workflowPath = join(repo.path, 'runtime-e2e-workflow.yaml');
+    const fixturePaths = ['gradlew', 'scripts/check-node-env.js', 'package.json'].map((path) => join(repo.path, path));
+    const fixtureContents = fixturePaths.map((path) => readFileSync(path, 'utf-8'));
     const runtimeRoot = join(repo.path, '.takt', '.runtime');
     const envFile = join(runtimeRoot, 'env.sh');
     const expectedRuntimeTmpDir = getExpectedRuntimeTemporaryDirectory(repo.path, runtimeTempRoot);
@@ -476,6 +520,8 @@ describe('E2E: runtime.prepare with provider', () => {
     const runDiagnostics = formatTaktRunResult(result);
 
     expect(result.exitCode, runDiagnostics).toBe(0);
+    expect(fixturePaths.map((path) => readFileSync(path, 'utf-8'))).toEqual(fixtureContents);
+    expectFirstPreparedCommand(repo.path, runtimeRoot);
 
     expect(existsSync(runtimeRoot)).toBe(true);
     expect(existsSync(join(runtimeRoot, 'cache'))).toBe(true);
@@ -508,6 +554,37 @@ describe('E2E: runtime.prepare with provider', () => {
     expect(envContent).toContain('export TMPDIR=');
     expect(envContent).toContain('export GRADLE_USER_HOME=');
     expect(envContent).toContain('export npm_config_cache=');
+  }, 240_000);
+
+  openCodeProviderIt('should propagate runtime.prepare through a non-edit OpenCode step', () => {
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      runtime: {
+        prepare: ['gradle', 'node'],
+      },
+    });
+
+    const fixturePaths = ['gradlew', 'scripts/check-node-env.js', 'package.json'].map((path) => join(repo.path, path));
+    const fixtureContents = fixturePaths.map((path) => readFileSync(path, 'utf-8'));
+    const runtimeRoot = join(repo.path, '.takt', '.runtime');
+    const result = runTakt({
+      args: [
+        '--task',
+        [
+          'In the repository root, run exactly this command once: `./gradlew test && npm test`.',
+          'Only if the entire command succeeds, respond exactly with: Task completed',
+        ].join(' '),
+        '--workflow', join(repo.path, 'runtime-e2e-readonly-workflow.yaml'),
+      ],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+      timeout: 240_000,
+    });
+
+    const runDiagnostics = formatTaktRunResult(result);
+    expect(result.exitCode, runDiagnostics).toBe(0);
+    expect(fixturePaths.map((path) => readFileSync(path, 'utf-8'))).toEqual(fixtureContents);
+    expectFirstPreparedCommand(repo.path, runtimeRoot);
+    registerRuntimeTmpDirectory(repo.path, join(runtimeRoot, 'env.sh'), runtimeTempRoot);
   }, 240_000);
 
   providerIt('should leave commands executed by a real provider unprepared when runtime.prepare is unset', () => {
