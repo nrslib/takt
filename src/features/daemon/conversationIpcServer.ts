@@ -61,6 +61,12 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   const decoder = new ConversationFrameDecoder();
   const owned = new Set<string>();
   let authenticated = false;
+  let awaitingOpen = false;
+  const finishInitializing = (): void => {
+    if (!awaitingOpen) return;
+    awaitingOpen = false;
+    onInitializingChange(-1);
+  };
   let pumping = false;
   let pendingRequests = 0;
   let pendingRequestBytes = 0;
@@ -81,6 +87,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     if (old !== undefined) { old.cancelled = true; old.read.cancel(); void old.iterator.return(undefined).catch(() => { socket.destroy(); }); }
   };
   const fail = (): void => {
+    finishInitializing();
     wakeControls();
     wakeWriter?.();
     cancelRead();
@@ -229,6 +236,9 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     if (request.method === 'hello') {
       if (authenticated || !timingSafeEqual(Buffer.from(capability, 'hex'), Buffer.from(request.params.capability, 'hex'))) { fail(); return; }
       authenticated = true;
+      // readiness と最初の attachment を、同じ接続の寿命で連続させる。
+      awaitingOpen = true;
+      onInitializingChange(1);
       await response({ owner });
       return;
     }
@@ -244,6 +254,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           const opened = await service.open(request.params, port.delivery);
           if (socket.destroyed) { service.detach(opened.attachmentId); opened.read.cancel(); return; }
           owned.add(opened.attachmentId);
+          finishInitializing();
           await response({ attachmentId: opened.attachmentId, read: snapshotMetadata(opened.read) });
           beginRead(opened.read);
         } finally { onInitializingChange(-1); }

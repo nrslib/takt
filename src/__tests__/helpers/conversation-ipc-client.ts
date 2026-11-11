@@ -13,8 +13,8 @@ export class Client {
   readonly frames: Frame[] = [];
   readonly sizes: number[] = [];
   readonly socket: Socket;
-  constructor(endpoint: string) {
-    this.socket = createConnection(endpoint);
+  constructor(endpoint: string | Socket) {
+    this.socket = typeof endpoint === 'string' ? createConnection(endpoint) : endpoint;
     this.socket.on('error', () => {});
     const decoder = new ConversationFrameDecoder();
     let length = 0;
@@ -22,6 +22,7 @@ export class Client {
       for (const byte of bytes) { length++; if (byte === 10) { this.sizes.push(length); length = 0; } }
       this.frames.push(...[...decoder.decode(bytes)] as Frame[]);
     });
+    this.socket.resume();
   }
   async request(method: string, params: unknown) {
     const requestId = randomUUID();

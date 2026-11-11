@@ -10,7 +10,7 @@ const doubles = vi.hoisted(() => ({
   ready: vi.fn(),
 }));
 vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
-vi.mock('../features/daemon/conversationReadiness.js', () => ({ isConversationIpcReady: doubles.ready }));
+vi.mock('../features/daemon/conversationReadiness.js', () => ({ connectConversationIpc: doubles.ready }));
 vi.mock('../infra/daemon/owner.js', () => ({
   readDaemonOwner: doubles.read, isDaemonOwnerRunning: doubles.running, removeDaemonOwner: doubles.remove,
 }));
@@ -24,6 +24,7 @@ const owner: DaemonOwner = {
   pid: 4321, identity: { startTime: 'darwin-start-v2:12345' }, version: packageVersion, cliPath: daemonEntryPath(),
 };
 afterEach(() => { vi.restoreAllMocks(); });
+let socket: { destroy: ReturnType<typeof vi.fn> };
 let child: EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; unref: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
@@ -31,7 +32,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   doubles.read.mockReset().mockReturnValue(undefined);
   doubles.running.mockReset().mockReturnValue(true);
-  doubles.ready.mockReset().mockResolvedValue(true);
+  socket = { destroy: vi.fn() };
+  doubles.ready.mockReset().mockResolvedValue(socket);
   doubles.open.mockResolvedValue({ fd: 42, close: doubles.close });
   doubles.delay.mockReset().mockResolvedValue(undefined);
   child = Object.assign(new EventEmitter(), { pid: owner.pid, exitCode: null, signalCode: null, unref: vi.fn() });
@@ -50,7 +52,7 @@ it('reuses the running daemon with the current version and CLI path', async () =
 
 it('waits for authenticated IPC readiness even when the matching owner is already running', async () => {
   doubles.read.mockReturnValue(owner);
-  doubles.ready.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  doubles.ready.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => socket);
   await ensureDaemon();
   expect(doubles.ready).toHaveBeenCalledTimes(2);
   expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
@@ -72,6 +74,7 @@ it('starts detached and confirms its own owner record before returning', async (
     env: expect.objectContaining({ TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR }),
   });
   expect(doubles.delay).toHaveBeenCalled();
+  expect(socket.destroy).toHaveBeenCalledOnce();
   expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
   expect(child.unref).toHaveBeenCalledOnce();
   expect(doubles.close).toHaveBeenCalledWith();
@@ -80,7 +83,7 @@ it('starts detached and confirms its own owner record before returning', async (
 it('waits for IPC readiness after its newly spawned daemon has published the owner', async () => {
   let releasePoll!: () => void;
   const poll = new Promise<void>((resolve) => { releasePoll = resolve; });
-  doubles.ready.mockResolvedValue(false);
+  doubles.ready.mockResolvedValue(undefined);
   doubles.delay.mockReturnValue(poll);
   let returned = false;
   const starting = ensureDaemon().then(() => { returned = true; });
@@ -89,13 +92,22 @@ it('waits for IPC readiness after its newly spawned daemon has published the own
     expect(doubles.running).toHaveBeenCalledWith(owner, expect.objectContaining({ timeoutMs: 5000 }));
     expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
     expect(returned).toBe(false);
-    doubles.ready.mockResolvedValue(true);
+    doubles.ready.mockResolvedValue(socket);
   } finally { releasePoll(); }
   await starting;
   expect(returned).toBe(true);
   expect(doubles.ready).toHaveBeenCalledTimes(2);
   expect(doubles.spawn).toHaveBeenCalledOnce();
   expect(child.unref).toHaveBeenCalledOnce();
+});
+
+it.each(['new', 'existing'] as const)('hands the authenticated socket to the caller for a %s daemon', async (kind) => {
+  if (kind === 'existing') doubles.read.mockReturnValue(owner);
+  const connection = await ensureDaemon({ retainConnection: true });
+  expect(connection).toBe(socket);
+  expect(socket.destroy).not.toHaveBeenCalled();
+  expect(doubles.spawn).toHaveBeenCalledTimes(kind === 'new' ? 1 : 0);
+  connection.destroy();
 });
 
 it('waits for the winning daemon IPC after its own child loses the startup race', async () => {
@@ -108,7 +120,7 @@ it('waits for the winning daemon IPC after its own child loses the startup race'
     });
     return child;
   });
-  doubles.ready.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  doubles.ready.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => socket);
 
   await ensureDaemon();
 
@@ -134,7 +146,7 @@ it('bounds IPC readiness waiting for the winning daemon after its own child exit
     });
     return child;
   });
-  doubles.ready.mockResolvedValue(false);
+  doubles.ready.mockResolvedValue(undefined);
   doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
 
   await expect(ensureDaemon()).rejects.toThrow();
