@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Manager can read a workflow's steps, transitions, and called workflows with `takt_get_workflow` before delegating work to a task (#1991).
 - The manager TUI shows what manager is doing during a turn: thinking, responding, or the tool in use (#1990).
 - Manager is notified when a PR waiting for merge becomes conflicting, once per conflict (#1995).
-- Manager can be restricted to selected workflows for new development tasks with `manager.workflows`, including a usage description for each candidate and an optional `manager.default_workflow` (#2020). The default candidates are `default` and `simple`; `workflows: all` keeps all workflows available. Existing task resumes, PR finishing, child workflow calls, and manual CLI use are not restricted.
+- Manager can be restricted to selected workflows for new development tasks with `manager.workflows`, including a usage description for each candidate (#2020). Manager selects a workflow suited to the task from those candidates and their usage descriptions (#2032). The default candidates are `default` and `simple`; `workflows: all` keeps all workflows available. Existing task resumes, PR finishing, child workflow calls, and manual CLI use are not restricted.
 - Manager can register a one-line waiting command, such as `gh run watch --exit-status`, with `takt_wait_command` (#2024). The daemon runs it independently of the manager turn and returns a completion event with the exit status and the last 16 KiB of output. Commands time out after one hour by default, can wait up to 24 hours, and stop when their goal is paused or aborted or the daemon shuts down.
 
 ### Changed
