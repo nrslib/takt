@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import stringWidth from 'string-width';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -15,6 +16,7 @@ vi.mock('../features/manager/notifications.js', () => ({
   resolveManagerNotificationOptions: doubles.options, sendSavedGoalNotifications: doubles.send,
 }));
 import { notifyManagerTurnFailure } from '../features/manager/turnFailureNotification.js';
+import { conversationErrorResult } from '../features/manager/conversationErrors.js';
 
 let goal: Goal;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
@@ -32,6 +34,43 @@ beforeEach(() => {
 });
 
 describe('notifyManagerTurnFailure', () => {
+  describe.each(['conversation', 'goal'] as const)('%s failure reason normalization', (destination) => {
+    it.each([
+      { name: 'ANSI-obfuscated sensitive key', raw: 'failed api_\u001b[31mtoken\u001b[0m=fixture-secret', expected: 'failed api_token=[REDACTED]' },
+      { name: 'secret longer than the display limit', raw: `token=${'s'.repeat(600)} readable`, expected: 'token=[REDACTED] readable' },
+      { name: 'terminal controls', raw: '\u001b[?25lfailed\u001b[?25h\u0007\u009b31m\u001b]52;c;payload\u0007', expected: 'failed' },
+      ...[
+        ['LF', '\n'], ['CRLF', '\r\n'], ['CR', '\r'], ['VT', '\v'], ['FF', '\f'],
+        ['NEL', '\u0085'], ['LS', '\u2028'], ['PS', '\u2029'], ['TAB', '\t'],
+      ].map(([name, separator]) => ({ name, raw: `before${separator}after`, expected: 'before after' })),
+      { name: 'long ASCII', raw: 'x'.repeat(2_000), expected: `${'x'.repeat(499)}…` },
+      { name: 'long CJK', raw: '界'.repeat(600), expected: `${'界'.repeat(249)}…` },
+      { name: 'long combining graphemes', raw: 'e\u0301'.repeat(600), expected: `${'e\u0301'.repeat(499)}…` },
+      { name: 'long emoji graphemes', raw: '👨‍👩‍👧‍👦'.repeat(600), expected: `${'👨‍👩‍👧‍👦'.repeat(249)}…` },
+    ])('uses the conversation rule for $name', async ({ raw, expected }) => {
+      doubles.label.mockImplementation((key: string, _language: string, vars: { reason?: string }) =>
+        key === 'manager.notificationHumanHeadings.blocked' ? 'blocked' : vars.reason);
+      const error = new Error(raw);
+      const result = conversationErrorResult(error, 'en');
+
+      const message = await notifyManagerTurnFailure('/project', destination === 'goal' ? goal.id : undefined, error);
+
+      expect(result).toEqual({ kind: 'error', code: 'operation_failed', message: expected });
+      expect(stringWidth(expected)).toBeLessThanOrEqual(500);
+      if (destination === 'goal') {
+        expect(message).toBeUndefined();
+        expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'blocked', severity: 'error', body: expected })]);
+        expect(doubles.send).toHaveBeenCalledExactlyOnceWith('/project', expect.any(Object), goal, 'https://example.test/notify');
+        expect(doubles.slack).not.toHaveBeenCalled();
+      } else {
+        expect(message).toBe(`blocked\n${expected}`);
+        expect(doubles.slack).toHaveBeenCalledExactlyOnceWith('https://example.test/notify', message);
+        expect(doubles.update).not.toHaveBeenCalled();
+        expect(doubles.send).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it.each(['ja', 'en'] as const)('saves the real %s recovery guidance for the goal menu', async (language) => {
     const { getLabel } = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
     doubles.label.mockImplementation(getLabel);
