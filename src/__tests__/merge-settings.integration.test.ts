@@ -25,7 +25,7 @@ describe('Merge settings persistence', () => {
       include_forks: true, threat_check_max_diff_bytes: 512,
       where: { author: 'alice', labels: ['ready', 'automation'], head_branch: 'takt/*', same_repository: true } };
     const configPath = scope === 'project' ? join(project, '.takt', 'config.yaml') : getGlobalConfigPath();
-    const rawManager = { auto_run: false, default_workflow: 'goal-workflow', notifications: { progress: false },
+    const rawManager = { auto_run: false, notifications: { progress: false },
       ...(scope === 'project' ? { main_merge: 'approve' } : {}) };
     writeFileSync(configPath, stringify({ merge: rawMerge, manager: rawManager, concurrency: 3, caccia: { enabled: false } }));
     const load = () => scope === 'project' ? loadProjectConfig(project) : loadGlobalConfig();
@@ -33,7 +33,7 @@ describe('Merge settings persistence', () => {
     expect(first).toMatchObject({ merge: { workflow: 'custom-merge', method: 'rebase', autoStart: true,
       includeDraft: true, includeForks: true, threatCheckMaxDiffBytes: 512,
       where: rawMerge.where }, concurrency: 3, caccia: { enabled: false },
-      manager: { autoRun: false, defaultWorkflow: 'goal-workflow', notifications: { progress: false },
+      manager: { autoRun: false, notifications: { progress: false },
         ...(scope === 'project' ? { mainMerge: 'approve' } : {}) } });
     if (scope === 'project') saveProjectConfig(project, loadProjectConfig(project));
     else saveGlobalConfig(loadGlobalConfig());

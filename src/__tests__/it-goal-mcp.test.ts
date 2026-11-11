@@ -119,19 +119,17 @@ describe('manager goal task enqueue', () => {
     });
   }
 
-  it('lists only configured manager workflows with usage descriptions and the additional default', async () => {
+  it('lists only configured manager workflows with usage descriptions', async () => {
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: {
-      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'], defaultWorkflow: 'simple',
+      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'],
     } });
     await withEnqueue(async (client) => {
       const result = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content)).workflows).toEqual([
         { name: 'safe', description: 'fixture safe', usageDescription: 'Use for input validation' },
-        expect.objectContaining({ name: 'simple' }),
       ]);
       expect((await enqueue(client)).isError).toBeUndefined();
-      expect((await enqueue(client, { workflow: 'simple', workKey: 'default-work' })).isError).toBeUndefined();
     });
   });
 

@@ -8,10 +8,6 @@ Formal specification configuration: {{specificationConfiguration}}
 
 形式仕様の mode は登録時に用意する仕様の種類、comments は仕様中のコメントの扱いを示します。
 
-Default workflow: {{defaultWorkflow}}
-
-タスクへ任せるワークフローを選ぶ際の既定値です。null は既定の指定がないことを表します。
-
 Repository manager.main_merge: {{mainMerge}}
 
 人が保存した継続の取り込み指示です。approve は PR の準備後に人のマージを待ち、auto は仕上げからマージまで進めます。

@@ -50,6 +50,5 @@ workflow_overrides:
 
 manager:
   workflows:
-    - default
-    - simple
-    - takt-default
+    - takt-default: TAKT本体の通常の機能追加や不具合修正。TAKT固有の計画・テスト・レビューを行う
+    - simple: 1〜2ファイルで済む小さな修正。軽い流れで進める

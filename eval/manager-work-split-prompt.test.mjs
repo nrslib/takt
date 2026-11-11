@@ -338,7 +338,7 @@ test('uses the exact production system assembly for each language', () => {
     process.env.TAKT_CONFIG_DIR = root;
     delete process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
     mkdirSync(join(root, '.takt'));
-    writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nconcurrency: 3\nmanager:\n  default_workflow: default\n  main_merge: auto\n');
+    writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nconcurrency: 3\nmanager:\n  main_merge: auto\n');
     invalidateGlobalConfigCache();
     for (const lang of ['ja', 'en']) {
       const fixture = { ...loadManagerCase('parallel-cli', lang), cwd: root };
@@ -967,7 +967,7 @@ test('baseline adapter passes resolved facets and settings through the productio
         instruction: '{{#if formalSpec}}FIXTURE_FORMAL{{/if}} {{#if formalSpecCommentsEnabled}}FIXTURE_COMMENTS{{/if}} {{formalSpecVerifierConstraints}}' },
       specificationConfiguration: { mode: true, comments: false, modelCheckTimeoutSeconds: 42 },
       formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: '/workspace/fixture-repository',
-      defaultWorkflow: 'default', mainMerge: 'auto', concurrency: 3,
+      mainMerge: 'auto', concurrency: 3,
     };
     assert.equal(buildBaselineSystem(input), buildProductionSystem(input));
   }
