@@ -8,7 +8,6 @@ interface ManagerSystemPromptInput {
   specificationConfiguration: { mode: boolean; comments: boolean } | readonly { repositoryDirectory: string; mode: boolean; comments: boolean }[];
   formalSpecVerifierConstraints: string;
   repository: string;
-  defaultWorkflow: string | null;
   mainMerge: string;
   concurrency: number;
 }
@@ -27,7 +26,6 @@ export function buildManagerSystemPrompt(input: ManagerSystemPromptInput): strin
     loadTemplate('manager_runtime_settings', lang, {
       repository: JSON.stringify(input.repository),
       specificationConfiguration: JSON.stringify(specificationConfiguration),
-      defaultWorkflow: JSON.stringify(input.defaultWorkflow),
       mainMerge: JSON.stringify(input.mainMerge),
       concurrency: String(input.concurrency),
     }).trim(),
