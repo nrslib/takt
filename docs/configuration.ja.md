@@ -213,6 +213,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `sync_project_local_takt_on_retry` | boolean | `true` | 既存 worktree の再試行位置を選ぶ前、または SDK を確認する前にルートの project-local `.takt` を同期します。SDK 導入を断った場合や選択を中止した場合も同期済みのファイルは残ります。`false` では worktree 側のコピーを維持します。 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
+| `manager.preserve_goal_worktree` | boolean | `false` | manager がゴールタスクの成果を取り込んだ後も worktree と run 証跡を保持します。[ゴールタスクの worktree 保持](#ゴールタスクの-worktree-保持)を参照。 |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
@@ -498,6 +499,17 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 `manager.main_merge` はプロジェクトの `.takt/config.yaml` で `approve`（既定）または `auto` を指定します。どちらも完成申請で PR を作成します。`approve` は manager が `takt_merge_goal_pr` の `until: prepare` で仕上げて人のマージを待ち、`auto` は `until: merge` でマージまで進めます。人の明示的なマージ指示も `until: merge` を使います。手元への直接マージや、PR 作成失敗の時間・回数による自動再試行は行いません。
 
 `until: prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.prepare_workflow` はこの manager の操作だけに適用され、`takt merge` の workflow 選択は変わりません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
+
+## ゴールタスクの worktree 保持
+
+プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` で `manager.preserve_goal_worktree: true` を指定すると、manager が `takt_merge_goal_task` でゴールタスクの成果を正常に取り込んだ後も worktree を保持します。project の値が global より優先されます。確認済みの成果が既に取り込み済みだった場合と、その操作で新たにマージした場合の両方に適用されます。
+
+```yaml
+manager:
+  preserve_goal_worktree: true
+```
+
+worktree、clone metadata、worktree 内の `.takt/runs` の reports・logs はそのまま残ります。completed タスク記録も従来どおり残し、タスク履歴の自動削除は行いません。既定の `false` では、従来の worktree・clone metadata の cleanup と `cleanupWarning` の挙動を維持します。この設定は、通常の `completeTask`、List Tasks からの手動 merge・delete、PR merge タスク、未取り込みタスクには影響しません。
 
 ## manager がタスクに使う workflow
 
