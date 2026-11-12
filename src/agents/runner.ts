@@ -248,13 +248,20 @@ export class AgentRunner {
     let currentOptions = options;
     while (true) {
       let compactionDetected = false;
+      let compactionSessionId: string | undefined;
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
           if (event.type === 'context_compacted') {
             compactionDetected = true;
+            compactionSessionId = event.data.sessionId;
           }
-          if (compactionDetected && event.type === 'result' && event.data.success) {
+          if (
+            compactionDetected
+            && event.type === 'result'
+            && event.data.success
+            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
+          ) {
             return;
           }
           currentOptions.onStream?.(event);
@@ -263,13 +270,16 @@ export class AgentRunner {
       const response = recoveryCount === 0
         ? await agent.call(task, callOptions)
         : await recoverFromCompaction.call(agent, task, callOptions);
-      if (!compactionDetected || response.status !== 'done') {
+      const responseSessionId = response.sessionId ?? currentOptions.sessionId;
+      const compactionMatchesResponse = compactionSessionId === undefined
+        || compactionSessionId === responseSessionId;
+      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
         return response;
       }
 
       currentOptions = {
         ...currentOptions,
-        sessionId: response.sessionId ?? currentOptions.sessionId,
+        sessionId: responseSessionId,
       };
       if (recoveryCount === maxCompactionRecoveries) {
         const error = 'Provider compaction recovery limit reached';

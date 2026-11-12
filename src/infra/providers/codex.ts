@@ -7,6 +7,7 @@ import {
   callCodexCustom,
   type CodexCallOptions,
 } from '../codex/index.js';
+import { emitResult } from '../codex/CodexStreamHandler.js';
 import { resolveOpenaiApiKey, resolveCodexCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { assertCodexConfigProfilePermissionControl } from '../../core/models/workflow-provider-options.js';
@@ -112,7 +113,16 @@ export class CodexProvider implements Provider {
       options,
     ) => {
       if (options.sessionId === undefined) {
-        throw new Error('Codex cannot recover from compaction without a session ID');
+        const error = 'Codex cannot recover from compaction without a session ID';
+        emitResult(options.onStream, false, error, undefined, 'provider_error');
+        return {
+          persona: name,
+          status: 'error',
+          content: error,
+          error,
+          failureCategory: 'provider_error',
+          timestamp: new Date(),
+        };
       }
       return call([
         'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',

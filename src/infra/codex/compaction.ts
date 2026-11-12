@@ -1,7 +1,7 @@
 import { createReadStream, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { resolveCodexHomeDirectory } from './home.js';
 
 export interface CodexRolloutObservation {
   readonly sessionsRoot: string;
@@ -86,16 +86,27 @@ export function createCodexRolloutObservation(
   sessionId: string | undefined,
   startedAt: Date,
 ): CodexRolloutObservation {
-  const sessionsRoot = join(environment.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
-  const rolloutPath = sessionId === undefined
-    ? undefined
-    : findRolloutRecursively(sessionsRoot, sessionId);
+  const sessionsRoot = join(resolveCodexHomeDirectory(environment), 'sessions');
+  let rolloutPath: string | undefined;
+  let byteOffset = 0;
+  if (sessionId !== undefined) {
+    try {
+      rolloutPath = findRolloutRecursively(sessionsRoot, sessionId);
+      if (rolloutPath !== undefined) {
+        byteOffset = statSync(rolloutPath).size;
+      }
+    } catch {
+      // Rollout observation is optional; an unreadable or removed rollout must not abort the Codex turn.
+      rolloutPath = undefined;
+      byteOffset = 0;
+    }
+  }
   return {
     sessionsRoot,
     startedAt,
     initialSessionId: sessionId,
     rolloutPath,
-    byteOffset: rolloutPath === undefined ? 0 : statSync(rolloutPath).size,
+    byteOffset,
   };
 }
 
@@ -122,16 +133,21 @@ export async function detectCodexCompaction(
   observation: CodexRolloutObservation,
   sessionId: string | undefined,
 ): Promise<boolean> {
-  if (sessionId === undefined) return false;
-  if (observation.initialSessionId !== undefined) {
-    return observation.rolloutPath !== undefined
-      && containsCompaction(observation.rolloutPath, observation.byteOffset);
-  }
+  try {
+    if (sessionId === undefined) return false;
+    if (observation.initialSessionId === sessionId) {
+      return observation.rolloutPath !== undefined
+        && await containsCompaction(observation.rolloutPath, observation.byteOffset);
+    }
 
-  const rolloutPath = findInitialRollout(
-    observation.sessionsRoot,
-    observation.startedAt,
-    sessionId,
-  );
-  return rolloutPath !== undefined && containsCompaction(rolloutPath, 0);
+    const rolloutPath = findInitialRollout(
+      observation.sessionsRoot,
+      observation.startedAt,
+      sessionId,
+    );
+    return rolloutPath !== undefined && await containsCompaction(rolloutPath, 0);
+  } catch {
+    // An unreadable or incomplete rollout disables optional detection; it does not fail the completed turn.
+    return false;
+  }
 }

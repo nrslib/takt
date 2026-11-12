@@ -410,10 +410,10 @@ export class CodexClient {
       return errorResponse;
     }
 
-    let compactionDetected = false;
+    const compactedThreadIds = new Set<string | undefined>();
     const signalCompaction = (sessionId: string | undefined): void => {
-      if (compactionDetected) return;
-      compactionDetected = true;
+      if (compactedThreadIds.has(sessionId)) return;
+      compactedThreadIds.add(sessionId);
       options.onStream?.({
         type: 'context_compacted',
         data: { ...(sessionId !== undefined ? { sessionId } : {}) },
@@ -733,7 +733,8 @@ export class CodexClient {
           return errorResponse;
         }
 
-        if (!compactionDetected && await detectCodexCompaction(rolloutObservation, currentThreadId)) {
+        if (!compactedThreadIds.has(currentThreadId)
+          && await detectCodexCompaction(rolloutObservation, currentThreadId)) {
           signalCompaction(currentThreadId);
         }
         emitResult(options.onStream, true, trimmed, currentThreadId);
