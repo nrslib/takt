@@ -1711,6 +1711,10 @@ provider_options:
 
 runtime profile または capability preset で設定できます。legacy モードでは `provider_routing`、deprecated の `persona_providers`、project、global config からも設定できます。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
 
+#### Codex の context compaction からの復帰
+
+Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行し、provider call ごとに3回までです。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+
 #### Codex の fast mode (`fast_mode`)
 
 `provider_options.codex.fast_mode` で Codex の fast mode を明示的に設定できます。

@@ -1749,6 +1749,10 @@ legacy mode it can also be set through `provider_routing`, deprecated
 `persona_providers`, project, or global config. The environment variable
 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
 
+#### Codex context compaction recovery
+
+When Codex records a `compacted` event in its transport or session rollout during Phase 1, TAKT waits for the current turn to finish, then resumes the same thread and re-injects the original Phase 1 instruction with context explaining that compaction occurred. Recovery turns are sequential and capped at three per provider call. A failed recovery, or another compaction after that cap, is returned as a failure rather than a successful step. TAKT does not infer compaction from assistant text. Providers that do not emit the event or do not support recovery keep their existing behavior. This automatic recovery is separate from the workflow-level `session: compact` behavior, which remains unchanged.
+
 #### Codex fast mode (`fast_mode`)
 
 Set the optional Codex fast-mode feature explicitly with `provider_options.codex.fast_mode`:
