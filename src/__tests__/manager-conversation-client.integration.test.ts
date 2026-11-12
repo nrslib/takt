@@ -40,10 +40,12 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
 import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
-import { getEpic, updateEpicDefinition } from '../infra/epics/index.js';
+import { abortEpic, addEpicMember, completeEpic, createEpic, getEpic, recordEpicVerificationResult,
+  startEpicVerification, updateEpicDefinition } from '../infra/epics/index.js';
+import { removeManagerRepository } from '../features/manager/workspaceOperations.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
-import { completedEpicGoal, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
+import { completedEpicGoal, epicDefinition, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -1790,6 +1792,29 @@ function displayedEpics(value: ConversationIpcClient) {
   return value.getSnapshot().items.filter((item: { kind: string }) => item.kind === 'epic');
 }
 
+async function openEpicDetail(app: ReturnType<typeof render>, objective: string, targetSha: string) {
+  vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(160);
+  Object.defineProperty(app.stdout, 'rows', { configurable: true, value: 80 });
+  app.stdout.emit('resize');
+  await waitFor(() => expect(app.lastFrame()).toContain('╭'));
+  app.stdin.write('\x0f');
+  await waitFor(() => expect(app.lastFrame()).toContain(objective));
+  app.stdin.write('\r');
+  await waitFor(() => expect(app.lastFrame()).toContain(targetSha));
+}
+
+function epicEvidenceRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /current.*evidence/iu.test(line));
+  expect(row, '現在の証拠を検証履歴と区別して表示する').toBeDefined();
+  return row!;
+}
+
+function epicStatusRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /status\s*:/iu.test(line));
+  expect(row, 'Epic自体の状態をメンバーの状態と区別して表示する').toBeDefined();
+  return row!;
+}
+
 it('updates existing Epic evidence on the same IPC client and restores one current item after reconnect', async () => {
   const f = await seedEpicSnapshot();
   const connections = observeIpcConnections();
@@ -1798,6 +1823,9 @@ it('updates existing Epic evidence on the same IPC client and restores one curre
     currentEvidence: { id: f.run.id, result: verificationResultFor(f.run) } },
     memberProgress: f.completed.members.map((member) => ({ ...member, status: 'completed', executionStatus: 'active' })), recovery: [] }]);
   expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+  expect(epicEvidenceRow(app)).toContain(f.run.id);
 
   const reason = '接続中に結合確認手順を改訂する';
   await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['改訂した手順'] } }, reason });
@@ -1807,6 +1835,11 @@ it('updates existing Epic evidence on the same IPC client and restores one curre
   expect(displayedEpics(client)).toMatchObject([{ epic: { ...changed, status: 'active',
     verificationRuns: [expect.objectContaining({ id: f.run.id, invalidationReason: reason })] } }]);
   expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+    expect(epicStatusRow(app)).toMatch(/active|in progress/iu);
+  });
   expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
 
   connections[0]!.socket.destroy();
@@ -1818,6 +1851,127 @@ it('updates existing Epic evidence on the same IPC client and restores one curre
   expect(displayedEpics(client)).toMatchObject([{ epic: changed }]);
   expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
   expect(displayedGoals(client)).toHaveLength(2);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => {
+    expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha);
+    expect(app.lastFrame()!.split(f.completed.objective)).toHaveLength(2);
+  });
+});
+
+it('shows creation, member changes and stale results on the same IPC-backed Epic screen before explicit completion', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+
+  const replacement = { ...completedEpicGoal('d'.repeat(40), 'e'.repeat(40)), id: randomUUID() };
+  saveGoal(replacement);
+  const reason = 'Add the corrected API goal';
+  await addEpicMember({ ...f.context, member: { repositoryDirectory: repository, goalId: replacement.id }, reason });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(replacement.id);
+    expect(app.lastFrame()).toMatch(/3\s*\/\s*3/u);
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+
+  const old = await startEpicVerification(f.context);
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Recheck the corrected API'] } },
+    reason: 'Change the integration procedure while verification is running' });
+  const current = await startEpicVerification(f.context);
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(old) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(current.id);
+    expect(app.lastFrame()).toContain(old.id);
+    expect(app.lastFrame()).toMatch(/stale/iu);
+    expect(epicEvidenceRow(app)).not.toContain(old.id);
+  });
+  await expect(completeEpic(f.context)).rejects.toThrow();
+  expect(await getEpic(f.context)).toMatchObject({ status: 'active', runningVerification: { id: current.id } });
+
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(current) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicEvidenceRow(app)).toContain(current.id));
+  await completeEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(/completed/iu));
+
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha));
+  const created = await createEpic({ globalConfigDirectory: directory, workspaceId: f.workspace.id,
+    ...epicDefinition(), objective: 'New Epic created while the list is open', reason: 'Request another integration check' });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(app.lastFrame()).toContain(created.objective));
+  expect(displayedEpics(client)).toHaveLength(2);
+});
+
+it('retains a running verification for result recovery across an IPC reconnect without replaying it', async () => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Explicit recovery check'] } }, reason: 'Require another check' });
+  const run = await startEpicVerification(f.context);
+  const stored = await getEpic(f.context);
+  const connections = observeIpcConnections();
+  const submit = vi.spyOn(client, 'submit');
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, stored.objective, stored.targets[0]!.targetSha);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+    expect(epicEvidenceRow(app)).not.toContain(run.id);
+  });
+  connections[0]!.socket.destroy();
+  await waitFor(() => {
+    expect(connections).toHaveLength(2);
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(connections[1]!.snapshots[0]?.complete).toBe(true);
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  expect(await getEpic(f.context)).toEqual(stored);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { runningVerification: { id: run.id } }, recovery: [{ id: run.id }] }]);
+});
+
+it.each(['complete', 'abort'] as const)('updates the same Epic detail after %s and repository removal while preserving its saved history', async (operation) => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { objective: 'Epic retained across repository removal' }, reason: 'Reopen integration work' });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, 'Epic retained across repository removal', f.completed.targets[0]!.targetSha);
+  await expect(removeManagerRepository(assignment, repository, directory)).rejects.toThrow();
+  if (operation === 'complete') {
+    const run = await startEpicVerification(f.context);
+    await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(run) });
+    await completeEpic(f.context);
+  } else await abortEpic({ ...f.context, reason: 'Stop integration without changing member goals' });
+  const saved = await getEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(operation === 'complete' ? /completed/iu : /aborted/iu));
+
+  for (const repositoryDirectory of f.workspace.repositoryDirectories) {
+    await removeManagerRepository(assignment, repositoryDirectory, directory);
+  }
+  assignment = { ...assignment, repositoryDirectories: [] };
+  doubles.assignment.mockResolvedValue(assignment);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(saved.objective);
+    expect(app.lastFrame()).toContain(saved.targets[0]!.targetSha);
+    expect(app.lastFrame()).toContain(f.run.id);
+    expect(app.lastFrame()).toMatch(/unknown|unavailable|not (?:available|loaded)/iu);
+  });
+  expect(displayedGoals(client)).toEqual([]);
+  expect(displayedEpics(client)).toMatchObject([{ epic: saved, memberProgress: [] }]);
+  expect(await getEpic(f.context)).toEqual(saved);
 });
 
 it('restores completed Epic history after repository removal without reading removed member goals', async () => {

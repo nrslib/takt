@@ -36,7 +36,7 @@ manager:
 入力欄の下にはキー操作の案内、その下にステータスラインを表示します（以下は表示例）。`/make-goal` と `/verify` の説明は常時表示せず、スラッシュ補完に表示します。実験的機能についての長い注意書きは起動時に一度表示します。
 
 ```text
-Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了
+Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O Epic  ^C 終了
 担当: takt | 進行中 1 ／ 未回答 0
 ```
 
@@ -114,6 +114,52 @@ mcp:
 「`/path/to/web` も担当して」「このリポジトリを担当から外して」「workspace の名前を開発に変えて」と会話で依頼できます。所属するどのリポジトリから起動しても同じ workspace が開きます。1つのゴールは1つのリポジトリで進みます。
 
 担当から外してもリポジトリやゴールは削除されません。未完成のゴールがある場合は外せないため、先に完成または中止してください。リポジトリの外で起動すると workspace を選べます。
+
+## Epic で複数ゴールの結合確認を管理する
+
+Epic は、同じ workspace manager が担当する複数ゴールと、その組み合わせを確かめる証拠をまとめた永続レコードです。各メンバーゴールは引き続き単一リポジトリ・単一 PR で進みます。Epic 自身のブランチ、PR、専用のタスク実行系は作りません。別 manager のゴールや、director による自動的な依存順序の決定は対象外です。
+
+### 作成とメンバー変更
+
+会話で全体目的、受け入れ条件、結合確認手順を伝え、Epic の作成を依頼します。例えば「API と画面の連携を確認する Epic を作り、この workspace の2つのゴールをメンバーに追加して」と依頼できます。manager は既存の MCP 操作を使います。変更操作には空でない理由を渡します。
+
+| 操作 | MCP ツールと内容 |
+|------|-----------------|
+| 作成・参照 | `takt_create_epic`、`takt_list_epics`、`takt_get_epic`。作成時は `objective`、`acceptanceCriteria`（`id` と `description`）、`verificationProcedure`（`version` と `steps`）、`reason` を指定します。 |
+| メンバー追加・削除 | `takt_add_epic_member`、`takt_remove_epic_member`。`member: { repositoryDirectory, goalId }` と変更理由を記録します。 |
+| 修正用ゴールへの置換 | `takt_replace_epic_member`。元の `member` と新しい `replacement`、理由を渡します。完了済みゴールを再オープンしません。 |
+| 定義の改訂 | `takt_update_epic_definition`。目的・受け入れ条件・確認手順の変更と理由を記録します。 |
+| 対象の固定・更新 | `takt_refresh_epic_targets`。完了メンバーの取り込み後 SHA を対象として記録します。 |
+
+MCP の `cwd` は担当リポジトリ内の絶対パス、`epicId` は対象の Epic ID です。workspace は現在の manager の担当から決まります。担当外・存在しないゴール・同じ Epic 内の重複メンバーは拒否します。記録は `~/.takt/workspaces/<workspaceId>/epics/<epicId>/epic.json` に保存し、`TAKT_CONFIG_DIR` があればその下を使います。
+
+### 固定対象と結合確認の証拠
+
+対象は各ゴールの `completion.targetSha`、つまり取り込み先へ反映した固定 SHA です。`completion.goalSha` や現在のブランチ先端で代用しません。対象外のコミットで main が進んだだけでは、固定した対象と証拠は変わりません。
+
+`takt_start_epic_verification` は実行 ID、現在の更新世代、SHA の組、定義、手順の版、開始時刻を記録するだけです。検証コマンドは自動実行しません。manager が既存の shell/run と一時作業場所で結合確認を行い、`takt_record_epic_verification_result` で結果を登録します。
+
+結果には開始記録に対応する `runId`、`revision`、`targets`、`procedureVersion`、開始・終了時刻、成否を含めます。対象環境の名前と説明、元の対象 SHA に対応する成果物参照、検証用作業場所と使用成果物、受け入れ条件ごとの判定を記録し、ログ参照も残してください。会話の返事だけを完了証拠にはしません。
+
+Terraform を含む手順では、`verificationProcedure.terraform.requiresApply` を `true` または `false` で明記します。結果にも Terraform の `phase`（`plan`／`post_apply`）、`applyStatus`（`not_applied`／`applied`／`failed`）、成果物参照を記録します。`requiresApply: true` の場合、plan 成功だけでは完了証拠にならず、適用済みの状態（`post_apply`、`applied`）での確認が必要です。`requiresApply: false` は適用を要求しない手順であることを示します。対象環境・適用状態・使用成果物の記録は省略しません。TAKT が Terraform apply/destroy を自動実行することはありません。
+
+### 完了、失効、中止、復旧
+
+成功結果の登録だけでは Epic は完了しません。空でない全メンバーが completed で、中止メンバーがおらず、現在の定義と固定 SHA の組への有効な成功証拠があり、実行中の検証がないことを確認して、`takt_complete_epic` で明示的に完了します。全メンバーが完了しても、確認待ちの active Epic は manager/daemon の活動中の作業・見回り対象に残ります。
+
+メンバー、受け入れ条件、確認手順、固定対象の変更は更新世代を進め、既存証拠を失効させます。completed の Epic は active に戻り、過去の証拠と失効理由を保持します。変更前に開始した検証結果は `stale` として履歴に残り、現在の証拠や完了には使いません。改訂後の対象で新しい検証を行ってください。
+
+`takt_abort_epic` は理由付きで Epic を中止し、記録を保持します。メンバーゴールの中止・再オープンや PR のクローズには波及しません。active Epic が参照するリポジトリは、メンバーゴールが completed でも担当解除できません。先にメンバー参照を削除するか、Epic を完了・中止してください。完了・中止後の担当解除でも、メンバー参照・固定 SHA・証拠・変更理由は履歴として残ります。
+
+再起動後に実行中の検証記録が残っても、成功扱いや自動再実行はしません。`takt_get_epic_verification_recovery` と保存記録を読み、実際の実行結果・副作用を確認してから、結果登録などの復旧操作を明示的に判断してください。
+
+### TUI で一覧と詳細を読む
+
+`Ctrl+O` で Epic 一覧を開き、`↑↓` で選択、`Enter` で詳細を開きます。active・completed・aborted を閲覧できます。一覧は目的・状態・完了メンバー数・現在の証拠・検証や失効の要約を表示します。詳細にはリポジトリ、ゴール ID、固定 targetSha、現在状態、検証結果と履歴、失効理由、結果確認・復旧対象を表示します。担当解除で現在状態を取得できないメンバーは未取得と表示し、保存履歴を残します。
+
+長い詳細は `↑↓`、`PageUp`／`PageDown`、`Home`／`End` で移動します。詳細の `Esc` は一覧へ、一覧の `Esc` は会話へ戻ります。`Ctrl+R`／`Ctrl+G` で既存メニューへ切り替えられ、未送信の会話入力を保持します。Epic 閲覧中の `Enter`・`Esc` は閲覧操作で、会話送信やターン中断を行いません。
+
+一覧・詳細は現在の snapshot に追従するため、開いたままの証拠失効・メンバー変更・検証結果更新も反映します。再接続時も同じ永続状態を重複なく復元し、会話履歴へ過去の Epic 表示を追記しません。
 
 ## Slack での会話
 

@@ -17,9 +17,10 @@ function fixture() {
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
-    selection: { selection: null, open: vi.fn(() => true), refresh: vi.fn(), handleInput: vi.fn() },
+    selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
     selectTarget: vi.fn(), abortGoal: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },
+    epicsOpen: false, openEpics: vi.fn(), handleEpicInput: vi.fn(),
   };
   return { options, bind() {
     useManagerInput(options);
@@ -71,4 +72,19 @@ it('submits /verify from the TUI without dismissing the pending proposal while t
   f.options.editorRef.current = createEditorState('/verify');
   input('', { ...key, return: true });
   expect(f.options.submit).toHaveBeenCalledExactlyOnceWith('/verify');
+});
+
+it('routes Epic navigation before turn interruption and blocks pasted conversation input while browsing', () => {
+  const f = fixture();
+  f.options.epicsOpen = true;
+  const input = f.bind();
+  input('', { ...key, escape: true });
+  expect(f.options.handleEpicInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ escape: true }));
+  expect(f.options.abortTurn).not.toHaveBeenCalled();
+  const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
+  paste('Do not modify the draft');
+  expect(f.options.edit).not.toHaveBeenCalled();
+  input('o', { ...key, ctrl: true });
+  expect(f.options.openEpics).toHaveBeenCalledOnce();
+  expect(f.options.submit).not.toHaveBeenCalled();
 });
