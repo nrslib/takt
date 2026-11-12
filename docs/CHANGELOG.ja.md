@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- プロジェクトルートが shallow clone のとき、worktree タスクが `Git clone failed` で失敗する問題を修正しました。Git はエラーメッセージにリポジトリのパスを引用符付きで含める（"reference repository '<path>' is shallow"）ため、`--reference` なしの通常クローンへのフォールバックが動作していませんでした。引用符付きと引用符なしの両方の表記を判定するようにしました。
+
 ## [0.75.0] - 2026-11-08
 
 ### Added
