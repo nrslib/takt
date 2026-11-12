@@ -45,6 +45,7 @@ export interface EditorDraft {
 
 export type EditorKey =
   | { readonly kind: 'insert'; readonly text: string }
+  | { readonly kind: 'paste'; readonly text: string }
   | { readonly kind: 'newline' }
   | { readonly kind: 'backspace' }
   | { readonly kind: 'delete' }
@@ -75,7 +76,9 @@ export function createEditorState(text: string): EditorState {
 export function applyEditorKey(state: EditorState, key: EditorKey): EditorState {
   switch (key.kind) {
     case 'insert':
-      return insertAtCursor(state, key.text);
+      return insertAtCursor(state, normalizeUnbracketedLineBreaks(key.text));
+    case 'paste':
+      return insertAtCursor(state, key.text, true);
     case 'newline':
       return insertAtCursor(state, '\n');
     case 'backspace':
@@ -122,12 +125,13 @@ export function replaceEditorText(state: EditorState, text: string): EditorState
 }
 
 /**
- * Pasted text arrives straight from the terminal, so it is sanitized before it
- * reaches the buffer. Line breaks survive: a multi-line paste is meant to land
- * as multiple rows rather than as one run-on line.
+ * Text arrives straight from the terminal, so it is sanitized before it reaches
+ * the buffer. Paste line endings are normalized first; ordinary inserted text
+ * keeps the existing display sanitizer's control-character behavior.
  */
-function insertAtCursor(state: EditorState, raw: string): EditorState {
-  const inserted = toDisplayText(raw);
+function insertAtCursor(state: EditorState, raw: string, normalizeLineBreaks = false): EditorState {
+  const normalized = normalizeLineBreaks ? raw.replace(/\r\n?/gu, '\n') : raw;
+  const inserted = toDisplayText(normalized);
   if (inserted.length === 0) {
     return state;
   }
@@ -136,6 +140,19 @@ function insertAtCursor(state: EditorState, raw: string): EditorState {
     text: state.text.slice(0, state.cursor) + inserted + state.text.slice(state.cursor),
     cursor: state.cursor + inserted.length,
   };
+}
+
+/**
+ * Unbracketed text can arrive as one input chunk. Treat embedded CRs as line
+ * breaks, while leaving a final CR for the display sanitizer to strip: IMEs can
+ * include that byte in their committed text.
+ */
+function normalizeUnbracketedLineBreaks(raw: string): string {
+  if (!raw.includes('\r')) {
+    return raw;
+  }
+  const normalized = raw.replace(/\r\n?/gu, '\n');
+  return raw.endsWith('\r') ? `${normalized.slice(0, -1)}\r` : normalized;
 }
 
 function deleteBeforeCursor(state: EditorState): EditorState {

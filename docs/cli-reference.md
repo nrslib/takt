@@ -745,6 +745,23 @@ takt merge --author alice --label ready --include-forks --concurrency 4
 takt merge "everything except prompt changes"
 ```
 
+Use `merge-review-ci` to review only PRs whose CI has already succeeded:
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+For review and evaluation comments without code changes, commits, pushes or merges, use the existing project setting in `.takt/config.yaml`:
+
+```yaml
+caccia:
+  enabled: false
+```
+
+Numbered and bulk runs check the existing `pr_status` before review. All checks must be finished and successful; `SUCCESS`, `NEUTRAL` and `SKIPPED` count as success. Pending, failed or absent checks end `COMPLETE` immediately without AI review, Caccia or evaluation comments. The initial check does not wait or retry and needs no new configuration or CLI option. Successful PRs delegate through `workflow_call` to the existing `merge-review`, including its later CI check and `TAKT evaluation: approved={true|false}. {reason}` comment. Existing fork selection and threat checks still apply: bulk runs require `--include-forks` to include forks; an explicit PR number bypasses selection conditions but still undergoes the threat check. Rejection retains its existing stop comment. Other merge workflows and the default workflow are unchanged.
+
 `merge-prepare` performs the same preparation as `merge-review-fix-simple` through CI, then succeeds without merging. Task completion records distinguish preparation, merge and unresolved work through `mergeOutcome`. Posting a failure comment does not count as success. Goal PR merge tasks safely fast-forward the original goal branch after push, preserving and reporting divergence or checked-out worktrees.
 
 The single positional argument is a PR number when it contains only decimal digits; otherwise it is AI selection text. A number bypasses selection conditions and AI selection. With text, TAKT first applies the existing CLI filters or `merge.where` settings and draft/fork exclusions, then judges each remaining candidate using its title, body, labels, head/base branch names, and complete list of changed file paths. Diff contents and review comments are not selection material. Text alone preserves configured filters.

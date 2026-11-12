@@ -1327,6 +1327,24 @@ describe('loadGlobalConfig', () => {
     expect(() => loadGlobalConfig()).toThrow(/unrecognized/i);
   });
 
+  it('should name a misspelled claude permissions key instead of dropping it', () => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+        '      import_user_read_denyy: true',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadGlobalConfig()).toThrow(/import_user_read_denyy/u);
+  });
+
   describe('runtime', () => {
     it('should load runtime.prepare from config.yaml', () => {
       const taktDir = join(testHomeDir, '.takt');

@@ -27,6 +27,7 @@ const addRepositoryTools = new Set([
 
 export interface ManagerTurnInput {
   requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
+  operationId?: string;
   prompt: string;
   sessionId: string | undefined;
   abortSignal: AbortSignal;

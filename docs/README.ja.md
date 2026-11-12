@@ -349,7 +349,7 @@ daemon は各プロジェクトのイベント処理前に、中断タスクを 
 
 ### manager の判断と作業
 
-manager は、担当のゴールを完成まで進める TAKT に詳しいエンジニアとして、自分で調査・実装・確認・Git 操作を行い、必要に応じて委任します。provider の通常の道具と割り当てた MCP を `full` 権限で使い、利用者の provider options は維持します。manager 固有の権限判断役、読取範囲の審査、保存許可による実行制御はありません。
+manager は、担当のゴールを完成まで進める TAKT に詳しいエンジニアとして、自分で調査・実装・確認・Git 操作を行い、必要に応じて委任します。provider の通常の道具と割り当てた MCP を使い、利用者の provider options は維持します。権限は既定で `auto` です。Claude（`claude` / `claude-sdk`）と Codex で制限なく実行するには、`manager.permission` または provider ごとの `manager.provider_permissions` を `full` に設定します。それ以外の provider では `auto` も `full` と同じ動作です。provider ごとの `manager.provider_permissions` は `manager.permission` より優先されるため、provider ごとの設定が `auto` なら `manager.permission: full` を設定しても `auto` が適用されます。別個の manager 固有の権限判断役、読取範囲の審査、保存許可による実行制御はありません。新しい開発タスクに使えるワークフローは `manager.workflows` と `manager.default_workflow` で選べます。詳しくは[設定ガイド](./configuration.ja.md#manager-がタスクに使う-workflow)を参照してください。
 
 取り込み先への反映、force push、リモートブランチや未保存成果の削除、ゴール中止、依頼範囲外の新しい投稿は、対象と作用が分かる人の明示指示に従うファセットの方針です。直接の発言、director の伝言、保存された継続指示を扱い、PR 作成・通常 push・設定済み通知は依頼作業に含めます。PR マージの指示にはそのブランチの削除も含み、指示済みのことを再確認しません。秘密値を読むにはその必要を含む人の指示が必要で、応答・記録・成果物に秘密値を残しません。
 
@@ -411,6 +411,16 @@ export DEEPSEEK_API_KEY=...                 # 公式 DeepSeek Harness SDK
 ```
 
 OpenCode の呼び出しには既定で 60 分の provider イベント無活動上限があります。タイマーは provider イベントごとにリセットされるため、イベントが届き続ける限り呼び出しは 60 分を超えて実行できます。上限は `provider_options.opencode.guards.call_timeout_ms`（最大 86,400,000 ms）で変更できます。guard プロファイルとモデル別上書きは [Configuration Guide](./configuration.ja.md) を参照してください。
+
+`provider_options.claude.permissions.deny` を使うと、Claude Code の `permissions.deny` ルール（例: `Read(./.env)`）を `claude-sdk` と `claude-headless` に渡せます。
+`Read(` ルールが止めるのは、Claude の組み込みのファイルツール（Grep や Glob などには `Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head` など）です。
+ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、スクリプトが自分でファイルを開く読み取りは止められません。
+Claude が sandbox 内で実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、Claude Code の sandbox をファイルシステム隔離付きで有効にしてください。`sandbox.filesystem.disabled: true` は隔離を無効にし、sandbox 内のコマンドがホスト上のファイルを読めるため設定しないでください。`excludedCommands` に一致するコマンドや `allow_unsandboxed_commands` により sandbox 外で実行されるコマンドは、この遮断の対象外です。
+拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
+hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
+`provider_options.claude.permissions.import_user_read_deny: true` を指定すると、`~/.claude/settings.json` の `Read(` ルールも取り込みます。
+どちらのキーも既定では未指定で、`claude-terminal` は対象外です。
+詳しくは[Claude Code の Read 拒否ルール](./configuration.ja.md#claude-read-deny-rules)を参照してください。
 
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 

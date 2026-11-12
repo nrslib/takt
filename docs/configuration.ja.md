@@ -497,7 +497,7 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `manager.main_merge` はプロジェクトの `.takt/config.yaml` で `approve`（既定）または `auto` を指定します。どちらも完成申請で PR を作成します。`approve` は manager が `takt_merge_goal_pr` の `until: prepare` で仕上げて人のマージを待ち、`auto` は `until: merge` でマージまで進めます。人の明示的なマージ指示も `until: merge` を使います。手元への直接マージや、PR 作成失敗の時間・回数による自動再試行は行いません。
 
-`until: prepare` は `merge-prepare` を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
+`until: prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.prepare_workflow` はこの manager の操作だけに適用され、`takt merge` の workflow 選択は変わりません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
 
 ## manager がタスクに使う workflow
 
@@ -509,12 +509,11 @@ manager:
     - default: 普通の機能追加や不具合の修正。計画からレビューまで一通り行う
     - simple: 1〜2 ファイルで済む小さな修正。軽い流れで進める
     - takt-default
-  default_workflow: default
 ```
 
-両方で省略した場合は `default` と `simple` が既定となり、上記の使い分けの説明を `language` に合わせて日本語または英語で返します。名前だけを明示した要素には説明を補いません。`manager.default_workflow` は一覧になくても選べます。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
+`manager.workflows` が project と global のどちらにも設定されていない場合、候補は `default` と `simple` です。manager は `language` に合わせた上記の使い分けの説明を受け取り、タスクに合う workflow を選択します。名前だけを明示した要素には説明を補いません。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
 
-manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.workflow` / `merge-prepare`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
+manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.prepare_workflow` / `merge.workflow`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
 
 ## manager のツール権限
 
@@ -1806,6 +1805,39 @@ provider_options:
 ```
 
 ファイル編集の権限は引き続き `permission_mode` で制御されます。
+
+<a id="claude-read-deny-rules"></a>
+
+#### Claude Code の Read 拒否ルール (`permissions`)
+
+TAKT から起動した Claude に `permissions.deny` のルール（例: `Read(./.env)`）を適用させるには、`provider_options.claude.permissions` でルールを Claude に渡します。
+
+```yaml
+provider_options:
+  claude:
+    permissions:
+      deny:
+        - "Read(./.env)"
+        - "Read(~/.ssh/**)"
+      import_user_read_deny: true
+```
+
+| キー | 型 | 既定値 | 意味 |
+|------|----|--------|------|
+| `deny` | 空でない文字列のリスト | なし | TAKT の設定に書くルールです。書いたとおりに Claude へ渡すので、`Read(` で始まるルールには限定しません。 |
+| `import_user_read_deny` | boolean | `false` | `true` のとき、`~/.claude/settings.json` の `permissions.deny` から、`Read(` で始まる（大文字と小文字を区別する）ルールも取り込みます。Bash 系、MCP 系、その他のルールは取り込みません。 |
+
+- `Read(` ルールが止める範囲は、TAKT ではなく Claude Code が決めます。
+  [Claude Code の権限に関するドキュメント](https://code.claude.com/docs/en/permissions)によると、止まるのは Claude の組み込みのファイルツール（Grep や Glob などには、`Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head`、`tail`、`sed`、`tee` など）です。
+  ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、Python や Node のスクリプトのように自分でファイルを開くものは、止まりません。
+  Claude が sandbox 内で実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、[Claude Code の sandbox](https://code.claude.com/docs/en/sandboxing.md) をファイルシステム隔離付きで有効にしてください。`sandbox.filesystem.disabled: true` は隔離を無効にし、sandbox 内のコマンドがホスト上のファイルを読めるため設定しないでください。`excludedCommands` に一致するコマンドや `allow_unsandboxed_commands` により sandbox 外で実行されるコマンドは、この遮断の対象外です。
+  拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
+  hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
+- Claude に渡すルールは、`deny` と取り込んだルールの和集合で、重複は 1 つにまとめます。TAKT は Claude の flag settings の `permissions.deny` として渡します（`claude-sdk` は SDK の `settings` オプション、`claude-headless` は `--settings`）。そのため、ステータス判定のような隔離された内部の呼び出しにも効きます。
+- 対象は `claude-sdk`（別名 `claude` を含む）と `claude-headless` で、workflow の step、内部の呼び出し、対話モードのアシスタントのすべてに効きます。`claude-terminal` には渡さず、後述の警告も出しません。
+- ユーザー設定のファイルは、現在のユーザーのホームディレクトリにある `~/.claude/settings.json` に固定です。`CLAUDE_CONFIG_DIR` は参照しません。ファイルを読むのは `import_user_read_deny` が `true` のときだけで、Claude を起動するたびに読みます。2 つのキーを指定しない場合は、ファイルを読まず、Claude の起動引数も従来どおりです。
+- ファイルが存在しない、読めない、JSON として不正、または `permissions` や `permissions.deny` の型が違う場合は、TAKT が警告を出し、`deny` のルールだけで Claude を起動します。ファイルを読めて `Read(` のルールが 1 件もないときは、何も取り込まず、警告も出しません。`permissions.deny` の要素のうち文字列でないものは無視します。
+- 2 つのキーは、ほかの `provider_options` の leaf と同じ層と上書きの規則に従います。上位の層は `deny` のリスト全体を置き換え、リストどうしは連結しません。環境変数は `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY`（JSON 配列）と `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY` です。
 
 <a id="pi-resource-loading"></a>
 

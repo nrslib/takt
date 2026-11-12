@@ -70,6 +70,10 @@ type RawProviderOptions = {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
     };
+    permissions?: {
+      deny?: string[];
+      import_user_read_deny?: boolean;
+    };
   };
   claude_terminal?: {
     backend?: ClaudeTerminalProviderOptions['backend'];
@@ -382,6 +386,7 @@ export function normalizeProviderOptions(
     || options.claude?.guards !== undefined
     || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
+    || options.claude?.permissions
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
     if (options.claude.base_url !== undefined) {
@@ -412,6 +417,19 @@ export function normalizeProviderOptions(
       };
       if (Object.keys(sandbox).length > 0) {
         claude.sandbox = sandbox;
+      }
+    }
+    if (options.claude.permissions) {
+      const permissions = {
+        ...(options.claude.permissions.deny !== undefined
+          ? { deny: options.claude.permissions.deny }
+          : {}),
+        ...(options.claude.permissions.import_user_read_deny !== undefined
+          ? { importUserReadDeny: options.claude.permissions.import_user_read_deny }
+          : {}),
+      };
+      if (Object.keys(permissions).length > 0) {
+        claude.permissions = permissions;
       }
     }
     if (Object.keys(claude).length > 0) {
@@ -649,6 +667,9 @@ export function mergeProviderOptions(
           : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
+          : {}),
+        ...(layer.claude.permissions
+          ? { permissions: { ...result.claude?.permissions, ...layer.claude.permissions } }
           : {}),
       };
     }
@@ -988,9 +1009,27 @@ export function resolveEffectiveProviderOptions(
     ),
   };
 
+  const claudePermissions = {
+    deny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.deny,
+      personaOptions?.claude?.permissions?.deny,
+      stepOptions?.claude?.permissions?.deny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.deny', source),
+    ),
+    importUserReadDeny: selectProviderValue(
+      resolvedConfigOptions.claude?.permissions?.importUserReadDeny,
+      personaOptions?.claude?.permissions?.importUserReadDeny,
+      stepOptions?.claude?.permissions?.importUserReadDeny,
+      resolveProviderOptionOrigin(originResolver, 'claude.permissions.importUserReadDeny', source),
+    ),
+  };
+
   const claude = {
     ...(claudeSandbox.allowUnsandboxedCommands !== undefined || claudeSandbox.excludedCommands !== undefined
       ? { sandbox: claudeSandbox }
+      : {}),
+    ...(claudePermissions.deny !== undefined || claudePermissions.importUserReadDeny !== undefined
+      ? { permissions: claudePermissions }
       : {}),
   };
   const claudeAllowedTools = selectProviderValue(
@@ -1376,6 +1415,7 @@ export function resolveEffectiveProviderOptions(
         }
       : {}),
     ...(claude.sandbox !== undefined
+      || claude.permissions !== undefined
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
@@ -1529,6 +1569,9 @@ function stripClaudeAllowedTools(
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
           : {}),
+        ...(providerOptions.claude.permissions !== undefined
+          ? { permissions: { ...providerOptions.claude.permissions } }
+          : {}),
       }
     : undefined;
 
@@ -1641,6 +1684,8 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.allowedTools',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.permissions.deny',
+  'claude.permissions.importUserReadDeny',
   'claude.skills.enabled',
   'claude.guards.callTimeoutMs',
   'codex.baseUrl',

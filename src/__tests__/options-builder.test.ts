@@ -1876,4 +1876,40 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     });
     expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
+
+  it('keeps claude permissions for Claude team leader parts when part_allowed_tools is given', () => {
+    const step = createStep({
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+          permissions: { deny: ['Read(./.env)'] },
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      providerOptions: {
+        claude: {
+          permissions: { importUserReadDeny: false },
+        },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: 'claude',
+        model: 'sonnet',
+      },
+      teamLeaderPart: {
+        partAllowedTools: ['Read', 'Edit'],
+      },
+    });
+
+    const expectedClaude = {
+      permissions: { deny: ['Read(./.env)'], importUserReadDeny: false },
+    };
+    expect(options.providerOptions).toEqual({ claude: expectedClaude });
+    expect(options.resolvedProviderOptions).toEqual({ claude: expectedClaude });
+    expect(options.allowedTools).toEqual(['Read', 'Edit']);
+  });
 });

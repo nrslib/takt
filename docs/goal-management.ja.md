@@ -53,7 +53,6 @@ daemon の停止で中断した人以外のイベント（タスクの成功・�
 ```yaml
 manager:
   auto_run: false
-  default_workflow: default
 ```
 
 グローバルの `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` の `manager.workflows` で、新しい開発タスクに使える workflow を指定します。project の値は global の一覧全体を置き換えます。各要素は名前の文字列か、`{ 名前: 使い分けの説明 }` の1対だけを持つオブジェクトです。`workflow_categories.workflows` と同じ記法です。
@@ -64,12 +63,11 @@ manager:
     - default: 普通の機能追加や不具合の修正。計画からレビューまで一通り行う
     - simple: 1〜2 ファイルで済む小さな修正。軽い流れで進める
     - takt-default
-  default_workflow: default
 ```
 
-両方で省略した場合は `default` と `simple` が既定となり、上記の使い分けの説明を `language` に合わせて日本語または英語で返します。名前だけを明示した要素には説明を補いません。`manager.default_workflow` は一覧になくても選べます。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
+`manager.workflows` が project と global のどちらにも設定されていない場合、候補は `default` と `simple` です。manager は `language` に合わせた上記の使い分けの説明を受け取り、タスクに合う workflow を選択します。名前だけを明示した要素には説明を補いません。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
 
-manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.workflow` / `merge-prepare`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
+manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.prepare_workflow` / `merge.workflow`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
 
 manager は Claude、Codex、OpenCode に対応します。道具は TAKT にある投入、再開、やり直し、削除、run の参照、差分と履歴、取り込み、完成確認の機能を使います。作業前にタスク、run の記録とレポート、git を確認し、済んだ操作は繰り返しません。
 
@@ -233,9 +231,9 @@ manager:
 
 完成申請は、確認済みの SHA を `origin` に push し、ゴールブランチから保存済みの取り込み先への PR を作成または再利用します。失敗は作業記録と `blocked` 通知に残し、manager が原因と副作用を確認して次の操作を判断します。時間や回数を決めた PR 作成の自動再試行は行いません。PR が未保存なら、原因解消後に `takt_complete_goal` を呼び直せます。
 
-`takt_merge_goal_pr` は必須の `cwd`、`goalId`、`prNumber`、`until` を受け、`merge_task: true` と `goal_id` を持つタスクを `tasks.yaml` に pending で積み、すぐにタスク名を返します。`prepare` は `merge-prepare`、`merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使います。同じ対象の pending / running タスクは二重に積めません。
+`takt_merge_goal_pr` は必須の `cwd`、`goalId`、`prNumber`、`until` を受け、`merge_task: true` と `goal_id` を持つタスクを `tasks.yaml` に pending で積み、すぐにタスク名を返します。`prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）、`merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使います。同じ対象の pending / running タスクは二重に積めません。
 
-daemon は通常のゴールタスクと同じように実行し、取り込み先の取り込み、競合解消、レビューと修正、push、Caccia、CI 待ちを行います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
+daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の取り込み、競合解消、レビューと修正、push、Caccia、CI 待ちを行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
 
 push 後は、元リポジトリのゴールブランチが origin の祖先なら fast-forward します。分岐していれば両方の履歴を保持して失敗結果とイベントで知らせます。チェックアウト中の作業コピーは書き換えず、追従を止めて知らせます。タスクの取り込み前と再申請の push 前にも同じ確認を行います。追従で先端が変わった場合は、その新しい SHA の受け入れ条件を確認し直して申請します。
 

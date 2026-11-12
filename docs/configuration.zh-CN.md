@@ -504,12 +504,11 @@ manager:
     - default: 常规功能开发和缺陷修复，从计划到审查。
     - simple: 只需修改一两个文件的小任务。
     - takt-default
-  default_workflow: default
 ```
 
-两层都省略时，默认只允许 `default` 和 `simple`，并根据 `language` 提供日文或英文的使用说明。显式的纯名称元素不补充说明。`manager.default_workflow` 即使不在列表中也可选。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
+在项目与全局两层都未设置 `manager.workflows` 时，候选项为 `default` 和 `simple`。manager 根据 `language` 获取上述日文或英文的使用说明，并选择适合任务的 workflow。显式的纯名称元素不补充说明。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
 
-manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.workflow` / `merge-prepare`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
+manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.prepare_workflow` / `merge.workflow`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
 
 ## manager 工具权限
 
@@ -1399,6 +1398,39 @@ provider_options:
       allow_unsandboxed_commands: true
 ```
 
+<a id="claude-read-deny-rules"></a>
+
+#### Claude Code 读取拒绝规则（`permissions`）
+
+要让由 TAKT 启动的 Claude 应用 `permissions.deny` 规则（例如 `Read(./.env)`），请通过 `provider_options.claude.permissions` 向 Claude 传递这些规则：
+
+```yaml
+provider_options:
+  claude:
+    permissions:
+      deny:
+        - "Read(./.env)"
+        - "Read(~/.ssh/**)"
+      import_user_read_deny: true
+```
+
+| 键 | 类型 | 默认值 | 含义 |
+|----|------|--------|------|
+| `deny` | 非空字符串列表 | 无 | 写在 TAKT 配置中的规则，按原样传给 Claude，因此不限于 `Read(` 规则。 |
+| `import_user_read_deny` | boolean | `false` | 为 `true` 时，还会从 `~/.claude/settings.json` 的 `permissions.deny` 导入以 `Read(` 开头（区分大小写）的规则。Bash 规则、MCP 规则和其他规则不会导入。 |
+
+- `Read(` 规则拦截的范围由 Claude Code 决定，而不是由 TAKT 决定。
+  根据 [Claude Code 权限文档](https://code.claude.com/docs/en/permissions)，这些规则适用于 Claude 的内置文件工具（Claude 会尽力将 `Read` 规则应用于 Grep、Glob 等工具），以及 Claude Code 在 Bash 中识别的文件命令，如 `cat`、`head`、`tail`、`sed` 和 `tee`。
+  它们不适用于不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不适用于自行打开文件的脚本（如 Python 或 Node 脚本）。
+  要在操作系统层面阻止 Claude 在 sandbox 中运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用带文件系统隔离的 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。不要将 `sandbox.filesystem.disabled` 设为 `true`，因为这会让 sandbox 中的命令能够读取主机文件。通过 `excludedCommands` 匹配或通过 `allow_unsandboxed_commands` 在 sandbox 外运行的命令不受此限制。
+  没有拒绝规则的路径，sandbox 中的进程仍然可以读取。
+  hooks、MCP server 等在 sandbox 之外运行的进程不会被阻止。
+- Claude 收到的规则是 `deny` 与导入规则的并集，重复项只保留一条。TAKT 将其作为 Claude flag settings 的 `permissions.deny` 传递（`claude-sdk` 使用 SDK 的 `settings` 选项，`claude-headless` 使用 `--settings`），因此对状态判定等隔离的内部调用同样有效。
+- 适用于 `claude-sdk`（包括别名 `claude`）和 `claude-headless`，覆盖 workflow step、内部调用和交互式 assistant。`claude-terminal` 不会收到这些规则，也不会触发下述警告。
+- 用户设置文件固定为当前用户主目录下的 `~/.claude/settings.json`，不会参考 `CLAUDE_CONFIG_DIR`。仅当 `import_user_read_deny` 为 `true` 时才读取，每次启动 Claude 都会读取。两个键都未设置时不读取文件，Claude 的启动参数也与以前相同。
+- 文件不存在、无法读取、不是有效 JSON，或 `permissions`、`permissions.deny` 的类型不对时，TAKT 会输出警告，并只用 `deny` 中的规则启动 Claude。文件可读但没有 `Read(` 规则时，不导入任何内容，也不输出警告。`permissions.deny` 中不是字符串的元素会被忽略。
+- 两个键与其他 `provider_options` leaf 使用相同的层级和覆盖规则。上层会整体替换 `deny` 列表，不会拼接。环境变量为 `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY`（JSON 数组）和 `TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY`。
+
 #### Pi 资源加载（`extensions`、`no_*`）
 
 ```yaml
@@ -1604,7 +1636,7 @@ takt update codex     # 仅更新指定提供者
 
 GitLab 支持 MR 详情、CI 状态获取和批量选择。启用 Caccia 时，在 `takt merge` 和 `from_pr` 任务中，Caccia effect 返回原因是 `github_unavailable` 的 `skipped`，然后等待返回 head 的 CI。合并结果 pipeline 通过合并提交的第二个父提交与 source head 的一致性进行验证。没有 pipeline 或 pipeline 对应旧 head 时不会通过 CI。指定合并方式和限制 head 仍不受支持，传入这些参数的 `merge_pr` 会失败。CI 等待完成不代表合并成功。
 
-默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。
+默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。manager 调用 `takt_merge_goal_pr` 且指定 `until: prepare` 时使用 `merge.prepare_workflow`（默认 `merge-prepare`）；`until: merge` 和 `takt merge` 仍使用 `merge.workflow`，此设置不改变 CLI 的 workflow 选择。
 
 `takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
 

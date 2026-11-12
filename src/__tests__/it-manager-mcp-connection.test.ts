@@ -269,6 +269,22 @@ describe('manager MCP connection confirmation', () => {
     } finally { await turnScope.end(); await connection.dispose(); }
   });
 
+  it('passes the turn operation ID to goal notification deduplication', async () => {
+    const turnScope = new TurnToolScope();
+    turnScope.begin(new AbortController().signal, '650e8400-e29b-41d4-a716-446655440099');
+    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { turnScope });
+    try {
+      const input = { cwd, goalId, kind: 'custom', body: '再配信される通知', severity: 'info' };
+      const first = await connection.client.callTool({ name: 'takt_notify_goal', arguments: input });
+      const replayed = await connection.client.callTool({ name: 'takt_notify_goal', arguments: input });
+      expect(first.isError).not.toBe(true);
+      expect(replayed.isError).not.toBe(true);
+      expect((await store.get(goalId)).notifications).toHaveLength(1);
+      expect(JSON.parse(firstTextContent(replayed.content)).notificationId)
+        .toBe(JSON.parse(firstTextContent(first.content)).notificationId);
+    } finally { await turnScope.end(); await connection.dispose(); }
+  });
+
   const operations = [
     { name: 'takt_pause_goal', executionStatus: 'active', expected: 'paused' },
     { name: 'takt_resume_goal', executionStatus: 'paused', expected: 'active' },

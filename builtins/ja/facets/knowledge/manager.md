@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-標準の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.workflow のレビューや CI 待ちは、定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
@@ -47,7 +47,7 @@ takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanCheck
 - 申請済み SHA が取り込み先に反映済みで、現在のゴールブランチ先端も同じ SHA の場合は、同じ expectedSha と訂正済み summary で takt_complete_goal を呼び、根拠を訂正します。反映済み SHA に takt_reopen_goal は使いません。
 - 申請済み SHA が取り込み先に反映済みで、根拠の訂正が不要な場合は、takt_check_goal_completion で完成を確認します。
 
-takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge-prepare、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
+takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge.prepare_workflow（既定は merge-prepare）、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
 マージ用タスクは PR ブランチへ直接 push します。手元のゴールブランチが祖先なら fast-forward し、分岐やチェックアウト中の作業コピーは元の内容を保持して結果に記録します。workflow が COMPLETE で終わり、PR が準備段階にある場合は、成功・prepared として届きます。
 

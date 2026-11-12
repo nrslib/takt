@@ -8,7 +8,8 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { SlackClient, SlackThread, SlackDeliveryResult } from '../../infra/slack/client.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { ConversationError } from './conversationErrors.js';
+import { escapeSlackMentions } from '../../shared/utils/slackText.js';
+import { conversationErrorResult } from './conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, ConversationPort, ConversationCommand, QuestionTarget } from './conversationPort.js';
 import { SlackInquiryBindings, slackInquiryKey } from '../../infra/slack/inquiryBindings.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
@@ -177,7 +178,7 @@ export function createSlackConversationPort(options: {
               { name: formatGoalName(goal.objective), id: goal.id, branch: goal.branch }));
           }
           if (output.result.kind !== 'reply' && output.result.kind !== 'notice' && output.result.kind !== 'error') return { kind: 'delivered' };
-          const text = output.result.message;
+          const text = output.result.kind === 'error' ? escapeSlackMentions(output.result.message) : output.result.message;
           const blocks: MarkdownBlock[] | undefined = text.length <= MARKDOWN_MESSAGE_LIMIT ? [{ type: 'markdown', text }] : undefined;
           return await options.client.postThreadMessage(target.endpoint, text, blocks);
         } finally { detach(target.attachmentId); }
@@ -223,12 +224,11 @@ export function createSlackConversationPort(options: {
         attachmentId = undefined;
         await options.client.postThreadMessage(endpoint, options.language === 'ja' ? '受け付けて保存しました。' : 'Accepted and saved.');
       } else {
-        const message = submission.message;
+        const message = escapeSlackMentions(submission.message);
         await options.client.postThreadMessage(endpoint, message);
       }
     } catch (error) {
-      const key = error instanceof ConversationError ? error.code : 'operation_failed';
-      await options.client.postThreadMessage(endpoint, getLabel(`manager.conversation.${key}`, options.language));
+      await options.client.postThreadMessage(endpoint, escapeSlackMentions(conversationErrorResult(error, options.language).message));
     } finally {
       admitted();
       if (attachmentId !== undefined) detach(attachmentId);

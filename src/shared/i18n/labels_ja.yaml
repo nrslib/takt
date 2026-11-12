@@ -479,6 +479,7 @@ manager:
     shutting_down: "daemonは終了処理中です。もう一度接続してください。"
     invalid_input: "操作の入力が正しくありません。"
     operation_failed: "会話の操作を完了できませんでした。現在の状態を確認してください。"
+    operation_failed_with_reason: "会話の操作を完了できませんでした。現在の状態を確認してください。理由: {reason}"
     dismissed: "ゴールの登録案を取り下げました。"
     answer_saved: "回答を保存しました。"
   assignmentHeading: "担当: {name}"

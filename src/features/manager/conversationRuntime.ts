@@ -68,7 +68,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         const executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
           contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
-            turnScope.begin(turn.abortSignal);
+            turnScope.begin(turn.abortSignal, turn.operationId);
             activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal, requestDaemon: turn.requestDaemon };
             try { return await executor.execute(turn); }
             finally { await turnScope.end(); activeTurn = undefined; }

@@ -328,6 +328,17 @@ it('retains interrupted context when runtime preparation fails before executor i
   expect(f.execute.mock.calls[1]![0].prompt).toContain('interrupted request');
 });
 
+it('returns the provider failure reason when a patrol cannot finish', async () => {
+  const f = conversationFixture();
+  f.execute.mockRejectedValueOnce(new Error('provider.transport: ECONNRESET socket closed'));
+
+  expect(await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] }))
+    .toMatchObject({ kind: 'completed', result: {
+      kind: 'error', code: 'operation_failed', message: expect.stringContaining('provider.transport: ECONNRESET socket closed'),
+    } });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
 it('retains interrupted context when a command is rejected and a patrol does not invoke the executor', async () => {
   const f = conversationFixture();
   const controller = new AbortController(); f.interruptNext(controller);

@@ -85,6 +85,8 @@ export interface ImagePasteInput {
 export interface ImagePasteHandlers {
   /** True when the event belonged to a paste and needs no further key handling. */
   readonly routeInput: (input: string, key: Key) => boolean;
+  /** Release an incomplete inline-image prefix before another text event. */
+  readonly flushPending: () => void;
   /** Ctrl+V: read the clipboard image and insert its placeholder. */
   readonly captureClipboard: () => void;
 }
@@ -135,6 +137,14 @@ export function useImagePaste({
     savePlaceholder((abortSignal) => sink.pasteClipboardImage(abortSignal), '');
   }, [savePlaceholder, sink]);
 
+  const flushPending = useCallback((): void => {
+    const read = consumeImagePasteInput(bufferRef.current, '');
+    bufferRef.current = read.buffer;
+    if (read.outcome.kind === 'passthrough') {
+      insertAtCaret(read.outcome.text);
+    }
+  }, [insertAtCaret]);
+
   const routeInput = useCallback((input: string, key: Key): boolean => {
     // A control or meta chord reports a letter that was never typed, so the
     // buffer is fed nothing and releases whatever it holds before the chord runs.
@@ -159,5 +169,5 @@ export function useImagePaste({
     }
   }, [insertAtCaret, savePlaceholder, sink]);
 
-  return { routeInput, captureClipboard };
+  return { routeInput, flushPending, captureClipboard };
 }

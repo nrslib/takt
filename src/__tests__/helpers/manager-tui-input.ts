@@ -41,7 +41,7 @@ it.each(['\n', '\r'])('keeps a bracketed paste containing %j as an unsent draft 
   await waitFor(() => expect(promptFrame(context)).toContain('second'));
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: separator === '\r' ? 'firstsecond' : 'first\nsecond' }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: 'first\nsecond' }]));
 });
 
 it('keeps Ctrl+A, Ctrl+E, Ctrl+K and cursor editing in the conversation draft', async () => {

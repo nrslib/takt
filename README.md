@@ -353,7 +353,7 @@ The ordinary `takt` assistant conversation has the same read-only task-state vie
 
 ### Manager judgment and work
 
-Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers with `full` permissions, preserving configured provider options. There is no manager-specific permission judge, read-scope review or execution control based on saved approvals.
+Manager is an engineer familiar with TAKT, responsible for completing assigned goals. It investigates, implements, verifies, performs Git operations and delegates when useful. It uses normal provider tools and assigned MCP servers, preserving configured provider options. Permissions default to `auto`. For Claude (`claude` / `claude-sdk`) and Codex, set `manager.permission` or provider-specific `manager.provider_permissions` to `full` for unrestricted execution. Other providers behave like `full` under `auto`. A provider-specific `manager.provider_permissions` entry takes precedence over `manager.permission`, so an `auto` entry keeps that provider in `auto` even when `manager.permission: full` is set. There is no separate manager-specific permission judge, read-scope review or execution control based on saved approvals. Use `manager.workflows` and `manager.default_workflow` to select the workflows available for new development tasks; see the [configuration guide](./docs/configuration.md#manager-task-workflows).
 
 Facet policy requires explicit human instructions identifying the target and effect for integration into a target branch, force pushes, deletion of remote branches or unsaved results, goal aborts and new posts outside the requested scope. Direct messages, director relays and saved continuing instructions are supported. PR creation, ordinary pushes and configured notifications are part of requested work. PR merge instructions include deletion of that PR branch; instructions already given are not reconfirmed. Reading secret values requires a human instruction covering that need, and secret values must not appear in responses, records or artifacts.
 
@@ -425,6 +425,16 @@ events continue to arrive. Raise the limit with
 `provider_options.opencode.guards.call_timeout_ms` (up to 86,400,000 ms). Guard
 profiles and per-model overrides are described in
 [Provider inactivity deadline and OpenCode execution guards](./docs/configuration.md#provider-inactivity-deadline-and-opencode-execution-guards).
+
+`provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`.
+`Read(` rules stop Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and the file commands Claude Code recognizes in Bash, such as `cat` and `head`.
+They do not stop a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself.
+To block the shell commands Claude runs in the sandbox, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the Claude Code sandbox with filesystem isolation. Do not set `sandbox.filesystem.disabled` to `true`, because that setting lets sandboxed commands read host files. Commands that run outside the sandbox, such as commands matched by `excludedCommands` or run with `allow_unsandboxed_commands`, are not blocked.
+Processes in the sandbox can still read paths that have no deny rule.
+Hooks, MCP servers, and other processes outside the sandbox are not blocked.
+Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`.
+Neither key is set by default, and `claude-terminal` is not affected.
+See [Claude Code read-deny rules](./docs/configuration.md#claude-read-deny-rules).
 
 ### Dedicated provider configuration (`runtime.yaml`)
 
