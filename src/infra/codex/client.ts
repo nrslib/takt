@@ -51,6 +51,10 @@ import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
 } from './failure-message.js';
+import {
+  createCodexRolloutObservation,
+  detectCodexCompaction,
+} from './compaction.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -381,6 +385,7 @@ export class CodexClient {
     };
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
+    let rolloutObservation: Awaited<ReturnType<typeof createCodexRolloutObservation>>;
     try {
       isolation = options.mcpOnlySideEffects
         ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
@@ -388,6 +393,11 @@ export class CodexClient {
       if (isolation === undefined) {
         mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
       }
+      rolloutObservation = createCodexRolloutObservation(
+        codexEnvironment,
+        threadId,
+        new Date(),
+      );
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -400,6 +410,16 @@ export class CodexClient {
       );
       return errorResponse;
     }
+
+    const compactedThreadIds = new Set<string | undefined>();
+    const signalCompaction = (sessionId: string | undefined): void => {
+      if (compactedThreadIds.has(sessionId)) return;
+      compactedThreadIds.add(sessionId);
+      options.onStream?.({
+        type: 'context_compacted',
+        data: { ...(sessionId !== undefined ? { sessionId } : {}) },
+      });
+    };
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
@@ -490,6 +510,11 @@ export class CodexClient {
           if (event.type === 'thread.started') {
             currentThreadId = typeof event.thread_id === 'string' ? event.thread_id : currentThreadId;
             emitInit(onStream, options.model, currentThreadId);
+            continue;
+          }
+
+          if (event.type === 'compacted') {
+            signalCompaction(currentThreadId);
             continue;
           }
 
@@ -710,6 +735,10 @@ export class CodexClient {
           return errorResponse;
         }
 
+        if (!compactedThreadIds.has(currentThreadId)
+          && await detectCodexCompaction(rolloutObservation, currentThreadId)) {
+          signalCompaction(currentThreadId);
+        }
         emitResult(onStream, true, trimmed, currentThreadId);
 
         const response: AgentResponse = {
