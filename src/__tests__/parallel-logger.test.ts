@@ -125,6 +125,22 @@ describe('ParallelLogger', () => {
   });
 
   describe('block events (tool_use, tool_result, tool_output, thinking)', () => {
+    it('prints one heading for consecutive thinking chunks and starts a new heading after another event', () => {
+      const logger = new ParallelLogger({ subStepNames: ['sub-a'], writeFn });
+      const handler = logger.createStreamHandler('sub-a', 0);
+
+      handler({ type: 'thinking', data: { thinking: 'first' } } as StreamEvent);
+      handler({ type: 'thinking', data: { thinking: 'second' } } as StreamEvent);
+      expect(output.filter((line) => line.includes('thinking:'))).toHaveLength(1);
+
+      handler({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} } } as StreamEvent);
+      handler({ type: 'thinking', data: { thinking: 'third' } } as StreamEvent);
+      expect(output.filter((line) => line.includes('thinking:'))).toHaveLength(2);
+      expect(output.join('')).not.toContain('first');
+      expect(output.join('')).not.toContain('second');
+      expect(output.join('')).not.toContain('third');
+    });
+
     it('should prefix tool_use events', () => {
       const logger = new ParallelLogger({
         subStepNames: ['sub-a'],

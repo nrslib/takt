@@ -73,6 +73,19 @@ describe('tool activity view state', () => {
     }
   });
 
+  it('moves from the latest position when consecutive page requests reuse an old render', () => {
+    const { reader, groups } = fixture(Array.from({ length: 12 }, (_, index) => `line ${index}`).join('\n'));
+    const first = toolActivityViewPage(reader, groups, createToolActivityViewState(), 20, 1, labels);
+    const secondState = moveToolActivityView(createToolActivityViewState(), first, 'next');
+    const stalePage = first;
+    const secondPage = toolActivityViewPage(reader, groups, secondState, 20, 1, labels);
+    const thirdState = moveToolActivityView(secondState, secondPage, 'next');
+
+    expect(secondState.position).not.toEqual(thirdState.position);
+    expect(thirdState.previous.at(-1)).toEqual(secondState.position);
+    expect(moveToolActivityView(thirdState, stalePage, 'previous').position).toEqual(secondState.position);
+  });
+
   it.each([false, true])('retains the complete input after narrow, wide and expanded headers with expanded first=%s', (expandedFirst) => {
     const { reader, groups } = fixture('ready');
     const command = 'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';

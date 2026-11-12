@@ -208,6 +208,38 @@ it('removes the previous live history after a tool-free turn and keeps its displ
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
+it('appends the previous tool transcript before the next user message', async () => {
+  const secondTurn = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ === 0) {
+      options.onStream!({ type: 'tool_use', data: { id: 'previous', tool: 'Read', input: { file_path: 'previous.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'previous', content: 'previous-result', isError: false } });
+      return toolReply();
+    }
+    await secondTurn.promise;
+    return toolReply('Second turn');
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'First question' }); await fixture.settled();
+    await waitFor(() => expect(toolRows()).toContain('previous-result'));
+
+    app.stdin.write('Next question'); app.stdin.write('\r');
+    await fixture.executing(2);
+    await waitFor(() => {
+      const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+      expect(entries.some((entry) => entry.content.includes('Next question'))).toBe(true);
+      expect(entries.some((entry) => entry.content.includes('previous-result'))).toBe(true);
+    });
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    const historyIndex = entries.findIndex((entry) => entry.content.includes('previous-result'));
+    const questionIndex = entries.findIndex((entry) => entry.role === 'user' && entry.content.includes('Next question'));
+    expect(historyIndex).toBeGreaterThanOrEqual(0);
+    expect(questionIndex).toBeGreaterThan(historyIndex);
+    expect(entries.filter((entry) => entry.content.includes('previous-result'))).toHaveLength(1);
+  } finally { secondTurn.resolve(); await fixture.settled(); }
+});
+
 it.each([1, 2])('retains each of %s identical completed results once after unfinished removal and display changes on the same screen', async (count) => {
   const finish = deferred<void>(); let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
@@ -686,6 +718,38 @@ it('keeps the selected slash completion and running turn while toggling and pagi
     await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify '));
     expect(submit.mock.calls.filter(([command]) => command.kind === 'message')).toHaveLength(1);
   } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('places the completed tool transcript before the following user message', async () => {
+  const secondTurn = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ === 0) {
+      options.onStream!({ type: 'tool_use', data: { id: 'previous', tool: 'Read', input: { file_path: 'previous.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'previous', content: 'previous-result', isError: false } });
+      return toolReply();
+    }
+    await secondTurn.promise;
+    return toolReply('Second turn');
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'First question' }); await fixture.settled();
+    await waitFor(() => expect(toolRows()).toContain('previous-result'));
+
+    app.stdin.write('Next question'); app.stdin.write('\r');
+    await fixture.executing(2);
+    await waitFor(() => {
+      const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+      expect(entries.some((entry) => entry.content.includes('Next question'))).toBe(true);
+      expect(entries.some((entry) => entry.content.includes('previous-result'))).toBe(true);
+    });
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    const historyIndex = entries.findIndex((entry) => entry.content.includes('previous-result'));
+    const questionIndex = entries.findIndex((entry) => entry.role === 'user' && entry.content.includes('Next question'));
+    expect(historyIndex).toBeGreaterThanOrEqual(0);
+    expect(questionIndex).toBeGreaterThan(historyIndex);
+    expect(entries.filter((entry) => entry.content.includes('previous-result'))).toHaveLength(1);
+  } finally { secondTurn.resolve(); await fixture.settled(); }
 });
 
 it('preserves a Japanese draft and insertion point while paging a long result, resizing and reconnecting on the same screen', async () => {

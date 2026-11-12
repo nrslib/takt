@@ -322,6 +322,20 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
   });
 });
 
+it('prints a new task thinking heading after the previous task handler is flushed', () => {
+  const output: string[] = [];
+  const writer = new TaskPrefixWriter({ taskName: 'task', colorIndex: 0, writeFn: (text) => output.push(text) });
+  const handler = createPrefixedStreamHandler(writer, 'expanded');
+  const thinking: StreamEvent = { type: 'thinking', data: { thinking: 'hidden' } };
+
+  handler(thinking);
+  handler.flush();
+  handler(thinking);
+
+  expect(output.filter((line) => line.includes('thinking:'))).toHaveLength(2);
+  expect(output.join('')).not.toContain('hidden');
+});
+
 describe('quiet non-interactive tool activity', () => {
   it('should preserve tool commands and results while suppressing response text', () => {
     const output: string[] = [];

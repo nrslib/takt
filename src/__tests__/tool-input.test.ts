@@ -42,6 +42,14 @@ describe('tool input summaries', () => {
     expect(input).toEqual(original);
   });
 
+  it('should remove ANSI sequences before matching known secrets in a command', () => {
+    const secret = 'secret123';
+    const preview = formatToolInput('Bash', { command: `printf sec\x1b[31mret123`, api_key: secret });
+
+    expect(preview).not.toContain(secret);
+    expect(preview).toContain('[REDACTED]');
+  });
+
   it.each([
     { api_key: 'test-only-key', query: 'safe search' },
     { private_blob: { text: 'unselected content' }, query: 'safe search' },

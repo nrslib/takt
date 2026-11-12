@@ -162,6 +162,60 @@ it.each(['running entry', 'removal', 'omission'].flatMap((snapshotItem) => [fals
   expect(value.getSnapshot().connection).toBe('connected');
 });
 
+it('holds a newer live tool history until the matching running state arrives', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const previousId = randomUUID();
+  const nextId = randomUUID();
+  await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: previousId, generation: 1 } } }, 2);
+  const history = new ToolActivityHistory();
+  const context = { callId: 'call', operationId: nextId, generation: 2 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'next.ts' } }, toolActivity: context });
+  const current = { operationId: nextId, generation: 2, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const output = vi.fn(); value.onOutput(output);
+
+  await sendOutput({ kind: 'tool_history', history: current }, 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toBeUndefined();
+  expect(output).not.toHaveBeenCalled();
+
+  await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: nextId, generation: 2 } } }, 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: nextId, generation: 2 } } });
+});
+
+it('does not publish snapshot work items when a live history update arrives mid-transfer', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
+  const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };
+  const nextItem = { kind: 'display_event' as const, event: { id: 'partial-event', message: 'snapshot-only-work' } };
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield nextItem;
+  })())) wire.push(encodeConversationFrame(frame));
+  readResponse(reads[1]!, read); await refreshing;
+  for (const bytes of wire.slice(0, -1)) reads[1]!.socket.emit('data', bytes);
+
+  const history = new ToolActivityHistory();
+  const operationId = randomUUID();
+  const context = { callId: 'call', operationId, generation: 1 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'ready.ts' } }, toolActivity: context });
+  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  await sendOutput({ kind: 'tool_history', history: current }, 1);
+
+  expect(value.getSnapshot().items).not.toContainEqual(nextItem);
+  expect(value.getSnapshot().items).toContainEqual({ kind: 'tool_history', history: current });
+
+  reads[1]!.socket.emit('data', wire.at(-1)!);
+  expect(value.getSnapshot().items).toContainEqual(nextItem);
+});
+
 it.each(['live', 'snapshot'] as const)('accepts current %s history after restoring a persisted turn with a larger generation and rejects its late replay', async (delivery) => {
   const reads = controlReads('open'); const value = client(); const connecting = value.connect();
   await vi.waitFor(() => expect(reads).toHaveLength(1));

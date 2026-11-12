@@ -43,7 +43,8 @@ function selectedInput(tool: string, input: Record<string, unknown>): string {
 }
 
 export function projectToolInput(tool: string, input: Record<string, unknown>, source: unknown = input): string {
-  return sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(selectedInput(tool, input), source));
+  const terminalSafeInput = sanitizeTerminalStreamText(selectedInput(tool, input));
+  return sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(terminalSafeInput, source));
 }
 
 function action(tool: string): string {

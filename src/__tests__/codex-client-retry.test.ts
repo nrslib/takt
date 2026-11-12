@@ -7,6 +7,7 @@ import { interpolateMcpEnv, McpSectionSchema } from '../infra/config/runtime-pro
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
 import { CODEX_SPAWN_OPTIONS, type CodexSpawnEnvironment } from '../infra/codex/types.js';
+import { withToolActivityCall } from '../shared/tool-activity/stream.js';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -705,6 +706,39 @@ describe('CodexClient retry', () => {
     expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
     expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
     expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
+  });
+
+  it('内部 retry ごとに新しい tool activity call ID を保つ', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      { type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: 'first attempt' } },
+        { type: 'turn.failed', error: { message: CODEX_RECONNECT_FAILURE_MESSAGE } },
+      ] },
+      { type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: 'second attempt' } },
+        { type: 'item.completed', item: { id: 'item_0', type: 'command_execution', aggregated_output: 'done', exit_code: 0 } },
+        { type: 'item.completed', item: { id: 'message', type: 'agent_message', text: 'retry succeeded' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ] },
+    ];
+    const received = vi.fn();
+    const onStream = withToolActivityCall(received)!;
+
+    const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ status: 'done', content: 'retry succeeded' });
+
+    const events = received.mock.calls.map(([event]) => event as { type: string; toolActivity?: { callId: string } });
+    const uses = events.filter((event) => event.type === 'tool_use');
+    const results = events.filter((event) => event.type === 'tool_result');
+    expect(uses).toHaveLength(2);
+    expect(uses[0]!.toolActivity?.callId).toBeTruthy();
+    expect(uses[0]!.toolActivity!.callId).not.toBe(uses[1]!.toolActivity!.callId);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.toolActivity?.callId).toBe(uses[1]!.toolActivity!.callId);
   });
 
   it('config profile の内部マーカーを呼び出し単位の Codex 環境へ設定する', async () => {

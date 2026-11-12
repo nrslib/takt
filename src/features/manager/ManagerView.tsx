@@ -277,7 +277,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
-    if (!summaryRequest) append(text, 'user');
+    if (!summaryRequest) {
+      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
+      if (content !== '') append(content);
+      displayedTools.current.rows = [];
+      append(text, 'user');
+    }
     else setSummarizing(true);
     resetChoice();
     void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
@@ -415,7 +420,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     browseTools: (direction) => {
       if (toolHeight <= 0) return;
       setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
-        : moveToolActivityView(current, toolPage, direction));
+        : moveToolActivityView(current,
+          toolActivityViewPage(toolDisplay, toolGroups, current, columns ?? 80, Math.max(0, toolHeight - 1), toolLabels), direction));
     },
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });

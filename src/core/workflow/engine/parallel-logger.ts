@@ -72,6 +72,7 @@ export interface ParallelLoggerOptions {
  */
 export class ParallelLogger {
   private readonly activities = new Map<string, ToolActivityDisplay>();
+  private readonly thinkingSteps = new Set<string>();
   private readonly toolDisplayMode: ToolActivityDisplayMode;
   private readonly quiet: boolean;
   private static readonly DEFAULT_FLUSH_INTERVAL_MS = 300;
@@ -173,6 +174,7 @@ export class ParallelLogger {
     const prefix = this.buildPrefix(subStepName, index);
 
     return (event: StreamEvent) => {
+      if (event.type !== 'thinking') this.thinkingSteps.delete(subStepName);
       switch (event.type) {
         case 'text':
           if (this.quiet || this.toolDisplayMode === 'silent') break;
@@ -231,7 +233,9 @@ export class ParallelLogger {
   private handleBlockEvent(name: string, prefix: string, event: StreamEvent): void {
     if (this.toolDisplayMode === 'silent') return;
     if (event.type === 'thinking') {
-      if (!this.quiet) this.writeFn(`${prefix}thinking:\n`);
+      const firstChunk = !this.thinkingSteps.has(name);
+      this.thinkingSteps.add(name);
+      if (!this.quiet && firstChunk) this.writeFn(`${prefix}thinking:\n`);
       return;
     }
     let activity = this.activities.get(name);

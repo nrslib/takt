@@ -13,11 +13,21 @@ import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './pri
 import { ToolActivityHistory } from '../../shared/tool-activity/history.js';
 import { ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
 import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import { truncateUtf8 } from '../../shared/utils/utf8.js';
+import { isSensitiveKeyName } from '../../shared/utils/sensitiveText.js';
 import { ConversationToolEventSchema, type ConversationToolEvent } from '../../shared/types/conversation-activity.js';
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
 const MAX_CONVERSATION_BYTES = 12 * 1024 * 1024;
+const MAX_TOOL_HISTORY_BYTES = 2 * 1024 * 1024;
+const TOOL_HISTORY_CONVERSATION_RESERVE_BYTES = 256 * 1024;
+const MIN_TOOL_HISTORY_BYTES = 64 * 1024;
+const MAX_TOOL_HISTORY_ENTRIES = 256;
+const MAX_TOOL_HISTORY_EVENT_IDS = 4096;
+const MAX_TOOL_HISTORY_INPUT_BYTES = 32 * 1024;
+const MAX_TOOL_HISTORY_INPUT_FIELD_BYTES = 8 * 1024;
+const MAX_TOOL_HISTORY_TEXT_BYTES = 16 * 1024;
 const id = z.string().min(1).max(128);
 const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
 const messageDigest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -49,6 +59,59 @@ const metadata = z.object({ version, receipts: z.array(receipt), toolHistory: To
 interface StoredConversation {
   record: ConversationRecord;
   metadata: z.infer<typeof metadata>;
+}
+
+function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  const entries = Object.entries(input).sort(([left], [right]) => Number(isSensitiveKeyName(right)) - Number(isSensitiveKeyName(left)));
+  const bounded: Record<string, unknown> = {};
+  let truncated = entries.length > 128;
+  for (const [key, value] of entries.slice(0, 128)) {
+    if (Buffer.byteLength(key, 'utf8') > 256) { truncated = true; continue; }
+    let nextValue: unknown;
+    if (typeof value === 'string') nextValue = truncateUtf8(value, MAX_TOOL_HISTORY_INPUT_FIELD_BYTES).value;
+    else {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > MAX_TOOL_HISTORY_INPUT_FIELD_BYTES) {
+        truncated = true;
+        continue;
+      }
+      nextValue = value;
+    }
+    const next = { ...bounded, [key]: nextValue };
+    if (Buffer.byteLength(JSON.stringify(next), 'utf8') > MAX_TOOL_HISTORY_INPUT_BYTES) {
+      truncated = true;
+      continue;
+    }
+    bounded[key] = nextValue;
+    if (typeof value === 'string' && nextValue !== value) truncated = true;
+  }
+  if (truncated) {
+    const marked = { ...bounded, __takt_truncated__: true };
+    if (Buffer.byteLength(JSON.stringify(marked), 'utf8') <= MAX_TOOL_HISTORY_INPUT_BYTES) return marked;
+  }
+  return bounded;
+}
+
+function boundToolHistory(history: ToolActivityTurnState, maxBytes: number): ToolActivityTurnState {
+  if (maxBytes < MIN_TOOL_HISTORY_BYTES) throw new Error('Conversation has insufficient reserved capacity for tool history');
+  const entries = history.history.entries.slice(-MAX_TOOL_HISTORY_ENTRIES).map((entry) => ({
+    ...entry,
+    input: boundedToolInput(entry.input),
+    output: truncateUtf8(entry.output, MAX_TOOL_HISTORY_TEXT_BYTES).value,
+    ...(entry.result === undefined ? {} : { result: truncateUtf8(entry.result, MAX_TOOL_HISTORY_TEXT_BYTES).value }),
+  }));
+  const eventIds = history.eventIds.slice(-MAX_TOOL_HISTORY_EVENT_IDS);
+  const bounded = (): ToolActivityTurnState => ({
+    ...history,
+    eventIds,
+    history: { ...history.history, entries },
+  });
+  while (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes && entries.length > 1) entries.shift();
+  while (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes && eventIds.length > 1) eventIds.shift();
+  if (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes) {
+    throw new Error('Tool history exceeds its reserved conversation capacity');
+  }
+  return bounded();
 }
 
 function receiptChangeFor(change: ConversationChange): z.infer<typeof receiptChange> | ConversationChange {
@@ -140,8 +203,16 @@ export class ConversationStateStore {
         history: message === null ? { ...state, entries: state.entries.filter((entry) => entry.status !== 'running') } : state,
         eventIds: [...(sameTurn ? previous.eventIds : []), ...(message === null ? [] : [message.eventId])],
       };
-      await this.write({ record: stored.record, metadata: { ...stored.metadata, toolHistory } }, signal);
-      return structuredClone(toolHistory);
+      const metadataWithoutHistory = { ...stored.metadata };
+      delete metadataWithoutHistory.toolHistory;
+      const stateBytes = Buffer.byteLength(JSON.stringify({
+        ...ConversationRecordSchema.parse(stored.record), daemonState: metadataWithoutHistory,
+      }), 'utf8');
+      const availableBytes = MAX_CONVERSATION_BYTES - stateBytes - TOOL_HISTORY_CONVERSATION_RESERVE_BYTES;
+      const historyBudget = Math.min(MAX_TOOL_HISTORY_BYTES, availableBytes);
+      const boundedHistory = boundToolHistory(toolHistory, historyBudget);
+      await this.write({ record: stored.record, metadata: { ...metadataWithoutHistory, toolHistory: boundedHistory } }, signal);
+      return structuredClone(boundedHistory);
     }, { signal, timeoutMs: 5000 });
   }
 

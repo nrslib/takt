@@ -197,7 +197,10 @@ export class ToolActivityDisplay {
       } else state.printed = value.result.text;
       return;
     }
-    state.pending += sanitizeTerminalStreamText(state.redactor.flush(entry.input));
+    const redacted = entry.status === 'running'
+      ? state.redactor.write('', entry.input)
+      : state.redactor.flush(entry.input);
+    state.pending += sanitizeTerminalStreamText(redacted);
     this.drain(state, true);
   }
 

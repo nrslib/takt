@@ -32,6 +32,7 @@ export interface ConversationClientSnapshot {
 type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
 type Request = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 type ActiveRead = { transferId?: string; response?: Promise<void> };
+type PendingToolHistory = { history: ToolActivityTurnState; version: OutputVersion };
 
 export class ConversationIpcClient {
   private socket: Socket | undefined;
@@ -52,6 +53,8 @@ export class ConversationIpcClient {
   private readItems = new Map<string, SnapshotDisplayItem>();
   private removed = new Set<string>();
   private toolHistorySequence = -1;
+  private currentStateSequence = -1;
+  private pendingToolHistories = new Map<string, PendingToolHistory>();
   private toolTurnBoundary: { operationId: string; generation: number | undefined; stateSequence: number } | undefined;
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
 
@@ -144,6 +147,7 @@ export class ConversationIpcClient {
       this.pendingActivity = undefined;
       activityResumed = true;
     }
+    this.applyPendingToolHistories();
     for (const listener of this.listeners) listener();
     if ((previousConnection !== 'connected' || activityResumed) && this.view.connection === 'connected' && this.activity !== undefined) {
       for (const listener of this.outputs) listener(this.activity);
@@ -159,6 +163,14 @@ export class ConversationIpcClient {
   private acceptToolHistory(history: ToolActivityTurnState, version: OutputVersion, live: boolean): boolean {
     if (this.isPreviousToolTurn(history, version)) return false;
     const running = this.view.state?.running;
+    if (live && version.stateSequence > this.currentStateSequence) {
+      const key = JSON.stringify([history.operationId, history.generation]);
+      const previous = this.pendingToolHistories.get(key);
+      if (previous === undefined || history.history.sequence >= previous.history.history.sequence) {
+        this.pendingToolHistories.set(key, { history, version });
+      }
+      return false;
+    }
     if (running != null && (history.operationId !== running.operationId || history.generation !== running.generation)) return false;
     const previous = this.committedItems.get('tool_history');
     const current = previous?.kind === 'tool_history' ? previous.history : undefined;
@@ -182,6 +194,24 @@ export class ConversationIpcClient {
     return true;
   }
 
+  private applyPendingToolHistories(): void {
+    const running = this.view.state?.running;
+    let changed = false;
+    for (const [key, pending] of this.pendingToolHistories) {
+      const matchesRunning = running != null && pending.history.operationId === running.operationId
+        && pending.history.generation === running.generation;
+      const finishedWithoutRunning = running == null && pending.history.finished;
+      if ((matchesRunning || finishedWithoutRunning) && this.acceptToolHistory(pending.history, pending.version, true)) {
+        changed = true;
+        this.pendingToolHistories.delete(key);
+      } else if (this.isPreviousToolTurn(pending.history, pending.version)
+        || pending.version.stateSequence <= this.currentStateSequence) {
+        this.pendingToolHistories.delete(key);
+      }
+    }
+    if (changed) this.view = { ...this.view, items: orderSnapshotItems(this.items) };
+  }
+
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
     const configDirectory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
@@ -198,6 +228,7 @@ export class ConversationIpcClient {
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
         state: (next, version) => {
+          this.currentStateSequence = Math.max(this.currentStateSequence, version.stateSequence);
           const running = next.running;
           if (running !== null) {
             this.toolTurnBoundary = { operationId: running.operationId, generation: running.generation, stateSequence: version.stateSequence };
@@ -225,7 +256,7 @@ export class ConversationIpcClient {
         output: (output, version) => {
           if (output.kind === 'tool_history') {
             if (!this.acceptToolHistory(output.history, version, true)) return;
-            this.update({ items: orderSnapshotItems(this.items) });
+            this.update({ items: orderSnapshotItems(this.committedItems) });
           }
           if (output.kind === 'activity') {
             const running = this.view.state?.running;
@@ -280,6 +311,8 @@ export class ConversationIpcClient {
     if (socket.destroyed) throw new Error('Daemon disconnected before opening conversation');
     const decoder = new ConversationFrameDecoder();
     this.toolHistorySequence = -1;
+    this.currentStateSequence = -1;
+    this.pendingToolHistories.clear();
     this.toolTurnBoundary = undefined;
     this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {

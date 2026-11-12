@@ -112,5 +112,5 @@ export function createPrefixedStreamHandler(
       default: break;
     }
   };
-  return Object.assign(handler, { flush: () => activity.flush() });
+  return Object.assign(handler, { flush: () => { activity.flush(); lastType = 'other'; } });
 }

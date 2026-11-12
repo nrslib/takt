@@ -2059,6 +2059,34 @@ describe('ConversationView activity status', () => {
     }
   });
 
+  it('hides only unfinished tool entries after interrupting a submission', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'finished', tool: 'Read', input: { file_path: 'finished.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'finished', content: 'kept-result', isError: false } });
+      emit(input, { type: 'tool_use', data: { id: 'unfinished', tool: 'Read', input: { file_path: 'unfinished.ts' } } });
+      await flushFrames();
+      app.stdin.write('\x0f');
+      await flushFrames();
+      expect(app.lastFrame()).toContain('finished.ts');
+      expect(app.lastFrame()).toContain('unfinished.ts');
+
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      expect(app.lastFrame()).toContain('finished.ts');
+      expect(app.lastFrame()).not.toContain('unfinished.ts');
+      expect(app.lastFrame()).toContain('kept-result');
+      conversation.resolveWith({ kind: 'assistant_response', content: 'late response' });
+      await flushFrames();
+    } finally {
+      app.unmount();
+    }
+  });
+
   it('should ignore interrupted activity events while the next turn is responding', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());

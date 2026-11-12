@@ -117,6 +117,30 @@ it('serializes tool history with session saves without changing the business ver
   expect(await restored.readToolHistory(id)).toEqual(completed);
 });
 
+it('bounds accumulated tool results before saving them with conversation state', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'large-output-call' };
+  const result = 'x'.repeat(6_500 * 1024);
+  for (const toolId of ['first', 'second']) {
+    await store.updateToolHistory(turn, { kind: 'tool_event', eventId: `${toolId}-start`, event: {
+      type: 'tool_use', data: { id: toolId, tool: 'Bash', input: { command: `run ${toolId}` } }, toolActivity: context,
+    } }, signal());
+    await store.updateToolHistory(turn, { kind: 'tool_event', eventId: `${toolId}-result`, event: {
+      type: 'tool_result', data: { id: toolId, content: result, isError: false }, toolActivity: context,
+    } }, signal());
+  }
+
+  const saved = await store.readToolHistory(id);
+  expect(saved?.history.entries).toHaveLength(2);
+  expect(saved?.history.entries.map((entry) => entry.status)).toEqual(['success', 'success']);
+  expect(saved?.history.entries.every((entry) => entry.result?.length === 16 * 1024)).toBe(true);
+  expect(saved?.eventIds).toEqual(['first-start', 'first-result', 'second-start', 'second-result']);
+  const content = await readFile(join(directory, 'conversations', `${id}.json`), 'utf8');
+  expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(12 * 1024 * 1024);
+});
+
 it('drops unfinished history at termination and refuses older generations of the same operation and mismatched event contexts', async () => {
   const directory = await root(); const store = new ConversationStateStore(directory);
   await store.create(record());

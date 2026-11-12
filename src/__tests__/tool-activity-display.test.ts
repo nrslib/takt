@@ -97,6 +97,21 @@ describe('tool activity display', () => {
     expect(display.history.entries()[0]!.output).toContain('secret123');
   });
 
+  it('should keep an unfinished secret candidate private when compact output is flushed', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf secret123', api_key: 'secret123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready '.repeat(50) + 'secret' } });
+
+    display.flush();
+
+    expect(output.join('\n')).not.toContain('secret');
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '123\n' + 'safe '.repeat(50) } });
+    display.handle({ type: 'tool_result', data: { id: 'a', content: 'done secret123', isError: false } });
+    expect(output.join('\n')).not.toContain('secret123');
+    expect(output.join('\n')).toContain('[REDACTED]');
+  });
+
   it('should keep OSC fragments private even when the redactor emits only part of a control sequence', () => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'known-secret' } } });

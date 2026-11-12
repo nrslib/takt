@@ -18,17 +18,21 @@ describe('tool activity call context', () => {
     expect(events).toEqual(original);
   });
 
-  it('should use different identities for separate provider attempts and retain supplied turn context', () => {
+  it('should preserve an inner provider-attempt identity through the outer call wrapper', () => {
     const callback = vi.fn();
-    const first = withToolActivityCall(callback)!;
-    const second = withToolActivityCall(callback)!;
-    const event: StreamEvent = { type: 'text', data: { text: 'response' }, toolActivity: { callId: 'upstream', operationId: 'op', generation: 2 } };
+    const outer = withToolActivityCall(callback)!;
+    const first = withToolActivityCall(outer)!;
+    const second = withToolActivityCall(outer)!;
+    const event: StreamEvent = { type: 'text', data: { text: 'response' } };
     first(event); second(event);
     const a = callback.mock.calls[0]![0] as StreamEvent;
     const b = callback.mock.calls[1]![0] as StreamEvent;
-    expect(a.toolActivity).toMatchObject({ operationId: 'op', generation: 2 });
+    expect(a.toolActivity?.callId).toBeTruthy();
     expect(a.toolActivity!.callId).not.toBe(b.toolActivity!.callId);
-    expect(event.toolActivity!.callId).toBe('upstream');
+    const upstream: StreamEvent = { ...event, toolActivity: { callId: 'upstream', operationId: 'op', generation: 2 } };
+    outer(upstream);
+    expect(callback.mock.calls[2]![0]).toMatchObject({ toolActivity: { callId: 'upstream', operationId: 'op', generation: 2 } });
+    expect(upstream.toolActivity!.callId).toBe('upstream');
   });
 
   it('should leave absent callbacks absent', () => {

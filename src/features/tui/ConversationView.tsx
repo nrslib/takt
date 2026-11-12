@@ -273,7 +273,10 @@ export function ConversationView({
   const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   const elapsed = formatElapsedTime(elapsedSeconds);
-  const toolGroups = toolDisplay.groups();
+  const toolGroups = toolDisplay.groups().map((group) => ({
+    ...group,
+    entries: turn === null ? group.entries.filter((entry) => entry.status !== 'running') : group.entries,
+  })).filter((group) => group.entries.length > 0);
   const activeTool = activity.kind === 'tool'
     ? toolGroups.flatMap((group) => group.entries).filter((entry) => entry.status === 'running').at(-1) : undefined;
   const activityLabel = activeTool !== undefined ? activeTool.tool
@@ -814,7 +817,9 @@ export function ConversationView({
     }
     if (key.pageUp || key.pageDown) {
       if (toolHistoryHeight > 1) {
-        setToolView((state) => moveToolActivityView(state, toolPage, key.pageUp ? 'previous' : 'next'));
+        setToolView((state) => moveToolActivityView(state,
+          toolActivityViewPage(toolDisplay, toolGroups, state, columns, Math.max(0, toolHistoryHeight - 1), toolLabels),
+          key.pageUp ? 'previous' : 'next'));
       }
       return;
     }
