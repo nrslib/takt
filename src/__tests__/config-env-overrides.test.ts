@@ -186,6 +186,78 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('claude permissions の leaf から traced-config 用の env 名を生成する', () => {
+    expect(envVarNameFromPath('provider_options.claude.permissions.deny'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY');
+    expect(envVarNameFromPath('provider_options.claude.permissions.import_user_read_deny'))
+      .toBe('TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY');
+  });
+
+  it('project config は claude permissions の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-claude-permissions-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./yaml-only)"',
+        '      import_user_read_deny: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY = '["Read(./.env)","Read(~/.ssh/**)"]';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY = 'true';
+
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      claude: {
+        permissions: {
+          deny: ['Read(./.env)', 'Read(~/.ssh/**)'],
+          importUserReadDeny: true,
+        },
+      },
+    });
+  });
+
+  it('global config は claude permissions の yaml 値と env override を leaf ごとに反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider_options:',
+        '  claude:',
+        '    permissions:',
+        '      deny:',
+        '        - "Read(./.env)"',
+        '      import_user_read_deny: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_IMPORT_USER_READ_DENY = 'true';
+
+    expect(loadGlobalConfig().providerOptions).toEqual({
+      claude: {
+        permissions: {
+          deny: ['Read(./.env)'],
+          importUserReadDeny: true,
+        },
+      },
+    });
+  });
+
+  it('project config は配列でない claude permissions.deny の env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-claude-permissions-env-invalid');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_PERMISSIONS_DENY = '"Read(./.env)"';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow();
+  });
+
   it('project config は DeepSeek reasoning_effort の env override を反映する', () => {
     const projectDir = join(testRoot, 'project-deepseek-reasoning-effort-env');
     const configDir = getProjectConfigDir(projectDir);

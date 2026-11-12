@@ -238,6 +238,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
   'src/__tests__/claude-mcp-runtime.test.ts',
+  'src/__tests__/claude-read-deny-wiring.test.ts',
   'src/__tests__/cli-update-check.test.ts',
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/clone-metadata-central.test.ts',

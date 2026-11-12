@@ -113,6 +113,10 @@ function buildSettingsArg(
     }
   }
 
+  if (options.denyRules !== undefined) {
+    settings.permissions = { deny: options.denyRules };
+  }
+
   if (readonlyArtifactPaths.length > 0) {
     settings.hooks = {
       PreToolUse: [createClaudeCliReadonlyArtifactHook(readonlyArtifactPaths, options.cwd)],

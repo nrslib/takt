@@ -1,6 +1,7 @@
 import { callClaude, callClaudeCustom } from '../claude/client.js';
 import type { ClaudeCallOptions } from '../claude/types.js';
 import { buildSdkOptions } from '../claude/options-builder.js';
+import { resolveClaudeDenyRules } from '../claude/read-deny.js';
 import { assertClaudeSdkRuntime } from '../claude/sdk-runtime.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
@@ -58,6 +59,14 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   };
 }
 
+/** Adds the deny rules for one launch; preflight does not launch Claude, so it uses toClaudeOptions alone. */
+function toClaudeLaunchOptions(options: ProviderCallOptions): ClaudeCallOptions {
+  return {
+    ...toClaudeOptions(options),
+    denyRules: resolveClaudeDenyRules(options.providerOptions?.claude?.permissions),
+  };
+}
+
 export class ClaudeProvider implements Provider {
   readonly supportsMcpOnlySideEffects = true;
   readonly supportsStrictToolAllowlist = true;
@@ -84,13 +93,13 @@ export class ClaudeProvider implements Provider {
     if (systemPrompt) {
       return {
         call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-          callClaudeCustom(name, prompt, systemPrompt, toClaudeOptions(options)),
+          callClaudeCustom(name, prompt, systemPrompt, toClaudeLaunchOptions(options)),
       };
     }
 
     return {
       call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-        callClaude(name, prompt, toClaudeOptions(options)),
+        callClaude(name, prompt, toClaudeLaunchOptions(options)),
     };
   }
 
@@ -108,7 +117,7 @@ export class ClaudeProvider implements Provider {
         outputSchema: assertOutputSchema(options.outputSchema, 'claude'),
       };
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-      return callClaudeCustom(name, fullPrompt, '', toClaudeOptions(isolatedOptions));
+      return callClaudeCustom(name, fullPrompt, '', toClaudeLaunchOptions(isolatedOptions));
     };
     return { call };
   }
