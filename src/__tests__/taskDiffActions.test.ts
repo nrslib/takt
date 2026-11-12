@@ -59,4 +59,26 @@ describe('showDiffAndPromptActionForTask', () => {
     const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options.map((option) => option.value)).toContain('create_pr');
   });
+
+  it('delete action description preserves changes and branch for tasks without a worktree', async () => {
+    await showDiffAndPromptActionForTask('/project', {
+      ...task,
+      data: { task: 'Implement task', worktree: false },
+    });
+
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string; description: string }>;
+    const deleteOption = options.find((option) => option.value === 'delete');
+    expect(deleteOption?.description).toBe('Remove task; keep uncommitted changes and branch');
+  });
+
+  it.each([
+    ['worktree: true', { task: 'Implement task', worktree: true }],
+    ['worktree is unspecified', { task: 'Implement task' }],
+  ])('keeps the original delete description when %s', async (_case, data) => {
+    await showDiffAndPromptActionForTask('/project', { ...task, data });
+
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string; description: string }>;
+    const deleteOption = options.find((option) => option.value === 'delete');
+    expect(deleteOption?.description).toBe('Discard changes, delete branch');
+  });
 });
