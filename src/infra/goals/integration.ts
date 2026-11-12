@@ -103,7 +103,7 @@ function completionRecord(
       'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks.',
       includedGoalCompletionGuidance,
       'If only reading or updating an existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
-      'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
+      'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; custom merge.prepare_workflow and merge.workflow settings follow their own steps.',
     ],
   };
 }
