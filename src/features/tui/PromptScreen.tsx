@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, usePaste, useStdout } from 'ink';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import { toDisplayText } from './displayText.js';
 import { resolveEditorKey } from './editorKeys.js';
@@ -57,6 +57,13 @@ export function PromptScreen({
     doneRef.current = true;
     onDone(answer);
   }, [onDone]);
+
+  usePaste((text) => {
+    if (doneRef.current) {
+      return;
+    }
+    edit(applyEditorKey(editorRef.current, { kind: 'paste', text }));
+  });
 
   useInput((input, key) => {
     if (doneRef.current) {

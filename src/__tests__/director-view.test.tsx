@@ -9,6 +9,19 @@ import { stripAnsi } from '../shared/utils/text.js';
 import { randomUUID } from 'node:crypto';
 
 afterEach(cleanup);
+it('keeps a CR-only bracketed paste as an unsent multi-line draft until Enter', async () => {
+  const client = new ManagerClientDouble();
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+
+  app.stdin.write('\x1b[200~first\rsecond\x1b[201~');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('second'));
+  expect(client.commands()).toEqual([]);
+
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: 'first\nsecond' }]));
+});
+
 it.each(['ja', 'en'] as const)('shows queue capacity rejection in the submitting director TUI (%s)', async (lang) => {
   const client = new ManagerClientDouble();
   const message = getLabel('manager.conversation.queue_full', lang);
