@@ -1295,6 +1295,25 @@ The merge command checks fork threats before starting the workflow, whether a PR
 
 The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. Once the final requirement check completes, TAKT pushes fixes, runs the Caccia effect, checks CI and GitHub review and mergeability on its returned head, then merges. An aborted child workflow stops the merge and produces a PR comment. CI failures enter the recovery process described below. Select `merge-review-fix` for parallel specialist reviews.
 
+### CI-gated review
+
+`merge-review-ci` is opt-in. Its first system step reads the existing `pr_status` and requires both `ci.finished` and `ci.passed` before calling `merge-review` through `workflow_call`. Success follows the existing definition, including `SUCCESS`, `NEUTRAL` and `SKIPPED`. Pending, failed or absent checks end `COMPLETE` without review, Caccia or evaluation comments. This initial check does not wait or retry and adds no configuration or CLI options.
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+For review and comments without code changes, commits, pushes or merges, use the existing `.takt/config.yaml` setting:
+
+```yaml
+caccia:
+  enabled: false
+```
+
+After the gate, the existing `merge-review` owns review, Caccia, its later CI check, evaluation and `TAKT evaluation: approved={true|false}. {reason}` comments. Its `COMPLETE` or `ABORT` result is preserved. Fork selection and the threat check before the workflow remain unchanged: bulk runs exclude forks unless included, while an explicit number bypasses selection conditions but still runs the threat check. Rejection keeps the existing stop comment. `merge-review`, `merge-review-fix` and `merge-review-fix-simple` retain their direct execution behavior and defaults.
+
 ### CI failure recovery inputs and effects
 
 `merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. They skip the initial review on these later attempts and continue through push → Caccia → CI on the new HEAD → merge evaluation. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends ABORT without merging. Resynchronization preserves the CI fix and rerun budgets already used.

@@ -1279,6 +1279,25 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 
 `takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗ではマージせず、結果を PR にコメントします。CI失敗では後述の回復処理へ進みます。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
 
+### CI成功済みPRのレビュー
+
+`merge-review-ci` は明示指定時だけ動くworkflowです。先頭のsystem stepで既存 `pr_status` を読み、`ci.finished` と `ci.passed` が両方真の場合だけ `workflow_call` で既存 `merge-review` を呼びます。成功の定義は既存処理と同じで、`SUCCESS`・`NEUTRAL`・`SKIPPED` を含みます。未完了・失敗・チェック未作成なら、レビュー・Caccia・評価コメントを実行せず `COMPLETE` になります。事前判定では待機・再試行せず、新しい設定項目やCLIオプションも追加しません。
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+コード変更・commit・push・マージを行わずレビューとコメントだけを実行するには、既存の `.takt/config.yaml` に次を設定します。
+
+```yaml
+caccia:
+  enabled: false
+```
+
+事前判定の後は、既存 `merge-review` がレビュー・Caccia・その後のCI確認・評価と `TAKT evaluation: approved={true|false}. {reason}` 形式のコメントを担当し、子の `COMPLETE` または `ABORT` をそのまま返します。workflow開始前のfork選択と脅威検査は変わりません。バッチでは包含指定がないforkを除外し、番号指定では選定条件を省略しても脅威検査を実行します。拒否時の既存停止コメントも維持します。`merge-review`・`merge-review-fix`・`merge-review-fix-simple` の直接実行時の動作と既定値は保持します。
+
 ### CI回復の入力と効果
 
 `merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回のレビューは繰り返さず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてABORTで終了し、マージしません。CI修正・再実行の使用済み回数は取り込み直し後も保持します。

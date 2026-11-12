@@ -743,6 +743,23 @@ takt merge --concurrency 4
 takt merge "プロンプト変更以外"
 ```
 
+CI成功済みのPRだけをレビューする場合は `merge-review-ci` を明示します。
+
+```bash
+takt merge 123 --workflow merge-review-ci
+takt merge --workflow merge-review-ci
+takt merge --workflow merge-review-ci --include-forks
+```
+
+コード変更・commit・push・マージを行わずレビューと評価コメントだけを実行するには、既存のプロジェクト設定 `.takt/config.yaml` に次を指定します。
+
+```yaml
+caccia:
+  enabled: false
+```
+
+番号指定とバッチの両方で、レビュー前に既存 `pr_status` を確認します。全チェックの完了と成功が必要で、`SUCCESS`・`NEUTRAL`・`SKIPPED` を成功とみなします。未完了・失敗・チェック未作成なら、AIレビュー・Caccia・評価コメントを実行せず、その場で `COMPLETE` になります。事前判定では待機・再試行せず、新しい設定項目やCLIオプションも不要です。成功時は `workflow_call` で既存 `merge-review` へ委譲し、その後のCI確認と `TAKT evaluation: approved={true|false}. {reason}` 形式のコメントを使います。forkの選択と脅威検査は従来どおりで、バッチでforkを含めるには `--include-forks` が必要です。番号指定は選定条件を省略しますが、脅威検査は行います。拒否時の既存停止コメントも維持します。他のマージworkflowと既定workflowは変わりません。
+
 `merge-prepare` は `merge-review-fix-simple` と同じ仕上げを CI 待ちまで行い、マージせず正常終了します。タスクの完了結果は `mergeOutcome` で準備完了・マージ済み・未解決を区別します。失敗をコメントできただけでは成功としません。ゴール所属のマージ用タスクは push 後に元リポジトリのゴールブランチを安全に fast-forward し、分岐やチェックアウト中は変更せず報告します。
 
 位置引数は一つです。数字列ならPR番号、それ以外ならAIによる選別テキストとして扱います。番号指定では選定条件とAI選別を適用しません。テキスト指定ではCLI条件または `merge.where` 設定とdraft・forkの除外を先に適用し、残った候補をAIが判定します。判断材料はタイトル、本文、ラベル、head・baseブランチ名、変更ファイルの全パスです。差分本文とレビューコメントは選別材料に含めません。テキストだけの指定では設定条件を保持します。

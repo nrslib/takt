@@ -1,5 +1,7 @@
 name: merge-review
 description: Review a PR, wait for CI and comment on the evaluation
+subworkflow:
+  callable: true
 max_steps: 51
 initial_step: identify
 steps:
