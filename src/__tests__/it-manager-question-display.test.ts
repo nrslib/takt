@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
 import { EventEmitter } from 'node:events';
-import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { mkdirSync,mkdtempSync,readFileSync,realpathSync,renameSync,rmSync,writeFileSync } from 'node:fs';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
 import { afterEach,beforeEach,expect,it,vi } from 'vitest';
@@ -820,7 +820,8 @@ it('exposes manager work tools without exposing a goal abort tool to the agent',
     await client.connect(clientTransport);
     const names = (await client.listTools()).tools.map(({ name }) => name);
     expect(names).toContain('takt_enqueue_goal_task');
-    expect(names.filter((name) => /abort/iu.test(name))).toEqual([]);
+    expect(names).toContain('takt_abort_epic');
+    expect(names).not.toContain('takt_abort_goal');
   } finally { await client.close(); await server.close(); }
 });
 
@@ -1188,6 +1189,9 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
 });
 
 it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question details while retaining saved notification history', async (lang) => {
+  const repositoryDirectory = `${cwd}-CSV`;
+  renameSync(cwd, repositoryDirectory);
+  cwd = repositoryDirectory;
   writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n');
   invalidateResolvedConfigCache(cwd);
   const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
@@ -1197,7 +1201,27 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call } = await mountGoalControls(lang, saved);
-  await waitFor(() => expect(app!.lastFrame()).toContain('^R'));
+  const withoutAssignment = (frame: string, pending: number): string => {
+    const heading = getLabel('manager.assignmentHeading', lang, { name: basename(cwd) });
+    const counts = getLabel('manager.counts', lang, { goals: '1', awaiting: '0', questions: String(pending) });
+    const assignment = `${heading} | ${counts}`;
+    const rows = frame.split('\n');
+    const assignmentRows = rows.filter((row) => row.trim() === assignment);
+    expect(assignmentRows).toHaveLength(1);
+    expect(assignmentRows[0]).toContain('CSV');
+    return rows.filter((row) => row !== assignmentRows[0]).join('\n');
+  };
+  await openMenu('answer');
+  await waitFor(() => {
+    const content = withoutAssignment(app!.lastFrame()!, 1);
+    expect(content).toContain(getLabel('manager.selectionTitles.answer', lang));
+    expect(content).toContain(question.body);
+  });
+  app!.stdin.write('\r');
+  await waitFor(() => {
+    const content = withoutAssignment(app!.lastFrame()!, 1);
+    for (const value of [question.body, ...question.options]) expect(content).toContain(value);
+  });
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
@@ -1209,10 +1233,8 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
   expect(display.events).toEqual([]);
   await remount(lang);
   await waitFor(() => {
-    const frame = app!.lastFrame()!;
-    expect(frame).toContain(lang === 'ja' ? '未回答 0' : 'Pending 0');
-    for (const value of [question.body, ...question.options]) expect(frame).not.toContain(value);
-    expect(frame).not.toContain(question.id);
+    const content = withoutAssignment(app!.lastFrame()!, 0);
+    for (const value of [question.body, ...question.options, question.id]) expect(content).not.toContain(value);
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);
   expect(call).not.toHaveBeenCalled();

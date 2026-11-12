@@ -36,7 +36,7 @@ The bottom status line shows the assignment name, counts of ongoing goals (activ
 Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
 ```text
-Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
+Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^O Epics  ^C Exit
 Assignment: takt | Ongoing 1 / Pending 0
 ```
 
@@ -114,6 +114,52 @@ Code watchers observe process loss and PR state changes and emit events only for
 Ask to add `/path/to/web`, remove a repository from the assignment, or rename the workspace. Starting from any member repository opens the same workspace. Each goal proceeds in one repository.
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
+
+## Managing combined verification with Epics
+
+An Epic is a workspace-owned persistent record linking goals and evidence that their combined results meet an overall objective. All members belong to the same workspace manager. Each goal keeps its single-repository, single-PR contract; an Epic does not create its own branch, PR, or task scheduler. Cross-manager operations and automatic dependency ordering by director are outside this feature.
+
+### Creation and member changes
+
+Tell manager the overall objective, acceptance criteria, and combined verification procedure. For example, ask it to create an Epic for the API and UI integration and add the two existing workspace goals. Manager uses the existing MCP tools. Mutation tools require a nonempty reason.
+
+| Operation | MCP tools and recorded input |
+|-----------|------------------------------|
+| Create and read | `takt_create_epic`, `takt_list_epics`, `takt_get_epic`. Creation records `objective`, `acceptanceCriteria` with `id` and `description`, `verificationProcedure` with `version` and `steps`, and `reason`. |
+| Add or remove a member | `takt_add_epic_member`, `takt_remove_epic_member`, with `member: { repositoryDirectory, goalId }` and a reason. |
+| Replace with a correction goal | `takt_replace_epic_member`, with the old `member`, new `replacement`, and reason. Completed goals are not reopened. |
+| Revise the definition | `takt_update_epic_definition`, with changes to the objective, acceptance criteria, or procedure and a reason. |
+| Pin or refresh targets | `takt_refresh_epic_targets` records the integrated SHAs of completed members. |
+
+The tools take an absolute `cwd` inside an assigned repository and, for an existing Epic, its `epicId`. Workspace ownership comes from the current manager assignment. Unassigned repositories, missing goals, and duplicate members are rejected. Records live under `~/.takt/workspaces/<workspaceId>/epics/<epicId>/epic.json`, or under `TAKT_CONFIG_DIR` when set.
+
+### Fixed targets and verification evidence
+
+Each target is the goal's `completion.targetSha`: the fixed SHA integrated into the target branch. It is not `completion.goalSha` or a moving branch tip. Unrelated main advancement does not change that fixed target set or invalidate its evidence.
+
+`takt_start_epic_verification` records an execution ID, revision, target SHA set, definition, procedure version, and start time. It does not execute verification commands. Manager uses existing shell/run facilities and a temporary workspace, then records the result with `takt_record_epic_verification_result`.
+
+The result includes the matching `runId`, `revision`, `targets`, `procedureVersion`, start and completion times, and outcome. Record the environment name and description, artifact references linked to source target SHAs, the verification workspace and its artifact references, acceptance results for each criterion, and log references. Conversation history alone is not completion evidence.
+
+For a Terraform procedure, explicitly record `verificationProcedure.terraform.requiresApply` as `true` or `false`. The result must also record Terraform `phase` (`plan` or `post_apply`), `applyStatus` (`not_applied`, `applied`, or `failed`), and artifact references. With `requiresApply: true`, a successful plan alone is insufficient: verification must record `post_apply` and `applied`. With `requiresApply: false`, the procedure does not require application. Environment, application state, and artifact references must still be recorded. TAKT does not automatically run Terraform apply or destroy.
+
+### Completion, invalidation, abort, and recovery
+
+Recording a successful result does not complete an Epic. Call `takt_complete_epic` explicitly after checking that the member set is nonempty, every member is completed, no member is aborted, current successful evidence matches the definition and fixed targets, and no verification is running. An active Epic awaiting verification remains daemon work and a manager patrol target even after all member goals complete.
+
+Member, acceptance-criteria, procedure, and fixed-target changes advance the revision and invalidate existing evidence. A completed Epic returns to active; previous evidence and invalidation reasons remain readable. A delayed pre-change result is retained as `stale` and cannot supply current evidence or complete the revised Epic. Verify the revised targets with a new execution.
+
+`takt_abort_epic` records a reason and retains the Epic history. It does not abort or reopen member goals or close their PRs. A repository referenced by an active Epic cannot be unassigned even when its member goal is completed. Remove the reference, complete the Epic, or abort it first. After completion or abort, unassignment preserves member references, fixed SHAs, evidence, and change reasons.
+
+A running verification left after restart is neither treated as success nor automatically rerun. Read `takt_get_epic_verification_recovery` and the saved records, inspect the actual outcome and side effects, and explicitly decide how to recover, such as registering the verified result.
+
+### Reading Epics in the TUI
+
+Press `Ctrl+O` for the Epic list, use `↑↓` to choose, and `Enter` for details. Active, completed, and aborted Epics remain available. The list shows objectives, states, completed-member counts, current evidence, and verification or invalidation summaries. Details show repository and goal identities, fixed targetSha values, member states, verification results and history, invalidation reasons, and result-confirmation or recovery work. When unassignment prevents reading a member's current state, it is shown as unavailable while saved history remains.
+
+Scroll long details with `↑↓`, `PageUp`/`PageDown`, or `Home`/`End`. `Esc` returns from details to the list and from the list to the conversation. `Ctrl+R`/`Ctrl+G` switches to the existing menus while retaining your unsent conversation draft. Within Epic browsing, `Enter` and `Esc` navigate rather than sending a message or interrupting the running turn.
+
+Both views follow the current snapshot, including evidence invalidation, member changes, and verification results while already open. Reconnecting restores the same persisted state without duplicate Epics or appending historical Epic screens to the conversation transcript.
 
 
 Workflows may use names, scope references or file paths, including workflows with merge_pr / close_pr. Set `autoPr` and `shouldPublishBranchToOrigin` on submission when needed; both default to false, retaining worktree isolation and the goal branch as the base.
