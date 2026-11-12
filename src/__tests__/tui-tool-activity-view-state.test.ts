@@ -212,6 +212,14 @@ describe('tool activity view state', () => {
       { key: 'other/result', offset: 0, text: 'separate', omitted: false },
     ]);
   });
+  it('retains updated text when a committed range has the same position and length', () => {
+    const committed = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
+    expect(excludeToolActivityTranscript([
+      { key: 'tool/result', offset: 0, text: 'error', omitted: false },
+    ], committed)).toEqual([
+      { key: 'tool/result', offset: 0, text: 'error', omitted: false },
+    ]);
+  });
   it('finishes the page safely when the selected unfinished entry is removed at turn termination', () => {
     const { reader, groups } = fixture('completed-result');
     const unfinished = { ...groups[0]!.entries[0]!, key: 'unfinished', status: 'running' as const };

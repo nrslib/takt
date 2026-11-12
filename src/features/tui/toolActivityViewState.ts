@@ -87,6 +87,9 @@ export function excludeToolActivityTranscript(
         if (existingEnd <= fragment.offset || existingStart >= fragmentEnd) return [fragment];
         const overlapStart = Math.max(fragment.offset, existingStart);
         const overlapEnd = Math.min(fragmentEnd, existingEnd);
+        const fragmentOverlap = fragment.text.slice(overlapStart - fragment.offset, overlapEnd - fragment.offset);
+        const existingOverlap = existing.text.slice(overlapStart - existingStart, overlapEnd - existingStart);
+        if (fragmentOverlap !== existingOverlap) return [fragment];
         const left = overlapStart > fragment.offset ? [{ ...fragment,
           text: fragment.text.slice(0, overlapStart - fragment.offset), omitted: false }] : [];
         const right = overlapEnd < fragmentEnd ? [{ ...fragment,
