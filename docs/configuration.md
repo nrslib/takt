@@ -1865,7 +1865,7 @@ provider_options:
 - Claude Code, not TAKT, decides what a `Read(` rule stops.
   According to the [Claude Code permissions documentation](https://code.claude.com/docs/en/permissions), the rules apply to Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and to file commands Claude Code recognizes in Bash, such as `cat`, `head`, `tail`, `sed`, and `tee`.
   They do not apply to a command that reads files without naming them, such as `grep -r pattern .`, or to a script that opens files itself, such as a Python or Node script.
-  To block the shell commands Claude runs, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md).
+  To block the shell commands Claude runs in the sandbox, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md). Commands that run outside the sandbox, such as commands matched by `excludedCommands` or run with `allow_unsandboxed_commands`, are not blocked.
   Processes in the sandbox can still read paths that have no deny rule.
   Hooks, MCP servers, and other processes outside the sandbox are not blocked.
 - The rules Claude receives are the union of `deny` and the imported rules, without duplicates. TAKT passes them as `permissions.deny` in Claude's flag settings (the SDK `settings` option for `claude-sdk`, `--settings` for `claude-headless`), so they also apply to isolated internal calls such as status judgment.

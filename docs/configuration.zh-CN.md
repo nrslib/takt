@@ -1422,7 +1422,7 @@ provider_options:
 - `Read(` 规则拦截的范围由 Claude Code 决定，而不是由 TAKT 决定。
   根据 [Claude Code 权限文档](https://code.claude.com/docs/en/permissions)，这些规则适用于 Claude 的内置文件工具（Claude 会尽力将 `Read` 规则应用于 Grep、Glob 等工具），以及 Claude Code 在 Bash 中识别的文件命令，如 `cat`、`head`、`tail`、`sed` 和 `tee`。
   它们不适用于不指定文件名就读取文件的命令（如 `grep -r pattern .`），也不适用于自行打开文件的脚本（如 Python 或 Node 脚本）。
-  要在操作系统层面阻止 Claude 运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。
+  要在操作系统层面阻止 Claude 在 sandbox 中运行的 shell 命令及其启动的进程访问某个路径，请先为该路径添加 `Read(` 拒绝规则，再启用 [Claude Code sandbox](https://code.claude.com/docs/en/sandboxing.md)。通过 `excludedCommands` 匹配或通过 `allow_unsandboxed_commands` 在 sandbox 外运行的命令不受此限制。
   没有拒绝规则的路径，sandbox 中的进程仍然可以读取。
   hooks、MCP server 等在 sandbox 之外运行的进程不会被阻止。
 - Claude 收到的规则是 `deny` 与导入规则的并集，重复项只保留一条。TAKT 将其作为 Claude flag settings 的 `permissions.deny` 传递（`claude-sdk` 使用 SDK 的 `settings` 选项，`claude-headless` 使用 `--settings`），因此对状态判定等隔离的内部调用同样有效。
