@@ -52,7 +52,9 @@ export class EpicStore {
     const errors: { epicId: string; error: Error }[] = [];
     let totalCount = 0;
     for (const entry of readdirSync(this.root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const id = EpicIdSchema.parse(entry.name);
+      const parsedId = EpicIdSchema.safeParse(entry.name);
+      if (!parsedId.success) continue;
+      const id = parsedId.data;
       try {
         const epic = this.read(id);
         if (epic !== undefined) {

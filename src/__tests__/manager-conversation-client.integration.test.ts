@@ -9,7 +9,7 @@ import { cleanup, render } from 'ink-testing-library';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
@@ -1685,7 +1685,7 @@ it('reuses unchanged goal files and reloads modified or deleted goals on the sam
   const [goal, other] = seedSnapshotGoals(2, 0, 0);
   const connections = observeIpcConnections();
   const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
-  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => path.endsWith('/goal.json'));
+  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json');
   await client.connect(); await complete();
   expect(goalReads()).toHaveLength(2);
   reads.mockClear();
@@ -1985,7 +1985,7 @@ it('restores completed Epic history after repository removal without reading rem
   await client.connect(); await complete();
   expect(displayedEpics(client)).toMatchObject([{ epic: { ...f.completed,
     currentEvidence: { id: f.run.id } } }]);
-  expect(reads.mock.calls.filter(([path]) => path.endsWith('/goal.json'))).toEqual([]);
+  expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toEqual([]);
   expect(displayedGoals(client)).toEqual([]);
 });
 

@@ -7,6 +7,8 @@ import { hasCode, readPrivateFile } from './privateFile.js';
 
 /** 読取中に祖先が差し替わった場合も、結果を公開しない。 */
 export class DaemonEpicFiles {
+  private readonly activeStatus = new Map<string, Map<string, { stamp: string; active: boolean }>>();
+
   constructor(private readonly directory: string) {}
 
   private paths(workspaceId: string, epicId?: string): string[] {
@@ -60,5 +62,48 @@ export class DaemonEpicFiles {
     }
     const after = await this.directories(paths);
     if (before.some((stamp, index) => stamp !== after[index])) throw new Error('Epic directory changed during listing');
+  }
+
+  async activeIds(workspaceId: string): Promise<string[]> {
+    const paths = this.paths(workspaceId);
+    let before: string[];
+    try { before = await this.directories(paths); }
+    catch (error) {
+      if (hasCode(error, 'ENOENT')) {
+        await this.directories(paths.slice(0, -1));
+        this.activeStatus.delete(workspaceId);
+        return [];
+      }
+      throw error;
+    }
+    const entries = await readdir(paths.at(-1)!, { withFileTypes: true });
+    const cached = this.activeStatus.get(workspaceId) ?? new Map();
+    const current = new Map<string, { stamp: string; active: boolean }>();
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const parsedId = EpicIdSchema.safeParse(entry.name);
+      if (!parsedId.success) continue;
+      if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('Invalid Epic entry');
+      const id = parsedId.data;
+      const epicPaths = this.paths(workspaceId, id);
+      await this.directories(epicPaths);
+      const filePath = join(epicPaths.at(-1)!, 'epic.json');
+      const stat = await lstat(filePath, { bigint: true });
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Invalid Epic file: ${filePath}`);
+      const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      const previous = cached.get(id);
+      let active: boolean;
+      if (previous?.stamp === stamp) active = previous.active;
+      else {
+        active = (await this.get(workspaceId, id)).status === 'active';
+        const after = await lstat(filePath, { bigint: true });
+        const afterStamp = `${after.dev}:${after.ino}:${after.size}:${after.mtimeNs}:${after.ctimeNs}`;
+        if (afterStamp !== stamp) throw new Error('Epic file changed during active status read');
+      }
+      current.set(id, { stamp, active });
+    }
+    const after = await this.directories(paths);
+    if (before.some((stamp, index) => stamp !== after[index])) throw new Error('Epic directory changed during active status listing');
+    this.activeStatus.set(workspaceId, current);
+    return [...current].filter(([, value]) => value.active).map(([id]) => id);
   }
 }

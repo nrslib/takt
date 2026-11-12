@@ -108,19 +108,24 @@ describe('workspace Epic storage', () => {
       const requests = createDaemonStateRequests({ conversations, ingress: { accept }, connectedPorts: () => [] });
       expect(await requests.handle(turn, { kind: 'publish_epic_events', workspaceId: workspace.id, epicId,
         reason: 'Publish saved verification' }, new AbortController().signal)).toEqual({ kind: 'epic_events_published' });
-      const events = epicEvents(record);
-      expect(accept.mock.calls.map(([event]) => event.eventId)).toEqual(events.map((event) => event.eventId));
+      const expectedEvents = epicEvents(record);
+      const events = accept.mock.calls.map(([event]) => event);
+      expect(events.map((event) => event.eventId)).toEqual(expectedEvents.map((event) => event.eventId));
+      const notificationError = new Error('Notification storage unavailable');
+      vi.spyOn(notifications, 'save').mockRejectedValueOnce(notificationError);
+      const send = vi.spyOn(conversations, 'send');
       for (const event of events) {
         const result = { ...turn, event: { ...event, operationId: turn.operationId, acceptedSequence: 1, lane: 'other' as const },
           outcome: { kind: 'completed' as const, result: { kind: 'notice' as const, message: '' } } };
         await conversations.apply(result);
         await conversations.apply(result);
       }
+      expect(errors).toHaveBeenCalledWith(notificationError);
+      expect(send.mock.calls.slice(0, 2).map(([, output]) => output.kind)).toEqual(['pending', 'result']);
       const saved = [];
       for await (const notice of notifications.iterate()) saved.push(notice);
       expect(saved.map(({ id }) => id).sort()).toEqual(events.map(({ eventId }) => eventId).sort());
       expect(saved.every((notice) => notice.conversationId === turn.conversationId)).toBe(true);
-      expect(errors).not.toHaveBeenCalled();
     } finally { await conversations.close(); }
     expect(await store.get(epicId)).toEqual(record);
   });

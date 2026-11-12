@@ -56,7 +56,7 @@ describe('Epic storage validation boundary', () => {
     const ids = [epicId, secondGoalId, verificationRunId].sort((a, b) => a.localeCompare(b));
     const records = ids.map((id, index) => ({ ...epicRecord(), id, objective: `Epic ${index}` }));
     doubles.stat.mockReturnValue({});
-    vi.mocked(readdirSync).mockReturnValue([...ids].reverse().map((name) => ({ name })) as unknown as ReturnType<typeof readdirSync>);
+    vi.mocked(readdirSync).mockReturnValue([...ids, '.DS_Store'].reverse().map((name) => ({ name })) as unknown as ReturnType<typeof readdirSync>);
     doubles.read.mockImplementation((path: string) => ({ content: Buffer.from(JSON.stringify(records.find(({ id }) => path.includes(id)))) }));
     const store = new EpicStore('/configuration', epicWorkspaceId);
     expect(await store.list({ offset: 1, limit: 1 })).toEqual({ epics: [records[1]], totalCount: 3, errors: [] });

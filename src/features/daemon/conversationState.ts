@@ -78,8 +78,10 @@ export class DaemonConversations implements ConversationOwner {
       const id = epicEventId(event);
       if (result.outcome.kind === 'completed' && epicEvents(epic).some((candidate) => candidate.eventId === id)) {
         const run = epic.verificationRuns.find((entry) => entry.id === event.runId)!;
-        await this.notifications.save({ id, conversationId: result.conversationId,
-          message: `Epic ${epic.id} revision ${event.revision}: ${event.kind === 'epic_completed' ? 'completed' : `verification ${run.result!.outcome}`} (${event.runId})` }, new AbortController().signal);
+        try {
+          await this.notifications.save({ id, conversationId: result.conversationId,
+            message: `Epic ${epic.id} revision ${event.revision}: ${event.kind === 'epic_completed' ? 'completed' : `verification ${run.result!.outcome}`} (${event.runId})` }, new AbortController().signal);
+        } catch (error) { this.onError(error); }
       }
     }
     if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);

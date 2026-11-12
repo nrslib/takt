@@ -61,15 +61,26 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
     expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
   }
   const assignment = await new DaemonRouting(directory).display(identity);
-  expect(JSON.parse(await buildTurnBusinessContext(assignment, null, directory)).epics)
-    .toEqual([{ epic: updated, recovery: [] }]);
+  const businessContext = await buildTurnBusinessContext(assignment, null, directory);
+  const context = JSON.parse(businessContext);
+  expect(Buffer.byteLength(JSON.stringify(context.epics))).toBeLessThanOrEqual(16 * 1024);
+  expect(context.epics).toMatchObject([{ epic: { id: updated.id, status: updated.status, revision: updated.revision,
+    detailsTruncated: true, retrieval: expect.stringContaining('takt_get_epic') }, recovery: [] }]);
+  expect(context.epics[0].epic.objective.length).toBeLessThan(updated.objective.length);
+  expect(businessContext).not.toContain(updated.objective);
   const errors = vi.fn();
   const conversations = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
     new DaemonNotifications(directory), async () => {}, errors);
   const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
+  const epicReads = vi.spyOn(DaemonEpicFiles.prototype, 'get');
   try {
+    epicReads.mockClear();
     expect(await source.hasWork(new DaemonPersistedFiles(directory))).toBe(true);
+    expect(epicReads).toHaveBeenCalledOnce();
+    expect(await source.hasWork(new DaemonPersistedFiles(directory))).toBe(true);
+    expect(epicReads).toHaveBeenCalledOnce();
     expect(await source.patrols()).toMatchObject([{ workspaceId: workspace.id, epicIds: [updated.id] }]);
+    expect(epicReads).toHaveBeenCalledOnce();
     expect(errors).not.toHaveBeenCalled();
   } finally {
     await source.close();

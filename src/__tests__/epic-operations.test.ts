@@ -6,8 +6,9 @@ import { epicRecord } from './helpers/epic-fixtures.js';
 import { verificationRunId, verificationStartedAt, secondGoalId, verificationResultFor } from './helpers/epic-fixtures.js';
 import { beginEpicVerification, applyEpicVerificationResult, finishEpic, epicView } from '../infra/epics/state.js';
 
-const doubles = vi.hoisted(() => ({ create: vi.fn(), complete: vi.fn(), list: vi.fn(), resolve: vi.fn() }));
-vi.mock('../infra/epics/index.js', async (original) => ({ ...await original<typeof import('../infra/epics/index.js')>(), createEpic: doubles.create, completeEpic: doubles.complete, listEpics: doubles.list }));
+const doubles = vi.hoisted(() => ({ create: vi.fn(), start: vi.fn(), complete: vi.fn(), list: vi.fn(), resolve: vi.fn() }));
+vi.mock('../infra/epics/index.js', async (original) => ({ ...await original<typeof import('../infra/epics/index.js')>(), createEpic: doubles.create,
+  startEpicVerification: doubles.start, completeEpic: doubles.complete, listEpics: doubles.list }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(), resolveAssignedProjectRoot: doubles.resolve }));
 
 describe('Epic manager tool registration', () => {
@@ -56,15 +57,33 @@ describe('Epic manager tool registration', () => {
     expect(response.isError).not.toBe(true);
     if (response.content[0]?.type !== 'text') throw new Error('Expected text');
     expect(JSON.parse(response.content[0].text)).toMatchObject({ operation: { tool: 'takt_create_epic', reason: 'requested' } });
+    doubles.create.mockClear();
+    const invalidPath = await callbacks.get('takt_create_epic')!({ ...input, path: 'missing.field' }, { signal: new AbortController().signal });
+    expect(invalidPath.isError).not.toBe(true);
+    if (invalidPath.content[0]?.type !== 'text') throw new Error('Expected text');
+    expect(JSON.parse(invalidPath.content[0].text)).toMatchObject({
+      epic: { epicId: epic.id, requestedPath: 'missing.field', responseSelectionError: 'Unknown Epic field' },
+      operation: { tool: 'takt_create_epic', reason: 'requested' },
+    });
+    expect(doubles.create).toHaveBeenCalledOnce();
     const member = { repositoryDirectory: '/repo', goalId: secondGoalId };
     const started = beginEpicVerification({ ...epic, members: [member], targets: [{ ...member, targetSha: 'b'.repeat(40) }] }, verificationRunId, verificationStartedAt);
     doubles.complete.mockResolvedValue(epicView(finishEpic(applyEpicVerificationResult(started.epic, verificationResultFor(started.run)))));
     await callbacks.get('takt_complete_epic')!({ cwd: '/repo', epicId: epic.id, reason: 'confirmed' }, { signal: new AbortController().signal });
     expect(doubles.complete).toHaveBeenCalledWith({ globalConfigDirectory: '/config', workspaceId: epic.workspaceId, epicId: epic.id });
     expect(changed).toHaveBeenCalledWith(epic.workspaceId, epic.id, 'confirmed');
+    const run = { id: verificationRunId, revision: epic.revision, status: 'running' };
+    doubles.start.mockResolvedValue(run);
+    changed.mockRejectedValueOnce(new Error('Daemon event publication unavailable'));
+    const startResponse = await callbacks.get('takt_start_epic_verification')!({ cwd: '/repo', epicId: epic.id, reason: 'start verification' },
+      { signal: new AbortController().signal });
+    expect(startResponse.isError).not.toBe(true);
+    if (startResponse.content[0]?.type !== 'text') throw new Error('Expected text');
+    expect(JSON.parse(startResponse.content[0].text)).toMatchObject({ epic: run,
+      operation: { tool: 'takt_start_epic_verification', reason: 'start verification', eventPublicationPending: true } });
     const controller = new AbortController(); controller.abort();
     expect((await callbacks.get('takt_create_epic')!(input, { signal: controller.signal })).isError).toBe(true);
-    expect(doubles.create).toHaveBeenCalledTimes(1);
+    expect(doubles.create).toHaveBeenCalledOnce();
   });
 
   it('rejects an ended turn before invoking domain operations', async () => {

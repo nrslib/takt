@@ -29,12 +29,15 @@ const digest = (value: unknown): string => createHash('sha256').update(JSON.stri
 export class FileDaemonWatchSource implements DaemonWatchSource {
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
+  private readonly epicFiles: DaemonEpicFiles;
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations,
     private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
-    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {}
+    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {
+    this.epicFiles = new DaemonEpicFiles(conversations.routing.directory);
+  }
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -64,11 +67,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       if (assignment.kind === 'daemon') continue;
       if (assignment.kind === 'workspace') {
         try {
-          let active = false;
-          for await (const epic of new DaemonEpicFiles(this.conversations.routing.directory).list(assignment.workspaceId)) {
-            if (epic.status === 'active') active = true;
-          }
-          if (active) return true;
+          if ((await this.epicFiles.activeIds(assignment.workspaceId)).length > 0) return true;
         } catch (error) { this.onError(error); return true; }
       }
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
@@ -106,10 +105,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for (const assignment of await this.conversations.routing.assignments()) {
       if (assignment.kind !== 'workspace') continue;
       try {
-        const epicIds: string[] = [];
-        for await (const epic of new DaemonEpicFiles(this.conversations.routing.directory).list(assignment.workspaceId)) {
-          if (epic.status === 'active') epicIds.push(epic.id);
-        }
+        const epicIds = await this.epicFiles.activeIds(assignment.workspaceId);
         if (epicIds.length === 0) continue;
         await this.conversations.ensure(assignment);
         targets.push({ conversationId: conversationId(assignment), workspaceId: assignment.workspaceId, epicIds,

@@ -19,7 +19,7 @@ export function epicListResult(page: { epics: readonly unknown[]; totalCount: nu
   return pagedResult('epics', page.epics, page.totalCount, page.offset);
 }
 
-export function epicResult(value: unknown, input: EpicResponseInput, operation?: { tool: string; reason: string }) {
+export function epicResult(value: unknown, input: EpicResponseInput, operation?: { tool: string; reason: string; eventPublicationPending?: boolean }) {
   if (input.path !== undefined) {
     let selected: unknown = value;
     for (const key of input.path.split('.')) {

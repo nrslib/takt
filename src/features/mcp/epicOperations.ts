@@ -56,10 +56,23 @@ export function registerEpicTools(server: McpServer, options: {
         }
         const value = await actions[name]({ ...(omitReason ? withoutReason : fields),
           globalConfigDirectory: options.globalConfigDirectory, workspaceId: assignment.workspaceId });
+        let eventPublicationPending = false;
         if (typeof reason === 'string' && 'epicId' in fields && options.changed !== undefined) {
-          await options.changed(assignment.workspaceId, fields.epicId as string, reason);
+          try { await options.changed(assignment.workspaceId, fields.epicId as string, reason); }
+          catch (error) {
+            if (name !== 'takt_start_epic_verification') throw error;
+            eventPublicationPending = true;
+          }
         }
-        return epicResult(value, { offset, limit, path, textOffset, maxBytes }, typeof reason === 'string' ? { tool: name, reason } : undefined);
+        const operation = typeof reason === 'string' ? { tool: name, reason,
+          ...(eventPublicationPending ? { eventPublicationPending: true } : {}) } : undefined;
+        try { return epicResult(value, { offset, limit, path, textOffset, maxBytes }, operation); }
+        catch (error) {
+          if (name !== 'takt_create_epic' || path === undefined || !(error instanceof Error)
+            || error.message !== 'Unknown Epic field' || value === null || typeof value !== 'object'
+            || !('id' in value) || typeof value.id !== 'string') throw error;
+          return epicResult({ epicId: value.id, requestedPath: path, responseSelectionError: error.message }, {}, operation);
+        }
       });
     } catch (error) { return errorResult('Epic operation failed', error); }
   });
