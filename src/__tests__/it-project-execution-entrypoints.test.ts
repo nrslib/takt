@@ -190,24 +190,24 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
-  it('自動 run は空キューで正常終了しても再起動しない', async () => {
+  it('run は空キューで正常終了しても再起動しない', async () => {
     mocks.claim.mockReturnValue([]);
     mocks.pool.mockResolvedValue({ success: 0, fail: 0, executedTaskNames: [] });
     mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
-    await expect(runAllTasks('/project', { goalTasksOnly: true })).resolves.toBeUndefined();
+    await expect(runAllTasks('/project')).resolves.toBeUndefined();
     expect(mocks.pool).toHaveBeenCalledOnce();
     expect(mocks.pool.mock.calls[0]![1]).toEqual([]);
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
 
-  it.each(['initial processing', 'claim'] as const)('自動 run は取得前の $0 の失敗では再起動を判定しない', async (boundary) => {
+  it.each(['initial processing', 'claim'] as const)('run は取得前の $0 の失敗では再起動を判定しない', async (boundary) => {
     const failure = new Error('before claim');
     if (boundary === 'initial processing') mocks.failInterrupted.mockImplementation(() => { throw failure; });
     else {
       await useActualWorkerPool();
       mocks.claim.mockImplementation(() => { throw failure; });
     }
-    const run = runAllTasks('/project', { goalTasksOnly: true });
+    const run = runAllTasks('/project');
     await expect(run).rejects.toBe(failure);
     if (boundary === 'claim') {
       expect(mocks.pool).toHaveBeenCalledOnce();
@@ -217,14 +217,6 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
 
-  it('an automatic run scopes the shared runner to goals and skips ordinary task retries', async () => {
-    await runAllTasks('/project', { goalTasksOnly: true });
-    expect(mocks.runner).toHaveBeenCalledWith('/project', expect.objectContaining({ goalTasksOnly: true }));
-    expect(mocks.requeue).not.toHaveBeenCalled();
-    expect(mocks.pool.mock.calls[0]![0]).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
-    expect(mocks.pool.mock.calls[0]![9]).toBe(true);
-    expect(mocks.ensure).not.toHaveBeenCalled();
-  });
 
   it('run はpoolの取得通知後に一度だけ表示を開始する', async () => {
     mocks.pool.mockImplementationOnce(async (...args: Parameters<typeof import('../features/tasks/execute/parallelExecution.js').runWithWorkerPool>) => {
@@ -290,20 +282,6 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(info).toHaveBeenCalledWith('Use takt add to append tasks.');
   });
 
-  it('自動起動した run は生きている所有者がいれば設定もキューも読み込まずに終了する', async () => {
-    mocks.acquire.mockImplementation(() => {
-      throw new ProjectExecutionAlreadyRunningError({
-        ownerId: 'existing-owner', pid: 4101, processIdentity: { startTime: 'process-start' },
-        kind: 'run', state: 'running',
-      });
-    });
-    await expect(runAllTasks('/project', { goalTasksOnly: true })).resolves.toBeUndefined();
-    expect(mocks.config).not.toHaveBeenCalled();
-    expect(mocks.failInterrupted).not.toHaveBeenCalled();
-    expect(mocks.claim).not.toHaveBeenCalled();
-    expect(mocks.pool).not.toHaveBeenCalled();
-    expect(mocks.release).not.toHaveBeenCalled();
-  });
 
   it.each(entrypoints)('手動の $kind は競合エラーを実行元へ返す', async ({ execute }) => {
     const conflict = new ProjectExecutionAlreadyRunningError({

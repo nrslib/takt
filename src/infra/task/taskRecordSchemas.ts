@@ -31,6 +31,8 @@ export const TaskRecordSchema = buildTaskSchema(
     slug: z.string().optional(),
     run_slug: z.string().min(1).optional(),
     execution_id: z.string().min(1).optional(),
+    worker_name: z.string().min(1).optional(),
+    waiting_reason: z.string().min(1).optional(),
     stop_request: z.object({
       execution_id: z.string().min(1),
       requested_at: z.iso.datetime(),

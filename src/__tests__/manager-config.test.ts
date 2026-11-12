@@ -5,6 +5,31 @@ vi.mock('../infra/config/global/globalConfig.js', () => ({ loadGlobalConfig: dou
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
+
+it.each([0, 1, 3])('accepts daemon builtin worker concurrency %s without changing its value', (concurrency) => {
+  const input = { daemon: { builtin_worker: { concurrency } } };
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+});
+
+it.each([-1, 0.5, '3', null, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+  'rejects invalid daemon builtin worker concurrency %j', (concurrency) => {
+    expect(GlobalConfigSchema.safeParse({ daemon: { builtin_worker: { concurrency } } }).success).toBe(false);
+  },
+);
+
+it.each([{}, { daemon: {} }, { daemon: { builtin_worker: {} } }])(
+  'keeps omitted builtin concurrency unspecified: %j', (input) => {
+    const parsed = GlobalConfigSchema.parse(input);
+    expect(parsed).not.toHaveProperty('daemon.builtin_worker.concurrency');
+  },
+);
+
+it.each([0, 3])('serializes daemon builtin worker concurrency %s', async (concurrency) => {
+  const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
+  const config = { language: 'en' as const, autoFetch: true, daemon: { builtinWorker: { concurrency } } };
+  expect(serializeGlobalConfig(config)).toMatchObject({ daemon: { builtin_worker: { concurrency } } });
+});
+
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
 it.each([
   { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },

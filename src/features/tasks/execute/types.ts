@@ -342,7 +342,6 @@ export interface TaskExecutionContextOverride {
 
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
-  goalTasksOnly?: boolean;
 }
 
 export interface TaskExecutionParallelOptions {

@@ -37,12 +37,12 @@ describe('withProjectExecution', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
-  it.each([false, true])('自動 run は正常終了・例外のどちらでも再起動しない: failure=%s', async (failed) => {
+  it.each([false, true])('run は正常終了・例外のどちらでも再起動しない: failure=%s', async (failed) => {
     const failure = new Error('execution failed');
     const run = withProjectExecution('/project', 'run', async () => {
       if (failed) throw failure;
       return 'done';
-    }, true);
+    });
     if (failed) await expect(run).rejects.toBe(failure);
     else await expect(run).resolves.toBe('done');
     expect(mocks.release).toHaveBeenCalledOnce();

@@ -172,6 +172,23 @@ it.each([true, false])('observes runnable awaiting-merge work only for merge_tas
   expect(errors).not.toHaveBeenCalled();
 });
 
+it.each([
+  { concurrency: 0, waitingReason: undefined, runnable: false },
+  { concurrency: 1, waitingReason: 'Waiting for an available builtin worker slot', runnable: false },
+  { concurrency: 1, waitingReason: undefined, runnable: true },
+])('does not classify capacity waiting as a stalled launch: %j', async ({ concurrency, waitingReason, runnable }) => {
+  const goal = GoalSchema.parse(goalRecord());
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  await writeFile(join(directory, '.takt', 'tasks.yaml'), `tasks:\n  - name: queued\n    status: pending\n    goal_id: ${goal.id}\n    created_at: 2026-11-06T00:00:00.000Z\n    started_at: null\n    completed_at: null\n${waitingReason === undefined ? '' : `    waiting_reason: ${waitingReason}\n`}`);
+  const errors = vi.fn();
+  const { source } = await watchSource(errors);
+  await writeFile(join(directory, 'global', 'config.yaml'), `daemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+  expect(await source.launches()).toMatchObject([{ runnablePending: runnable, autoRun: true }]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
 it('patrols linked active and failed merge work until only human merge waits remain', async () => {
   const base = goalRecord();
   const completion = { goalBranch: base.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],

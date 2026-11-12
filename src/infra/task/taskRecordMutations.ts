@@ -70,6 +70,7 @@ export function buildTerminalTaskRecord(
   return {
     ...nextTask,
     ...updates,
+    waiting_reason: undefined,
     owner_start_time: null,
     ...(nextRetryMetadata?.startStep ? { start_step: nextRetryMetadata.startStep } : {}),
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
@@ -124,6 +125,8 @@ export function buildRetryTaskRecord(
     ...(options.workflow ? { workflow: options.workflow } : {}),
     ...taskSpecSource,
     status,
+    worker_name: undefined,
+    waiting_reason: undefined,
     execution_id: status === 'running' ? randomUUID() : undefined,
     stop_request: undefined,
     started_at: status === 'running' ? nowIso() : null,

@@ -224,7 +224,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         }
         targets.push({ targetId: projectKey(project.repositoryDirectory), generation: digest(pending.map((task) => [task.name, task.created_at])),
           conversationId: project.conversationId, repositoryDirectory: project.repositoryDirectory,
-          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true, runnablePending: true, owner, launching,
+          autoRun: projectConfig.manager?.auto_run ?? global.manager?.auto_run ?? true,
+          runnablePending: global.daemon?.builtin_worker?.concurrency !== 0 && pending.some((task) => task.waiting_reason === undefined), owner, launching,
           pendingSince: pending.map((task) => task.created_at).sort()[0]! });
       } catch (error) { this.onError(error); }
     }

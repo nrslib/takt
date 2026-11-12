@@ -48,6 +48,44 @@ import {
 let isolatedGlobalConfigDir: string;
 let originalTaktConfigDirForFile: string | undefined;
 
+describe('daemon builtin worker configuration', () => {
+  it.each([0, 3])('loads, saves and reloads builtin concurrency %s through both configuration readers', async (concurrency) => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    writeFileSync(configPath, `language: en\ndaemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+    invalidateGlobalConfigCache();
+
+    const loaded = loadGlobalConfig();
+    expect(loaded).toHaveProperty('daemon.builtinWorker.concurrency', concurrency);
+    expect(await readDaemonConfiguration(configPath)).toHaveProperty('daemon.builtin_worker.concurrency', concurrency);
+
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).toHaveProperty('daemon.builtinWorker.concurrency', concurrency);
+    expect(await readDaemonConfiguration(configPath)).toHaveProperty('daemon.builtin_worker.concurrency', concurrency);
+  });
+
+  it('preserves omitted builtin concurrency through a save and reload', async () => {
+    const { loadGlobalConfig, saveGlobalConfig } = await import('../infra/config/global/globalConfig.js');
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    const loaded = loadGlobalConfig();
+    expect(loaded).not.toHaveProperty('daemon.builtinWorker.concurrency');
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig()).not.toHaveProperty('daemon.builtinWorker.concurrency');
+    expect(await readDaemonConfiguration(configPath)).not.toHaveProperty('daemon.builtin_worker.concurrency');
+  });
+
+  it.each([-1, 0.5])('rejects invalid builtin concurrency %s at the asynchronous daemon reader', async (concurrency) => {
+    const { readDaemonConfiguration } = await import('../features/daemon/configuration.js');
+    const configPath = join(isolatedGlobalConfigDir, 'config.yaml');
+    writeFileSync(configPath, `daemon:\n  builtin_worker:\n    concurrency: ${concurrency}\n`);
+    await expect(readDaemonConfiguration(configPath)).rejects.toThrow();
+  });
+});
+
 function disableBuiltinWorkflowsForFixtureTests(): void {
   writeFileSync(
     join(isolatedGlobalConfigDir, 'config.yaml'),
