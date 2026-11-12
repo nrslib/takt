@@ -415,7 +415,7 @@ OpenCode の呼び出しには既定で 60 分の provider イベント無活動
 `provider_options.claude.permissions.deny` を使うと、Claude Code の `permissions.deny` ルール（例: `Read(./.env)`）を `claude-sdk` と `claude-headless` に渡せます。
 `Read(` ルールが止めるのは、Claude の組み込みのファイルツール（Grep や Glob などには `Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head` など）です。
 ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、スクリプトが自分でファイルを開く読み取りは止められません。
-Claude が sandbox 内で実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、Claude Code の sandbox を有効にしてください。`excludedCommands` に一致するコマンドや `allow_unsandboxed_commands` により sandbox 外で実行されるコマンドは、この遮断の対象外です。
+Claude が sandbox 内で実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、Claude Code の sandbox をファイルシステム隔離付きで有効にしてください。`sandbox.filesystem.disabled: true` は隔離を無効にし、sandbox 内のコマンドがホスト上のファイルを読めるため設定しないでください。`excludedCommands` に一致するコマンドや `allow_unsandboxed_commands` により sandbox 外で実行されるコマンドは、この遮断の対象外です。
 拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
 hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
 `provider_options.claude.permissions.import_user_read_deny: true` を指定すると、`~/.claude/settings.json` の `Read(` ルールも取り込みます。

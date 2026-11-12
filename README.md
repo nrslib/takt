@@ -429,7 +429,7 @@ profiles and per-model overrides are described in
 `provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`.
 `Read(` rules stop Claude's built-in file tools (Claude applies `Read` rules to tools such as Grep and Glob on a best-effort basis) and the file commands Claude Code recognizes in Bash, such as `cat` and `head`.
 They do not stop a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself.
-To block the shell commands Claude runs in the sandbox, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the Claude Code sandbox. Commands that run outside the sandbox, such as commands matched by `excludedCommands` or run with `allow_unsandboxed_commands`, are not blocked.
+To block the shell commands Claude runs in the sandbox, and the processes they start, from accessing a path at the OS level, add a `Read(` deny rule for that path and enable the Claude Code sandbox with filesystem isolation. Do not set `sandbox.filesystem.disabled` to `true`, because that setting lets sandboxed commands read host files. Commands that run outside the sandbox, such as commands matched by `excludedCommands` or run with `allow_unsandboxed_commands`, are not blocked.
 Processes in the sandbox can still read paths that have no deny rule.
 Hooks, MCP servers, and other processes outside the sandbox are not blocked.
 Set `provider_options.claude.permissions.import_user_read_deny: true` to also import the `Read(` rules from `~/.claude/settings.json`.
