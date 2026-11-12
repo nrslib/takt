@@ -13,7 +13,7 @@ interface ToolResult {
 // 分割されたANSI列は、次のチャンクで確定するまで文字列処理へ渡さない。
 export function stableToolResultPrefix(raw: string): string {
   // eslint-disable-next-line no-control-regex
-  const incompleteEscape = /\x1b(?:\[[0-9;]*|\][^\x07\x1b]*(?:\x1b)?|)$/u.exec(raw);
+  const incompleteEscape = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*(?:\x1b)?|)(?![\s\S])/u.exec(raw);
   return incompleteEscape === null ? raw : raw.slice(0, incompleteEscape.index);
 }
 

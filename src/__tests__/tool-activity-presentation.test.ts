@@ -18,6 +18,12 @@ describe('tool activity presentation', () => {
     expect(stableToolResultPrefix('ready\x1b[32')).toBe('ready');
     expect(stableToolResultPrefix('ready\x1b]52;c;private\x07')).toBe('ready\x1b]52;c;private\x07');
   });
+  it('should retain complete CSI sequences before streamed output', () => {
+    const output = '\x1b[32mready\x1b[0m';
+
+    expect(stableToolResultPrefix(output)).toBe(output);
+    expect(stableToolResultPrefix(`${output}\x1b[3`)).toBe(output);
+  });
   it('should retain reception order and observed times in individual and grouped projections', () => {
     const values = [
       entry({ key: 'first', startSequence: 1, completionSequence: 4, status: 'failure' }),

@@ -1,6 +1,7 @@
 import {
   REDACTED_VALUE,
   SENSITIVE_TEXT_BOUNDARY_WINDOW,
+  hasUnterminatedPrivateKeyBlock,
   hasPotentialSensitiveTextSuffix,
   sanitizeSensitiveText,
 } from './sensitive-text.js';
@@ -42,6 +43,9 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
       pending = '';
       return sanitized;
     }
+    if (!flush && hasUnterminatedPrivateKeyBlock(pending)) {
+      return '';
+    }
     let output = '';
     while (pending.length > 0) {
       const matchedValue = orderedValues.find((value) => pending.startsWith(value));
@@ -53,7 +57,7 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
       if (!flush && orderedValues.some((value) => value.startsWith(pending))) {
         break;
       }
-      if (!flush && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW) {
+      if (!flush && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW && !pending.includes('\n')) {
         break;
       }
       output += pending[0];

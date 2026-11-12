@@ -23,7 +23,7 @@ describe('tool activity call context', () => {
     const outer = withToolActivityCall(callback)!;
     const first = withToolActivityCall(outer)!;
     const second = withToolActivityCall(outer)!;
-    const event: StreamEvent = { type: 'text', data: { text: 'response' } };
+    const event: StreamEvent = { type: 'tool_use', data: { id: 'item_0', tool: 'Read', input: {} } };
     first(event); second(event);
     const a = callback.mock.calls[0]![0] as StreamEvent;
     const b = callback.mock.calls[1]![0] as StreamEvent;
@@ -33,6 +33,20 @@ describe('tool activity call context', () => {
     outer(upstream);
     expect(callback.mock.calls[2]![0]).toMatchObject({ toolActivity: { callId: 'upstream', operationId: 'op', generation: 2 } });
     expect(upstream.toolActivity!.callId).toBe('upstream');
+  });
+
+  it('should preserve non-tool stream events without adding tool activity context', () => {
+    const received: StreamEvent[] = [];
+    const callback = withToolActivityCall((event) => received.push(event))!;
+    const events: StreamEvent[] = [
+      { type: 'text', data: { text: 'response' } },
+      { type: 'thinking', data: { thinking: 'private thought' } },
+      { type: 'result', data: { result: 'done', sessionId: 'session', success: true } },
+    ];
+
+    events.forEach(callback);
+
+    expect(received).toEqual(events);
   });
 
   it('should leave absent callbacks absent', () => {
