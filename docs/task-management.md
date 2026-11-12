@@ -231,7 +231,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Pull from remote** | Pull the latest changes from remote origin (fast-forward only) |
 | **Try merge** | Squash merge (stages changes without committing, for manual review) |
 | **Merge & cleanup** | Squash merge and delete the branch |
-| **Delete** | Remove the task and its worktree and delete the branch; tasks with `worktree: false` keep their recorded branch and uncommitted changes |
+| **Delete** | Remove the task and its worktree and delete the branch; uncommitted changes in a removed worktree or clone are discarded. Tasks with `worktree: false` keep their recorded branch and uncommitted changes |
 
 ### Actions for Failed Tasks
 

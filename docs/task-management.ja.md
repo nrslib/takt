@@ -231,7 +231,7 @@ takt list
 | **Pull from remote** | リモート origin から最新の変更を取り込み（fast-forward のみ） |
 | **Try merge** | スカッシュマージ（コミットせずにステージング、手動レビュー用） |
 | **Merge & cleanup** | スカッシュマージしてブランチを削除 |
-| **Delete** | タスクと worktree を削除してブランチを削除（`worktree: false` のタスクは記録されたブランチと未コミットの変更を保持） |
+| **Delete** | タスクと worktree を削除してブランチを削除。削除される worktree/clone 内の未コミット変更も失われます（`worktree: false` のタスクは記録されたブランチと未コミットの変更を保持） |
 
 ### 失敗タスクの操作
 

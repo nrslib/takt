@@ -212,7 +212,7 @@ takt list
 | **Pull from remote** | 从 remote origin 拉取最新修改（仅 fast-forward） |
 | **Try merge** | squash merge（只 stage，不 commit，便于人工检查） |
 | **Merge & cleanup** | squash merge 并删除分支 |
-| **Delete** | 删除任务和工作树并删除分支；`worktree: false` 的任务会保留记录的分支和未提交修改 |
+| **Delete** | 删除任务和工作树并删除分支；被删除的 worktree/clone 中的未提交修改也会丢失。`worktree: false` 的任务会保留记录的分支和未提交修改 |
 
 ### 失败任务的操作
 
