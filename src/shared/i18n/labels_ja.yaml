@@ -356,6 +356,11 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
+    toolHistoryCompact: "ツール履歴: Ctrl+O で展開 · PageUp/PageDown で移動"
+    toolHistoryExpanded: "ツール履歴: Ctrl+O で折りたたみ · PageUp/PageDown で移動"
+    toolHistoryMore: "[出力を省略・続きあり]"
+    toolHistoryEnd: "[末尾]"
+    toolHistoryCompletion: "完了受信順"
     extendedThinking: "推論中..."
     responding: "応答中"
     selectTask: "候補タスクを選択中..."

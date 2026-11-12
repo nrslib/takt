@@ -54,7 +54,7 @@ function action(tool: string): string {
   }
 }
 
-function displayResult(entry: ToolActivityEntry): { text: string; source: unknown } {
+function displayResult(entry: ToolActivityEntry, resultText?: string): { text: string; source: unknown } {
   const raw = entry.result === undefined || entry.result === '' ? entry.output : entry.result;
   const { text, parsed } = classifyToolResult(raw);
   const known = createBoundedSensitiveValues();
@@ -62,7 +62,7 @@ function displayResult(entry: ToolActivityEntry): { text: string; source: unknow
   known.collect(raw);
   known.collect(entry.output);
   known.collect(parsed);
-  return { text: sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(text, known)), source: known };
+  return { text: sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(resultText ?? text, known)), source: known };
 }
 
 export function toolActivityDetail(
@@ -70,11 +70,12 @@ export function toolActivityDetail(
   offset = 0,
   maxLines = DETAIL_RESULT_LINES,
   maxBytes = DETAIL_RESULT_BYTES,
+  resultText?: string,
 ): ToolActivityPage {
   if (!Number.isInteger(offset) || offset < 0
     || !Number.isInteger(maxLines) || maxLines < 1
     || !Number.isInteger(maxBytes) || maxBytes < 4) throw new RangeError('Invalid tool activity page bounds');
-  const { text } = displayResult(entry);
+  const { text } = displayResult(entry, resultText);
   return textPage(text, offset, Math.min(maxLines, DETAIL_RESULT_LINES), Math.min(maxBytes, DETAIL_RESULT_BYTES));
 }
 
@@ -103,8 +104,8 @@ function projectLabel(text: string, source: unknown): string {
   return page.text + (page.truncated ? NAME_TRUNCATION_MARKER : '');
 }
 
-export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 'expanded' = 'compact'): ToolActivityProjection {
-  const { text, source } = displayResult(entry);
+export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 'expanded' = 'compact', resultText?: string): ToolActivityProjection {
+  const { text, source } = displayResult(entry, resultText);
   const inputBytes = mode === 'compact' ? COMPACT_INPUT_BYTES : DETAIL_RESULT_BYTES;
   const input = textPage(projectToolInput(entry.tool, entry.input, source), 0,
     mode === 'compact' ? 1 : DETAIL_RESULT_LINES,
@@ -114,6 +115,7 @@ export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 
     action: projectLabel(action(entry.tool), source),
     input: input.text + (input.truncated ? INPUT_TRUNCATION_MARKER : ''), status: entry.status,
     startedAt: entry.startedAt, completedAt: entry.completedAt,
+    startSequence: entry.startSequence, completionSequence: entry.completionSequence,
     durationMs: entry.startedAt === undefined || entry.completedAt === undefined
       ? undefined : Math.max(0, entry.completedAt - entry.startedAt),
     result: textPage(text, 0,
@@ -122,11 +124,11 @@ export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 
   };
 }
 
-export function groupToolActivities(entries: readonly ToolActivityEntry[]): ToolActivityGroup[] {
+export function groupToolActivities(entries: readonly ToolActivityEntry[], resultTexts?: ReadonlyMap<string, string>): ToolActivityGroup[] {
   const groups: ToolActivityGroup[] = [];
   let previousTool: string | undefined;
   for (const entry of entries) {
-    const projection = projectToolActivity(entry);
+    const projection = projectToolActivity(entry, 'compact', resultTexts?.get(entry.key));
     const previous = groups.at(-1);
     const tool = canonicalToolName(entry.tool);
     if (previous !== undefined && previousTool === tool) previous.entries.push(projection);

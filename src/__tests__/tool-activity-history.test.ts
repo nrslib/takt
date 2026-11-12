@@ -10,6 +10,20 @@ const result = (id: string, isError = false, callId = 'a'): Extract<StreamEvent,
 });
 
 describe('tool activity history', () => {
+  it('should select by entry key and isolate the returned input, context and status', () => {
+    const history = new ToolActivityHistory();
+    const [started] = history.apply(use('provider-id'));
+    history.apply(use('other-id'));
+    const selected = history.get(started!.key)!;
+    expect(selected).toMatchObject({ toolId: 'provider-id', input: { file_path: 'a.ts' }, status: 'running' });
+    selected.input.file_path = 'changed.ts';
+    selected.status = 'failure';
+    selected.context!.callId = 'changed';
+    expect(history.get(started!.key)).toMatchObject({ input: { file_path: 'a.ts' }, context: { callId: 'a' }, status: 'running' });
+    expect(history.get('provider-id')).toBeUndefined();
+    expect(history.get('missing')).toBeUndefined();
+  });
+
   it('should update the original entry with success and observed timestamps', () => {
     let now = 1000;
     const history = new ToolActivityHistory(() => now);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { groupToolActivities, projectToolActivity, toolActivityDetail } from '../shared/tool-activity/index.js';
 import type { ToolActivityEntry } from '../shared/tool-activity/index.js';
+import { stableToolResultPrefix } from '../shared/tool-activity/result.js';
 import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_INPUT_BYTES, COMPACT_RESULT_BYTES, DETAIL_RESULT_BYTES } from '../shared/tool-activity/presentation.js';
 
 function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
@@ -12,6 +13,24 @@ function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
 }
 
 describe('tool activity presentation', () => {
+  it('should defer an incomplete terminal control prefix until its terminator arrives', () => {
+    expect(stableToolResultPrefix('ready\x1b]52;c;private')).toBe('ready');
+    expect(stableToolResultPrefix('ready\x1b[32')).toBe('ready');
+    expect(stableToolResultPrefix('ready\x1b]52;c;private\x07')).toBe('ready\x1b]52;c;private\x07');
+  });
+  it('should retain reception order and observed times in individual and grouped projections', () => {
+    const values = [
+      entry({ key: 'first', startSequence: 1, completionSequence: 4, status: 'failure' }),
+      entry({ key: 'second', startSequence: 2, completionSequence: 3 }),
+    ];
+    const expected = [
+      { key: 'first', startSequence: 1, completionSequence: 4, status: 'failure', startedAt: 1000, completedAt: 1250, durationMs: 250 },
+      { key: 'second', startSequence: 2, completionSequence: 3, status: 'success', startedAt: 1000, completedAt: 1250, durationMs: 250 },
+    ];
+    expect(values.map((value) => projectToolActivity(value))).toMatchObject(expected);
+    expect(groupToolActivities(values).flatMap((group) => group.entries)).toMatchObject(expected);
+  });
+
   it.each([
     ['MCP text', '{"content":[{"type":"text","text":"ready"}],"structured_content":null}', 'ready'],
     ['mixed MCP blocks', '{"stdout":"first","content":[{"type":"image","data":"private-image"},{"type":"text","text":"ready"},{"type":"text","text":4}]}', 'first\nready'],

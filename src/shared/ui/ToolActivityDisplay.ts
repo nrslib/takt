@@ -1,8 +1,8 @@
 import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
-import { classifyToolResult } from '../tool-activity/result.js';
-import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, projectToolActivity } from '../tool-activity/presentation.js';
-import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityProjection } from '../tool-activity/types.js';
+import { classifyToolResult, stableToolResultPrefix } from '../tool-activity/result.js';
+import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, groupToolActivities, projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
+import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../tool-activity/types.js';
 import { truncateUtf8 } from '../utils/utf8.js';
 import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
 import { sanitizeTerminalStreamText } from '../utils/text.js';
@@ -32,6 +32,7 @@ export class ToolActivityDisplay {
   private readonly streams = new Map<string, StreamOutputState>();
   private readonly completed = new Map<string, ToolActivityEntry['status']>();
   private readonly displayedResults = new Map<string, { text: string; bytes: number; lines: number; truncated: boolean }>();
+  private readonly readableStreams = new Map<string, { redactor: SensitiveTextStreamRedactor; consumed: number; text: string }>();
 
   constructor(
     readonly mode: ToolActivityDisplayMode,
@@ -42,6 +43,22 @@ export class ToolActivityDisplay {
 
   handle(event: StreamEvent): ToolActivityEntry[] {
     const entries = this.history.apply(event);
+    if (event.type === 'tool_output') {
+      for (const entry of entries) {
+        const result = classifyToolResult(entry.output);
+        if (result.kind !== 'text') continue;
+        let stream = this.readableStreams.get(entry.key);
+        if (stream === undefined) {
+          stream = { redactor: createSensitiveTextStreamRedactor(), consumed: 0, text: '' };
+          this.readableStreams.set(entry.key, stream);
+        }
+        stream.text += stream.redactor.write(result.text.slice(stream.consumed), entry.input);
+        stream.consumed = result.text.length;
+      }
+    }
+    if (event.type === 'tool_result') {
+      for (const entry of entries) this.readableStreams.delete(entry.key);
+    }
     if (this.mode === 'silent') return entries;
     for (const entry of entries) {
       if (event.type === 'tool_use') {
@@ -56,6 +73,30 @@ export class ToolActivityDisplay {
       }
     }
     return entries;
+  }
+
+  groups(): ToolActivityGroup[] {
+    const entries = this.history.entries();
+    return groupToolActivities(entries, this.readableResults(entries));
+  }
+
+  detail(key: string, offset: number): ToolActivityProjection {
+    const entry = this.history.get(key);
+    if (entry === undefined) throw new RangeError('Unknown tool activity key');
+    const text = this.readableResults([entry]).get(entry.key);
+    return { ...projectToolActivity(entry, 'expanded', text), result: toolActivityDetail(entry, offset, undefined, undefined, text) };
+  }
+
+  private readableResults(entries: readonly ToolActivityEntry[]): ReadonlyMap<string, string> {
+    const results = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry.status !== 'running') continue;
+      // 構造化出力は、最終結果だけが持つ秘密値の情報が揃うまで公開しない。
+      const text = classifyToolResult(entry.output).kind === 'structured' ? ''
+        : sanitizeTerminalStreamText(stableToolResultPrefix(this.readableStreams.get(entry.key)?.text ?? ''));
+      results.set(entry.key, text);
+    }
+    return results;
   }
 
   flush(): void {
