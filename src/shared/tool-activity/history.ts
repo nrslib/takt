@@ -17,6 +17,11 @@ export class ToolActivityHistory {
     return structuredClone(this.items);
   }
 
+  get(key: string): ToolActivityEntry | undefined {
+    const entry = this.items.find((item) => item.key === key);
+    return entry === undefined ? undefined : structuredClone(entry);
+  }
+
   apply(event: StreamEvent): ToolActivityEntry[] {
     const sequence = ++this.sequence;
     const receivedAt = this.now();

@@ -12,7 +12,10 @@ import {
 } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
-import { formatToolInput } from '../../shared/ui/toolInput.js';
+import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import { getLabel } from '../../shared/i18n/index.js';
+import { ToolActivityView } from './ToolActivityView.js';
+import { createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from './toolActivityViewState.js';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
@@ -135,15 +138,8 @@ const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
 /** Queued lines shown below the prompt; the rest are counted in one row. */
 const MAX_QUEUE_ROWS = 3;
 
-interface ToolActivity {
-  readonly id: string;
-  readonly name: string;
-  readonly inputSummary: string;
-}
-
 interface Activity {
   readonly kind: 'waiting' | 'thinking' | 'responding' | 'tool';
-  readonly tools: readonly ToolActivity[];
 }
 
 /** `/go` asks the session for a task instruction rather than for a reply. */
@@ -190,7 +186,9 @@ export function ConversationView({
   const [editor, setEditorView] = useState<EditorState>(editorRef.current);
   const [streamingRaw, setStreamingRaw] = useState('');
   const [turn, setTurn] = useState<{ readonly id: number; readonly startedAt: number } | null>(null);
-  const [activity, setActivity] = useState<Activity>({ kind: 'waiting', tools: [] });
+  const [activity, setActivity] = useState<Activity>({ kind: 'waiting' });
+  const [toolDisplay, setToolDisplay] = useState(() => new ToolActivityDisplay('silent', false, () => undefined, false));
+  const [toolView, setToolView] = useState(createToolActivityViewState);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const isBusy = turn !== null;
   /**
@@ -275,8 +273,10 @@ export function ConversationView({
   const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   const elapsed = formatElapsedTime(elapsedSeconds);
-  const activeTool = activity.kind === 'tool' ? activity.tools.at(-1) : undefined;
-  const activityLabel = activeTool !== undefined ? activeTool.name
+  const toolGroups = toolDisplay.groups();
+  const activeTool = activity.kind === 'tool'
+    ? toolGroups.flatMap((group) => group.entries).filter((entry) => entry.status === 'running').at(-1) : undefined;
+  const activityLabel = activeTool !== undefined ? activeTool.tool
     : activity.kind === 'thinking' ? ui.extendedThinking
     : activity.kind === 'responding' ? ui.responding : ui.thinking;
   // Reserve the spinner and its following space before choosing the hint.
@@ -296,7 +296,7 @@ export function ConversationView({
   }
   const requiredStatus = displayedActivity === '' ? statusSuffix : `${displayedActivity} ${statusSuffix}`;
   const rawInputSummary = activeTool !== undefined
-    ? truncateStatusText(activeTool.inputSummary, columns - 2 - stringWidth(requiredStatus) - 1)
+    ? truncateStatusText(toSingleLineText(activeTool.input), columns - 2 - stringWidth(requiredStatus) - 1)
     : '';
   const inputSummary = rawInputSummary === '…' ? '' : rawInputSummary;
   const statusLabel = `${requiredStatus}${inputSummary === '' ? '' : ` ${inputSummary}`}`;
@@ -359,6 +359,17 @@ export function ConversationView({
     : 0;
   remainingLiveRows -= visibleCompletionCount - visibleCompletionRows;
   const showModelRow = remainingLiveRows > 0;
+  remainingLiveRows -= Number(showModelRow);
+  const toolHistoryHeight = toolGroups.length === 0 ? 0 : Math.max(0, remainingLiveRows);
+  const toolLabels = {
+    compact: getLabel('tui.ui.toolHistoryCompact', lang),
+    expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+    more: getLabel('tui.ui.toolHistoryMore', lang),
+    end: getLabel('tui.ui.toolHistoryEnd', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+  };
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, toolView, columns,
+    Math.max(0, toolHistoryHeight - 1), toolLabels);
   const queuedSummary = queue.length > visibleQueueRows
     ? `${ui.queuedHint}  ${ui.queuedMore.replace('{count}', String(queue.length - visibleQueueRows))}`
     : ui.queuedHint;
@@ -443,6 +454,7 @@ export function ConversationView({
     text: string,
     controller: AbortController,
     submissionId: number,
+    display: ToolActivityDisplay,
   ): Promise<void> => {
     /** False once this call was interrupted or the view moved on. */
     const isCurrent = (): boolean =>
@@ -467,34 +479,19 @@ export function ConversationView({
               setActivity((current) => ({ ...current, kind: 'thinking' }));
               break;
             case 'tool_use':
-              setActivity((current) => ({
-                kind: 'tool',
-                tools: [
-                  ...current.tools.filter((tool) => tool.id !== event.data.id),
-                  {
-                    id: event.data.id,
-                    name: toSingleLineText(event.data.tool),
-                    inputSummary: toSingleLineText(formatToolInput(event.data.tool, event.data.input)),
-                  },
-                ],
-              }));
+              display.handle(event);
+              setActivity({ kind: 'tool' });
               break;
             case 'tool_result':
-              setActivity((current) => {
-                const tools = current.tools.filter((tool) => {
-                  if (event.data.completedToolIds !== undefined) {
-                    return !event.data.completedToolIds.includes(tool.id);
-                  }
-                  if (event.data.id !== undefined) {
-                    return tool.id !== event.data.id;
-                  }
-                  return tool !== current.tools.at(-1);
-                });
-                return {
-                  kind: current.kind === 'tool' && tools.length === 0 ? 'waiting' : current.kind,
-                  tools,
-                };
-              });
+              display.handle(event);
+              setActivity((current) => ({
+                kind: current.kind === 'tool' && !display.groups().some((group) => group.entries.some((entry) => entry.status === 'running'))
+                  ? 'waiting' : current.kind,
+              }));
+              break;
+            case 'tool_output':
+              display.handle(event);
+              setActivity((current) => ({ ...current }));
               break;
           }
         },
@@ -568,13 +565,16 @@ export function ConversationView({
     const submissionId = submissionCountRef.current;
     setTurn({ id: submissionId, startedAt: performance.now() });
     setElapsedSeconds(0);
-    setActivity({ kind: 'waiting', tools: [] });
+    setActivity({ kind: 'waiting' });
+    const display = new ToolActivityDisplay('silent', false, () => undefined, false);
+    setToolDisplay(display);
+    setToolView(createToolActivityViewState());
     inFlightRef.current = {
       id: submissionId,
       controller,
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
-    trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId) });
+    trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId, display) });
   }, [appendTranscript, runSubmission, submitMode, trackPendingWork]);
 
   /**
@@ -796,6 +796,17 @@ export function ConversationView({
       return;
     }
 
+    if (key.ctrl && input === 'o') {
+      setToolView((state) => toggleToolActivityView(state));
+      return;
+    }
+    if (key.pageUp || key.pageDown) {
+      if (toolHistoryHeight > 1) {
+        setToolView((state) => moveToolActivityView(state, toolPage, key.pageUp ? 'previous' : 'next'));
+      }
+      return;
+    }
+
     if (slashCompletion.handleInput(key, (text) => {
       updateEditor(replaceEditorText(editorRef.current, text));
     })) return;
@@ -943,6 +954,7 @@ export function ConversationView({
         )}
         {showPromptHint && <Text dimColor wrap="truncate-end">{ui.hint}</Text>}
         {showModelRow && <Text dimColor wrap="truncate-end">{modelRow}</Text>}
+        <ToolActivityView page={toolPage} state={toolView} labels={toolLabels} height={toolHistoryHeight} />
       </Box>
     </>
   );

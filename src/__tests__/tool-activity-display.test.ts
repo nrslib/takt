@@ -1,8 +1,98 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
-import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES } from '../shared/tool-activity/presentation.js';
+import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
 
 describe('tool activity display', () => {
+  it.each([1, 5])('should clone only the selected detail with %s unrelated entries', (count) => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    const [target] = display.handle({ type: 'tool_use', data: { id: 'target', tool: 'Bash', input: { command: 'printf ready' } } });
+    const lines = Array.from({ length: DETAIL_RESULT_LINES + 5 }, (_, index) => `line-${index}`);
+    display.handle({ type: 'tool_result', data: { id: 'target', content: lines.join('\n'), isError: false } });
+    for (let index = 0; index < count; index += 1) {
+      display.handle({ type: 'tool_use', data: { id: `other-${index}`, tool: 'Read', input: { file_path: `UNRELATED-${index}.ts` } } });
+    }
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      const first = display.detail(target!.key, 0);
+      const second = display.detail(target!.key, first.result.nextOffset);
+      expect(first.input).toBe('printf ready');
+      expect(first.result).toMatchObject({ text: lines.slice(0, DETAIL_RESULT_LINES).join('\n'), hasMore: true });
+      expect(second.result).toMatchObject({ text: lines.slice(DETAIL_RESULT_LINES).join('\n'), hasMore: false });
+      expect(clone.mock.calls.length).toBeGreaterThan(0);
+      for (const [value] of clone.mock.calls) expect(JSON.stringify(value)).not.toContain('UNRELATED-');
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  it('should preserve ordinary text beginning with a redacted value without reclassifying it as JSON', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'secret123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'secret123 ready ' + 'safe '.repeat(100) } });
+    const value = display.groups()[0]!.entries[0]!;
+    expect(value.result.text).toContain('[REDACTED] ready');
+    expect(display.detail(value.key, 0).result.text).toContain('[REDACTED] ready');
+  });
+  it('should defer structured streaming content until the final result supplies all secret fields', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf ready' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '{"stdout":"ready secret123"}' } });
+    const key = display.groups()[0]!.entries[0]!.key;
+    for (const result of [display.groups()[0]!.entries[0]!.result, display.detail(key, 0).result]) {
+      expect(result.text).toBe('');
+      expect(result.text).not.toContain('secret123');
+    }
+    display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"ready secret123","token":"secret123"}', isError: false } });
+    expect(display.detail(key, 0).result.text).toBe('ready [REDACTED]');
+  });
+  it('should read grouped projections and successive detail pages without writing in silent mode', () => {
+    const writer = vi.fn();
+    const display = new ToolActivityDisplay('silent', false, writer, false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Read', input: { file_path: 'a.ts' } } });
+    const lines = Array.from({ length: DETAIL_RESULT_LINES + 5 }, (_, index) => `line-${index}`);
+    display.handle({ type: 'tool_result', data: { id: 'a', content: lines.join('\n'), isError: false } });
+    display.handle({ type: 'tool_use', data: { id: 'b', tool: 'Read', input: { file_path: 'b.ts' } } });
+    expect(display.groups()[0]?.summary).toBe('Read 2 files');
+    const key = display.groups()[0]!.entries[0]!.key;
+    const first = display.detail(key, 0);
+    const second = display.detail(key, first.result.nextOffset);
+    expect(first.result).toMatchObject({ text: lines.slice(0, DETAIL_RESULT_LINES).join('\n'), hasMore: true });
+    expect(second.result).toMatchObject({ text: lines.slice(DETAIL_RESULT_LINES).join('\n'), hasMore: false });
+    expect(writer).not.toHaveBeenCalled();
+    expect(() => display.detail('missing', 0)).toThrow(RangeError);
+  });
+
+  it('should never flush a partial known secret when reading running output repeatedly', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf safe', token: 'secret123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready '.repeat(50) + 'secret' } });
+    const key = display.groups()[0]!.entries[0]!.key;
+    for (let read = 0; read < 3; read += 1) {
+      const detail = display.detail(key, 0);
+      expect(detail.status).toBe('running');
+      expect(detail.result.text).toContain('ready');
+      expect(detail.result.text).not.toContain('secret');
+    }
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '123\n' + 'tail '.repeat(50) } });
+    expect(display.detail(key, 0).result.text).toContain('[REDACTED]');
+    display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"done secret123","token":"secret123"}', isError: true } });
+    expect(display.detail(key, 0)).toMatchObject({ status: 'failure', result: { text: 'done [REDACTED]' } });
+    expect(display.history.entries()[0]!.output).toContain('secret123');
+  });
+
+  it('should keep OSC fragments private even when the redactor emits only part of a control sequence', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'known-secret' } } });
+    const key = display.groups()[0]!.entries[0]!.key;
+    for (const output of ['ready '.repeat(50) + '\x1b]', '52;c;PRIVATE_CLIPBOARD\x07', 'after '.repeat(50)]) {
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output } });
+      const text = display.detail(key, 0).result.text;
+      expect(text).toContain('ready');
+      expect(text).not.toContain('PRIVATE_CLIPBOARD');
+      expect(text).not.toContain('\x1b');
+    }
+  });
+
   it('should include completed secret fields when projecting buffered structured output', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);

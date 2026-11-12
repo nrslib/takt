@@ -747,6 +747,8 @@
     "src/__tests__/tui-status-text.test.ts",
     "src/__tests__/tui-task-conversation.test.ts",
     "src/__tests__/tui-terminal-ownership.test.ts",
+    "src/__tests__/tui-tool-activity-view-state.test.ts",
+    "src/__tests__/tui-tool-activity-view.test.tsx",
     "src/__tests__/undeliveredMessages.test.ts",
     "src/__tests__/update-notifier-lifecycle.integration.test.ts",
     "src/__tests__/updateNotifier.test.ts",

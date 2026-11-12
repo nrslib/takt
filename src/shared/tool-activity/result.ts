@@ -11,10 +11,14 @@ interface ToolResult {
 }
 
 // 分割されたANSI列は、次のチャンクで確定するまで文字列処理へ渡さない。
-export function classifyToolResult(raw: string): ToolResult {
+export function stableToolResultPrefix(raw: string): string {
   // eslint-disable-next-line no-control-regex
   const incompleteEscape = /\x1b(?:\[[0-9;]*|\][^\x07\x1b]*(?:\x1b)?|)$/u.exec(raw);
-  const stable = incompleteEscape === null ? raw : raw.slice(0, incompleteEscape.index);
+  return incompleteEscape === null ? raw : raw.slice(0, incompleteEscape.index);
+}
+
+export function classifyToolResult(raw: string): ToolResult {
+  const stable = stableToolResultPrefix(raw);
   const normalized = stripAnsi(stable);
   const leading = normalized.trimStart();
   if (leading === '' || LOG_PREFIXES.some((prefix) => prefix.startsWith(leading) && prefix !== leading)) {

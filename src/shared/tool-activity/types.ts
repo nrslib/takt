@@ -33,6 +33,8 @@ export interface ToolActivityProjection {
   status: ToolActivityStatus;
   startedAt?: number;
   completedAt?: number;
+  startSequence?: number;
+  completionSequence?: number;
   durationMs?: number;
   result: ToolActivityPage;
 }
