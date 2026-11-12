@@ -142,6 +142,94 @@ describe('Epic domain transitions', () => {
     expect(() => beginEpicVerification(epic, run.id, verificationStartedAt)).toThrow();
   });
 
+  describe.each(['succeeded', 'failed'] as const)('acceptance results for %s verification', (outcome) => {
+    it.each([
+      [], ['api'], ['api', 'api'], ['ui', 'ui'], ['api', 'other'], ['api', 'ui', 'other'],
+    ].map((criterionIds) => ({ criterionIds })))('rejects incomplete criterion IDs $criterionIds at registration without changing the Epic', ({ criterionIds }) => {
+      const started = beginEpicVerification(readyEpic(), verificationRunId, verificationStartedAt);
+      const before = structuredClone(started.epic);
+      const result = { ...verificationResultFor(started.run), outcome,
+        acceptanceResults: criterionIds.map((criterionId) => ({ criterionId, outcome: 'passed' as const })),
+      };
+
+      expect(() => applyEpicVerificationResult(started.epic, result)).toThrow();
+      expect(started.epic).toEqual(before);
+    });
+
+    it('records every criterion even when one failed without granting completion evidence', () => {
+      const started = beginEpicVerification(readyEpic(), verificationRunId, verificationStartedAt);
+      const result = { ...verificationResultFor(started.run), outcome, acceptanceResults: [
+        { criterionId: 'api', outcome: 'passed' as const }, { criterionId: 'ui', outcome: 'failed' as const },
+      ] };
+
+      const received = applyEpicVerificationResult(started.epic, result);
+
+      expect(received.verificationRuns[0]).toMatchObject({ status: outcome, result });
+      expect(epicView(received).currentEvidence).toBeUndefined();
+      expect(() => finishEpic(received)).toThrow();
+    });
+  });
+
+  it('accepts the single required criterion and rejects its absence at registration', () => {
+    const epic = EpicSchema.parse({ ...readyEpic(), acceptanceCriteria: [{ id: 'api', description: 'API が応答する' }] });
+    const started = beginEpicVerification(epic, verificationRunId, verificationStartedAt);
+    const result = { ...verificationResultFor(started.run), acceptanceResults: [{ criterionId: 'api', outcome: 'passed' as const }] };
+
+    expect(() => applyEpicVerificationResult(started.epic, { ...result, acceptanceResults: [] })).toThrow();
+    const received = applyEpicVerificationResult(started.epic, result);
+    expect(received.verificationRuns[0]?.result).toEqual(result);
+    expect(finishEpic(received).status).toBe('completed');
+  });
+
+  it('accepts all criteria in a different order without reordering the recorded result', () => {
+    const started = beginEpicVerification(readyEpic(), verificationRunId, verificationStartedAt);
+    const result = verificationResultFor(started.run);
+    const reversed = { ...result, acceptanceResults: [...result.acceptanceResults].reverse() };
+
+    const received = applyEpicVerificationResult(started.epic, reversed);
+
+    expect(received.verificationRuns[0]?.result).toEqual(reversed);
+    expect(finishEpic(received).status).toBe('completed');
+    expect(applyEpicVerificationResult(received, reversed)).toEqual(received);
+    expect(() => applyEpicVerificationResult(received, result)).toThrow();
+  });
+
+  it('checks delayed results against the start criteria after the current criteria change', () => {
+    const started = beginEpicVerification(readyEpic(), verificationRunId, verificationStartedAt);
+    const changed = reviseEpic(started.epic, { acceptanceCriteria: [
+      { id: 'api', description: 'API が応答する' }, { id: 'infra', description: '基盤を確認する' },
+    ] }, reason);
+    const before = structuredClone(changed);
+    const result = { ...verificationResultFor(started.run), outcome: 'failed' as const, acceptanceResults: [
+      { criterionId: 'api', outcome: 'passed' as const }, { criterionId: 'ui', outcome: 'failed' as const },
+    ] };
+
+    expect(() => applyEpicVerificationResult(changed, { ...result, acceptanceResults: [
+      result.acceptanceResults[0]!, { ...result.acceptanceResults[1]!, criterionId: 'infra' },
+    ] })).toThrow();
+    expect(changed).toEqual(before);
+
+    const received = applyEpicVerificationResult(changed, result);
+    expect(received.verificationRuns[0]).toMatchObject({ status: 'stale', result });
+    expect(epicView(received).currentEvidence).toBeUndefined();
+    expect(() => finishEpic(received)).toThrow();
+  });
+
+  it('requires all criteria after aborting and records a complete failure as stale', () => {
+    const started = beginEpicVerification(readyEpic(), verificationRunId, verificationStartedAt);
+    const aborted = abortEpicState(started.epic, { ...reason, kind: 'aborted' });
+    const before = structuredClone(aborted);
+    const result = { ...verificationResultFor(started.run), outcome: 'failed' as const };
+
+    expect(() => applyEpicVerificationResult(aborted, { ...result, acceptanceResults: result.acceptanceResults.slice(0, 1) })).toThrow();
+    expect(aborted).toEqual(before);
+
+    const received = applyEpicVerificationResult(aborted, result);
+    expect(received.status).toBe('aborted');
+    expect(received.verificationRuns[0]).toMatchObject({ status: 'stale', result });
+    expect(epicView(received).currentEvidence).toBeUndefined();
+  });
+
   it.each(['missing criterion', 'unrelated artifact', 'unrelated workspace artifact', 'Terraform plan'] as const)('does not treat %s as completion evidence', (condition) => {
     let epic = readyEpic();
     if (condition === 'Terraform plan') epic = EpicSchema.parse({ ...epic, verificationProcedure: {

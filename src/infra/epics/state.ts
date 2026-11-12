@@ -39,15 +39,20 @@ export function reviseEpic(epic: Epic, changes: Partial<EpicDefinition> & { memb
   });
 }
 
+function hasCompleteAcceptanceResults(run: EpicVerificationRun, result: EpicVerificationResult): boolean {
+  const criteria = run.definition.acceptanceCriteria;
+  const resultIds = new Set(result.acceptanceResults.map(({ criterionId }) => criterionId));
+  return result.acceptanceResults.length === criteria.length && resultIds.size === criteria.length
+    && criteria.every(({ id }) => resultIds.has(id));
+}
+
 function resultHasEvidence(run: EpicVerificationRun): boolean {
   const result = run.result;
   if (result === undefined || result.outcome !== 'succeeded') return false;
   if (result.runId !== run.id || result.revision !== run.revision || result.procedureVersion !== run.procedureVersion
     || result.startedAt !== run.startedAt || !sameTargets(result.targets, run.targets)) return false;
-  const criteria = run.definition.acceptanceCriteria;
-  if (result.acceptanceResults.length !== criteria.length
-    || new Set(result.acceptanceResults.map(({ criterionId }) => criterionId)).size !== criteria.length
-    || criteria.some(({ id }) => !result.acceptanceResults.some((entry) => entry.criterionId === id && entry.outcome === 'passed'))) return false;
+  if (!hasCompleteAcceptanceResults(run, result)
+    || result.acceptanceResults.some((entry) => entry.outcome !== 'passed')) return false;
   const sourceTargets = result.artifacts.flatMap(({ sources }) => sources);
   if (sourceTargets.some((source) => !run.targets.some((target) => isDeepStrictEqual(source, target)))
     || run.targets.some((target) => !sourceTargets.some((source) => isDeepStrictEqual(source, target)))) return false;
@@ -105,6 +110,7 @@ export function applyEpicVerificationResult(epic: Epic, input: EpicVerificationR
   if (run === undefined) throw new Error(`Unknown Epic verification run: ${result.runId}`);
   if (run.revision !== result.revision || run.procedureVersion !== result.procedureVersion
     || run.startedAt !== result.startedAt || !sameTargets(run.targets, result.targets)) throw new Error('Verification result differs from its start record');
+  if (!hasCompleteAcceptanceResults(run, result)) throw new Error('Verification results must include every start criterion exactly once');
   if (run.result !== undefined) {
     if (!isDeepStrictEqual(normalizeResult(run.result), result)) throw new Error('Conflicting result for the same verification run');
     return epic;

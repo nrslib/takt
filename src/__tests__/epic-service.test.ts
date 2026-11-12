@@ -170,6 +170,31 @@ describe('Epic public operations', () => {
     expect(saved.verificationRuns[0]?.invalidationReason).toContain(failure.message);
   });
 
+  it('rejects incomplete criteria before target synchronization and accepts the corrected result as stale', async () => {
+    const context = await create();
+    await addEpicMember({ ...context, member, reason: '追加' });
+    const first = await startEpicVerification(context);
+    await recordEpicVerificationResult({ ...context, result: verificationResultFor(first) });
+    const second = await startEpicVerification(context);
+    const before = await getEpic(context);
+    const result = verificationResultFor(second);
+    const updatedTarget = { ...member, targetSha: 'c'.repeat(40) };
+    doubles.targets.mockResolvedValue([updatedTarget]);
+
+    await expect(recordEpicVerificationResult({ ...context, result: { ...result, acceptanceResults: [] } })).rejects.toThrow();
+    expect(await getEpic(context)).toEqual(before);
+    expect(await getEpicVerificationRecovery(context)).toEqual([second]);
+
+    const received = await recordEpicVerificationResult({ ...context, result });
+    expect(await getEpic(context)).toEqual(received);
+    expect(received.targets).toEqual([updatedTarget]);
+    expect(received.revision).toBe(before.revision + 1);
+    expect(received.verificationRuns[0]?.result).toEqual(before.verificationRuns[0]?.result);
+    expect(received.verificationRuns[1]).toMatchObject({ status: 'stale', result });
+    expect(received.currentEvidence).toBeUndefined();
+    expect(await getEpicVerificationRecovery(context)).toEqual([]);
+  });
+
   it.each([true, false])('preserves evidence and running state after missing Terraform result rejection with requiresApply=%s', async (requiresApply) => {
     const definition = epicDefinition();
     const epic = await createEpic({ ...owner, ...definition, verificationProcedure: {
