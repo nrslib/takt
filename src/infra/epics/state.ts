@@ -4,7 +4,7 @@ import {
   type Epic, type EpicChange, type EpicDefinition, type EpicTarget,
   type EpicVerificationResult, type EpicVerificationRun, type EpicView,
 } from './schema.js';
-import { normalizeTargets, sameTargets, memberKey } from './targets.js';
+import { normalizeTargets, sameTargets, memberKey } from './targetIdentity.js';
 
 export function epicDefinition(epic: Epic): EpicDefinition {
   return { objective: epic.objective, acceptanceCriteria: epic.acceptanceCriteria, verificationProcedure: epic.verificationProcedure };

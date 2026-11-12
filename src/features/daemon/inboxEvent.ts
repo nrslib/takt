@@ -28,6 +28,7 @@ export function buildManagerEventPrompt(event: TurnEvent & { unreadableGoalIds?:
     ? [
       'Inspect the listed goals together using their current state, saved agreements, and the runs\' latest decisions and evidence. Determine the next actions for each goal and record the inspection.',
       'Report goals in unreadableGoalIds as unverified and continue inspecting those you could retrieve.',
+      'Inspect the listed Epic IDs using their persisted definitions, fixed targets, member progress and verification recovery records. An active Epic remains pending after all members complete. Never treat a running verification as success or rerun it automatically; obtain an explicit decision before starting a new verification.',
     ].join('\n\n')
     : 'To advance the assigned goals, compare the change conveyed by this event with the current state. Decide the next work to arrange and whether to accept results based on the runs\' decisions and evidence and the saved results.' });
 }

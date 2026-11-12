@@ -3,6 +3,7 @@ import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
+import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
 
@@ -28,6 +29,7 @@ export interface ConversationState {
   queuedMessageCount?: number;
 }
 export type SnapshotValue =
+  | EpicSnapshot
   | { kind: 'state'; state: ConversationState }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }

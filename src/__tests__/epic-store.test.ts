@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EpicStore } from '../infra/epics/store.js';
+import { readdirSync } from 'node:fs';
 import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
 import {
   epicId, epicRecord, epicVerificationResult, epicWorkspaceId, secondGoalId,
@@ -47,7 +48,33 @@ describe('Epic storage validation boundary', () => {
     const store = new EpicStore('/configuration', epicWorkspaceId);
     await expect(store.get(epicId)).rejects.toThrow();
     expect(() => store.save(epicRecord())).toThrow();
-    expect(await store.list()).toEqual({ epics: [], errors: [] });
+    expect(await store.list()).toEqual({ epics: [], totalCount: 0, errors: [] });
+    expect(doubles.save).not.toHaveBeenCalled();
+  });
+
+  it('retains only the requested page while validating and counting every record in order', async () => {
+    const ids = [epicId, secondGoalId, verificationRunId].sort((a, b) => a.localeCompare(b));
+    const records = ids.map((id, index) => ({ ...epicRecord(), id, objective: `Epic ${index}` }));
+    doubles.stat.mockReturnValue({});
+    vi.mocked(readdirSync).mockReturnValue([...ids].reverse().map((name) => ({ name })) as unknown as ReturnType<typeof readdirSync>);
+    doubles.read.mockImplementation((path: string) => ({ content: Buffer.from(JSON.stringify(records.find(({ id }) => path.includes(id)))) }));
+    const store = new EpicStore('/configuration', epicWorkspaceId);
+    expect(await store.list({ offset: 1, limit: 1 })).toEqual({ epics: [records[1]], totalCount: 3, errors: [] });
+    expect(doubles.read.mock.calls.map(([path]) => ids.find((id) => (path as string).includes(id)))).toEqual(ids);
+    expect(await store.list({ offset: 3, limit: 1 })).toEqual({ epics: [], totalCount: 3, errors: [] });
+    expect((await store.list()).epics).toEqual(records);
+  });
+
+  it.each(['json', 'owner'])('reports a page-external %s failure instead of returning a successful partial list', async (failure) => {
+    const ids = [epicId, secondGoalId].sort((a, b) => a.localeCompare(b));
+    doubles.stat.mockReturnValue({});
+    vi.mocked(readdirSync).mockReturnValue(ids.map((name) => ({ name })) as unknown as ReturnType<typeof readdirSync>);
+    doubles.read.mockImplementation((path: string) => ({ content: Buffer.from(path.includes(ids[0]!)
+      ? JSON.stringify({ ...epicRecord(), id: ids[0] })
+      : failure === 'json' ? '{' : JSON.stringify({ ...epicRecord(), id: ids[1], workspaceId: secondGoalId })) }));
+    const result = await new EpicStore('/configuration', epicWorkspaceId).list({ offset: 0, limit: 1 });
+    expect(result.epics.map(({ id }) => id)).toEqual([ids[0]]);
+    expect(result.errors).toEqual([{ epicId: ids[1], error: expect.any(Error) }]);
     expect(doubles.save).not.toHaveBeenCalled();
   });
 

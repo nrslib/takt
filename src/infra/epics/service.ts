@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod';
 import { readWorkspace, type Workspace } from '../config/global/workspaceRegistry.js';
 import { resolveGitRepositoryDirectory } from '../task/repositoryDirectory.js';
 import {
   EpicContextSchema, EpicCreateSchema, EpicDefinitionChangeSchema, EpicMemberChangeSchema,
   EpicMemberReplaceSchema, EpicOwnerSchema, EpicReasonSchema, EpicResultInputSchema,
-  type Epic, type EpicChange, type EpicContext, type EpicMember, type EpicOwner,
+  type Epic, type EpicChange, type EpicContext, type EpicMember, type EpicOwner, type EpicView,
 } from './schema.js';
 import { EpicStore } from './store.js';
 import { withWorkspaceEpicLock } from './lock.js';
-import { memberKey, resolveEpicMember, resolveEpicTargets, sameTargets } from './targets.js';
+import { resolveEpicMember, resolveEpicTargets } from './targets.js';
+import { memberKey, sameTargets } from './targetIdentity.js';
 import {
   abortEpicState, applyEpicVerificationResult, assertEpicMutable, beginEpicVerification,
   epicDefinition, epicVerificationRecovery, epicView, finishEpic, reviseEpic,
@@ -85,11 +87,18 @@ export async function getEpic(input: unknown) {
   return epicView(await new EpicStore(request.globalConfigDirectory, request.workspaceId).get(request.epicId));
 }
 
-export async function listEpics(input: unknown) {
+const EpicPageSchema = z.object({ offset: z.number().int().nonnegative(), limit: z.number().int().nonnegative() }).strict();
+type EpicPage = z.infer<typeof EpicPageSchema>;
+
+export function listEpics(input: unknown): Promise<EpicView[]>;
+export function listEpics(input: unknown, page: EpicPage): Promise<{ epics: EpicView[]; totalCount: number; offset: number }>;
+export async function listEpics(input: unknown, page?: EpicPage) {
   const request = EpicOwnerSchema.parse(input);
-  const result = await new EpicStore(request.globalConfigDirectory, request.workspaceId).list();
+  const selection = page === undefined ? undefined : EpicPageSchema.parse(page);
+  const result = await new EpicStore(request.globalConfigDirectory, request.workspaceId).list(selection);
   if (result.errors.length > 0) throw new AggregateError(result.errors.map(({ error }) => error), 'Cannot read workspace Epics');
-  return result.epics.map(epicView);
+  const epics = result.epics.map(epicView);
+  return selection === undefined ? epics : { epics, totalCount: result.totalCount, offset: selection.offset };
 }
 
 export async function addEpicMember(input: unknown) {

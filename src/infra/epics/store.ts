@@ -44,24 +44,28 @@ export class EpicStore {
     return epic;
   }
 
-  async list(): Promise<{ epics: Epic[]; errors: { epicId: string; error: Error }[] }> {
+  async list(page?: { offset: number; limit: number }): Promise<{ epics: Epic[]; totalCount: number; errors: { epicId: string; error: Error }[] }> {
     assertSafePath(this.root, true);
-    if (lstatOrUndefined(this.root) === undefined) return { epics: [], errors: [] };
+    if (lstatOrUndefined(this.root) === undefined) return { epics: [], totalCount: 0, errors: [] };
     const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
     const epics: Epic[] = [];
     const errors: { epicId: string; error: Error }[] = [];
+    let totalCount = 0;
     for (const entry of readdirSync(this.root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const id = EpicIdSchema.parse(entry.name);
       try {
         const epic = this.read(id);
-        if (epic !== undefined) epics.push(epic);
+        if (epic !== undefined) {
+          if (page === undefined || totalCount >= page.offset && totalCount - page.offset < page.limit) epics.push(epic);
+          totalCount++;
+        }
       } catch (error) {
         if (!(error instanceof InvalidEpicFileError)) throw error;
         errors.push({ epicId: id, error });
       }
     }
     assertPrivateDirectoryReadSnapshot(snapshot);
-    return { epics, errors };
+    return { epics, totalCount, errors };
   }
 
   private validate(input: unknown): Epic {

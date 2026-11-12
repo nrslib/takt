@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { memberKey, normalizeTargets, resolveEpicMember, resolveEpicTargets, sameTargets } from '../infra/epics/targets.js';
+import { resolveEpicMember, resolveEpicTargets } from '../infra/epics/targets.js';
+import { memberKey, normalizeTargets, sameTargets } from '../infra/epics/targetIdentity.js';
 import { completedEpicGoal, epicWorkspaceId, secondGoalId } from './helpers/epic-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 

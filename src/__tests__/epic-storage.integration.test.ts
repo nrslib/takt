@@ -1,8 +1,19 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EpicStore } from '../infra/epics/store.js';
-import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
+import { listEpics } from '../infra/epics/index.js';
+import { applyEpicVerificationResult, beginEpicVerification, epicVerificationRecovery, epicView, finishEpic } from '../infra/epics/state.js';
+import { DaemonEpicFiles } from '../infra/daemon/epicFiles.js';
+import { epicEvents } from '../features/daemon/epicEvents.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { DaemonConversations } from '../features/daemon/conversationState.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { createDaemonStateRequests } from '../features/daemon/stateRequests.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import type { DaemonIngress } from '../core/daemon/ports.js';
 import {
   epicId, epicRecord, epicVerificationResult, epicWorkspaceId, secondGoalId,
   verificationResultFor, verificationRunId, verificationStartedAt,
@@ -36,13 +47,82 @@ describe('workspace Epic storage', () => {
     filePath = join(configDirectory, 'workspaces', epicWorkspaceId, 'epics', epicId, 'epic.json');
   });
 
+  it('returns globally ordered pages with exact totals and validates records outside the page', async () => {
+    const owner = { globalConfigDirectory: configDirectory, workspaceId: epicWorkspaceId };
+    const records = [epicId, secondGoalId, verificationRunId].sort((a, b) => a.localeCompare(b))
+      .map((id, index) => ({ ...epicRecord(), id, objective: `Epic ${index}` }));
+    const store = new EpicStore(configDirectory, epicWorkspaceId);
+    for (const record of records) await store.create(record);
+    expect(await listEpics(owner)).toEqual(records);
+    expect(await listEpics(owner, { offset: 0, limit: 1 })).toEqual({ epics: [records[0]], totalCount: 3, offset: 0 });
+    expect(await listEpics(owner, { offset: 1, limit: 1 })).toEqual({ epics: [records[1]], totalCount: 3, offset: 1 });
+    expect(await listEpics(owner, { offset: 4, limit: 1 })).toEqual({ epics: [], totalCount: 3, offset: 4 });
+    const outside = join(configDirectory, 'workspaces', epicWorkspaceId, 'epics', records[2]!.id, 'epic.json');
+    for (const content of ['{', JSON.stringify({ ...records[2], workspaceId: secondGoalId })]) {
+      writeFileSync(outside, content);
+      await expect(listEpics(owner, { offset: 0, limit: 1 })).rejects.toBeInstanceOf(AggregateError);
+    }
+  });
+
   it('creates, reloads and lists the same workspace-owned record', async () => {
     const record = epicRecord();
     await new EpicStore(configDirectory, epicWorkspaceId).create(record);
     const restored = new EpicStore(configDirectory, epicWorkspaceId);
     expect(await restored.get(record.id)).toEqual(record);
-    expect(await restored.list()).toEqual({ epics: [record], errors: [] });
+    expect(await restored.list()).toEqual({ epics: [record], totalCount: 1, errors: [] });
     expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(record);
+  });
+
+  it.each(['running', 'completed'] as const)('restores %s verification and event identity from Epic histories larger than 16 MiB', async (status) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: 'Verification recovery', repositoryDirectories: [] });
+    const completed = completedRecord(undefined);
+    const state = status === 'running'
+      ? beginEpicVerification({ ...completed, status: 'active' }, secondGoalId, verificationStartedAt).epic
+      : completed;
+    const record = { ...state, workspaceId: workspace.id, changes: state.changes.map((change, index) => index === 0
+      ? { ...change, reason: 'x'.repeat(16 * 1024 * 1024) } : change) };
+    const store = new EpicStore(configDirectory, workspace.id);
+    await store.create(record);
+    const path = join(configDirectory, 'workspaces', workspace.id, 'epics', epicId, 'epic.json');
+    expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
+    const files = new DaemonEpicFiles(configDirectory);
+    const restored = await files.get(workspace.id, epicId);
+    expect(restored).toEqual(epicView(await store.get(epicId)));
+    expect(epicVerificationRecovery(restored)).toEqual(status === 'running' ? [state.verificationRuns.at(-1)] : []);
+    expect(epicEvents(restored)).toEqual(epicEvents(record));
+    if (status === 'completed') expect(epicEvents(restored).map(({ event }) => event.kind))
+      .toEqual(['epic_verification_result', 'epic_completed']);
+    const listed = [];
+    for await (const epic of files.list(workspace.id)) listed.push(epic);
+    expect(listed).toEqual([restored]);
+    const errors = vi.fn();
+    const notifications = new DaemonNotifications(configDirectory);
+    const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
+      notifications, async () => {}, errors);
+    const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+    const turn = { conversationId: conversationId(owner), operationId: verificationRunId, generation: 1 };
+    const accept = vi.fn<DaemonIngress['accept']>(async (event) => ({ kind: 'accepted', eventId: event.eventId,
+      operationId: event.eventId, acceptedSequence: 1 }));
+    try {
+      await conversations.ensure(owner);
+      const requests = createDaemonStateRequests({ conversations, ingress: { accept }, connectedPorts: () => [] });
+      expect(await requests.handle(turn, { kind: 'publish_epic_events', workspaceId: workspace.id, epicId,
+        reason: 'Publish saved verification' }, new AbortController().signal)).toEqual({ kind: 'epic_events_published' });
+      const events = epicEvents(record);
+      expect(accept.mock.calls.map(([event]) => event.eventId)).toEqual(events.map((event) => event.eventId));
+      for (const event of events) {
+        const result = { ...turn, event: { ...event, operationId: turn.operationId, acceptedSequence: 1, lane: 'other' as const },
+          outcome: { kind: 'completed' as const, result: { kind: 'notice' as const, message: '' } } };
+        await conversations.apply(result);
+        await conversations.apply(result);
+      }
+      const saved = [];
+      for await (const notice of notifications.iterate()) saved.push(notice);
+      expect(saved.map(({ id }) => id).sort()).toEqual(events.map(({ eventId }) => eventId).sort());
+      expect(saved.every((notice) => notice.conversationId === turn.conversationId)).toBe(true);
+      expect(errors).not.toHaveBeenCalled();
+    } finally { await conversations.close(); }
+    expect(await store.get(epicId)).toEqual(record);
   });
 
   it('keeps records from different workspaces separate', async () => {
@@ -67,7 +147,7 @@ describe('workspace Epic storage', () => {
   it('rejects a record whose workspace differs from the store owner', async () => {
     const store = new EpicStore(configDirectory, epicWorkspaceId);
     await expect(store.create({ ...epicRecord(), workspaceId: '750e8400-e29b-41d4-a716-446655440000' })).rejects.toThrow();
-    expect(await store.list()).toEqual({ epics: [], errors: [] });
+    expect(await store.list()).toEqual({ epics: [], totalCount: 0, errors: [] });
   });
 
   it('rejects persisted completion without verification evidence instead of trusting a status field', async () => {
@@ -101,7 +181,7 @@ describe('workspace Epic storage', () => {
     expect(() => store.save(invalid)).toThrow();
     expect(readFileSync(filePath)).toEqual(before);
     expect(await store.get(epicId)).toEqual(original);
-    expect(await store.list()).toEqual({ epics: [original], errors: [] });
+    expect(await store.list()).toEqual({ epics: [original], totalCount: 1, errors: [] });
 
     const corrupted = JSON.stringify(invalid);
     writeFileSync(filePath, corrupted);
@@ -120,7 +200,7 @@ describe('workspace Epic storage', () => {
     await store.create(record);
     expect(store.save(record)).toEqual(record);
     expect(await new EpicStore(configDirectory, epicWorkspaceId).get(epicId)).toEqual(record);
-    expect(await store.list()).toEqual({ epics: [record], errors: [] });
+    expect(await store.list()).toEqual({ epics: [record], totalCount: 1, errors: [] });
   });
 
   it.each([
