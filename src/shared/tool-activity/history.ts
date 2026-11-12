@@ -1,5 +1,6 @@
 import type { StreamCallContext, StreamEvent } from '../types/provider.js';
-import type { ToolActivityEntry } from './types.js';
+import type { ToolActivityEntry, ToolActivityHistoryState } from './types.js';
+import { ToolActivityHistoryStateSchema } from './schema.js';
 
 function sameContext(left: StreamCallContext | undefined, right: StreamCallContext | undefined): boolean {
   return left?.callId === right?.callId
@@ -8,13 +9,23 @@ function sameContext(left: StreamCallContext | undefined, right: StreamCallConte
 }
 
 export class ToolActivityHistory {
-  private readonly items: ToolActivityEntry[] = [];
+  private items: ToolActivityEntry[] = [];
   private sequence = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
   entries(): ToolActivityEntry[] {
     return structuredClone(this.items);
+  }
+
+  snapshot(): ToolActivityHistoryState {
+    return { entries: this.entries(), sequence: this.sequence };
+  }
+
+  restore(state: ToolActivityHistoryState): void {
+    const restored = ToolActivityHistoryStateSchema.parse(state);
+    this.items = structuredClone(restored.entries);
+    this.sequence = restored.sequence;
   }
 
   get(key: string): ToolActivityEntry | undefined {
@@ -78,7 +89,7 @@ export class ToolActivityHistory {
 
   private add(tool: string, toolId: string | undefined, context: StreamCallContext | undefined): ToolActivityEntry {
     const entry: ToolActivityEntry = {
-      key: String(this.items.length + 1), tool, toolId,
+      key: String(this.items.reduce((maximum, entry) => Math.max(maximum, Number(entry.key)), 0) + 1), tool, toolId,
       context: context === undefined ? undefined : { ...context },
       input: {}, output: '', status: 'running', association: 'unmatched',
     };

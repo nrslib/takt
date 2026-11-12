@@ -26,6 +26,8 @@ import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { receiveInboxChange } from '../features/daemon/inbox.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
+import * as privateFiles from '../infra/daemon/privateFile.js';
+import type { ToolActivityTurnState } from '../shared/tool-activity/types.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -75,6 +77,96 @@ it('persists the session and applies the human response to the current proposal'
   expect((await fixture.store.read(id))!.state).toMatchObject({ revision: 5, pending: null, session: { sessionId: 'persisted-session' } });
   expect(execute.mock.calls[0]![0].sessionId).toBe('provider-session');
   expect((await fixture.store.read(id))!.state.session.contextKey).toBe('test');
+});
+
+it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change without repeating the provider after a history %s failure', async (failure) => {
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'acquired-session',
+      structuredOutput: { message: 'done', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const write = privateFiles.writePrivateFile; let failed = false;
+  vi.spyOn(privateFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
+    if (failure !== 'delivery' && path.endsWith(`/conversations/${id}.json`) && !failed) {
+      const value = JSON.parse(typeof content === 'string' ? content : Buffer.from(content).toString('utf8')) as { daemonState?: { toolHistory?: ToolActivityTurnState } };
+      const history = value.daemonState?.toolHistory;
+      if (history !== undefined && !history.finished
+        && history.history.entries.some((entry) => failure === 'start' ? entry.status === 'running' : entry.status === 'success')) {
+        failed = true; throw new Error('Injected publication failure');
+      }
+    }
+    await write(path, content, signal);
+  });
+  const completed = deferred<Extract<PortOutput, { kind: 'result' }>>();
+  const attachment = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
+    speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
+    async deliver(_id, output) {
+      if (failure === 'delivery' && output.kind === 'tool_history' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
+      if (output.kind === 'result') completed.resolve(output);
+      return { kind: 'delivered' };
+    },
+  });
+  attachment.read.cancel();
+  const admission = await fixture.input.submit({ attachmentId: attachment.attachmentId, requestId: randomUUID(),
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text: 'Read once' } });
+  expect(admission).toMatchObject({ kind: 'accepted' });
+  const result = await completed.promise;
+  await expect(fixture.settled()).rejects.toThrow();
+  expect(failed).toBe(true);
+  expect(result.result).toMatchObject(failure === 'delivery' ? { kind: 'reply', message: 'done' } : { kind: 'error', code: 'failed' });
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('acquired-session');
+  const records = await fixture.events.restore();
+  const pending = []; for await (const event of records.pending) pending.push(event);
+  expect(pending).toHaveLength(0);
+  expect(fixture.dispatcher.activeTurnCount).toBe(0);
+  expect(call).toHaveBeenCalledOnce();
+  if (failure === 'delivery') {
+    const snapshot = await fixture.conversations.snapshot(id);
+    const items = []; for await (const item of snapshot.items) items.push(item);
+    snapshot.complete();
+    expect(items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { finished: true,
+      history: { entries: [{ status: 'success', result: 'ready' }] } } });
+  }
+});
+
+it.each([1, 2])('replaces persisted history after the daemon restarts its generation counter following %s completed turns', async (previousTurns) => {
+  let invocation = 0;
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = ++invocation;
+    options.onStream!({ type: 'tool_use', data: { id: 'reused-tool', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'reused-tool', content: `result-${index}`, isError: false } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'restored-session',
+      structuredOutput: { message: 'done', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const first = await open();
+  for (let index = 0; index < previousTurns; index++) {
+    await first.submit(`Previous turn ${index}`); await fixture.settled();
+  }
+  const previous = (await fixture.store.readToolHistory(id))!;
+  expect(previous.history.entries).toMatchObject([{ result: `result-${previousTurns}`, status: 'success' }]);
+  await fixture.close();
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  const second = await open(); await second.submit('New turn after restart'); await fixture.settled();
+  const current = (await fixture.store.readToolHistory(id))!;
+  expect(current.operationId).not.toBe(previous.operationId);
+  expect(previous.generation).toBe(previousTurns);
+  expect(current.generation).toBe(1);
+  expect(current).toMatchObject({ finished: true, history: { entries: [{ toolId: 'reused-tool', result: `result-${previousTurns + 1}`, status: 'success' }] } });
+  expect(current.history.entries).toHaveLength(1);
+  const snapshot = await fixture.conversations.snapshot(id);
+  const items = [];
+  for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  expect(items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('restored-session');
+  expect(call).toHaveBeenCalledTimes(previousTurns + 1);
 });
 
 it.each([false, true])('compares the saved system prompt fingerprint on the first turn after restart (changed: %s)', async (changed) => {

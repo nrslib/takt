@@ -88,6 +88,58 @@ async function patrolRecords(directory: string) {
   return new FilePatrolRecords(directory);
 }
 
+it('serializes tool history with session saves without changing the business version and restores observed identities', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'call' };
+  const start = { kind: 'tool_event' as const, eventId: 'start', event: { type: 'tool_use' as const,
+    data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity: context } };
+  await Promise.all([
+    store.updateToolHistory(turn, start, signal()),
+    store.save(turn, { operationId: 'session-save', expectedVersion: 0,
+      session: { provider: 'codex', model: null, sessionId: 'retained-session' } }, signal()),
+  ]);
+  const running = await store.readToolHistory(id);
+  expect(running?.history.entries).toMatchObject([{ toolId: 'tool', status: 'running', context }]);
+  expect(await store.updateToolHistory(turn, start, signal())).toBeUndefined();
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'result', event: {
+    type: 'tool_result', data: { id: 'tool', isError: true, content: 'failed read' }, toolActivity: context,
+  } }, signal());
+  await store.updateToolHistory(turn, null, signal());
+  const restored = new ConversationStateStore(directory);
+  const completed = await restored.readToolHistory(id);
+  expect(completed).toMatchObject({ finished: true, eventIds: ['start', 'result'], history: { sequence: 2,
+    entries: [{ key: running!.history.entries[0]!.key, startedAt: running!.history.entries[0]!.startedAt,
+      status: 'failure', result: 'failed read', context }] } });
+  expect((await restored.read(id))!.state).toMatchObject({ version: 1, session: { sessionId: 'retained-session' } });
+  expect(await restored.updateToolHistory(turn, start, signal())).toBeUndefined();
+  expect(await restored.readToolHistory(id)).toEqual(completed);
+});
+
+it('drops unfinished history at termination and refuses older generations of the same operation and mismatched event contexts', async () => {
+  const directory = await root(); const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const next = { ...turn, operationId: 'turn-2', generation: 2 };
+  const event = { kind: 'tool_event' as const, eventId: 'start', event: { type: 'tool_use' as const,
+    data: { id: 'reused', tool: 'Read', input: {} }, toolActivity: {
+      callId: 'call', operationId: next.operationId, generation: next.generation,
+    } } };
+  await expect(store.updateToolHistory(turn, event, signal())).rejects.toThrow('Tool event turn mismatch');
+  await store.updateToolHistory(next, event, signal());
+  expect(await store.updateToolHistory({ ...next, generation: 1 }, event, signal())).toBeUndefined();
+  const saved = await store.readToolHistory(id);
+  for (const stale of [turn, { ...next, operationId: 'other' }]) {
+    await expect(store.updateToolHistory(stale, event, signal())).rejects.toThrow('Tool event turn mismatch');
+  }
+  expect(await store.readToolHistory(id)).toEqual(saved);
+  await store.updateToolHistory(next, null, signal());
+  expect(await store.readToolHistory(id)).toMatchObject({ finished: true, history: { entries: [], sequence: 1 } });
+  await store.updateToolHistory({ ...next, operationId: 'turn-3', generation: 3 }, null, signal());
+  expect(await store.readToolHistory(id)).toBeUndefined();
+  expect((await store.read(id))!.state.version).toBe(0);
+});
+
 describe('durable manager patrol timestamps', () => {
   it('returns no timestamp for a repository that has never been patrolled', async () => {
     const records = await patrolRecords(await root());

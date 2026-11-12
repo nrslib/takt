@@ -20,6 +20,78 @@ function fixture(execute = vi.fn(async (_input: TurnStart, _io: TurnIo): Promise
   return { runtime, messages, wait, initialize, execute, close, onFatal, envelope, transport };
 }
 
+it('drains every tool event in order before finishing even when activity is coalesced behind a slow transport', async () => {
+  const blocked = deferred<void>(); const release = deferred<void>();
+  const content = '日本語の結果\n'.repeat(3000);
+  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    const context = { operationId: input.turn.operationId, generation: input.turn.generation, callId: 'call' };
+    io.progress({ kind: 'tool_event', eventId: 'start', event: {
+      type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity: context,
+    } });
+    for (let index = 0; index < 10; index++) io.progress({ kind: 'thinking' });
+    io.progress({ kind: 'tool_event', eventId: 'result', event: {
+      type: 'tool_result', data: { id: 'tool', content, isError: false }, toolActivity: context,
+    } });
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  }));
+  await f.initialize();
+  const send = f.transport.send.getMockImplementation()!;
+  f.transport.send.mockImplementation(async (message) => {
+    await send(message);
+    if (message.kind === 'turn_progress' && typeof message.message !== 'string'
+      && message.message.kind === 'tool_event' && message.message.eventId === 'start') {
+      blocked.resolve(); await release.promise;
+    }
+  });
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  try {
+    await blocked.promise;
+    expect(f.messages.some((message) => message.kind === 'turn_finished')).toBe(false);
+    release.resolve();
+    expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
+    const events = f.messages.flatMap((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
+      && message.message.kind === 'tool_event' ? [message.message] : []);
+    expect(events.map((event) => event.eventId)).toEqual(['start', 'result']);
+    expect(events[1]!.event.data).toMatchObject({ content });
+    expect(f.messages.at(-1)?.kind).toBe('turn_finished');
+    expect(f.onFatal).not.toHaveBeenCalled();
+  } finally { release.resolve(); await f.runtime.disconnect(); }
+});
+
+it.each(['transport', 'capacity'])('fails visibly instead of silently losing tool history on %s failure', async (failure) => {
+  const release = deferred<void>();
+  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    for (let index = 0; index < (failure === 'capacity' ? MAX_PROCESS_PENDING_REQUESTS + 1 : 2); index++) {
+      io.progress({ kind: 'tool_event', eventId: `event-${index}`, event: {
+        type: 'tool_use', data: { id: `tool-${index}`, tool: 'Read', input: {} },
+        toolActivity: { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation },
+      } });
+    }
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' }, change: {
+      operationId: 'retained-change', expectedVersion: 0,
+      session: { provider: 'mock', model: null, sessionId: 'retained-session' },
+    } };
+  }));
+  await f.initialize();
+  const send = f.transport.send.getMockImplementation()!;
+  f.transport.send.mockImplementation(async (message) => {
+    if (message.kind === 'turn_progress') {
+      if (failure === 'transport') throw new Error('lost transport');
+      await release.promise;
+    }
+    await send(message);
+  });
+  const done = f.wait('turn_finished');
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  release.resolve();
+  const completed = await done;
+  expect(completed).toMatchObject({ outcome: { kind: 'failed', message: expect.stringContaining('Tool history delivery') } });
+  if (failure === 'transport') expect(completed).toMatchObject({ outcome: { change: { session: { sessionId: 'retained-session' } } } });
+  expect(f.onFatal).not.toHaveBeenCalled();
+  await f.runtime.disconnect();
+});
+
 it.each([false, true])('keeps intermediate text ordered behind a slow send and suppresses queued text after interruption=%s', async (interrupted) => {
   const entered = deferred<void>();
   const release = deferred<void>();

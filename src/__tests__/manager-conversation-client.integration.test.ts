@@ -9,6 +9,7 @@ import { cleanup, render } from 'ink-testing-library';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
+import * as toolActivityView from '../features/tui/ToolActivityView.js';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
@@ -55,6 +56,11 @@ vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
   return { ...actual, TranscriptView: vi.fn((props: Parameters<typeof actual.TranscriptView>[0]) =>
     createElement(actual.TranscriptView, props)) };
 });
+vi.mock('../features/tui/ToolActivityView.js', async (original) => {
+  const actual = await original<typeof import('../features/tui/ToolActivityView.js')>();
+  return { ...actual, ToolActivityView: vi.fn((props: Parameters<typeof actual.ToolActivityView>[0]) =>
+    createElement(actual.ToolActivityView, props)) };
+});
 
 let directory: string;
 let repository: string;
@@ -95,6 +101,679 @@ beforeEach(async () => {
 });
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
+
+function useToolProvider(call: ProviderAgent['call']): void {
+  const executor = createManagerTurnExecutor(repository, {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'tool-history', executor });
+}
+
+function toolReply(message = 'Tool turn finished') {
+  return { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
+    structuredOutput: { message, summary: null } };
+}
+
+function currentToolPage() {
+  const props = vi.mocked(toolActivityView.ToolActivityView).mock.lastCall?.[0];
+  expect(props, 'ManagerView should render the shared tool activity view').toBeDefined();
+  return props!;
+}
+
+function toolRows(): string { return currentToolPage().page.rows.join('\n'); }
+
+async function browseToolPage(app: ReturnType<typeof render>, key: string): Promise<string> {
+  const before = currentToolPage();
+  app.stdin.write(key);
+  await waitFor(() => expect(currentToolPage().state).not.toEqual(before.state));
+  return toolRows();
+}
+
+it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after publication'].map((timing) => ({ phase, timing }))))(
+  'keeps current history when a snapshot starts $timing of the $phase event', async ({ phase, timing }) => {
+  const firstDone = deferred<void>(); const secondDone = deferred<void>();
+  const startSecondTool = deferred<void>(); const secondResult = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = ++invocation;
+    if (index === 2) await startSecondTool.promise;
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    if (index === 1) { options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'previous', isError: false } }); await firstDone.promise; }
+    else { await secondResult.promise; options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } }); await secondDone.promise; }
+    return toolReply();
+  }));
+  const connections = observeIpcConnections(); await client.connect(); await complete(); await snapshotView();
+  const write = daemonFiles.writePrivateFile;
+  const saving = deferred<void>(); const publish = deferred<void>();
+  try {
+    await client.submit({ kind: 'message', text: 'Previous turn' });
+    await waitFor(() => expect(toolRows()).toContain('previous'));
+    firstDone.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
+    await client.submit({ kind: 'message', text: 'Current turn' }); await fixture.executing(2);
+    const operationId = client.getSnapshot().state!.running!.operationId;
+    vi.spyOn(daemonFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
+      const text = typeof content === 'string' ? content : Buffer.from(content).toString('utf8');
+      if (path.endsWith(`/conversations/${client.getSnapshot().state!.conversationId}.json`)
+        && text.includes(operationId) && text.includes('turn-2.ts') && (phase === 'start' ? !text.includes('ready') : text.includes('ready'))) {
+        saving.resolve(); await publish.promise;
+      }
+      await write(path, content, signal);
+    });
+    startSecondTool.resolve(); if (phase === 'result') secondResult.resolve(); await saving.promise;
+    const entered = deferred<void>();
+    const snapshot = fixture.conversations.snapshot.bind(fixture.conversations);
+    vi.spyOn(fixture.conversations, 'snapshot').mockImplementation((id) => {
+      const pending = snapshot(id); entered.resolve(); return pending;
+    });
+    const refreshing = timing === 'before publication' ? refreshSnapshot(client, connections[0]!) : undefined;
+    if (refreshing !== undefined) await entered.promise;
+    publish.resolve();
+    if (refreshing !== undefined) await refreshing;
+    else await refreshSnapshot(client, connections[0]!);
+    await waitFor(() => expect(toolRows()).toContain('turn-2.ts'));
+    expect(client.getSnapshot().items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { operationId } });
+    if (phase === 'result') expect(toolRows()).toContain('ready');
+    secondResult.resolve();
+    secondDone.resolve(); await fixture.settled();
+    await waitFor(() => expect(toolRows()).toContain('ready'));
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+    expect(toolRows()).toContain('ready');
+  } finally { publish.resolve(); firstDone.resolve(); startSecondTool.resolve(); secondResult.resolve(); secondDone.resolve(); await fixture.settled(); }
+});
+
+it('removes the previous live history after a tool-free turn and keeps its displayed transcript on reconnect', async () => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ === 0) {
+      options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'previous.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'previous-result', isError: false } });
+      await finish.promise;
+    }
+    return toolReply();
+  }));
+  const connections = observeIpcConnections(); await client.connect(); await complete(); await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Previous tools' });
+    await waitFor(() => expect(toolRows()).toContain('previous-result'));
+    finish.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
+    await client.submit({ kind: 'message', text: 'No tools this turn' }); await fixture.settled();
+    await refreshSnapshot(client, connections[0]!);
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+    connections[0]!.socket.destroy(); await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+    const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+    expect(text.split('previous-result')).toHaveLength(2);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([1, 2])('retains each of %s identical completed results once after unfinished removal and display changes on the same screen', async (count) => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'unfinished', tool: 'Bash', input: { command: 'background' } } });
+    for (let index = 0; index < count; index++) {
+      options.onStream!({ type: 'tool_use', data: { id: `completed-${index}`, tool: 'Read', input: { file_path: `file-${index}.ts` } } });
+      options.onStream!({ type: 'tool_result', data: { id: `completed-${index}`, content: 'ready', isError: false } });
+    }
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Keep visible completed results' });
+    await waitFor(() => expect(toolRows().split('\n').filter((row) => row === 'ready')).toHaveLength(count));
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await waitFor(() => expect(toolRows()).not.toContain('background'));
+    await browseToolPage(app, '\x0f');
+    while (currentToolPage().page.hasMore) await browseToolPage(app, '\x1b[6~');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    columns.mockReturnValue(40); app.stdout.emit('resize');
+    await waitFor(() => { for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(40); });
+    await browseToolPage(app, '\x0f');
+    await client.submit({ kind: 'message', text: 'Advance to the next turn' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split('\n').filter((line) => line === 'ready')).toHaveLength(count);
+      expect(text).not.toContain('background');
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([
+  'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  "printf '途中…完了'",
+])('retains the exact displayed input in the next transcript after resizing the same screen: %s', async (command) => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'summary', tool: 'Bash', input: { command } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'summary', content: 'ready', isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  const columns = vi.spyOn(app.stdout, 'columns', 'get');
+  columns.mockReturnValue(40); app.stdout.emit('resize');
+  try {
+    await client.submit({ kind: 'message', text: 'Show the command' });
+    await waitFor(() => {
+      expect(toolRows()).toContain('success');
+      const header = toolRows().split('\n').find((row) => row.startsWith('✓ Bash'))!;
+      expect(header).toBeDefined(); expect(measureWidth(header)).toBeLessThanOrEqual(40);
+      if (command.length > 40) expect(header).toMatch(/…$/u);
+    });
+    columns.mockReturnValue(80); app.stdout.emit('resize');
+    await waitFor(() => expect(toolRows()).toContain(`✓ Bash ${command}`));
+    finish.resolve(); await fixture.settled();
+    await client.submit({ kind: 'message', text: 'Advance to another turn' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split('\n').filter((line) => line === `✓ Bash ${command}`)).toHaveLength(1);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('retains the received start and completion times once after compact display and finite expanded pages on the same screen', async () => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'timed', tool: 'Bash', input: { command: 'printf ready' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'timed', content: 'ready', isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView();
+  vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(32); app.stdout.emit('resize');
+  try {
+    await client.submit({ kind: 'message', text: 'Show exact times' });
+    await waitFor(() => expect(toolRows()).toMatch(/success @.*…/u));
+    const item = client.getSnapshot().items.find((value) => value.kind === 'tool_history');
+    expect(item?.kind).toBe('tool_history');
+    if (item?.kind !== 'tool_history') throw new Error('Missing received tool history');
+    const entry = item.history.history.entries[0]!;
+    expect(entry.startedAt).toEqual(expect.any(Number)); expect(entry.completedAt).toEqual(expect.any(Number));
+    const timing = `success @${entry.startedAt} → @${entry.completedAt} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms) ${getLabel('tui.ui.toolHistoryCompletion', 'en')} #${entry.completionSequence}`;
+    const observed: string[] = [];
+    await browseToolPage(app, '\x0f');
+    for (let page = 0; page < 30; page++) {
+      observed.push(...currentToolPage().page.rows);
+      if (!currentToolPage().page.hasMore) break;
+      await browseToolPage(app, '\x1b[6~');
+    }
+    expect(observed.join('')).toContain(timing);
+    expect(currentToolPage().page.hasMore).toBe(false);
+    finish.resolve(); await fixture.settled();
+    await client.submit({ kind: 'message', text: 'Advance after viewing the times' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split('\n').filter((line) => line === timing)).toHaveLength(1);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([5, 6])('fits a %s line draft and expanded results while resizing the same screen without losing its cursor', async (lineCount) => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'printf long' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: Array.from({ length: 100 }, (_, i) => `result-${i}`).join('\n'), isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView(); const submit = vi.spyOn(client, 'submit');
+  const lines = Array.from({ length: lineCount }, (_, index) => `下書き${index + 1}を保持`);
+  const draft = lines.join('\n');
+  try {
+    await client.submit({ kind: 'message', text: 'Show detailed results with my draft' });
+    await waitFor(() => expect(toolRows()).toContain('result-0'));
+    app.stdin.write('\x1b[200~' + draft + '\x1b[201~');
+    await waitFor(() => expect(app.lastFrame()).toContain(lines.at(-1)!));
+    app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
+    await browseToolPage(app, '\x0f');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    for (const width of [80, 40, 80]) {
+      columns.mockReturnValue(width); app.stdout.emit('resize');
+      await waitFor(() => {
+        const frame = app.lastFrame()!; const start = frame.indexOf('✓ Bash');
+        expect(start).toBeGreaterThanOrEqual(0);
+        const live = frame.slice(start).trimEnd().split('\n');
+        for (const line of lines) expect(live.join('\n')).toContain(line);
+        for (const row of live) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+        expect(live.length).toBeLessThanOrEqual(24);
+        expect(currentToolPage().state.expanded).toBe(true);
+        expect(currentToolPage().page.hasMore).toBe(true);
+      });
+    }
+    app.stdin.write('追記');
+    await waitFor(() => expect(app.lastFrame()).toContain('追記保持'));
+    finish.resolve(); await fixture.settled();
+    app.stdin.write('\r');
+    await waitFor(() => expect(submit.mock.calls.some(([command]) => command.kind === 'message'
+      && command.text === draft.slice(0, -2) + '追記' + draft.slice(-2))).toBe(true));
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([false, true])('retains one timed tool entry across duplicate delivery, repeated snapshots and reconnect with failure=%s', async (isError) => {
+  const result = deferred<void>(); const finish = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: { command: 'printf history-ready' } } });
+    await result.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'tool-1', content: 'history-ready', isError } });
+    await finish.promise;
+    return toolReply();
+  });
+  useToolProvider(call);
+  const progress = vi.spyOn(fixture.conversations, 'progress');
+  const outputs = vi.fn(); client.onOutput(outputs);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  try {
+    expect(await client.submit({ kind: 'message', text: 'Track one tool' })).toMatchObject({ kind: 'accepted' });
+    await waitFor(() => expect(toolRows()).toContain('running @'));
+    expect(toolRows()).toContain('printf history-ready');
+    const startedAt = toolRows().match(/@(\d+)/u)![1];
+    result.resolve();
+    await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
+    const completed = toolRows();
+    expect(completed).toContain(`@${startedAt}`);
+    expect(completed).toMatch(/→ @\d+.*\(\d+ ms\)/u);
+    expect(completed.split('\n').filter((row) => /^[✓✗] Bash/u.test(row))).toHaveLength(1);
+    expect(completed).toContain('history-ready');
+    const events = progress.mock.calls.filter(([, message]) => JSON.stringify(message).includes('"id":"tool-1"'));
+    expect(events).toHaveLength(2);
+    const toolOutputs = () => outputs.mock.calls.filter(([output]) => JSON.stringify(output).includes('"tool-1"'));
+    const deliveredCount = toolOutputs().length;
+    expect(deliveredCount).toBeGreaterThan(0);
+    await refreshSnapshot(client, connections[0]!);
+    await refreshSnapshot(client, connections[0]!);
+    for (const [turn, message] of events) await fixture.dispatcher.post({ kind: 'turn_progress', turn, message });
+    await fixture.dispatcher.drain();
+    await refreshSnapshot(client, connections[0]!);
+    expect(toolRows()).toBe(completed);
+    expect(toolOutputs()).toHaveLength(deliveredCount);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(toolRows()).toBe(completed);
+    expect(toolOutputs()).toHaveLength(deliveredCount);
+    expect(app.lastFrame()).toContain('history-ready');
+    finish.resolve(); await fixture.settled();
+    await refreshSnapshot(client, connections[1]!);
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    expect(toolRows()).toBe(completed);
+    expect(app.lastFrame()).toContain('history-ready');
+    expect(call).toHaveBeenCalledOnce();
+  } finally { result.resolve(); finish.resolve(); await fixture.settled(); }
+});
+
+it.each(['operationId', 'generation'] as const)('rejects an old result when only %s differs while reusing the provider tool ID', async (different) => {
+  const finishes = [deferred<void>(), deferred<void>()];
+  const results = [deferred<void>(), deferred<void>()];
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = invocation++;
+    options.onStream!({ type: 'tool_use', data: { id: 'tool-1', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    await results[index]!.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'tool-1', content: `turn-${index}-result`, isError: index === 0 } });
+    await finishes[index]!.promise;
+    return toolReply(`Turn ${index} finished`);
+  }));
+  const progress = vi.spyOn(fixture.conversations, 'progress');
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'First turn' });
+    await waitFor(() => expect(toolRows()).toContain('turn-0.ts'));
+    results[0]!.resolve();
+    await waitFor(() => expect(toolRows()).toContain('turn-0-result'));
+    const old = progress.mock.calls.find(([, message]) => JSON.stringify(message).includes('turn-0-result'));
+    expect(old).toBeDefined();
+    finishes[0]!.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Second turn' });
+    await waitFor(() => expect(toolRows()).toContain('turn-1.ts'));
+    const current = client.getSnapshot().state!.running!;
+    const turn = { ...old![0], operationId: current.operationId, generation: current.generation!,
+      [different]: different === 'operationId' ? old![0].operationId : old![0].generation };
+    expect(turn[different]).not.toBe(current[different]);
+    const runningRows = toolRows();
+    await fixture.dispatcher.post({ kind: 'turn_progress', turn, message: old![1] });
+    await fixture.dispatcher.drain();
+    await refreshSnapshot(client, connections[0]!);
+    expect(toolRows()).toBe(runningRows);
+    expect(toolRows()).not.toContain('turn-0-result');
+    results[1]!.resolve();
+    await waitFor(() => expect(toolRows()).toContain('turn-1-result'));
+    expect(app.lastFrame()).toContain('turn-1-result');
+    expect(toolRows()).toContain('success');
+    expect(toolRows()).not.toContain('failure');
+    const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    expect(transcript.filter((entry) => JSON.stringify(entry).includes('turn-0-result'))).toHaveLength(1);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(toolRows()).toContain('turn-1-result');
+    expect(toolRows()).not.toContain('turn-0-result');
+    expect(vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+      .filter((entry) => JSON.stringify(entry).includes('turn-0-result'))).toHaveLength(1);
+    expect(app.lastFrame()).toContain('Turn 0 finished');
+  } finally { for (const value of [...results, ...finishes]) value.resolve(); await fixture.settled(); }
+});
+
+it.each([false, true])('restores a tool result completed during disconnection on the same client and screen with failure=%s', async (isError) => {
+  const finish = deferred<void>(); const reconnect = deferred<void>(); const opening = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'offline-tool', tool: 'Bash', input: { command: 'printf offline-result' } } });
+    await finish.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'offline-tool', content: 'offline-result', isError } });
+    return toolReply();
+  });
+  useToolProvider(call);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const open = service.open.bind(service);
+  vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+    opening.resolve(); await reconnect.promise; return open(...args);
+  });
+  try {
+    await client.submit({ kind: 'message', text: 'Complete while disconnected' });
+    await waitFor(() => expect(toolRows()).toContain('running @'));
+    const conversationId = client.getSnapshot().state!.conversationId;
+    connections[0]!.socket.destroy();
+    await opening.promise;
+    expect(client.getSnapshot().connection).not.toBe('connected');
+    expect(fixture.activeOperationCount).toBe(1);
+    expect(call.mock.calls[0]![1].abortSignal?.aborted).toBe(false);
+    finish.resolve(); await fixture.settled();
+    expect(fixture.activeOperationCount).toBe(0);
+    expect(client.getSnapshot().connection).not.toBe('connected');
+    reconnect.resolve();
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete',
+      state: { conversationId, running: null } }));
+    await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
+    expect(app.lastFrame()).toContain('offline-result');
+    const completed = toolRows();
+    expect(completed.split('\n').filter((row) => /^[✓✗] Bash/u.test(row))).toHaveLength(1);
+    await refreshSnapshot(client, connections[1]!);
+    await refreshSnapshot(client, connections[1]!);
+    expect(toolRows()).toBe(completed);
+    expect(call).toHaveBeenCalledOnce();
+    expect(app.lastFrame()).toContain('offline-result');
+  } finally { finish.resolve(); reconnect.resolve(); await fixture.settled(); }
+});
+
+it('discards an unfinished old tool when the same conversation advances and reconnects', async () => {
+  const finishes = [deferred<void>(), deferred<void>()];
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = invocation++;
+    options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: index === 0 ? 'stale.ts' : 'current.ts' } } });
+    await finishes[index]!.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Start unfinished tool' });
+    await waitFor(() => expect(toolRows()).toContain('stale.ts'));
+    finishes[0]!.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Start next turn' });
+    await waitFor(() => expect(toolRows()).toContain('current.ts'));
+    expect(toolRows()).not.toContain('stale.ts');
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(toolRows()).toContain('current.ts');
+    expect(toolRows()).toContain('running');
+    expect(toolRows()).not.toContain('stale.ts');
+    const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    expect(transcript.filter((entry) => JSON.stringify(entry).includes('stale.ts'))).toEqual([]);
+  } finally { for (const value of finishes) value.resolve(); await fixture.settled(); }
+});
+
+it.each([
+  ['allowed JSON', '{"stdout":"ready secret123","api\\u005fkey":"secret123"}', 'ready [REDACTED]'],
+  ['unknown JSON field', '{"private_blob":{"text":"非公開本文"}}', '[structured output omitted]'],
+  ['JSON array', '[{"text":"非公開本文"}]', '[structured output omitted]'],
+  ['incomplete JSON', '{"stdout":"非公開本文', '[structured output omitted]'],
+])('sanitizes %s in the manager compact and expanded view before and after reconnect', async (_name, content, expected) => {
+  const finish = deferred<void>();
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'safe-json', tool: 'Bash', input: { command: 'printf ready\x1b[2J' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'safe-json', content, isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const check = () => {
+    const rows = currentToolPage().page.rows;
+    expect(rows.join('\n')).toContain(expected);
+    for (const row of rows) for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b', '{', '}']) {
+      expect(row).not.toContain(forbidden);
+    }
+  };
+  try {
+    await client.submit({ kind: 'message', text: 'Show a safe result' });
+    await waitFor(check);
+    await browseToolPage(app, '\x0f'); check();
+    expect(currentToolPage().state.expanded).toBe(true);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    check();
+    await browseToolPage(app, '\x0f'); check();
+    expect(currentToolPage().state.expanded).toBe(false);
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Keep the displayed history in the transcript' });
+    await fixture.settled();
+    await waitFor(() => expect(vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+      .some((entry) => entry.content.includes(expected))).toBe(true));
+    for (const entry of vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries) {
+      for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b']) expect(entry.content).not.toContain(forbidden);
+    }
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('groups five completed reads and exposes every path and result through bounded detail pages', async () => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    for (let index = 0; index < 5; index++) {
+      options.onStream!({ type: 'tool_use', data: { id: `read-${index}`, tool: 'Read', input: { file_path: `日本語-${index}.ts` } } });
+      options.onStream!({ type: 'tool_result', data: { id: `read-${index}`, content: `read-result-${index}`, isError: false } });
+    }
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Read five files' });
+    await waitFor(() => expect(toolRows()).toContain('Read 5 files'));
+    const compactResults = toolRows().match(/read-result-\d/gu) ?? [];
+    expect(compactResults.length).toBeGreaterThanOrEqual(1);
+    expect(compactResults.length).toBeLessThanOrEqual(3);
+    const pages = [await browseToolPage(app, '\x0f')];
+    for (let page = 0; page < 30 && currentToolPage().page.hasMore; page++) {
+      pages.push(await browseToolPage(app, '\x1b[6~'));
+    }
+    expect(currentToolPage().page.hasMore).toBe(false);
+    for (let index = 0; index < 5; index++) {
+      expect(pages.join('\n')).toContain(`日本語-${index}.ts`);
+      expect(pages.join('\n')).toContain(`read-result-${index}`);
+    }
+    expect(pages.length).toBeGreaterThan(1);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('keeps start order and matches a delayed background failure after a later tool succeeds', async () => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'background', tool: 'Bash', input: { command: 'background-command' } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'later', tool: 'Grep', input: { pattern: 'later-search' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'later', content: 'later-success', isError: false } });
+    options.onStream!({ type: 'tool_result', data: { id: 'background', content: 'background-failure', isError: true } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Wait for background completion' });
+    await waitFor(() => expect(toolRows()).toContain('background-failure'));
+    const rows = toolRows();
+    const first = rows.indexOf('✗ Bash'); const second = rows.indexOf('✓ Grep');
+    expect(first).toBeGreaterThanOrEqual(0); expect(second).toBeGreaterThan(first);
+    const background = rows.slice(first, second); const later = rows.slice(second);
+    expect(background).toContain('background-command'); expect(background).toContain('failure');
+    expect(background).toContain('background-failure'); expect(background).not.toContain('later-success');
+    expect(later).toContain('later-search'); expect(later).toContain('success');
+    expect(later).toContain('later-success'); expect(later).not.toContain('background-failure');
+    expect(Number(background.match(/completion #(\d+)/u)![1])).toBeGreaterThan(Number(later.match(/completion #(\d+)/u)![1]));
+    expect(app.lastFrame()).toContain('background-failure');
+    expect(app.lastFrame()).toContain('later-success');
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('keeps the selected slash completion and running turn while toggling and paging tool history', async () => {
+  const finish = deferred<void>();
+  let signal: AbortSignal | undefined;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    signal = options.abortSignal;
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'completion-history' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: Array<string>(50).fill('completion-result').join('\n'), isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  const submit = vi.spyOn(client, 'submit');
+  try {
+    await client.submit({ kind: 'message', text: 'Show history beside completions' });
+    await waitFor(() => expect(toolRows()).toContain('completion-result'));
+    app.stdin.write('/');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /make-goal'));
+    app.stdin.write('\x1b[B');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify'));
+    const running = client.getSnapshot().state!.running;
+    for (const key of ['\x0f', '\x1b[6~', '\x1b[5~', '\x0f']) {
+      await browseToolPage(app, key);
+      expect(app.lastFrame()).toContain('❯ /verify');
+      expect(client.getSnapshot().state!.running).toEqual(running);
+      expect(signal?.aborted).toBe(false);
+    }
+    app.stdin.write('\t');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify '));
+    expect(submit.mock.calls.filter(([command]) => command.kind === 'message')).toHaveLength(1);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('preserves a Japanese draft and insertion point while paging a long result, resizing and reconnecting on the same screen', async () => {
+  const finish = deferred<void>();
+  const lines = Array.from({ length: 180 }, (_, index) => `row-${String(index).padStart(3, '0')} ${'日本語'.repeat(20)}`);
+  expect(Buffer.byteLength(lines.join('\n'))).toBeGreaterThan(16 * 1024);
+  let signal: AbortSignal | undefined;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    signal = options.abortSignal;
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'printf long-result' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: lines.join('\n'), isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'running', tool: 'Grep', input: { pattern: 'still-running' } } });
+    await finish.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const submit = vi.spyOn(client, 'submit');
+  try {
+    await client.submit({ kind: 'message', text: 'Inspect long output' });
+    await waitFor(() => expect(toolRows()).toContain('row-000'));
+    const compactRows = toolRows().match(/row-\d{3}/gu) ?? [];
+    expect(compactRows.length).toBeGreaterThanOrEqual(1);
+    expect(compactRows.length).toBeLessThanOrEqual(3);
+    app.stdin.write('日本語下書き');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語下書き'));
+    app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
+    const running = { ...client.getSnapshot().state!.running! };
+    const pages = [await browseToolPage(app, '\x0f')];
+    for (let page = 0; page < 100 && currentToolPage().page.hasMore; page++) {
+      pages.push(await browseToolPage(app, '\x1b[6~'));
+      expect(currentToolPage().page.rows.length).toBeLessThan(24);
+    }
+    expect(currentToolPage().page.hasMore).toBe(false);
+    for (let index = 0; index < lines.length; index++) expect(pages.join('\n')).toContain(`row-${String(index).padStart(3, '0')}`);
+    expect(pages.join('\n')).toContain('still-running');
+    expect(pages.at(-1)).toContain('running');
+    await browseToolPage(app, '\x1b[5~');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    for (const width of [40, 100, 80]) {
+      const beforeResize = toolRows();
+      columns.mockReturnValue(width); app.stdout.emit('resize');
+      await waitFor(() => {
+        expect(app.lastFrame()).toContain('日本語下書き');
+        expect(toolRows()).not.toBe(beforeResize);
+        for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+      });
+    }
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(client.getSnapshot().state?.running).toEqual(running);
+    expect(signal?.aborted).toBe(false);
+    app.stdin.write('追記');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語下追記書き'));
+    app.stdin.write('\r');
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text: '日本語下追記書き' }, expect.any(Function)));
+    app.stdin.write('\x1b[27u');
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([32, 40])('reserves wrapped control hints and the draft before filling tool detail pages at width %s', async (width) => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bounded', tool: 'Bash', input: { command: 'printf bounded-result' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'bounded',
+      content: Array.from({ length: 120 }, (_, index) => `result-line-${index}`).join('\n'), isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Fill the current detail page' });
+    await waitFor(() => expect(toolRows()).toContain('result-line-0'));
+    app.stdin.write('日本語の下書き');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語の下書き'));
+    await browseToolPage(app, '\x0f');
+    const previousHeight = currentToolPage().height;
+    vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(width); app.stdout.emit('resize');
+    await waitFor(() => {
+      expect(currentToolPage().height).not.toBe(previousHeight);
+      expect(currentToolPage().state.expanded).toBe(true);
+      expect(currentToolPage().page.hasMore).toBe(true);
+      const frame = app.lastFrame()!;
+      const start = frame.indexOf('✓ Bash');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const liveRows = frame.slice(start).trimEnd().split('\n');
+      for (const row of liveRows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+      expect(liveRows.join('\n')).toContain('日本語の下書き');
+      expect(liveRows.join('').replace(/\s/gu, '')).toContain(getLabel('manager.inputHint', 'en').replace(/\s/gu, ''));
+      expect(liveRows.length).toBeLessThanOrEqual(24);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
 
 it('refreshes human merge wait and ongoing counts through IPC when finishing work runs, fails and is retried', async () => {
   const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
@@ -234,14 +913,13 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
     read.cancel();
     for (const persisted of [writes.mock.calls, savedResults.mock.calls, items, client.getSnapshot()]) {
       const json = JSON.stringify(persisted);
-      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
-      expect(json).not.toContain('private-');
+      for (const transient of [prose, '調べがつきました。', 'private-reasoning-marker']) expect(json).not.toContain(transient);
       JSON.parse(json, (key, value: unknown) => {
         expect(key).not.toBe('activity');
         return value;
       });
     }
-    expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-');
+    expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-reasoning-marker');
   } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); service.detach(slackOpen.attachmentId); }
 });
 
