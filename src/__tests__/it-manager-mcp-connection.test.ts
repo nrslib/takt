@@ -13,7 +13,11 @@ import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/man
 import { TurnToolScope } from '../features/daemonTurn/toolScope.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { MANAGER_ASSIGNMENT_HEADER, withManagerAssignment } from '../features/manager/assignment.js';
-import { readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
+import { createWorkspace, readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
+import {
+  addEpicMember, createEpic, getEpic, listEpics, recordEpicVerificationResult, startEpicVerification,
+} from '../infra/epics/index.js';
+import { completedEpicGoal, epicDefinition, secondGoalId, verificationResultFor } from './helpers/epic-fixtures.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
@@ -48,6 +52,200 @@ describe('manager MCP connection confirmation', () => {
     vi.unstubAllEnvs();
     invalidateResolvedConfigCache(cwd);
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  async function epicFixture() {
+    const globalConfigDirectory = getGlobalConfigDir();
+    const workspace = await createWorkspace({ globalConfigDirectory, name: '連携確認', repositoryDirectories: [cwd] });
+    const owner = { globalConfigDirectory, workspaceId: workspace.id };
+    const epic = await createEpic({ ...owner, ...epicDefinition(), reason: '連携確認を依頼する' });
+    const context = { ...owner, epicId: epic.id };
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    await store.update(goalId, () => completedEpicGoal(sha, sha));
+    const connection = await connectTestManagerMcp(cwd, { kind: 'workspace', workspaceId: workspace.id });
+    const call = (name: string, args: Record<string, unknown> = {}) => connection.client.callTool({
+      name, arguments: { cwd, ...(name === 'takt_list_epics' ? {} : { epicId: epic.id }),
+        ...(['takt_get_epic', 'takt_list_epics', 'takt_get_epic_verification_recovery'].includes(name)
+          ? {} : { reason: '人の指示で操作する' }), ...args },
+    });
+    const success = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await call(name, args);
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      return result;
+    };
+    return { owner, context, connection, call, success, member: { repositoryDirectory: cwd, goalId } };
+  }
+
+  it('exposes Epic operations on the manager connection and reloads a created definition', async () => {
+    const f = await epicFixture();
+    try {
+      const names = (await f.connection.client.listTools()).tools.map(({ name }) => name);
+      expect(names).toEqual(expect.arrayContaining([
+        'takt_create_epic', 'takt_get_epic', 'takt_list_epics', 'takt_update_epic_definition',
+        'takt_add_epic_member', 'takt_remove_epic_member', 'takt_replace_epic_member', 'takt_refresh_epic_targets',
+        'takt_start_epic_verification', 'takt_record_epic_verification_result', 'takt_complete_epic',
+        'takt_abort_epic', 'takt_get_epic_verification_recovery',
+      ]));
+      const created = await f.connection.client.callTool({ name: 'takt_create_epic', arguments: {
+        cwd, ...epicDefinition(), objective: '別の連携確認', reason: '別の確認を依頼する',
+      } });
+      expect(created.isError, firstTextContent(created.content)).not.toBe(true);
+      const epics = await listEpics(f.owner);
+      expect(epics).toHaveLength(2);
+      const saved = epics.find(({ id }) => id !== f.context.epicId)!;
+      expect(saved).toMatchObject({ ...epicDefinition(), objective: '別の連携確認', status: 'active',
+        workspaceId: f.owner.workspaceId, changes: [expect.objectContaining({ reason: '別の確認を依頼する' })] });
+      for (const name of ['takt_get_epic', 'takt_list_epics']) {
+        const result = await f.success(name, name === 'takt_get_epic' ? { epicId: saved.id } : {});
+        expect(firstTextContent(result.content)).toContain(saved.id);
+      }
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('pages Epic reads from storage while retaining global field paths and later-record failures', async () => {
+    const f = await epicFixture();
+    try {
+      for (const objective of ['Second', 'Third']) await createEpic({ ...f.owner, ...epicDefinition(), objective, reason: 'Separate Epic' });
+      const all = await listEpics(f.owner);
+      for (const offset of [0, 1]) {
+        const result = JSON.parse(firstTextContent((await f.success('takt_list_epics', { offset, limit: 1 })).content));
+        expect(result).toMatchObject({ epics: [all[offset]], totalCount: 3, offset, returnedCount: 1, nextOffset: offset + 1 });
+      }
+      const field = JSON.parse(firstTextContent((await f.success('takt_list_epics', { offset: 0, limit: 1, path: '1.objective' })).content));
+      expect(field).toMatchObject({ path: '1.objective', content: all[1]!.objective });
+      expect(JSON.parse(firstTextContent((await f.success('takt_list_epics', { path: 'length' })).content)))
+        .toMatchObject({ path: 'length', content: '3' });
+      expect(JSON.parse(firstTextContent((await f.success('takt_list_epics', { offset: 3, limit: 1 })).content)))
+        .toMatchObject({ epics: [], totalCount: 3, nextOffset: null });
+      const outside = join(f.owner.globalConfigDirectory, 'workspaces', f.owner.workspaceId, 'epics', all[2]!.id, 'epic.json');
+      writeFileSync(outside, '{');
+      expect((await f.call('takt_list_epics', { offset: 0, limit: 1 })).isError).toBe(true);
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('records definition and member changes through MCP while preserving the completed goals', async () => {
+    const f = await epicFixture();
+    try {
+      const original = await store.get(goalId);
+      await store.create({ ...original, id: secondGoalId });
+      const replacement = { repositoryDirectory: cwd, goalId: secondGoalId };
+      await f.success('takt_update_epic_definition', { changes: { objective: '更新した連携目的' }, reason: '目的を改訂する' });
+      await f.success('takt_add_epic_member', { member: f.member, reason: '最初の成果を追加する' });
+      await f.success('takt_replace_epic_member', { member: f.member, replacement, reason: '修正成果へ置換する' });
+      await f.success('takt_refresh_epic_targets', { reason: '取り込み後の対象を固定する' });
+      expect(await getEpic(f.context)).toMatchObject({ objective: '更新した連携目的', members: [replacement],
+        targets: [{ ...replacement, targetSha: original.completion!.targetSha }], changes: expect.arrayContaining([
+          expect.objectContaining({ reason: '目的を改訂する' }),
+          expect.objectContaining({ member: f.member, reason: '最初の成果を追加する' }),
+          expect.objectContaining({ member: f.member, replacement, reason: '修正成果へ置換する' }),
+        ]) });
+      await f.success('takt_remove_epic_member', { member: replacement, reason: '対象を外す' });
+      await f.success('takt_abort_epic', { reason: '連携確認を中止する' });
+      expect(await getEpic(f.context)).toMatchObject({ status: 'aborted', members: [], changes: expect.arrayContaining([
+        expect.objectContaining({ member: replacement, reason: '対象を外す' }),
+        expect.objectContaining({ reason: '連携確認を中止する' }),
+      ]) });
+      expect(await store.get(goalId)).toEqual(original);
+      expect(await store.get(secondGoalId)).toEqual({ ...original, id: secondGoalId });
+    } finally { await f.connection.dispose(); }
+  });
+
+  it.each(['unassigned', 'missing', 'duplicate'] as const)('rejects an %s Epic member through MCP without changing successful evidence', async (invalid) => {
+    const f = await epicFixture();
+    try {
+      await addEpicMember({ ...f.context, member: f.member, reason: '成果を追加する' });
+      const run = await startEpicVerification(f.context);
+      await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(run) });
+      const before = await getEpic(f.context);
+      await f.success('takt_get_epic');
+      const outside = join(cwd, 'outside');
+      if (invalid === 'unassigned') {
+        mkdirSync(outside);
+        initializeGitFixture(outside, []);
+        await new GoalStore(outside).create(goalRecord());
+      }
+      const member = invalid === 'unassigned' ? { ...f.member, repositoryDirectory: outside }
+        : invalid === 'missing' ? { ...f.member, goalId: secondGoalId } : f.member;
+      expect((await f.call('takt_add_epic_member', { member })).isError).toBe(true);
+      expect(await getEpic(f.context)).toEqual(before);
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('rejects foreign workspace Epic reads and writes on the same manager connection', async () => {
+    const f = await epicFixture();
+    try {
+      const other = await createWorkspace({ globalConfigDirectory: f.owner.globalConfigDirectory, name: '別担当', repositoryDirectories: [] });
+      const foreignOwner = { ...f.owner, workspaceId: other.id };
+      const foreign = await createEpic({ ...foreignOwner, ...epicDefinition(), reason: '別担当の確認' });
+      const before = await getEpic({ ...foreignOwner, epicId: foreign.id });
+      for (const name of ['takt_get_epic', 'takt_abort_epic']) {
+        expect((await f.call(name, { workspaceId: other.id, epicId: foreign.id })).isError).toBe(true);
+      }
+      expect(await getEpic({ ...foreignOwner, epicId: foreign.id })).toEqual(before);
+      const listed = await f.success('takt_list_epics');
+      expect(firstTextContent(listed.content)).toContain(f.context.epicId);
+      expect(firstTextContent(listed.content)).not.toContain(foreign.id);
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('rejects Epic abortion without a reason before changing the saved record', async () => {
+    const f = await epicFixture();
+    try {
+      await f.success('takt_get_epic');
+      const before = await getEpic(f.context);
+      for (const reason of [undefined, '']) {
+        expect((await f.call('takt_abort_epic', { reason })).isError).toBe(true);
+        expect(await getEpic(f.context)).toEqual(before);
+      }
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('preserves the original run when an old MCP result arrives after a definition change', async () => {
+    const f = await epicFixture();
+    try {
+      await f.success('takt_add_epic_member', { member: f.member });
+      await f.success('takt_start_epic_verification');
+      const old = (await getEpic(f.context)).runningVerification!;
+      expect(old).toBeDefined();
+      const recovery = await f.success('takt_get_epic_verification_recovery');
+      expect(firstTextContent(recovery.content)).toContain(old.id);
+      await f.success('takt_update_epic_definition', { changes: { verificationProcedure: { version: 2, steps: ['改訂した確認'] } } });
+      await f.success('takt_start_epic_verification');
+      const current = (await getEpic(f.context)).runningVerification!;
+      await f.success('takt_record_epic_verification_result', { result: verificationResultFor(old) });
+      const saved = await getEpic(f.context);
+      expect(saved).toMatchObject({ status: 'active', runningVerification: { id: current.id }, verificationRuns: expect.arrayContaining([
+        expect.objectContaining({ id: old.id, revision: old.revision, status: 'stale' }),
+      ]) });
+      expect(saved.currentEvidence).toBeUndefined();
+      expect((await f.call('takt_complete_epic')).isError).toBe(true);
+      expect((await getEpic(f.context)).status).toBe('active');
+    } finally { await f.connection.dispose(); }
+  });
+
+  it('keeps result registration separate from completion and applies repeated MCP calls once', async () => {
+    const f = await epicFixture();
+    try {
+      await f.success('takt_add_epic_member', { member: f.member });
+      const goalBefore = await store.get(goalId);
+      const refsBefore = execFileSync('git', ['for-each-ref'], { cwd, encoding: 'utf8' });
+      await f.success('takt_start_epic_verification');
+      const run = (await getEpic(f.context)).runningVerification!;
+      await f.success('takt_record_epic_verification_result', { result: verificationResultFor(run) });
+      expect((await getEpic(f.context)).status).toBe('active');
+      await f.success('takt_complete_epic');
+      const completed = await getEpic(f.context);
+      expect(completed.status).toBe('completed');
+      for (const _attempt of [1, 2]) {
+        await f.success('takt_record_epic_verification_result', { result: verificationResultFor(run) });
+        await f.success('takt_complete_epic');
+        await f.success('takt_get_epic');
+      }
+      expect(await getEpic(f.context)).toEqual(completed);
+      expect(completed.verificationRuns).toHaveLength(1);
+      expect(await store.get(goalId)).toEqual(goalBefore);
+      expect(execFileSync('git', ['for-each-ref'], { cwd, encoding: 'utf8' })).toBe(refsBefore);
+    } finally { await f.connection.dispose(); }
   });
 
   it('records every patrol entry as inspection and preserves ordinary work kinds on the same MCP connection', async () => {

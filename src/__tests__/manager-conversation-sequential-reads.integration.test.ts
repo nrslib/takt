@@ -1,5 +1,5 @@
 import * as privateFiles from '../shared/utils/private-file.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -15,6 +15,17 @@ import { formatGoalNotification } from '../infra/goals/notifications.js';
 import { conversationProjection } from '../features/daemon/conversationProjection.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
 import { DaemonDisplayFiles } from '../infra/daemon/displayFiles.js';
+import { DaemonEpicFiles } from '../infra/daemon/epicFiles.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { epicDefinition, epicRecord, secondGoalId } from './helpers/epic-fixtures.js';
+import { createEpic, getEpic, updateEpicDefinition } from '../infra/epics/index.js';
+import { buildTurnBusinessContext } from '../features/daemonTurn/turnContext.js';
+import { DaemonConversations } from '../features/daemon/conversationState.js';
+import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
+import { DaemonNotifications } from '../infra/daemon/notifications.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 let directory: string;
 let repository: string;
 function assignment() { return { kind: 'repository' as const, repositoryDirectory: repository, repositoryDirectories: [repository] }; }
@@ -25,6 +36,80 @@ function save(goal: Goal) {
 async function collect<T>(source: AsyncIterable<T>) { const values: T[] = []; for await (const value of source) values.push(value); return values; }
 beforeEach(() => { directory = getGlobalConfigDir(); repository = join(directory, 'repository'); mkdirSync(repository); });
 afterEach(() => vi.restoreAllMocks());
+
+it('restores Epic definitions and retained history larger than 16 MiB saved by the public API', async () => {
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Large Epic', repositoryDirectories: [] });
+  const owner = { globalConfigDirectory: directory, workspaceId: workspace.id };
+  const objective = 'x'.repeat(8 * 1024 * 1024);
+  const original = await createEpic({ ...owner, ...epicDefinition(), objective, reason: 'Create integration definition' });
+  const path = join(directory, 'workspaces', workspace.id, 'epics', original.id, 'epic.json');
+  expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
+  const files = new DaemonEpicFiles(directory);
+  expect(await files.get(workspace.id, original.id)).toEqual(await getEpic({ ...owner, epicId: original.id }));
+  expect(await collect(files.list(workspace.id))).toEqual([original]);
+
+  const updated = await updateEpicDefinition({ ...owner, epicId: original.id,
+    changes: { objective: `${objective} updated` }, reason: 'Retain the previous definition' });
+  expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
+  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const project = () => collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false));
+  for (const _attempt of [1, 2]) {
+    const items = await project();
+    expect(items.filter((item) => item.kind === 'epic')).toEqual([
+      { kind: 'epic', epic: updated, memberProgress: [], recovery: [] },
+    ]);
+    expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
+  }
+  const assignment = await new DaemonRouting(directory).display(identity);
+  expect(JSON.parse(await buildTurnBusinessContext(assignment, null, directory)).epics)
+    .toEqual([{ epic: updated, recovery: [] }]);
+  const errors = vi.fn();
+  const conversations = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
+    new DaemonNotifications(directory), async () => {}, errors);
+  const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
+  try {
+    expect(await source.hasWork(new DaemonPersistedFiles(directory))).toBe(true);
+    expect(await source.patrols()).toMatchObject([{ workspaceId: workspace.id, epicIds: [updated.id] }]);
+    expect(errors).not.toHaveBeenCalled();
+  } finally {
+    await source.close();
+    await conversations.close();
+  }
+  expect(await getEpic({ ...owner, epicId: original.id })).toEqual(updated);
+});
+
+it('projects each Epic on demand and preserves cancellation and later read failures', async () => {
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Epics', repositoryDirectories: [] });
+  const records = [epicRecord(), { ...epicRecord(), id: secondGoalId }]
+    .map((epic) => ({ ...epic, workspaceId: workspace.id })).sort((a, b) => a.id.localeCompare(b.id));
+  const store = new EpicStore(directory, workspace.id);
+  for (const record of records) await store.create(record);
+  const get = vi.spyOn(DaemonEpicFiles.prototype, 'get');
+  const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
+  const read = () => conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false);
+  const iterator = read();
+  expect((await iterator.next()).value).toMatchObject({ kind: 'assignment' });
+  expect(get).not.toHaveBeenCalled();
+  expect((await iterator.next()).value).toMatchObject({ kind: 'epic', epic: records[0] });
+  expect(get).toHaveBeenCalledTimes(1);
+  expect((await iterator.next()).value).toMatchObject({ kind: 'epic', epic: records[1] });
+  expect(get).toHaveBeenCalledTimes(2);
+  expect((await iterator.next()).done).toBe(true);
+  writeFileSync(join(directory, 'workspaces', workspace.id, 'epics', records[1]!.id, 'epic.json'), '{');
+  let cancelled = false;
+  const stopped = conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => cancelled);
+  await stopped.next();
+  await stopped.next();
+  get.mockClear();
+  cancelled = true;
+  expect((await stopped.next()).done).toBe(true);
+  expect(get).not.toHaveBeenCalled();
+  const failed = read();
+  await failed.next();
+  await failed.next();
+  expect((await failed.next()).value).toMatchObject({ kind: 'display_event' });
+  await expect(failed.next()).rejects.toThrow();
+});
 
 it('reports corrupt tasks while projecting goals and inquiries with awaiting-merge goals treated as human waits', async () => {
   const active = { ...goalRecord(), questions: [createInquiry({ body: 'Goal question' })] };

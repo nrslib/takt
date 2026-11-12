@@ -1,4 +1,5 @@
 import { DaemonWaitCommands } from './waitCommands.js';
+import { startEpicWatcher } from './epicWatcher.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { homedir } from 'node:os';
@@ -59,6 +60,7 @@ export async function startDaemon(options: {
   let idleCheck: WatchLoop | undefined;
   let waitCommandCheck: WatchLoop | undefined;
   let patrols: WatchLoop | undefined;
+  let epicWatcher: WatchLoop | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
@@ -92,7 +94,7 @@ export async function startDaemon(options: {
   const resources = { async close() {
     await startupFinished;
     const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
-      closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
+      closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -170,6 +172,7 @@ export async function startDaemon(options: {
         allowedUserIds: config.manager.slack.allowed_user_ids, language: config.language ?? global.language ?? 'en' });
     }
     ipc = await createConversationIpcServer(directory, options.owner, input);
+    epicWatcher = startEpicWatcher(conversations, dispatcher, reportDaemonError);
     options.signal.throwIfAborted();
     const files = new DaemonPersistedFiles(directory);
     const records = new FileWatchRecords(directory);

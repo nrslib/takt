@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -61,6 +62,15 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
     for (const assignment of await this.conversations.routing.assignments()) {
       if (assignment.kind === 'daemon') continue;
+      if (assignment.kind === 'workspace') {
+        try {
+          let active = false;
+          for await (const epic of new DaemonEpicFiles(this.conversations.routing.directory).list(assignment.workspaceId)) {
+            if (epic.status === 'active') active = true;
+          }
+          if (active) return true;
+        } catch (error) { this.onError(error); return true; }
+      }
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
@@ -93,6 +103,19 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async patrols(): Promise<readonly ManagerPatrolTarget[]> {
     const global = await globalDaemonConfiguration(this.conversations.routing.directory);
     const targets: ManagerPatrolTarget[] = [];
+    for (const assignment of await this.conversations.routing.assignments()) {
+      if (assignment.kind !== 'workspace') continue;
+      try {
+        const epicIds: string[] = [];
+        for await (const epic of new DaemonEpicFiles(this.conversations.routing.directory).list(assignment.workspaceId)) {
+          if (epic.status === 'active') epicIds.push(epic.id);
+        }
+        if (epicIds.length === 0) continue;
+        await this.conversations.ensure(assignment);
+        targets.push({ conversationId: conversationId(assignment), workspaceId: assignment.workspaceId, epicIds,
+          intervalSeconds: global.manager?.patrol_interval ?? 1800 });
+      } catch (error) { this.onError(error); }
+    }
     for await (const project of this.projects()) {
       try {
         const config = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));

@@ -1,4 +1,5 @@
 import type { WaitCommandCompleted } from './waitCommand.js';
+import type { EpicEvent } from './epicEvent.js';
 import type { ConversationActor, DirectorMessageOrigin } from '../../infra/conversations/schema.js';
 import type { GoalExecutionOrigin, GoalQuestion, GoalTaskResult } from '../../infra/goals/schema.js';
 import type { ConversationCommand } from '../../features/manager/conversationPort.js';
@@ -33,6 +34,7 @@ export type WatchObservation = {
 
 /** F/C/E が作り、A が優先度を決め、D が同じ会話の文脈で処理する。 */
 export type TurnEvent =
+  | EpicEvent
   | WaitCommandCompleted
   // 接続ごとの指定を発言に固定する。session の provider/model は上書き指定の代用にしない。
   | { kind: 'human_command'; command: HumanCommand; speaker: ConversationActor; agentOverrides?: AssistantCliOverrides }
@@ -44,14 +46,14 @@ export type TurnEvent =
   | { kind: 'goal_resumed'; repositoryDirectory: string; goalId: string; origin?: GoalExecutionOrigin }
   | { kind: 'inquiry_answered'; repositoryDirectory: string; goalId: string; questionId: string; answer: NonNullable<GoalQuestion['answer']> }
   | { kind: 'watch_observation'; observation: WatchObservation }
-  | { kind: 'patrol'; repositoryDirectory: string; goalIds: string[] };
+  | { kind: 'patrol'; repositoryDirectory?: string; goalIds: string[]; workspaceId?: string; epicIds?: string[] };
 
 export function eventGoalReference(event: TurnEvent): { repositoryDirectory: string; goalId?: string | null } | undefined {
   switch (event.kind) {
     case 'task_completed': case 'task_failed': return event.task;
     case 'goal_pr_failed': case 'goal_registered': case 'goal_resumed': case 'inquiry_answered': return event;
     case 'wait_command_completed': return { repositoryDirectory: event.repositoryDirectory };
-    case 'patrol': return { repositoryDirectory: event.repositoryDirectory };
+    case 'patrol': return event.repositoryDirectory === undefined ? undefined : { repositoryDirectory: event.repositoryDirectory };
     case 'watch_observation': {
       const observation = event.observation;
       switch (observation.kind) {

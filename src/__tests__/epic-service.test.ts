@@ -8,7 +8,7 @@ import {
 import { epicDefinition, epicWorkspaceId, secondGoalId, verificationResultFor } from './helpers/epic-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
-const doubles = vi.hoisted(() => ({ records: new Map<string, unknown>(), workspace: vi.fn(), member: vi.fn(), targets: vi.fn(), lock: vi.fn() }));
+const doubles = vi.hoisted(() => ({ records: new Map<string, unknown>(), list: vi.fn(), workspace: vi.fn(), member: vi.fn(), targets: vi.fn(), lock: vi.fn() }));
 vi.mock('../infra/config/global/workspaceRegistry.js', () => ({ readWorkspace: doubles.workspace }));
 vi.mock('../infra/epics/lock.js', () => ({ withWorkspaceEpicLock: doubles.lock }));
 vi.mock('../infra/epics/targets.js', async (original) => ({
@@ -34,8 +34,10 @@ vi.mock('../infra/epics/store.js', () => ({
       doubles.records.set(epic.id, structuredClone(epic));
       return epic;
     }
-    async list() {
-      return { epics: [...doubles.records.values()].map((value) => EpicSchema.parse(value)).filter((epic) => epic.workspaceId === this.workspaceId), errors: [] };
+    async list(page?: { offset: number; limit: number }) {
+      doubles.list(page);
+      const epics = [...doubles.records.values()].map((value) => EpicSchema.parse(value)).filter((epic) => epic.workspaceId === this.workspaceId);
+      return { epics: page === undefined ? epics : epics.slice(page.offset, page.offset + page.limit), totalCount: epics.length, errors: [] };
     }
     private validate(input: Epic) {
       const epic = EpicSchema.parse(input);
@@ -66,6 +68,25 @@ async function create() {
 }
 
 describe('Epic public operations', () => {
+  it('passes page selection to storage and preserves the unpaged public result', async () => {
+    const contexts = await Promise.all([create(), create(), create()]);
+    const all = await listEpics(owner);
+    expect(all.map(({ id }) => id)).toEqual(contexts.map(({ epicId }) => epicId));
+    expect(await listEpics(owner, { offset: 1, limit: 1 })).toEqual({ epics: [all[1]], totalCount: 3, offset: 1 });
+    expect(doubles.list).toHaveBeenLastCalledWith({ offset: 1, limit: 1 });
+    expect(await listEpics(owner, { offset: 3, limit: 1 })).toEqual({ epics: [], totalCount: 3, offset: 3 });
+  });
+
+  it('checks active references outside the first page before allowing repository removal', async () => {
+    await create();
+    const middle = await create();
+    await create();
+    await addEpicMember({ ...middle, member, reason: 'Add reference outside the first page' });
+    expect((await listEpics(owner, { offset: 0, limit: 1 })).epics[0]!.members).toEqual([]);
+    await expect(assertRepositoryHasNoActiveEpics(owner, member.repositoryDirectory)).rejects.toThrow();
+    await abortEpic({ ...middle, reason: 'Release reference' });
+    await expect(assertRepositoryHasNoActiveEpics(owner, member.repositoryDirectory)).resolves.toBeUndefined();
+  });
   it('creates and reads workspace-owned definitions through the storage boundary', async () => {
     const context = await create();
     expect(await getEpic(context)).toMatchObject({ ...epicDefinition(), workspaceId: owner.workspaceId, status: 'active' });
