@@ -10,6 +10,53 @@ const result = (id: string, isError = false, callId = 'a'): Extract<StreamEvent,
 });
 
 describe('tool activity history', () => {
+  it('should roundtrip provider identities without imposing daemon operation ID limits', () => {
+    const history = new ToolActivityHistory(() => 1000.5);
+    const toolId = 'provider-tool-'.repeat(30);
+    const callId = 'call-context-'.repeat(30);
+    history.apply(use(toolId, callId)); history.apply(result(toolId, false, callId));
+    const restored = new ToolActivityHistory();
+    restored.restore(history.snapshot());
+    expect(restored.entries()).toEqual(history.entries());
+    expect(restored.entries()[0]).toMatchObject({ toolId, context: { callId }, startedAt: 1000.5, completedAt: 1000.5 });
+  });
+  it('should restore identity, observed timestamps and reception order without replaying events', () => {
+    let now = 1000;
+    const original = new ToolActivityHistory(() => now);
+    original.apply(use('first')); original.apply(use('second'));
+    now = 1250; original.apply(result('second', true));
+    const saved = original.snapshot();
+    const restored = new ToolActivityHistory(() => 9000);
+    restored.restore(saved);
+    expect(restored.entries()).toEqual(original.entries());
+    expect(restored.apply(result('second', true))).toEqual([]);
+    const [finished] = restored.apply(result('first'));
+    expect(finished).toMatchObject({ startedAt: 1000, completedAt: 9000, status: 'success' });
+    expect(finished!.completionSequence).toBeGreaterThan(saved.sequence);
+    restored.restore(saved);
+    expect(restored.snapshot()).toEqual(saved);
+    saved.entries[0]!.input.file_path = 'mutated';
+    expect(restored.entries()[0]!.input.file_path).toBe('a.ts');
+  });
+
+  it('should not reuse retained entry keys after unfinished entries were removed', () => {
+    const original = new ToolActivityHistory();
+    original.apply(use('unfinished')); original.apply(use('finished')); original.apply(result('finished'));
+    const saved = original.snapshot();
+    const restored = new ToolActivityHistory();
+    restored.restore({ ...saved, entries: saved.entries.filter((entry) => entry.status !== 'running') });
+    restored.apply(use('new'));
+    expect(new Set(restored.entries().map((entry) => entry.key)).size).toBe(2);
+    expect(restored.entries().map((entry) => entry.toolId)).toEqual(['finished', 'new']);
+  });
+
+  it('should reject duplicate keys in a saved history', () => {
+    const history = new ToolActivityHistory();
+    history.apply(use('first'));
+    const saved = history.snapshot();
+    expect(() => history.restore({ ...saved, entries: [...saved.entries, ...saved.entries] })).toThrow();
+  });
+
   it('should select by entry key and isolate the returned input, context and status', () => {
     const history = new ToolActivityHistory();
     const [started] = history.apply(use('provider-id'));

@@ -2,7 +2,7 @@ import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
 import { classifyToolResult, stableToolResultPrefix } from '../tool-activity/result.js';
 import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, groupToolActivities, projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
-import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../tool-activity/types.js';
+import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection } from '../tool-activity/types.js';
 import { truncateUtf8 } from '../utils/utf8.js';
 import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
 import { sanitizeTerminalStreamText } from '../utils/text.js';
@@ -73,6 +73,25 @@ export class ToolActivityDisplay {
       }
     }
     return entries;
+  }
+
+  restore(state: ToolActivityHistoryState): void {
+    this.history.restore(state);
+    this.streams.clear();
+    this.completed.clear();
+    this.displayedResults.clear();
+    this.readableStreams.clear();
+    for (const entry of this.history.entries()) {
+      if (entry.status !== 'running') {
+        this.completed.set(entry.key, entry.status);
+        continue;
+      }
+      const result = classifyToolResult(entry.output);
+      if (result.kind !== 'text') continue;
+      const redactor = createSensitiveTextStreamRedactor();
+      const text = redactor.write(result.text, entry.input);
+      this.readableStreams.set(entry.key, { redactor, consumed: result.text.length, text });
+    }
   }
 
   groups(): ToolActivityGroup[] {

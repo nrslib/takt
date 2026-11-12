@@ -1,4 +1,19 @@
-import type { StreamCallContext } from '../types/provider.js';
+import type { StreamCallContext, StreamEvent } from '../types/provider.js';
+
+export type ToolActivityEvent = Extract<StreamEvent, { type: 'tool_use' | 'tool_result' | 'tool_output' }>;
+
+export interface ToolActivityHistoryState {
+  entries: ToolActivityEntry[];
+  sequence: number;
+}
+
+export interface ToolActivityTurnState {
+  operationId: string;
+  generation: number;
+  finished: boolean;
+  eventIds: string[];
+  history: ToolActivityHistoryState;
+}
 
 export type ToolActivityStatus = 'running' | 'success' | 'failure';
 

@@ -175,6 +175,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               abortSignal: io.signal,
               onActivity: (activity) => io.progress(activity),
               onText: (message) => io.progress({ kind: 'turn_text', message }),
+              onToolEvent: (event) => {
+                if (event.toolActivity === undefined) throw new Error('Missing tool call identity');
+                io.progress({ kind: 'tool_event', eventId: randomUUID(), event: {
+                  ...event, toolActivity: { ...event.toolActivity, operationId: input.turn.operationId, generation: input.turn.generation },
+                } });
+              },
               patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import {
   createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
+  mergeToolActivityTranscript,
   type ToolActivityViewLabels,
 } from '../features/tui/toolActivityViewState.js';
 import type { ToolActivityGroup, ToolActivityProjection } from '../shared/tool-activity/types.js';
@@ -29,6 +30,146 @@ function fixture(content: string) {
 }
 
 describe('tool activity view state', () => {
+  it.each([false, true])('retains the complete input after narrow, wide and expanded headers with expanded first=%s', (expandedFirst) => {
+    const { reader, groups } = fixture('ready');
+    const command = 'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    groups[0]!.entries[0]!.input = command;
+    const initial = createToolActivityViewState();
+    const expanded = toggleToolActivityView(initial);
+    const pages = [
+      ...(expandedFirst ? [toolActivityViewPage(reader, groups, expanded, 40, 1, labels)] : []),
+      toolActivityViewPage(reader, groups, initial, 40, 1, labels),
+      toolActivityViewPage(reader, groups, initial, 80, 1, labels),
+      toolActivityViewPage(reader, groups, expanded, 40, 1, labels),
+      toolActivityViewPage(reader, groups, initial, 40, 1, labels),
+    ];
+    expect(pages[expandedFirst ? 1 : 0]!.rows[0]).toMatch(/…$/u);
+    const retained = pages.reduce((ranges, page) => mergeToolActivityTranscript(ranges, page.transcript ?? []), [] as NonNullable<typeof pages[0]['transcript']>[number][]);
+    expect(retained.map((range) => range.text)).toEqual([`✓ Bash ${command}`]);
+    expect(reader.detail).not.toHaveBeenCalled();
+  });
+  it('preserves an ellipsis from the original input across narrow and wide display', () => {
+    const { reader, groups } = fixture('ready');
+    groups[0]!.entries[0]!.input = "printf '途中…完了'";
+    const state = createToolActivityViewState();
+    const narrow = toolActivityViewPage(reader, groups, state, 19, 1, labels);
+    const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
+    expect(mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []).map((range) => range.text))
+      .toEqual(["✓ Bash printf '途中…完了'"]);
+  });
+  it('retains full timestamps after a compact row and all finite expanded pages', () => {
+    const { reader, groups } = fixture('ready');
+    Object.assign(groups[0]!.entries[0]!, { startedAt: 1794440000000, completedAt: 1794440000250 });
+    const initial = createToolActivityViewState();
+    const compact = toolActivityViewPage(reader, groups, initial, 32, 2, labels);
+    expect(compact.rows[1]).toMatch(/…$/u);
+    let retained = mergeToolActivityTranscript([], compact.transcript ?? []);
+    let state = toggleToolActivityView(initial);
+    for (let index = 0; index < 30; index++) {
+      const page = toolActivityViewPage(reader, groups, state, 32, 2, labels);
+      retained = mergeToolActivityTranscript(retained, page.transcript ?? []);
+      if (!page.hasMore) break;
+      state = moveToolActivityView(state, page, 'next');
+    }
+    expect(retained.filter((range) => range.key === JSON.stringify(['a', 'time'])).map((range) => range.text))
+      .toEqual(['success @1794440000000 → @1794440000250 (250 ms) completion #2']);
+  });
+  it.each(['group', 'groupOmission', 'omission'] as const)('separates display omission from the source of %s rows', (section) => {
+    const { reader, groups } = fixture('ready');
+    const entry = groups[0]!.entries[0]!;
+    groups[0]!.entries.push({ ...entry, key: 'b' });
+    groups[0]!.summary = 'Ran 200 operations with details';
+    const guide = { ...labels, more: 'Continue to see additional results…' };
+    const initial = createToolActivityViewState();
+    const state = { ...initial, position: { ...initial.position, section } };
+    const narrow = toolActivityViewPage(reader, groups, state, 16, 1, guide);
+    const wide = toolActivityViewPage(reader, groups, state, 80, 1, guide);
+    const retained = mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []);
+    expect(narrow.transcript![0]!.omitted).toBe(true);
+    expect(narrow.transcript![0]!.text).toBe(wide.rows[0]!.slice(0, 15));
+    expect(retained.map((range) => range.text)).toEqual(wide.rows);
+    expect(retained[0]!.omitted).toBe(false);
+    expect(mergeToolActivityTranscript(retained, narrow.transcript ?? [])).toEqual(retained);
+    expect(reader.detail).not.toHaveBeenCalled();
+  });
+  it('stores only the visible prefix and keeps an undisplayed wide grapheme out of the source range', () => {
+    const { reader, groups } = fixture('ready');
+    const initial = createToolActivityViewState();
+    const page = toolActivityViewPage(reader, groups, initial, 10, 1, labels);
+    expect(page.rows).toEqual(['✓ Bash pr…']);
+    expect(page.transcript).toEqual([{ key: JSON.stringify(['a', 'header']), offset: 0, text: '✓ Bash pr', omitted: true }]);
+    const input = { ...initial, expanded: true, position: { ...initial.position, section: 'input' as const } };
+    groups[0]!.entries[0]!.input = '日本語';
+    const tiny = toolActivityViewPage(reader, groups, input, 1, 1, labels);
+    expect(tiny.rows).toEqual(['…']);
+    expect(tiny.transcript).toEqual([{ key: JSON.stringify(['a', 'input']), offset: 0, text: '', omitted: true }]);
+  });
+  it('removes the omission marker when an equally long complete range is later displayed', () => {
+    const partial = [{ key: 'header', offset: 0, text: 'visible', omitted: true }];
+    const complete = [{ key: 'header', offset: 0, text: 'visible', omitted: false }];
+    expect(mergeToolActivityTranscript(partial, complete)).toEqual(complete);
+    expect(mergeToolActivityTranscript(complete, partial)).toEqual(complete);
+  });
+  it('preserves the rendered spaces for tabs in compact headers across widths', () => {
+    const { reader, groups } = fixture('ready');
+    groups[0]!.entries[0]!.input = 'printf\tready';
+    const state = createToolActivityViewState();
+    const narrow = toolActivityViewPage(reader, groups, state, 16, 1, labels);
+    const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
+    const retained = mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []);
+    expect(retained.map((range) => range.text)).toEqual(wide.rows);
+    expect(wide.rows).toEqual(['✓ Bash printf ready']);
+    expect(narrow.transcript![0]!.text + '…').toBe(narrow.rows[0]);
+  });
+  it('retains overlapping visible result ranges once across modes, reflow and preceding entry removal', () => {
+    const { reader, groups } = fixture('one\ntwo\nthree\nfour\nunseen');
+    const initial = createToolActivityViewState();
+    const prefix = { summary: 'Grep', entries: [{ ...groups[0]!.entries[0]!, key: 'unfinished', status: 'running' as const }] };
+    const first = toolActivityViewPage(reader, [prefix, ...groups], initial, 80, 10, labels);
+    const compact = toolActivityViewPage(reader, groups, initial, 80, 5, labels);
+    const expanded = toolActivityViewPage(reader, groups, toggleToolActivityView(initial), 80, 7, labels);
+    const narrow = toolActivityViewPage(reader, groups, toggleToolActivityView(initial), 4, 12, labels);
+    const retained = [first, compact, expanded, narrow].reduce((ranges, page) => mergeToolActivityTranscript(ranges, page.transcript ?? []), [] as NonNullable<typeof first.transcript>[number][]);
+    const result = retained.filter((range) => range.key === JSON.stringify(['a', 'result'])).map((range) => range.text).join('');
+    expect(result).toContain('one\ntwo\nthree\nfour');
+    expect(result.split('one')).toHaveLength(2);
+    expect(result).not.toContain('unseen');
+    expect(retained.some((range) => range.key.includes('unfinished'))).toBe(false);
+  });
+  it('keeps identical results from different entries and preserves gaps between separately viewed ranges', () => {
+    const ranges = mergeToolActivityTranscript([], [
+      { key: 'tool-2/result', offset: 0, text: 'ready', omitted: false },
+      { key: 'tool-3/result', offset: 0, text: 'ready', omitted: false },
+      { key: 'tool-2/result', offset: 10, text: 'tail', omitted: false },
+    ]);
+    expect(mergeToolActivityTranscript(ranges, [{ key: 'tool-2/result', offset: 2, text: 'ady', omitted: false }])).toEqual(ranges);
+    expect(ranges.filter((range) => range.text === 'ready')).toHaveLength(2);
+    expect(ranges.filter((range) => range.key === 'tool-2/result').map((range) => range.offset)).toEqual([0, 10]);
+  });
+  it('finishes the page safely when the selected unfinished entry is removed at turn termination', () => {
+    const { reader, groups } = fixture('completed-result');
+    const unfinished = { ...groups[0]!.entries[0]!, key: 'unfinished', status: 'running' as const };
+    groups[0]!.entries.push(unfinished);
+    const initial = toggleToolActivityView(createToolActivityViewState());
+    const state = { ...initial, position: { ...initial.position, entry: 1, section: 'header' as const } };
+    expect(toolActivityViewPage(reader, groups, state, 80, 2, labels).rows[0]).toContain('… Bash');
+    groups[0]!.entries.pop();
+    expect(toolActivityViewPage(reader, groups, state, 80, 2, labels)).toMatchObject({ rows: [], transcript: [], hasMore: false });
+  });
+  it('identifies only displayed completed rows for transcript retention without reading unseen detail', () => {
+    const { reader, groups } = fixture('unvisited-detail');
+    const completed = groups[0]!.entries[0]!;
+    completed.result = { text: 'completed-result', nextOffset: 16, hasMore: false, truncated: false };
+    groups.push({ summary: 'running', entries: [{ ...completed, key: 'running', status: 'running',
+      input: 'unfinished-input', result: { text: 'unfinished-output', nextOffset: 17, hasMore: false, truncated: false } }] });
+    const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 20, labels);
+    expect(page.rows).toContain('unfinished-output');
+    expect(page.transcript?.map((row) => row.text)).toEqual(page.rows.slice(0, 3));
+    expect(page.transcript?.map((row) => row.text)).toContain('completed-result');
+    const bounded = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 1, labels);
+    expect(bounded.transcript?.map((row) => row.text)).toEqual(bounded.rows);
+    expect(reader.detail).not.toHaveBeenCalled();
+  });
   it.each([
     ['x', 96], ['x', 97], ['日', 48], ['日', 49],
   ])('should bound a wrapped compact result for %s repeated %s times', (character, count) => {

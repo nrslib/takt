@@ -10,6 +10,10 @@ import { ApprovalSchema, ConversationAgentOverridesSchema, ConversationIdSchema,
   PendingSummarySchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
 import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { ToolActivityHistory } from '../../shared/tool-activity/history.js';
+import { ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
+import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import { ConversationToolEventSchema, type ConversationToolEvent } from '../../shared/types/conversation-activity.js';
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
@@ -32,7 +36,7 @@ const receipt = z.union([
   z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict(),
   z.object({ turn: StoredTurnSchema, change: receiptChange, version }).strict(),
 ]);
-const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {
+const metadata = z.object({ version, receipts: z.array(receipt), toolHistory: ToolActivityTurnStateSchema.optional() }).strict().superRefine((value, context) => {
   const operations = new Set<string>();
   if (value.version < value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
   for (const [index, entry] of value.receipts.entries()) {
@@ -96,6 +100,49 @@ export class ConversationStateStore {
   async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
     const stored = await this.load(id);
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
+  }
+
+  async readToolHistory(id: string): Promise<ToolActivityTurnState | undefined> {
+    return (await this.load(id))?.metadata.toolHistory;
+  }
+
+  async updateToolHistory(turn: TurnIdentity, input: ConversationToolEvent | null, signal: AbortSignal): Promise<ToolActivityTurnState | undefined> {
+    const identity = StoredTurnSchema.parse(turn);
+    const message = input === null ? null : ConversationToolEventSchema.parse(input);
+    return this.lock.exclusive(`${this.path(identity.conversationId)}.lock`, async () => {
+      signal.throwIfAborted();
+      const stored = await this.load(identity.conversationId);
+      if (stored === undefined) throw new Error('Unknown tool history conversation');
+      const previous = stored.metadata.toolHistory;
+      // 別operationの現在性は会話所有者が照合する。世代番号はdaemon再起動で戻り得る。
+      if (previous?.operationId === identity.operationId && previous.generation > identity.generation) return undefined;
+      const sameTurn = previous?.operationId === identity.operationId && previous.generation === identity.generation;
+      if (message === null && !sameTurn) {
+        if (previous === undefined) return undefined;
+        const remaining = { ...stored.metadata };
+        delete remaining.toolHistory;
+        await this.write({ record: stored.record, metadata: remaining }, signal);
+        return undefined;
+      }
+      if (sameTurn && (previous.finished || message !== null && previous.eventIds.includes(message.eventId))) return undefined;
+      const history = new ToolActivityHistory();
+      if (sameTurn) history.restore(previous.history);
+      if (message !== null) {
+        const context = message.event.toolActivity;
+        if (context?.operationId !== identity.operationId || context.generation !== identity.generation) {
+          throw new Error('Tool event turn mismatch');
+        }
+        history.apply(message.event);
+      }
+      const state = history.snapshot();
+      const toolHistory: ToolActivityTurnState = {
+        operationId: identity.operationId, generation: identity.generation, finished: message === null,
+        history: message === null ? { ...state, entries: state.entries.filter((entry) => entry.status !== 'running') } : state,
+        eventIds: [...(sameTurn ? previous.eventIds : []), ...(message === null ? [] : [message.eventId])],
+      };
+      await this.write({ record: stored.record, metadata: { ...stored.metadata, toolHistory } }, signal);
+      return structuredClone(toolHistory);
+    }, { signal, timeoutMs: 5000 });
   }
 
   async *iterate(): AsyncGenerator<ConversationRecord> {
@@ -173,7 +220,7 @@ export class ConversationStateStore {
         const savedChange = receiptChangeFor(change);
         const receipts = [...stored.metadata.receipts, { turn: identity, change: savedChange, version: nextVersion }].slice(-MAX_RECEIPTS);
         while (receipts.length > 1 && Buffer.byteLength(JSON.stringify(receipts)) > MAX_RECEIPT_BYTES) receipts.shift();
-        await this.write({ record: checked.data, metadata: { version: nextVersion,
+        await this.write({ record: checked.data, metadata: { ...stored.metadata, version: nextVersion,
           receipts } }, signal);
         return committed = { kind: 'state_saved', version: nextVersion, duplicate: false };
       }, { signal, timeoutMs: 5000 });

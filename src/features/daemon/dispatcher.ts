@@ -11,6 +11,7 @@ import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply
 import { createTurnQueues } from './turnQueues.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
+import { ToolHistoryPersistenceError } from '../../core/daemon/toolHistoryPersistenceError.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -42,6 +43,7 @@ interface ActiveTurn {
   save: 'waiting' | 'saving' | 'failed';
   saveAttempt: number;
   finishReply?: Reply<void>;
+  historyFailure?: ToolHistoryPersistenceError;
 }
 
 interface Shutdown {
@@ -175,7 +177,10 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         const response = active?.progress.get(notice.id);
         if (active === undefined || response === undefined) break;
         active.progress.delete(notice.id);
-        if (!notice.result.ok) this.failure('progress', active.event, notice.result.error, effects);
+        if (!notice.result.ok) {
+          if (notice.result.error instanceof ToolHistoryPersistenceError) active.historyFailure ??= notice.result.error;
+          this.failure('progress', active.event, notice.result.error, effects);
+        }
         response.reply.resolve();
         if (response.ordered) {
           const next = [...active.progress.entries()].find(([, pending]) => pending.ordered);
@@ -436,7 +441,8 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     } else {
       const id = ++this.nextId;
       const waiting = [...active.progress.values()].some((pending) => pending.ordered);
-      const ordered = waiting || typeof message.message !== 'string' && message.message.kind === 'turn_text';
+      const ordered = waiting || typeof message.message !== 'string'
+        && (message.message.kind === 'turn_text' || message.message.kind === 'tool_event');
       if (ordered && active.progress.size >= MAX_PROCESS_PENDING_REQUESTS) {
         response.reject(new Error('Turn progress capacity exceeded'));
         return;
@@ -492,8 +498,12 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private beginSettlement(active: ActiveTurn, effects: DispatcherEffect[]): void {
     if (active.phase !== 'settling' || active.save !== 'waiting' || active.requests.size > 0 || active.progress.size > 0) return;
+    if (active.result === undefined) throw new Error('Missing turn result');
+    if (active.result.outcome.kind === 'completed' && active.historyFailure !== undefined) {
+      active.result = { ...active.result, outcome: { kind: 'failed', message: active.historyFailure.message,
+        ...(active.result.outcome.change === undefined ? {} : { change: active.result.outcome.change }) } };
+    }
     const result = active.result;
-    if (result === undefined) throw new Error('Missing turn result');
     active.save = 'saving';
     const attempt = ++active.saveAttempt;
     const { turn, event } = active;

@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
 import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
@@ -17,7 +17,7 @@ import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
-import { PromptInput } from '../tui/PromptInput.js';
+import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
 import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
@@ -30,6 +30,11 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
+import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import { ToolActivityView } from '../tui/ToolActivityView.js';
+import { createToolActivityViewState, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
+  type ToolActivityTranscriptRange } from '../tui/toolActivityViewState.js';
+import { layoutPromptRows } from '../tui/promptLayout.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
   { command: '/verify', labelKey: 'interactive.commands.verify' }];
@@ -52,6 +57,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
+  const [toolView, setToolView] = useState(createToolActivityViewState);
+  const displayedTools = useRef<{ turn: string | undefined; rows: ToolActivityTranscriptRange[] }>({ turn: undefined, rows: [] });
+  const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
@@ -73,8 +81,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
   const { stdout } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
+  const [rows, setRows] = useState(() => stdout.rows);
   useEffect(() => {
-    const handleResize = (): void => { setColumns(stdout.columns); };
+    const handleResize = (): void => { setColumns(stdout.columns); setRows(stdout.rows); };
     stdout.on('resize', handleResize);
     return () => { stdout.off('resize', handleResize); };
   }, [stdout]);
@@ -333,7 +342,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     ? (busy ? 'manager.summaryInputHintWorking' : 'manager.summaryInputHint')
     : 'manager.inputHint', lang);
   const hintSeparator = selectingSummary ? ' / ' : '  ';
-  const hintItems = inputHint.split(hintSeparator);
+  const hintItems = inputHint.split(hintSeparator).map((item, index, items) =>
+    item + (index < items.length - 1 ? hintSeparator : ''));
   const statusDetails = getLabel('manager.counts', lang, {
     goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && !goal.awaitingHumanMerge).length),
     awaiting: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && goal.awaitingHumanMerge).length),
@@ -343,6 +353,53 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);
   const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
   const headingWidth = Math.min(measureWidth(assignmentHeading), splitStatus ? statusWidth : availableHeadingWidth);
+  const toolHistory = snapshot.items.find((item) => item.kind === 'tool_history')?.history;
+  const toolTurn = running != null ? JSON.stringify([running.operationId, running.generation])
+    : toolHistory === undefined ? undefined : JSON.stringify([toolHistory.operationId, toolHistory.generation]);
+  const currentToolView = toolViewTurn.current === toolTurn ? toolView : createToolActivityViewState();
+  const toolDisplay = useMemo(() => {
+    const display = new ToolActivityDisplay('silent', false, () => {}, false);
+    if (toolHistory !== undefined && (running == null
+      || toolHistory.operationId === running.operationId && toolHistory.generation === running.generation)) {
+      display.restore({ ...toolHistory.history, entries: toolHistory.history.entries.filter((entry) =>
+        entry.status !== 'running' || !toolHistory.finished && running != null) });
+    }
+    return display;
+  }, [toolHistory, running?.operationId, running?.generation]);
+  const toolGroups = toolDisplay.groups();
+  const toolLabels = {
+    compact: getLabel('tui.ui.toolHistoryCompact', lang), expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+    more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+  };
+  const promptRows = Math.min(MAX_VISIBLE_ROWS, layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length);
+  const completionRows = conversationInput ? Math.min(3, slashCompletion.completions.length) : 0;
+  let hintRows = 1;
+  let hintRowWidth = 0;
+  for (const item of hintItems) {
+    const width = measureWidth(item);
+    if (hintRowWidth > 0 && hintRowWidth + width > statusWidth) {
+      hintRows++;
+      hintRowWidth = 0;
+    }
+    hintRowWidth += width;
+  }
+  const toolHeight = selection.selection !== null || answerTarget !== null || abortTarget !== null || toolGroups.length === 0 ? 0
+    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows
+      - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
+      - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, columns ?? 80,
+    Math.max(0, toolHeight - 1), toolLabels);
+  useEffect(() => {
+    if (displayedTools.current.turn !== toolTurn) {
+      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
+      if (content !== '') append(content);
+      displayedTools.current = { turn: toolTurn, rows: [] };
+      toolViewTurn.current = toolTurn;
+      setToolView(createToolActivityViewState());
+    }
+    displayedTools.current.rows = mergeToolActivityTranscript(displayedTools.current.rows, toolPage.transcript ?? []);
+  }, [toolTurn, toolPage]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
@@ -355,6 +412,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
     slashCompletion,
+    browseTools: (direction) => {
+      if (toolHeight <= 0) return;
+      setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
+        : moveToolActivityView(current, toolPage, direction));
+    },
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   const baseLabel = activityLabel ?? (state?.queuedMessageCount
@@ -378,17 +440,18 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
+    {toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}
       completions={conversationInput ? slashCompletion.completions : []}
       completionIndex={slashCompletion.completionIndex}
+      maxVisibleCompletions={3}
+      maxVisibleRows={MAX_VISIBLE_ROWS}
       disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
-    <Box flexWrap="wrap">{hintItems.map((item, index) => {
-      const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
-      return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
-    })}</Box>
+    <Box flexWrap="wrap">{hintItems.map((text) =>
+      <Box key={text} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>)}</Box>
     <Box flexDirection={splitStatus ? 'column' : 'row'} width={statusWidth}>
       <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
       <Text dimColor wrap="truncate-end">{splitStatus ? statusDetails : ` | ${statusDetails}`}</Text>

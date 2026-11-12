@@ -9,10 +9,11 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
 import { createTuiConversationPort } from './tuiConversationPort.js';
-import type { ConversationCommand, ConversationOpen, ConversationPort, ConversationState, PortOutput, Submission } from './conversationPort.js';
+import type { ConversationCommand, ConversationOpen, ConversationPort, ConversationState, OutputVersion, PortOutput, Submission } from './conversationPort.js';
 import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from './snapshotChanges.js';
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal('response'), requestId: z.string(),
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
@@ -50,6 +51,8 @@ export class ConversationIpcClient {
   private items = new Map<string, SnapshotDisplayItem>();
   private readItems = new Map<string, SnapshotDisplayItem>();
   private removed = new Set<string>();
+  private toolHistorySequence = -1;
+  private toolTurnBoundary: { operationId: string; generation: number | undefined; stateSequence: number } | undefined;
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
 
   constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides,
@@ -122,6 +125,14 @@ export class ConversationIpcClient {
     const previousConnection = this.view.connection;
     this.view = { ...this.view, ...change };
     const running = this.view.state?.running;
+    const tools = this.committedItems.get('tool_history');
+    if (running != null && tools?.kind === 'tool_history'
+      && (tools.history.operationId !== running.operationId || tools.history.generation !== running.generation)) {
+      this.committedItems.delete('tool_history');
+      this.items.delete('tool_history');
+      this.readItems.delete('tool_history');
+      this.view = { ...this.view, items: orderSnapshotItems(this.items) };
+    }
     if (this.view.connection === 'disconnected' || running?.operationId !== this.activity?.operationId
       || running?.generation !== this.activity?.generation) this.activity = undefined;
     let activityResumed = false;
@@ -139,6 +150,38 @@ export class ConversationIpcClient {
     }
   }
 
+  private isPreviousToolTurn(history: ToolActivityTurnState, version: OutputVersion): boolean {
+    const boundary = this.toolTurnBoundary;
+    return boundary !== undefined && version.stateSequence < boundary.stateSequence
+      && (history.operationId !== boundary.operationId || history.generation !== boundary.generation);
+  }
+
+  private acceptToolHistory(history: ToolActivityTurnState, version: OutputVersion, live: boolean): boolean {
+    if (this.isPreviousToolTurn(history, version)) return false;
+    const running = this.view.state?.running;
+    if (running != null && (history.operationId !== running.operationId || history.generation !== running.generation)) return false;
+    const previous = this.committedItems.get('tool_history');
+    const current = previous?.kind === 'tool_history' ? previous.history : undefined;
+    const sameTurn = current?.operationId === history.operationId && current.generation === history.generation;
+    if (!sameTurn && version.stateSequence < this.toolHistorySequence) return false;
+    if (current !== undefined) {
+      if (current.operationId === history.operationId && history.generation < current.generation
+        || sameTurn && (history.history.sequence < current.history.sequence || current.finished && !history.finished)) return false;
+    }
+    if (live) {
+      this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
+      this.removed.delete('tool_history');
+    }
+    if (current !== undefined && JSON.stringify(history) === JSON.stringify(current)) return false;
+    const item = { kind: 'tool_history' as const, history };
+    if (live) {
+      this.committedItems.set('tool_history', item);
+      this.items.set('tool_history', item);
+    }
+    this.readItems.set('tool_history', item);
+    return true;
+  }
+
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
     const configDirectory = await resolveDaemonConfigDirectory(getGlobalConfigDir());
@@ -154,14 +197,36 @@ export class ConversationIpcClient {
       this.items.clear();
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
-        state: (next) => this.update({ state: next }),
-        item: (item) => {
+        state: (next, version) => {
+          const running = next.running;
+          if (running !== null) {
+            this.toolTurnBoundary = { operationId: running.operationId, generation: running.generation, stateSequence: version.stateSequence };
+            const staged = this.readItems.get('tool_history');
+            if (staged?.kind === 'tool_history'
+              && (staged.history.operationId !== running.operationId || staged.history.generation !== running.generation)) this.readItems.delete('tool_history');
+          }
+          this.update({ state: next });
+        },
+        item: (item, _transferId, version) => {
+          if (item.kind === 'tool_history') {
+            if (!this.acceptToolHistory(item.history, version, false)) {
+              const current = this.committedItems.get('tool_history');
+              if (current !== undefined) this.readItems.set('tool_history', current);
+            }
+            return;
+          }
           const key = snapshotItemKey(item);
           this.readItems.set(key, item);
           this.items.set(key, item);
         },
-        remove: (key) => { this.removed.add(key); },
-        output: (output) => {
+        remove: (key, _transferId, version) => {
+          if (key !== 'tool_history' || this.toolHistorySequence <= version.stateSequence) this.removed.add(key);
+        },
+        output: (output, version) => {
+          if (output.kind === 'tool_history') {
+            if (!this.acceptToolHistory(output.history, version, true)) return;
+            this.update({ items: orderSnapshotItems(this.items) });
+          }
           if (output.kind === 'activity') {
             const running = this.view.state?.running;
             if (running?.operationId !== output.operationId || running.generation !== output.generation) {
@@ -176,7 +241,7 @@ export class ConversationIpcClient {
           }
           for (const listener of this.outputs) listener(output);
         },
-        read: (readStatus, transferId, mode) => {
+        read: (readStatus, transferId, mode, version) => {
           if (readStatus === 'reading') {
             this.readItems.clear();
             this.removed.clear();
@@ -186,8 +251,14 @@ export class ConversationIpcClient {
           } else if (this.read?.transferId === transferId) {
             if (readStatus === 'complete') {
               const next = mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
-              for (const [key, item] of this.readItems) next.set(key, item);
+              for (const [key, item] of this.readItems) {
+                if (item.kind === 'tool_history' && this.isPreviousToolTurn(item.history, version)) continue;
+                next.set(key, item);
+              }
               for (const key of this.removed) next.delete(key);
+              const history = this.committedItems.get('tool_history');
+              if (history !== undefined && this.toolHistorySequence > version.stateSequence) next.set('tool_history', history);
+              this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
               this.committedItems = next;
               this.items = new Map(next);
             }
@@ -208,6 +279,8 @@ export class ConversationIpcClient {
     this.socket = socket;
     if (socket.destroyed) throw new Error('Daemon disconnected before opening conversation');
     const decoder = new ConversationFrameDecoder();
+    this.toolHistorySequence = -1;
+    this.toolTurnBoundary = undefined;
     this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {
       if (this.socket !== socket || socket.destroyed) return;

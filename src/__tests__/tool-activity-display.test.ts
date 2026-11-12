@@ -3,6 +3,23 @@ import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/u
 import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
 
 describe('tool activity display', () => {
+  it('should restore completed results without output and keep partial running secrets private', () => {
+    const writer = vi.fn();
+    const source = new ToolActivityDisplay('silent', false, writer, false);
+    source.handle({ type: 'tool_use', data: { id: 'done', tool: 'Read', input: { file_path: 'done.ts' } } });
+    source.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
+    source.handle({ type: 'tool_use', data: { id: 'running', tool: 'Bash', input: { token: 'secret123' } } });
+    source.handle({ type: 'tool_output', data: { id: 'running', tool: 'Bash', output: 'ready '.repeat(50) + 'secret' } });
+    const restored = new ToolActivityDisplay('expanded', false, writer, false);
+    restored.restore(source.history.snapshot());
+    expect(restored.groups().flatMap((group) => group.entries).map((entry) => entry.status)).toEqual(['failure', 'running']);
+    const key = restored.history.entries()[1]!.key;
+    expect(restored.detail(key, 0).result.text).toContain('ready');
+    expect(restored.detail(key, 0).result.text).not.toContain('secret');
+    expect(writer).not.toHaveBeenCalled();
+    restored.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
+    expect(writer).not.toHaveBeenCalled();
+  });
   it.each([1, 5])('should clone only the selected detail with %s unrelated entries', (count) => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     const [target] = display.handle({ type: 'tool_use', data: { id: 'target', tool: 'Bash', input: { command: 'printf ready' } } });

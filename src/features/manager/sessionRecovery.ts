@@ -1,6 +1,7 @@
 import type { ProviderAgent, ProviderCallOptions } from '../../infra/providers/types.js';
 import { createAgentFailureError, isAgentFailureError } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 
 export async function callWithManagerSessionRecovery(
   agent: ProviderAgent,
@@ -15,10 +16,10 @@ export async function callWithManagerSessionRecovery(
     options.abortSignal?.throwIfAborted();
     const response = await agent.call(prompt, {
       ...options, sessionId,
-      onStream: (event) => {
+      onStream: withToolActivityCall((event) => {
         if (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
         options.onStream?.(event);
-      },
+      }),
     });
     if (response.status !== 'done') {
       if (response.failureCategory !== undefined) throw createAgentFailureError(response.failureCategory, response.error ?? 'Manager provider failed');
