@@ -1,9 +1,13 @@
 export class TurnToolScope {
-  private active?: { signal: AbortSignal; accepting: boolean; pending: Set<Promise<unknown>> };
+  private active?: { signal: AbortSignal; operationId?: string; accepting: boolean; pending: Set<Promise<unknown>> };
 
-  begin(signal: AbortSignal): void {
+  get operationId(): string | undefined {
+    return this.active?.operationId;
+  }
+
+  begin(signal: AbortSignal, operationId?: string): void {
     if (this.active !== undefined) throw new Error('Previous turn tools are still active');
-    this.active = { signal, accepting: true, pending: new Set() };
+    this.active = { signal, operationId, accepting: true, pending: new Set() };
   }
 
   run<T>(action: () => Promise<T>): Promise<T> {

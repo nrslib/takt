@@ -119,19 +119,17 @@ describe('manager goal task enqueue', () => {
     });
   }
 
-  it('lists only configured manager workflows with usage descriptions and the additional default', async () => {
+  it('lists only configured manager workflows with usage descriptions', async () => {
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: {
-      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'], defaultWorkflow: 'simple',
+      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'],
     } });
     await withEnqueue(async (client) => {
       const result = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content)).workflows).toEqual([
         { name: 'safe', description: 'fixture safe', usageDescription: 'Use for input validation' },
-        expect.objectContaining({ name: 'simple' }),
       ]);
       expect((await enqueue(client)).isError).toBeUndefined();
-      expect((await enqueue(client, { workflow: 'simple', workKey: 'default-work' })).isError).toBeUndefined();
     });
   });
 
@@ -767,10 +765,11 @@ describe('local goal integration and inspection through manager MCP', () => {
     expect(responses[0]).toEqual(responses[1]);
   });
 
-  function configure(mode: 'auto' | 'approve' | undefined, target?: string) {
+  function configure(mode: 'auto' | 'approve' | undefined, target?: string, preserveGoalWorktree = false) {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),
-      'manager:', '  workflows: all', '  auto_run: false', ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
+      'manager:', '  workflows: all', '  auto_run: false', `  preserve_goal_worktree: ${preserveGoalWorktree}`,
+      ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
     ].join('\n'));
   }
 
@@ -847,8 +846,39 @@ describe('local goal integration and inspection through manager MCP', () => {
       expectIncluded(task.sha, branch);
       expect(existsSync(clone.path)).toBe(false);
       expect(existsSync(clone.metadataPath)).toBe(false);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: task.taskName, status: 'completed' }),
+      ]));
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved.workLog).toHaveLength(previous.workLog.length + (included ? 0 : 1));
+    });
+  });
+
+  it.each([false, true])('[SCN-TL-CLEAN-P3] preserves the integrated worktree, run artifacts, metadata, and completed task with already included=%s', async (included) => {
+    const task = await saveResult({ 'result.txt': 'integrated work\n' });
+    const clone = saveTaskClone(task);
+    const runDir = join(clone.path, '.takt', 'runs', `run-${task.sha}`);
+    mkdirSync(join(runDir, 'reports'), { recursive: true });
+    mkdirSync(join(runDir, 'logs'), { recursive: true });
+    writeFileSync(join(runDir, 'reports', 'result.md'), 'preserved report\n');
+    writeFileSync(join(runDir, 'logs', 'execution.jsonl'), '{"event":"completed"}\n');
+    const before = cloneSnapshot(clone);
+    configure('approve', undefined, true);
+    if (included) git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged' });
+      expect(JSON.parse(firstTextContent(result.content))).not.toHaveProperty('cleanupWarning');
+      expectIncluded(task.sha, branch);
+      expect(cloneSnapshot(clone)).toEqual(before);
+      expect(readFileSync(join(runDir, 'reports', 'result.md'), 'utf8')).toBe('preserved report\n');
+      expect(readFileSync(join(runDir, 'logs', 'execution.jsonl'), 'utf8')).toBe('{"event":"completed"}\n');
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: task.taskName, status: 'completed' }),
+      ]));
     });
   });
 

@@ -53,7 +53,6 @@ By default, required runs start automatically. Disable this to start `takt run` 
 ```yaml
 manager:
   auto_run: false
-  default_workflow: default
 ```
 
 Set `manager.workflows` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to choose the workflows manager may use for new development tasks. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair, using the same notation as `workflow_categories.workflows`.
@@ -64,12 +63,11 @@ manager:
     - default: Regular features and bug fixes, covering planning through review.
     - simple: Small changes in one or two files, using a lightweight workflow.
     - takt-default
-  default_workflow: default
 ```
 
-When omitted at both scopes, the list is `default` and `simple`, with the usage descriptions above in English or their Japanese equivalents according to `language`. Explicit name-only entries have no usage description. `manager.default_workflow` is also allowed even when absent from the list. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
+When `manager.workflows` is omitted at both project and global scopes, the candidates are `default` and `simple`. Manager receives the usage descriptions above in English or their Japanese equivalents according to `language` and selects a workflow suited to the task. Explicit name-only entries have no usage description. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
 
-Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.workflow` or `merge-prepare`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
+Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
@@ -242,9 +240,9 @@ Both `main_merge: approve` and `auto` publish a PR. With the default `approve`, 
 
 Completion pushes the reviewed SHA to `origin` and creates or reuses a PR from the goal branch to its saved integration target. Failures remain in work logs and `blocked` notifications. Manager inspects causes and side effects and decides what to do next; no timed or counted automatic PR-creation retries run. When no PR is saved, call `takt_complete_goal` again after fixing the cause.
 
-`takt_merge_goal_pr` requires `cwd`, `goalId`, `prNumber` and `until`. It enqueues a pending task with `merge_task: true` and `goal_id` in `tasks.yaml` and immediately returns its name. `prepare` selects `merge-prepare`; `merge` selects `merge.workflow`, defaulting to `merge-review-fix-simple`. Pending or running work for the same target is rejected.
+`takt_merge_goal_pr` requires `cwd`, `goalId`, `prNumber` and `until`. It enqueues a pending task with `merge_task: true` and `goal_id` in `tasks.yaml` and immediately returns its name. `prepare` selects `merge.prepare_workflow`, defaulting to `merge-prepare`; `merge` selects `merge.workflow`, defaulting to `merge-review-fix-simple`. Pending or running work for the same target is rejected.
 
-The daemon executes it like other goal tasks: incorporate the target branch, resolve conflicts, review and fix, push, run Caccia and wait for CI. Conflicting PRs use this same path instead of ordinary conflict-fix tasks. PR merge tasks push directly to the PR branch and must not be integrated with `takt_merge_goal_task`. `takt_list_tasks` shows `mergeTask` and completion results. Completion events include `mergeOutcome` (`prepared`, `merged` or `unresolved`) and `branchSynchronization`. When merged, manager completes the goal with `takt_check_goal_completion`.
+The daemon executes the selected workflow like other goal tasks. The default `merge-prepare` and `merge-review-fix-simple` workflows incorporate the target branch, resolve conflicts, review and fix, push, run Caccia and wait for CI. Custom workflows follow their own step definitions, including whether they perform these operations. Conflicting PRs use this same path instead of ordinary conflict-fix tasks. PR merge tasks push directly to the PR branch and must not be integrated with `takt_merge_goal_task`. `takt_list_tasks` shows `mergeTask` and completion results. Completion events include `mergeOutcome` (`prepared`, `merged` or `unresolved`) and `branchSynchronization`. When merged, manager completes the goal with `takt_check_goal_completion`.
 
 After push, the original repository fast-forwards its goal branch if it is an ancestor of origin. Divergent histories are preserved and reported as failure in task results and events. Checked-out working copies are preserved and synchronization stops with a report. The same checks run before task integration and completion publication. If synchronization changes the tip, verify acceptance criteria at that new SHA before submitting completion again.
 

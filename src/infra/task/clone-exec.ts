@@ -85,8 +85,14 @@ function getExecErrorStderr(error: unknown): string {
   return '';
 }
 
-function isShallowReferenceError(message: string): boolean {
-  return message.includes('reference repository is shallow');
+// Git quotes the reference path into the message ("reference repository '<path>' is shallow");
+// the unquoted wording is kept for output that omits the path. The quoted path may itself contain
+// newlines. The match is anchored to a `fatal:` line; a destination that already holds files is
+// protected separately (see destinationHasContent), so a look-alike never causes a deletion.
+const SHALLOW_REFERENCE_PATTERN = /^fatal: reference repository (?:'[\s\S]*?' )?is shallow\s*$/m;
+
+export function isShallowReferenceError(message: string): boolean {
+  return SHALLOW_REFERENCE_PATTERN.test(message);
 }
 
 function cloneFailedError(error: unknown, attempt: 'reference' | 'direct'): Error {
@@ -116,6 +122,18 @@ function runIsolatedGitCommandAbortable(
   abortSignal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string }> {
   return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv());
+}
+
+// A destination that already holds files was not created by this clone attempt, so a failed attempt
+// must never clean it up, whatever its error message says (a path may even contain newlines).
+function destinationHasContent(clonePath: string): boolean {
+  try {
+    return fs.readdirSync(clonePath).length > 0;
+  } catch (error) {
+    // Only a missing destination is known to be ours to create. Anything else (an existing regular file
+    // gives ENOTDIR, an unreadable directory EACCES) means something is there, so it is not cleaned up.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
 }
 
 function cleanupPartialClone(clonePath: string): void {
@@ -298,11 +316,13 @@ export function cloneAndIsolate(
     ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
+  const destinationHadContent = destinationHasContent(clonePath);
+
   try {
     runIsolatedGitCommandSync(projectDir, referenceCloneArgs);
   } catch (err) {
     const stderr = getExecErrorStderr(err);
-    if (isShallowReferenceError(stderr)) {
+    if (!destinationHadContent && isShallowReferenceError(stderr)) {
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
@@ -508,6 +528,8 @@ export async function cloneAndIsolateAbortable(
     ? [...REFERENCE_CLONE_ARGS, '--reference', projectDir, '--dissociate', ...commonArgs]
     : fallbackCloneArgs;
 
+  const destinationHadContent = destinationHasContent(clonePath);
+
   try {
     await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
   } catch (err) {
@@ -516,7 +538,7 @@ export async function cloneAndIsolateAbortable(
     }
 
     const stderr = getErrorMessage(err);
-    if (isShallowReferenceError(stderr)) {
+    if (!destinationHadContent && isShallowReferenceError(stderr)) {
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {

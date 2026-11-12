@@ -3,6 +3,7 @@ import type { MergeConfig, MergeSettings } from '../../core/models/config-types.
 export function resolveMergeSettings(config: MergeConfig | undefined): MergeSettings {
   return {
     workflow: config?.workflow ?? 'merge-review-fix-simple',
+    prepareWorkflow: config?.prepareWorkflow ?? 'merge-prepare',
     method: config?.method ?? 'squash',
     concurrency: config?.concurrency ?? 2,
     autoStart: config?.autoStart ?? false,

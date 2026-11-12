@@ -484,6 +484,7 @@ manager:
     shutting_down: "The daemon is shutting down. Connect again."
     invalid_input: "The operation input is invalid."
     operation_failed: "The conversation operation failed. Inspect its current state."
+    operation_failed_with_reason: "The conversation operation failed. Inspect its current state. Reason: {reason}"
     dismissed: "Goal proposal dismissed."
     answer_saved: "Answer saved."
   assignmentHeading: "Assignment: {name}"

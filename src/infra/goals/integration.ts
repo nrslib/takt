@@ -43,8 +43,9 @@ export async function assertReviewedGoalSha(
 }
 
 function cleanupIntegratedTaskClone(
-  cwd: string, taskName: string, sourceBranch: string,
+  cwd: string, taskName: string, sourceBranch: string, preserveWorktree: boolean,
 ): { cleanupWarning?: { path: string; reason: string } } {
+  if (preserveWorktree) return {};
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
   if (task === undefined || task.status === 'pending' || task.status === 'running') return {};
   const meta = loadCloneMeta(cwd, sourceBranch);
@@ -59,7 +60,7 @@ function cleanupIntegratedTaskClone(
 
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
-  notifications: GoalNotificationPolicy, language: Language,
+  notifications: GoalNotificationPolicy, language: Language, preserveWorktree: boolean,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
@@ -70,7 +71,7 @@ export async function integrateGoalTask(
   // 成果取り込みは内容一致だけで省略せず、厳密な到達性を維持する。
   if (await isGoalCommitIncluded(cwd, expectedSha, targetSha, signal)) {
     return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal,
-      ...cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) };
+      ...cleanupIntegratedTaskClone(cwd, taskName, sourceBranch, preserveWorktree) };
   }
   if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -85,7 +86,7 @@ export async function integrateGoalTask(
     }), { kind: 'progress', body: formatIntegratedWorkNotification(purpose, language) }, notifications));
   }
   return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved,
-    ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
+    ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch, preserveWorktree) : {}) };
 }
 
 const includedGoalCompletionGuidance = 'To correct evidence for an approved goal SHA already included in the target branch, use takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion.';
@@ -103,7 +104,7 @@ function completionRecord(
       'To correct saved evidence before the approved SHA is included in the target branch, use takt_reopen_goal with a reason, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks.',
       includedGoalCompletionGuidance,
       'If only reading or updating an existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.',
-      'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; a custom merge.workflow follows its own steps.',
+      'Assign PR finishing to takt_merge_goal_pr. Use until: prepare for approval mode, or until: merge for automatic merging or an explicit human instruction to merge. Review and CI waiting are handled by merge-prepare and the default merge-review-fix-simple; custom merge.prepare_workflow and merge.workflow settings follow their own steps.',
     ],
   };
 }

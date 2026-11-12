@@ -39,6 +39,7 @@ vi.mock('node:fs', () => ({
     realpathSync: vi.fn((value: string) => value),
     existsSync: vi.fn(),
     rmSync: vi.fn(),
+    readdirSync: vi.fn(),
     unlinkSync: vi.fn(),
     accessSync: vi.fn(),
     constants: { W_OK: 2 },
@@ -55,6 +56,7 @@ vi.mock('node:fs', () => ({
   realpathSync: vi.fn((value: string) => value),
   existsSync: vi.fn(),
   rmSync: vi.fn(),
+  readdirSync: vi.fn(),
   unlinkSync: vi.fn(),
   accessSync: vi.fn(),
   constants: { W_OK: 2 },
@@ -109,6 +111,9 @@ const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(fs.lstatSync).mockImplementation(() => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+  });
+  vi.mocked(fs.readdirSync).mockImplementation(() => {
     throw Object.assign(new Error('missing'), { code: 'ENOENT' });
   });
   let randomByteValue = 1;
@@ -2218,6 +2223,7 @@ describe('shallow clone fallback', () => {
   function setupShallowCloneMock(options: {
     shallowError: boolean;
     otherError?: string;
+    shallowMessage?: string;
   }): { cloneCalls: string[][] } {
     const cloneCalls: string[][] = [];
 
@@ -2240,7 +2246,7 @@ describe('shallow clone fallback', () => {
 
         if (hasReference && options.shallowError) {
           const err = new Error('clone failed');
-          (err as unknown as { stderr: Buffer }).stderr = Buffer.from('fatal: reference repository is shallow');
+          (err as unknown as { stderr: Buffer }).stderr = Buffer.from(options.shallowMessage ?? `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           throw err;
         }
 
@@ -2284,7 +2290,7 @@ describe('shallow clone fallback', () => {
     return { cloneCalls };
   }
 
-  function setupAbortableShallowCloneMock(): { cloneCalls: string[][] } {
+  function setupAbortableShallowCloneMock(shallowMessage?: string): { cloneCalls: string[][] } {
     const cloneCalls: string[][] = [];
 
     mockSpawn.mockImplementation((_cmd, args) => {
@@ -2318,7 +2324,7 @@ describe('shallow clone fallback', () => {
           return;
         }
         if (isCloneCommand(argsArr) && argsArr.includes('--reference')) {
-          child.stderr.emit('data', 'fatal: reference repository is shallow');
+          child.stderr.emit('data', shallowMessage ?? `fatal: reference repository '${hiddenMainRepoPath}' is shallow`);
           child.emit('close', 1);
           return;
         }
@@ -2445,6 +2451,85 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[1]).not.toContain('--dissociate');
     expect(cloneCalls[1]).toContain('--no-local');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  const newlineReferenceError = "fatal: reference repository '/work/my\nproject' is shallow\n";
+
+  it('should fall back when the shallow reference path contains a newline', () => {
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: true, shallowMessage: newlineReferenceError });
+
+    createSharedClone(linkedWorktreePath, { worktree: '/tmp/newline-reference', taskSlug: 'newline-reference' });
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[1]).not.toContain('--reference');
+  });
+
+  it('should fall back in the abortable clone when the shallow reference path contains a newline', async () => {
+    const { cloneCalls } = setupAbortableShallowCloneMock(newlineReferenceError);
+
+    await createSharedCloneAbortable(linkedWorktreePath, {
+      worktree: '/tmp/newline-reference-abortable',
+      taskSlug: 'newline-reference',
+      branch: 'feature/local-branch',
+    });
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[1]).not.toContain('--reference');
+  });
+
+  // A destination path may contain newlines, which can put a shallow-looking line in the middle of
+  // git's "destination path ... already exists" error. That error must neither retry nor delete.
+  const destinationExistsError = "fatal: destination path '/tmp/before\nfatal: reference repository 'p' is shallow\nafter' already exists and is not an empty directory.";
+
+  it('should not retry or delete an existing destination whose path mimics the shallow error', () => {
+    vi.mocked(fs.readdirSync).mockReturnValue(['existing'] as never);
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false, otherError: destinationExistsError });
+
+    expect(() => createSharedClone(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-destination',
+      taskSlug: 'existing-destination',
+    })).toThrow('Git clone failed');
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('should not retry or delete an existing destination in the abortable clone either', async () => {
+    vi.mocked(fs.readdirSync).mockReturnValue(['existing'] as never);
+    const { cloneCalls } = setupAbortableCloneFailureMock(destinationExistsError);
+
+    await expect(createSharedCloneAbortable(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-destination-abortable',
+      taskSlug: 'existing-destination',
+    })).rejects.toThrow('Git clone failed');
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an existing regular file (ENOTDIR)', 'ENOTDIR'],
+    ['an unreadable directory (EACCES)', 'EACCES'],
+  ])('should not retry or delete a destination that cannot be listed: %s', async (_label, code) => {
+    vi.mocked(fs.readdirSync).mockImplementation(() => {
+      throw Object.assign(new Error('cannot list'), { code });
+    });
+    const { cloneCalls } = setupShallowCloneMock({ shallowError: false, otherError: destinationExistsError });
+
+    expect(() => createSharedClone(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-file-destination',
+      taskSlug: 'existing-file',
+    })).toThrow('Git clone failed');
+    expect(cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
+
+    const abortable = setupAbortableCloneFailureMock(destinationExistsError);
+    await expect(createSharedCloneAbortable(hiddenMainRepoPath, {
+      worktree: '/tmp/existing-file-destination-abortable',
+      taskSlug: 'existing-file',
+    })).rejects.toThrow('Git clone failed');
+    expect(abortable.cloneCalls).toHaveLength(1);
+    expect(fs.rmSync).not.toHaveBeenCalled();
   });
 
   it('should sanitize non-shallow clone errors before throwing', () => {

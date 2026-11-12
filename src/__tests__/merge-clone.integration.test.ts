@@ -1156,6 +1156,43 @@ describe('Merge PR persistent clone ownership', () => {
     expect(mocks.workflow).toHaveBeenCalledOnce(); expect(existsSync(executedCwd!)).toBe(true);
   });
 
+  it.each([false, true])('merge-review-ciのfork包含=%sで既存の選択と実cloneの脅威検査を通す', async (includeForks) => {
+    const check = vi.spyOn(threatCheck, 'checkForkThreats');
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+      expect(request.workflowIdentifier).toBe('merge-review-ci');
+      expect(request.prExecutionContext?.prNumber).toBe(123);
+      expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(prHead);
+      expect(check).toHaveResolvedWith(expect.objectContaining({ passed: true }));
+      return { success: true };
+    });
+    const result = await runMerge({ projectCwd: project, concurrency: 1, includeForks,
+      workflow: 'merge-review-ci', settings: resolveMergeSettings(undefined) }, {
+      listOpenPrNumbers: () => [123],
+      fetchPrListItem: (number) => ({ number, author: 'author', labels: [], base_branch: 'main',
+        head_branch: 'feature/pr', managed_by_takt: false, same_repository: false, draft: false, updated_at: '' }),
+      executePrWorkflow,
+    });
+    expect(result).toMatchObject({ processedCount: includeForks ? 1 : 0, mergedCount: 0, exitCode: 0 });
+    expect(check).toHaveBeenCalledTimes(includeForks ? 1 : 0);
+    expect(mocks.agent).toHaveBeenCalledTimes(includeForks ? 1 : 0);
+    expect(mocks.workflow).toHaveBeenCalledTimes(includeForks ? 1 : 0);
+    expect(mocks.comment).not.toHaveBeenCalled();
+  });
+
+  it('merge-review-ciでも脅威検査が拒否した番号指定forkの本体を開始しない', async () => {
+    const check = vi.spyOn(threatCheck, 'checkForkThreats');
+    mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: {
+      suspicious: true, reason: '認証情報を送信する', files: ['code.txt'] } });
+    const result = await runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
+      workflow: 'merge-review-ci', settings: resolveMergeSettings(undefined) });
+    expect(result).toMatchObject({ processedCount: 1, mergedCount: 0, exitCode: 1 });
+    expect(check).toHaveResolvedWith(expect.objectContaining({ passed: false }));
+    expect(mocks.agent).toHaveBeenCalledOnce();
+    expect(mocks.workflow).not.toHaveBeenCalled();
+    expect(mocks.comment).toHaveBeenCalledExactlyOnceWith(123,
+      expect.stringContaining('認証情報を送信する'), project);
+  });
+
   it.each(['suspicious', 'invalid', 'overflow'])('%sのforkを未マージとして集計し理由を投稿する', async (kind) => {
     const paths = observeClone();
     if (kind === 'suspicious') mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: {
@@ -1385,7 +1422,7 @@ describe('Merge PR persistent clone ownership', () => {
       new TaskStore(project).update((current) => ({ tasks: current.tasks.map((item) => item.name === task.name
         ? { ...item, status: 'completed', started_at: new Date().toISOString(), completed_at: new Date().toISOString(), completion: { success: true, interrupted: false, branch: 'task-result', sha: taskSha } } : item) }));
       expect(await integrateGoalTask(project, goal.id, task.name, taskSha, undefined,
-        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'en')).toMatchObject({ status: 'merged' });
+        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'en', false)).toMatchObject({ status: 'merged' });
       const integrated = git(project, 'rev-parse', 'feature/pr');
       expect(git(project, 'merge-base', remoteHead, integrated)).toBe(remoteHead);
       expect(git(project, 'merge-base', taskSha, integrated)).toBe(taskSha);

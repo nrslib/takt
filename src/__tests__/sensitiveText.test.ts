@@ -11,8 +11,203 @@ import {
   sanitizeSensitiveText,
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
+import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
 
 describe('sensitiveText', () => {
+  describe.each(["'", '"'])('shell header enclosed in %s', (quote) => {
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'Basic [REDACTED]'],
+      ['Authorization', 'Bearer fixture-secret==', 'Bearer [REDACTED]'],
+      ['Cookie', 'sid=fixture-secret==; other=fixture-extra', '[REDACTED]'],
+      ['Set-Cookie', 'sid=fixture-secret==; Path=/', '[REDACTED]'],
+    ])('keeps the URL after a padded %s value', (header, value, expected) => {
+      const command = 'curl -H ' + quote + header + ': ' + value + quote;
+      const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+
+      expect(sanitizeSensitiveText(command + suffix))
+        .toBe('curl -H ' + quote + header + ': ' + expected + quote + suffix);
+    });
+  });
+
+  it.each([
+    ['Authorization', 'Digest username=\\"alice\\", response=\\"fixture-secret\\"', 'Digest [REDACTED]'],
+    ['Authorization', 'Bearer \\"fixture-secret\\"', 'Bearer [REDACTED]'],
+    ['Authorization', 'Basic \\"fixture-secret\\"', 'Basic [REDACTED]'],
+    ['Authorization', 'Bearer fixture-secret\\\\', 'Bearer [REDACTED]'],
+    ['Cookie', 'sid=\\"fixture-secret\\"; other=\\"fixture-extra\\"', '[REDACTED]'],
+    ['Set-Cookie', 'sid=\\"fixture-secret\\"; Path=/', '[REDACTED]'],
+  ])('handles escaped quotes and backslash pairs in a double-quoted %s argument', (header, value, expected) => {
+    const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+    const command = 'curl -H "' + header + ': ' + value + '"';
+
+    expect(sanitizeSensitiveText(command + suffix)).toBe('curl -H "' + header + ': ' + expected + '"' + suffix);
+    expect(sanitizeSensitiveText(JSON.stringify({ command: command + suffix })))
+      .toBe(JSON.stringify({ command: 'curl -H "' + header + ': ' + expected + '"' + suffix }));
+  });
+
+  it('treats a backslash as literal inside a single-quoted shell header', () => {
+    const command = "curl -H 'Cookie: sid=fixture-secret\\' 'https://example.test/path'";
+
+    expect(sanitizeSensitiveText(command)).toBe("curl -H 'Cookie: [REDACTED]' 'https://example.test/path'");
+  });
+
+  it('redacts quoted sensitive assignments before interpreting embedded header text', () => {
+    const text = 'token="metadata Authorization: Basic c2VjcmV0==" https://example.test/path';
+
+    expect(sanitizeSensitiveText(text)).toBe('token="[REDACTED]" https://example.test/path');
+  });
+
+  describe.each(["'", '"'])('sensitive assignment enclosed in %s', (quote) => {
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'c2VjcmV0=='],
+      ['Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+      ['Set-Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+    ])('collects the embedded %s credential without collecting the following URL', (header, value, credential) => {
+      const text = 'token=' + quote + 'metadata ' + header + ': ' + value + quote + ' https://example.test/path';
+
+      const collected = collectSensitiveStringValues(text);
+
+      expect(collected.values.has(credential)).toBe(true);
+      expect([...collected.values].some((candidate) => candidate.includes('example.test/path'))).toBe(false);
+      expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', text))
+        .toBe('echoed [REDACTED] https://example.test/path');
+      expect(sanitizeSensitiveTextWithKnownValues(text, text))
+        .toBe('token=' + quote + '[REDACTED]' + quote + ' https://example.test/path');
+    });
+
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'c2VjcmV0=='],
+      ['Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+      ['Set-Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+    ])('collects the JSON-escaped %s credential without collecting the following URL', (header, value, credential) => {
+      const command = 'token=' + quote + 'metadata ' + header + ': ' + value + quote + ' https://example.test/path';
+      const source = JSON.stringify({ command });
+      const expected = JSON.stringify({ command: 'token=' + quote + '[REDACTED]' + quote + ' https://example.test/path' });
+
+      const collected = collectSensitiveStringValues(source);
+
+      expect(collected.values.has(credential)).toBe(true);
+      expect([...collected.values].some((candidate) => candidate.includes('example.test/path'))).toBe(false);
+      expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', source))
+        .toBe('echoed [REDACTED] https://example.test/path');
+      expect(sanitizeSensitiveText(source)).toBe(expected);
+      expect(sanitizeSensitiveTextWithKnownValues(source, source)).toBe(expected);
+    });
+  });
+
+  it.each([
+    'metadata \\"quoted\\" ',
+    'metadata \\\\ ',
+    'metadata \\\\\\"quoted\\\\\\" ',
+  ])('keeps JSON assignment boundaries after escaped metadata: %s', (metadata) => {
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
+  });
+
+  it('bounds header collection inside a long JSON-escaped assignment', () => {
+    const metadata = 'metadata \\"quoted\\" \\\\ '.repeat(4_096);
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
+  });
+
+  it.each(['\n', '\r\n'])('keeps the following diagnosis after an unterminated quoted header (%j)', (separator) => {
+    const command = 'curl -H "Authorization: Digest response=\\"fixture-secret\\"';
+
+    expect(sanitizeSensitiveText(command + separator + 'provider.transport: ECONNRESET'))
+      .toBe('curl -H "Authorization: Digest [REDACTED]' + separator + 'provider.transport: ECONNRESET');
+  });
+
+  it('redacts a long escaped header and preserves the next argument and diagnosis', () => {
+    const parameters = 'response=\\"fixture-secret\\", '.repeat(4_096);
+    const command = 'curl -H "Authorization: Digest ' + parameters + 'nonce=\\"fixture-extra\\""';
+    const suffix = " 'https://example.test/path'\nprovider.transport: ECONNRESET";
+
+    expect(sanitizeSensitiveText(command + suffix))
+      .toBe('curl -H "Authorization: Digest [REDACTED]"' + suffix);
+  });
+
+  it.each([
+    ["curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'", 'c2VjcmV0=='],
+    ["curl -H 'Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+    ["curl -H 'Set-Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+  ])('collects the credential without collecting a subsequent URL: %s', (command, credential) => {
+    expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', { command }))
+      .toBe('echoed [REDACTED] https://example.test/path');
+  });
+
+  it.each([
+    ['Authorization', 'Digest token="fixture-secret", nonce="fixture-extra"'],
+    ['Cookie', 'token="fixture-secret"; other=fixture-extra'],
+    ['Set-Cookie', 'token="fixture-secret"; Path=/'],
+  ])('collects the complete %s value containing a quoted sensitive assignment', (header, value) => {
+    const command = "curl -H '" + header + ': ' + value + "'";
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed ' + value, { command }))
+      .toBe('echoed [REDACTED]');
+  });
+
+  it.each([
+    {
+      command: "curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'",
+      expected: "curl -H 'Authorization: Basic [REDACTED]' 'https://example.test/path'",
+      secrets: ['c2VjcmV0=='],
+    },
+    {
+      command: String.raw`curl -H "Authorization: Digest username=\"alice\", response=\"fixture-secret\""`,
+      expected: 'curl -H "Authorization: Digest [REDACTED]"',
+      secrets: ['alice', 'fixture-secret'],
+    },
+  ])('redacts the complete shell header without consuming subsequent arguments: $command', ({ command, expected, secrets }) => {
+    expect(sanitizeSensitiveText(command)).toBe(expected);
+
+    const sanitized = sanitizeSensitiveText(`${command} --verbose\nprovider.transport: ECONNRESET`);
+
+    expect(sanitized).toBe(`${expected} --verbose\nprovider.transport: ECONNRESET`);
+    for (const secret of secrets) {
+      expect(sanitized).not.toContain(secret);
+    }
+  });
+
+  it.each([
+    ['Digest', 'realm="fixture-secret", nonce="fixture-extra"'],
+    ['Bearer', 'realm="fixture-secret"'],
+    ['Basic', 'realm="fixture-secret"'],
+    ['Bearer', '"fixture-secret"'],
+    ['Basic', '"fixture-secret"'],
+    ['Digest', "realm='fixture-secret', nonce='fixture-extra'"],
+    ['Bearer', "'fixture-secret'"],
+    ['Basic', "'fixture-secret'"],
+  ])('redacts quoted Authorization %s %s while preserving command quotes and diagnosis', (scheme, value) => {
+    const quote = value.includes('"') ? "'" : '"';
+    const text = `curl -H ${quote}Authorization: ${scheme} ${value}${quote} https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H ${quote}Authorization: ${scheme} [REDACTED]${quote} https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
+  it.each(['Cookie', 'Set-Cookie'])('redacts quoted %s values while preserving the enclosing command and subsequent diagnosis', (header) => {
+    const text = `curl -H '${header}: sid="fixture-secret"; other="fixture-extra"' https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H '${header}: [REDACTED]' https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
   describe.each(['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user='])(
     'user option %s', (option) => {
       it.each([

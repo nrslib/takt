@@ -70,13 +70,13 @@ describe('manager conversation configuration and provider boundary', () => {
     mkdirSync(directory, { recursive: true });
     const path = join(directory, 'config.yaml');
     for (const workflows of [['default', { simple: 'Small changes' }], 'all']) {
-      writeFileSync(path, `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: default\n`);
+      writeFileSync(path, `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n`);
       invalidateGlobalConfigCache();
       if (scope === 'project') saveProjectConfig(cwd, loadProjectConfig(cwd));
       else saveGlobalConfig(loadGlobalConfig());
       invalidateGlobalConfigCache();
-      expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { workflows, default_workflow: 'default' } });
-      expect(resolveManagerConfig(cwd)).toMatchObject({ workflows, defaultWorkflow: 'default' });
+      expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { workflows } });
+      expect(resolveManagerConfig(cwd)).toMatchObject({ workflows });
     }
   });
 
@@ -86,32 +86,6 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-workflow'));
-  });
-
-  it.each([{ workflows: ['simple'] }, { workflows: 'all' }])('warns and omits an unavailable default workflow with workflows=$workflows', ({ workflows }) => {
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: missing-manager-default\n`);
-    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
-
-    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
-
-    expect(warning).toHaveBeenCalledTimes(1);
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-default'));
-    const defaultLine = prompt.split('\n').find((line) => line.startsWith('Default workflow: '))!;
-    expect(JSON.parse(defaultLine.slice('Default workflow: '.length))).toBeNull();
-  });
-
-  it.each([{ workflows: ['simple'] }, { workflows: 'all' }])('keeps a valid default workflow outside the explicit list with workflows=$workflows', ({ workflows }) => {
-    const directory = join(cwd, '.takt', 'workflows');
-    mkdirSync(directory);
-    writeFileSync(join(directory, 'fixture-manager-default.yaml'), 'name: fixture-manager-default\ninitial_step: work\nsteps:\n  - name: work\n    instruction: Work\n    rules:\n      - condition: done\n        next: COMPLETE\n');
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n  default_workflow: fixture-manager-default\n`);
-    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
-
-    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
-
-    expect(warning).not.toHaveBeenCalled();
-    const defaultLine = prompt.split('\n').find((line) => line.startsWith('Default workflow: '))!;
-    expect(JSON.parse(defaultLine.slice('Default workflow: '.length))).toBe('fixture-manager-default');
   });
 
   it('uses one configuration snapshot during candidate validation and refreshes it for the next plan', () => {
@@ -358,6 +332,14 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(plan.strategy.systemPrompt).toContain(paragraph!);
   });
 
+  it.each(['ja', 'en'] as const)('exposes PR finishing workflow selection in the %s manager guidance', (language) => {
+    const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
+    const paragraph = knowledge.split('\n\n').find((body) => body.includes('takt_merge_goal_pr') && body.includes('until: prepare'));
+    expect(paragraph).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*until: merge.*merge\.workflow.*merge-review-fix-simple/u);
+    const plan = createManagerConversationPlan(cwd, { language });
+    expect(plan.strategy.systemPrompt).toContain(paragraph!);
+  });
+
   it('passes full permissions without a fixed tool allowlist to the mock provider', async () => {
     const provider = new MockProvider();
     const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message: 'question', summary: null }), structuredOutput: { message: 'question', summary: null } });
@@ -400,43 +382,15 @@ describe('manager conversation configuration and provider boundary', () => {
     }
   });
 
-  it('provides the configured default workflow to the manager turn', async () => {
-    const workflows = join(cwd, '.takt', 'workflows');
-    mkdirSync(workflows, { recursive: true });
-    writeFileSync(join(workflows, 'fixture-fallback-workflow.yaml'), [
-      'name: fixture-fallback-workflow', 'description: default workflow fixture',
-      'max_steps: 2', 'initial_step: work', 'steps:',
-      '  - name: work', '    persona: coder', '    instruction: Implement validation',
-      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
-    ].join('\n'));
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  default_workflow: fixture-fallback-workflow\n');
-    const provider = new MockProvider();
-    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
-      persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'),
-      content: JSON.stringify({ message: '確認しました', summary: null }),
-    });
-    const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
-    vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
-    const session = createManagerTurnExecutor(cwd, createManagerConversationPlan(cwd, {}));
-    {
-      expect((await executeTurn(session, { text: 'workflowを選んでください' })).message).toBeTypeOf('string');
-      expect(`${setup.mock.calls[0]![0].systemPrompt}\n${call.mock.calls[0]![0]}`)
-        .toContain('fixture-fallback-workflow');
-    }
-  });
-
   it.each([false, true])('preserves manager settings through project configuration load and save (auto run: %s)', (autoRun) => {
     const path = join(cwd, '.takt', 'config.yaml');
-    writeFileSync(path, [
-      'provider: mock', 'manager:', `  auto_run: ${autoRun}`,
-      '  default_workflow: fixture-fallback-workflow',
-    ].join('\n'));
+    writeFileSync(path, `provider: mock\nmanager:\n  auto_run: ${autoRun}\n`);
 
     const loaded = loadProjectConfig(cwd);
     saveProjectConfig(cwd, loaded);
 
     expect(parse(readFileSync(path, 'utf8'))).toMatchObject({
-      manager: { auto_run: autoRun, default_workflow: 'fixture-fallback-workflow' },
+      manager: { auto_run: autoRun },
     });
     expect(loadProjectConfig(cwd)).toEqual(loaded);
   });
@@ -445,25 +399,25 @@ describe('manager conversation configuration and provider boundary', () => {
     const globalDirectory = join(cwd, 'global');
     mkdirSync(globalDirectory);
     vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
-    writeFileSync(join(globalDirectory, 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${autoRun}\n  default_workflow: global-fallback\n`);
+    writeFileSync(join(globalDirectory, 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${autoRun}\n`);
     invalidateGlobalConfigCache();
     const loaded = loadGlobalConfig();
     saveGlobalConfig(loaded);
     invalidateGlobalConfigCache();
-    expect(loadGlobalConfig().manager).toEqual({ autoRun, defaultWorkflow: 'global-fallback' });
-    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun, default_workflow: 'global-fallback' } });
+    expect(loadGlobalConfig().manager).toEqual({ autoRun });
+    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun } });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${!autoRun}\n`);
-    expect(resolveManagerConfig(cwd)).toMatchObject({ autoRun: !autoRun, defaultWorkflow: 'global-fallback', mainMerge: 'approve' });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ autoRun: !autoRun, mainMerge: 'approve' });
   });
 
   it.each(['auto', 'approve'])('loads and saves repository main merge permission %s without losing other manager settings', (mainMerge) => {
     const path = join(cwd, '.takt', 'config.yaml');
-    writeFileSync(path, `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n  default_workflow: default\n`);
+    writeFileSync(path, `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n`);
     const loaded = loadProjectConfig(cwd);
-    expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false });
     saveProjectConfig(cwd, loaded);
-    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false, default_workflow: 'default' } });
-    expect(resolveManagerConfig(cwd)).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false } });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ mainMerge, autoRun: false });
   });
 
   it.each(['project', 'global'] as const)('preserves notification switches through %s configuration load and save', (scope) => {
