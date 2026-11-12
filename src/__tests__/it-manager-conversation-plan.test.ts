@@ -332,6 +332,14 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(plan.strategy.systemPrompt).toContain(paragraph!);
   });
 
+  it.each(['ja', 'en'] as const)('exposes PR finishing workflow selection in the %s manager guidance', (language) => {
+    const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
+    const paragraph = knowledge.split('\n\n').find((body) => body.includes('takt_merge_goal_pr') && body.includes('until: prepare'));
+    expect(paragraph).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*until: merge.*merge\.workflow.*merge-review-fix-simple/u);
+    const plan = createManagerConversationPlan(cwd, { language });
+    expect(plan.strategy.systemPrompt).toContain(paragraph!);
+  });
+
   it('passes full permissions without a fixed tool allowlist to the mock provider', async () => {
     const provider = new MockProvider();
     const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message: 'question', summary: null }), structuredOutput: { message: 'question', summary: null } });

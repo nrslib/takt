@@ -501,7 +501,7 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 
 Set project `.takt/config.yaml` `manager.main_merge` to `approve` (default) or `auto`. Both publish a PR on completion submission. With `approve`, manager enqueues preparation using `takt_merge_goal_pr` with `until: prepare` and waits for human merge. `auto` uses `until: merge` to prepare and merge, as does an explicit human merge instruction. Completion does not merge locally, and PR creation failures have no timed or counted automatic retries.
 
-`until: prepare` uses `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
+`until: prepare` uses `merge.prepare_workflow`, defaulting to `merge-prepare`. `until: merge` uses `merge.workflow`, defaulting to `merge-review-fix-simple`; manager does not select a workflow name. `merge.prepare_workflow` applies only to this manager operation and does not change workflow selection for `takt merge`. `merge.auto_start` controls startup after ordinary task PR publication. Manager explicitly enqueues goal PR merge tasks.
 
 ## Manager task workflows
 
@@ -517,7 +517,7 @@ manager:
 
 When `manager.workflows` is omitted at both project and global scopes, the candidates are `default` and `simple`. Manager receives the usage descriptions above in English or their Japanese equivalents according to `language` and selects a workflow suited to the task. Explicit name-only entries have no usage description. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
 
-Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.workflow` or `merge-prepare`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
+Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
 ## Manager tool permissions
 

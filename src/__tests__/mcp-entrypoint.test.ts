@@ -758,7 +758,7 @@ describe('MCP package entrypoint', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('advertises goal PR finishing while CI is running through listTools', async () => {
+  it('advertises goal PR workflow selection and CI-independent enqueueing through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'goal-pr-tools', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -768,7 +768,8 @@ describe('MCP package entrypoint', () => {
       const { tools } = await client.listTools();
       const merge = tools.find(({ name }) => name === 'takt_merge_goal_pr')!;
       expect(merge.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'prNumber', 'until']);
-      expect(merge.description).toMatch(/until: prepare.*without merging/iu);
+      expect(merge.description).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*without merging/iu);
+      expect(merge.description).toMatch(/until: merge.*merge\.workflow.*merge-review-fix-simple/iu);
     } finally { await client.close(); await server.close(); }
   });
 

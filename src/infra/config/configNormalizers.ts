@@ -69,6 +69,7 @@ export function denormalizeMergeConfig(config: MergeConfig | undefined): Record<
   if (config === undefined) return undefined;
   return {
     ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+    ...(config.prepareWorkflow === undefined ? {} : { prepare_workflow: config.prepareWorkflow }),
     ...(config.method === undefined ? {} : { method: config.method }),
     ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
     ...(config.autoStart === undefined ? {} : { auto_start: config.autoStart }),

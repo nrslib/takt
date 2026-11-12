@@ -508,7 +508,7 @@ manager:
 
 在项目与全局两层都未设置 `manager.workflows` 时，候选项为 `default` 和 `simple`。manager 根据 `language` 获取上述日文或英文的使用说明，并选择适合任务的 workflow。显式的纯名称元素不补充说明。`workflows: all` 恢复不受限制的选择。创建 manager 会话计划时会警告并忽略找不到的名称；空名称、多键对象等无效格式会在加载配置时被拒绝。
 
-manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.workflow` / `merge-prepare`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
+manager 的 `takt_list_workflows` 只返回允许的候选项，以及 workflow 自身的 `description` 和配置中的可选 `usageDescription`。`takt_enqueue_goal_task` 会拒绝范围外的新任务，并在错误中列出允许项和配置路径。已有任务仍可使用原 workflow 恢复、重新入队或重试。PR 收尾 `takt_merge_goal_pr`（`merge.prepare_workflow` / `merge.workflow`）、子 `workflow_call`、非 manager MCP 和手动 CLI 不受限制。workspace manager 按目标仓库应用配置。
 
 ## manager 工具权限
 
@@ -1603,7 +1603,7 @@ takt update codex     # 仅更新指定提供者
 
 GitLab 支持 MR 详情、CI 状态获取和批量选择。启用 Caccia 时，在 `takt merge` 和 `from_pr` 任务中，Caccia effect 返回原因是 `github_unavailable` 的 `skipped`，然后等待返回 head 的 CI。合并结果 pipeline 通过合并提交的第二个父提交与 source head 的一致性进行验证。没有 pipeline 或 pipeline 对应旧 head 时不会通过 CI。指定合并方式和限制 head 仍不受支持，传入这些参数的 `merge_pr` 会失败。CI 等待完成不代表合并成功。
 
-默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。
+默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。manager 调用 `takt_merge_goal_pr` 且指定 `until: prepare` 时使用 `merge.prepare_workflow`（默认 `merge-prepare`）；`until: merge` 和 `takt merge` 仍使用 `merge.workflow`，此设置不改变 CLI 的 workflow 选择。
 
 `takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
 

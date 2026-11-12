@@ -497,7 +497,7 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `manager.main_merge` はプロジェクトの `.takt/config.yaml` で `approve`（既定）または `auto` を指定します。どちらも完成申請で PR を作成します。`approve` は manager が `takt_merge_goal_pr` の `until: prepare` で仕上げて人のマージを待ち、`auto` は `until: merge` でマージまで進めます。人の明示的なマージ指示も `until: merge` を使います。手元への直接マージや、PR 作成失敗の時間・回数による自動再試行は行いません。
 
-`until: prepare` は `merge-prepare` を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
+`until: prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）を使います。`until: merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使い、manager はワークフロー名を指定しません。`merge.prepare_workflow` はこの manager の操作だけに適用され、`takt merge` の workflow 選択は変わりません。`merge.auto_start` は通常タスクの PR 公開後の起動を制御し、ゴール PR は manager が明示的にタスクを積みます。
 
 ## manager がタスクに使う workflow
 
@@ -513,7 +513,7 @@ manager:
 
 `manager.workflows` が project と global のどちらにも設定されていない場合、候補は `default` と `simple` です。manager は `language` に合わせた上記の使い分けの説明を受け取り、タスクに合う workflow を選択します。名前だけを明示した要素には説明を補いません。`workflows: all` なら従来どおり制限しません。見つからない名前は manager の会話の plan を作るときに警告して無視します。空の名前や複数キーのオブジェクトなど、不正な形は設定読み込み時にエラーになります。
 
-manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.workflow` / `merge-prepare`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
+manager の `takt_list_workflows` は選べる候補だけを返し、workflow 自身の `description` に加えて、設定した使い分けの説明を `usageDescription` で返します。`takt_enqueue_goal_task` で選べない workflow を新規登録すると、道具が候補一覧と設定ファイルの場所を示すエラーで断ります。既存タスクの再開・積み直し・やり直しは、保存済みの workflow のまま可能です。`takt_merge_goal_pr` による PR の仕上げ（`merge.prepare_workflow` / `merge.workflow`）、子の `workflow_call`、manager 以外の MCP、人が手で使う CLI には制限しません。workspace manager は、一覧取得・タスク投入の対象リポジトリごとの設定を使います。
 
 ## manager のツール権限
 

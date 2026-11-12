@@ -16,8 +16,9 @@ beforeEach(() => {
 it.each([
   { until: 'prepare' as const, config: undefined, workflow: 'merge-prepare' },
   { until: 'prepare' as const, config: { workflow: 'custom' }, workflow: 'merge-prepare' },
+  { until: 'prepare' as const, config: { prepareWorkflow: 'custom-prepare', workflow: 'custom' }, workflow: 'custom-prepare' },
   { until: 'merge' as const, config: undefined, workflow: 'merge-review-fix-simple' },
-  { until: 'merge' as const, config: { workflow: 'custom' }, workflow: 'custom' },
+  { until: 'merge' as const, config: { prepareWorkflow: 'custom-prepare', workflow: 'custom' }, workflow: 'custom' },
 ])('enqueues $until using $workflow and returns the pending task', async ({ until, config, workflow }) => {
   doubles.config.mockReturnValue(config);
   expect(await mergeGoalPr('/project', goal, until, signal)).toEqual({
