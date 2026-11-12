@@ -139,7 +139,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               : { state: 'reserved' as const, revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory };
             let reservationSaved = existing?.state === 'reserved';
             try {
-              validateGoalBranchReferences(reservation.repositoryDirectory, priorPending.summary.startBranch, priorPending.summary.integrationBranch);
+              if (new GoalStore(reservation.repositoryDirectory).find(reservation.goalId) === undefined) {
+                validateGoalBranchReferences(reservation.repositoryDirectory, priorPending.summary.startBranch, priorPending.summary.integrationBranch);
+              }
               if (!reservationSaved) {
                 // The reservation must be durable before creating a goal or its Git resources.
                 await state.save({ approval: reservation });

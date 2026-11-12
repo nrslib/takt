@@ -26,12 +26,12 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
 const doubles = vi.hoisted(() => ({ readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
-  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
 vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.getGoal; update = doubles.updateGoal; } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { find = doubles.findGoal; get = doubles.getGoal; update = doubles.updateGoal; } }));
 vi.mock('../features/daemonTurn/reconcileLostRun.js', () => ({ reconcileLostRun: doubles.reconcile }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
   resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path,
@@ -112,6 +112,7 @@ beforeEach(() => {
   doubles.readTasks.mockResolvedValue([]);
   doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
+  doubles.findGoal.mockReturnValue(undefined);
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
   doubles.validateBranches.mockImplementation(() => {});
 });
@@ -511,6 +512,46 @@ it('releases a persisted reservation after an invalid local branch fails validat
   nextInput.state = { ...f.input.state, version: saved.change.expectedVersion + 1, approval: null };
   nextInput.event.event = humanMessage('continue');
   expect(await f.service.execute(nextInput, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+});
+it('resumes a saved goal when its approved branch disappears before approval is persisted', async () => {
+  const f = fixture(); const goal = goalRecord();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  doubles.findGoal.mockReturnValue(goal);
+  doubles.register.mockResolvedValue(goal);
+  doubles.validateBranches.mockImplementation(() => { throw new Error('Unable to resolve the deleted branch'); });
+  doubles.artifacts.mockResolvedValue(true);
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(doubles.validateBranches).not.toHaveBeenCalled();
+  expect(doubles.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/repository', id: goal.id,
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch }), f.io.signal);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal },
+    change: { approval: { state: 'registered', goalId: goal.id }, proposal: { pending: null } } });
+});
+it('validates approved branches when only the reserved goal branch remains', async () => {
+  const f = fixture(); const goal = goalRecord();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
+  f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' }, command: { kind: 'approve_summary', revision: 1 } };
+  doubles.findGoal.mockReturnValue(undefined);
+  doubles.register.mockRejectedValue(new Error('A branch for this reservation requires reconciliation'));
+  doubles.artifacts.mockResolvedValue(true);
+
+  await f.service.execute(f.input, f.io);
+
+  expect(doubles.validateBranches).toHaveBeenCalledExactlyOnceWith('/repository', goal.startBranch, goal.integrationBranch);
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(doubles.artifacts).toHaveBeenCalledWith('/repository', goal.id);
 });
 it('clears a new reservation when registration fails before leaving a goal or branch', async () => {
   const f = fixture();
