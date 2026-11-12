@@ -347,7 +347,7 @@ it.each(['check', 'complete', 'reopen'] as const)('preserves the goal when fetch
 });
 it('integrates reviewed task work and records it only in the shared work log', async () => {
   doubles.contentIncluded.mockResolvedValue(true);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged', sha: targetSha });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged', sha: targetSha });
   expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, goal.branch, undefined);
   expect(goal.workLog).toEqual([expect.objectContaining({ summary: expect.stringContaining('task') })]);
   expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'progress' })]);
@@ -356,10 +356,10 @@ it('integrates reviewed task work and records it only in the shared work log', a
 });
 it('cleans the clone without duplicating integration when Git already contains a result whose recording failed', async () => {
   doubles.update.mockRejectedValueOnce(new Error('save failed'));
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toThrow();
   expect(clones.cleanup).not.toHaveBeenCalled();
   doubles.included.mockResolvedValue(true);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
   expect(doubles.update).toHaveBeenCalledOnce();
   expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
@@ -367,13 +367,13 @@ it('cleans the clone without duplicating integration when Git already contains a
 it.each(['changed SHA', 'different goal', 'still running', 'still pending'])('rejects %s before changing Git', async (condition) => {
   if (condition === 'changed SHA') doubles.sha.mockResolvedValue(targetSha);
   else doubles.tasks.mockReturnValue([{ name: 'task', goalId: condition === 'different goal' ? 'other' : goal.id, status: condition === 'still pending' ? 'pending' : 'running', branch: 'takt/result', completion: { branch: 'takt/result' } }]);
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toThrow();
   expect(doubles.merge).not.toHaveBeenCalled(); expect(doubles.update).not.toHaveBeenCalled();
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
 it.each(['conflict', 'checked_out'] as const)('leaves work unrecorded after a %s merge result', async (status) => {
   doubles.merge.mockResolvedValue({ status, conflicts: ['file'], worktrees: ['/worktree'] });
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'en')).toMatchObject({ status });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'en', false)).toMatchObject({ status });
   expect(doubles.update).not.toHaveBeenCalled();
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
@@ -381,18 +381,32 @@ it.each(['pending', 'running'])('preserves a %s task clone even when its reviewe
   doubles.included.mockResolvedValue(true);
   doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, status, branch: 'takt/result', completion: { branch: 'takt/result' } }]);
 
-  await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+  await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false);
 
   expect(clones.cleanup).not.toHaveBeenCalled();
   expect(doubles.merge).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
+});
+it.each([false, true])('preserves the clone and metadata without reading cleanup state when preservation is enabled with already included=%s', async (included) => {
+  doubles.included.mockResolvedValue(included);
+  doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
+
+  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', true);
+
+  expect(result).toMatchObject({ status: 'merged', sha: targetSha });
+  expect(result).not.toHaveProperty('cleanupWarning');
+  expect(clones.load).not.toHaveBeenCalled();
+  expect(clones.cleanup).not.toHaveBeenCalled();
+  expect(doubles.merge).toHaveBeenCalledTimes(included ? 0 : 1);
+  expect(doubles.tasks()).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'task', status: 'completed' })]));
+  expect(goal.workLog).toHaveLength(included ? 0 : 1);
 });
 it.each([false, true])('returns the merged result and clone cleanup failure with already included=%s', async (included) => {
   doubles.included.mockResolvedValue(included);
   doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
   clones.cleanup.mockImplementation(() => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); });
 
-  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false);
 
   expect(result).toMatchObject({ status: 'merged', sha: targetSha, sourceBranch: 'takt/result', expectedSha: sourceSha,
     targetBranch: goal.branch, cleanupWarning: { path: '/takt-worktrees/task-clone', reason: expect.stringMatching(/permission denied/i) } });
@@ -403,7 +417,7 @@ it('does not clean the task clone when the Git merge throws', async () => {
   const failure = new Error('merge failed');
   doubles.merge.mockRejectedValueOnce(failure);
 
-  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toBe(failure);
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).rejects.toBe(failure);
 
   expect(clones.cleanup).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
@@ -415,7 +429,7 @@ it('preserves the clone if the task resumes before integration finishes', async 
     return { status: 'merged', sha: targetSha };
   });
 
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
 
   expect(clones.cleanup).not.toHaveBeenCalled();
 });
@@ -808,7 +822,7 @@ it('preserves inquiries and publishes a PR without attempting a conflicting loca
 
 it('lets the manager integrate reviewed useful work from a failed task', async () => {
   doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, goalPurpose: '確認済みの途中成果', status: 'failed', branch: 'takt/result', completion: { success: false, branch: 'takt/result' } }]);
-  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
   expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
 });
@@ -1321,7 +1335,7 @@ it.each(['integrate', 'complete'] as const)('stops %s before changing or publish
   const error = new Error('Goal branch diverged from origin');
   vi.mocked(synchronizeGoalBranch).mockRejectedValueOnce(error);
   const pending = operation === 'integrate'
-    ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')
+    ? integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja', false)
     : completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
   await expect(pending).rejects.toBe(error);
   expect(doubles.merge).not.toHaveBeenCalled();

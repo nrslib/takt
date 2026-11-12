@@ -10,8 +10,8 @@ import { integrationSummary } from './goalResponse.js';
 import type { CompleteGoalInput, GoalIdentityInput, MergeGoalTaskInput, MergeGoalPrInput, ReopenGoalInput } from './schemas.js';
 
 export function mergeTaktGoalTask(input: MergeGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async ({ policy }) => integrationSummary(await integrateGoalTask(
-    input.cwd, input.goalId, input.taskName, input.expectedSha, signal, policy, resolveConfigValue(input.cwd, 'language'),
+  return goalWrite(input, deps, signal, async ({ policy, preserveGoalWorktree }) => integrationSummary(await integrateGoalTask(
+    input.cwd, input.goalId, input.taskName, input.expectedSha, signal, policy, resolveConfigValue(input.cwd, 'language'), preserveGoalWorktree,
   )), 'Goal integration failed', 'integrate');
 }
 
