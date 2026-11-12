@@ -704,6 +704,7 @@
     "src/__tests__/taskBranchLifecycleActions.test.ts",
     "src/__tests__/taskDeleteActions.test.ts",
     "src/__tests__/taskDeleteOperations.test.ts",
+    "src/__tests__/taskDiffActions.test.ts",
     "src/__tests__/taskExecution.test.ts",
     "src/__tests__/taskForceFailActions.test.ts",
     "src/__tests__/taskGit-auth.integration.test.ts",

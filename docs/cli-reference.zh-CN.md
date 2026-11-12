@@ -453,7 +453,7 @@ takt list --non-interactive --format json
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。配置为 `worktree: false` 的任务会保留记录的分支和工作区中的修改。
 
 ```bash
 # 先确认匹配列表，再执行删除
@@ -464,7 +464,7 @@ takt list --non-interactive --action delete --status failed pr_failed --yes
 takt list --non-interactive --action delete --status failed pr_failed --format json
 ```
 
-在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
+在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆；配置为 `worktree: false` 的任务会保留记录的分支和未提交修改。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
 
 #### 咨询运行中的任务
 
