@@ -136,9 +136,42 @@ it('bounds accumulated tool results before saving them with conversation state',
   expect(saved?.history.entries).toHaveLength(2);
   expect(saved?.history.entries.map((entry) => entry.status)).toEqual(['success', 'success']);
   expect(saved?.history.entries.every((entry) => entry.result?.length === 16 * 1024)).toBe(true);
+  expect(saved?.history.entries.every((entry) => entry.resultTruncated)).toBe(true);
   expect(saved?.eventIds).toEqual(['first-start', 'first-result', 'second-start', 'second-result']);
   const content = await readFile(join(directory, 'conversations', `${id}.json`), 'utf8');
   expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(12 * 1024 * 1024);
+});
+
+it('redacts long tool input values before truncating and records result omission in stored history', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'large-secret-call' };
+  const secret = `private-${'x'.repeat(9 * 1024)}`;
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'secret-start', event: {
+    type: 'tool_use', data: { id: 'secret-tool', tool: 'Bash', input: { api_key: secret } }, toolActivity: context,
+  } }, signal());
+  const running = await store.readToolHistory(id);
+  expect((running?.history.entries[0]?.input.api_key as string).length).toBeLessThan(secret.length);
+
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'secret-result', event: {
+    type: 'tool_result', data: { id: 'secret-tool', content: `echo ${secret}`, isError: false }, toolActivity: context,
+  } }, signal());
+  const saved = await store.readToolHistory(id);
+  expect(saved?.history.entries[0]?.result).toBe('echo [REDACTED]');
+  expect(saved?.history.entries[0]).not.toHaveProperty('resultTruncated');
+  expect(saved?.history.entries[0]?.result).not.toContain(secret);
+
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'stream-start', event: {
+    type: 'tool_use', data: { id: 'stream-tool', tool: 'Bash', input: {} }, toolActivity: context,
+  } }, signal());
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'stream-output', event: {
+    type: 'tool_output', data: { id: 'stream-tool', tool: 'Bash', output: 'x'.repeat(16 * 1024 + 1) }, toolActivity: context,
+  } }, signal());
+  const streamed = await store.readToolHistory(id);
+  expect(streamed?.history.entries.find((entry) => entry.toolId === 'stream-tool')).toMatchObject({
+    output: 'x'.repeat(16 * 1024), outputTruncated: true,
+  });
 });
 
 it('drops unfinished history at termination and refuses older generations of the same operation and mismatched event contexts', async () => {

@@ -32,7 +32,7 @@ import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
 import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
-import { createToolActivityViewState, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
+import { createToolActivityViewState, excludeToolActivityTranscript, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
   type ToolActivityTranscriptRange } from '../tui/toolActivityViewState.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
 
@@ -58,7 +58,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
   const [toolView, setToolView] = useState(createToolActivityViewState);
-  const displayedTools = useRef<{ turn: string | undefined; rows: ToolActivityTranscriptRange[] }>({ turn: undefined, rows: [] });
+  const displayedTools = useRef<{ turn: string | undefined; rows: ToolActivityTranscriptRange[]; committed: ToolActivityTranscriptRange[] }>(
+    { turn: undefined, rows: [], committed: [] });
   const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
@@ -280,6 +281,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (!summaryRequest) {
       const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
       if (content !== '') append(content);
+      displayedTools.current.committed = mergeToolActivityTranscript(displayedTools.current.committed, displayedTools.current.rows);
       displayedTools.current.rows = [];
       append(text, 'user');
     }
@@ -399,11 +401,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (displayedTools.current.turn !== toolTurn) {
       const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
       if (content !== '') append(content);
-      displayedTools.current = { turn: toolTurn, rows: [] };
+      displayedTools.current = { turn: toolTurn, rows: [], committed: [] };
       toolViewTurn.current = toolTurn;
       setToolView(createToolActivityViewState());
     }
-    displayedTools.current.rows = mergeToolActivityTranscript(displayedTools.current.rows, toolPage.transcript ?? []);
+    displayedTools.current.rows = mergeToolActivityTranscript(displayedTools.current.rows,
+      excludeToolActivityTranscript(toolPage.transcript ?? [], displayedTools.current.committed));
   }, [toolTurn, toolPage]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,

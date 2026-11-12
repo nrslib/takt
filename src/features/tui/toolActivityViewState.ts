@@ -66,6 +66,40 @@ export function mergeToolActivityTranscript(
   });
 }
 
+export function excludeToolActivityTranscript(
+  incoming: readonly ToolActivityTranscriptRange[],
+  committed: readonly ToolActivityTranscriptRange[],
+): ToolActivityTranscriptRange[] {
+  const committedByKey = new Map<string, ToolActivityTranscriptRange[]>();
+  for (const range of committed) {
+    const ranges = committedByKey.get(range.key) ?? [];
+    ranges.push(range);
+    committedByKey.set(range.key, ranges);
+  }
+  const remaining: ToolActivityTranscriptRange[] = [];
+  for (const range of incoming) {
+    let fragments = [{ ...range }];
+    for (const existing of committedByKey.get(range.key) ?? []) {
+      const existingStart = existing.offset;
+      const existingEnd = existing.offset + existing.text.length;
+      fragments = fragments.flatMap((fragment) => {
+        const fragmentEnd = fragment.offset + fragment.text.length;
+        if (existingEnd <= fragment.offset || existingStart >= fragmentEnd) return [fragment];
+        const overlapStart = Math.max(fragment.offset, existingStart);
+        const overlapEnd = Math.min(fragmentEnd, existingEnd);
+        const left = overlapStart > fragment.offset ? [{ ...fragment,
+          text: fragment.text.slice(0, overlapStart - fragment.offset), omitted: false }] : [];
+        const right = overlapEnd < fragmentEnd ? [{ ...fragment,
+          offset: overlapEnd, text: fragment.text.slice(overlapEnd - fragment.offset) }] : [];
+        return [...left, ...right];
+      });
+      if (fragments.length === 0) break;
+    }
+    remaining.push(...fragments);
+  }
+  return remaining;
+}
+
 export function createToolActivityViewState(): ToolActivityViewState {
   return { expanded: false, position: { group: 0, entry: 0, section: 'group', offset: 0 }, previous: [] };
 }

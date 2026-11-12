@@ -163,7 +163,9 @@ export class ConversationIpcClient {
   private acceptToolHistory(history: ToolActivityTurnState, version: OutputVersion, live: boolean): boolean {
     if (this.isPreviousToolTurn(history, version)) return false;
     const running = this.view.state?.running;
-    if (live && version.stateSequence > this.currentStateSequence) {
+    const matchesRunning = running != null && history.operationId === running.operationId
+      && history.generation === running.generation;
+    if (live && version.stateSequence > this.currentStateSequence && !matchesRunning) {
       const key = JSON.stringify([history.operationId, history.generation]);
       const previous = this.pendingToolHistories.get(key);
       if (previous === undefined || history.history.sequence >= previous.history.history.sequence) {
@@ -204,6 +206,7 @@ export class ConversationIpcClient {
       if ((matchesRunning || finishedWithoutRunning) && this.acceptToolHistory(pending.history, pending.version, true)) {
         changed = true;
         this.pendingToolHistories.delete(key);
+        for (const listener of this.outputs) listener({ kind: 'tool_history', history: pending.history });
       } else if (this.isPreviousToolTurn(pending.history, pending.version)
         || pending.version.stateSequence <= this.currentStateSequence) {
         this.pendingToolHistories.delete(key);

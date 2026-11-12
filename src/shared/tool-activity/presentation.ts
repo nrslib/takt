@@ -14,6 +14,7 @@ export const DETAIL_RESULT_BYTES = 16 * 1024;
 export const CI_RESULT_LINES = 80;
 export const CI_RESULT_BYTES = 16 * 1024;
 const INPUT_TRUNCATION_MARKER = ' [input truncated]';
+const OUTPUT_TRUNCATION_MARKER = '[output truncated]\n';
 const NAME_TRUNCATION_MARKER = ' [name truncated]';
 
 function canonicalToolName(tool: string): string {
@@ -58,12 +59,14 @@ function action(tool: string): string {
 function displayResult(entry: ToolActivityEntry, resultText?: string): { text: string; source: unknown } {
   const raw = entry.result === undefined || entry.result === '' ? entry.output : entry.result;
   const { text, parsed } = classifyToolResult(raw);
+  const truncated = entry.result === undefined || entry.result === '' ? entry.outputTruncated : entry.resultTruncated;
   const known = createBoundedSensitiveValues();
   known.collect(entry.input);
   known.collect(raw);
   known.collect(entry.output);
   known.collect(parsed);
-  return { text: sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(resultText ?? text, known)), source: known };
+  const displayText = truncated ? OUTPUT_TRUNCATION_MARKER + (resultText ?? text) : resultText ?? text;
+  return { text: sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(displayText, known)), source: known };
 }
 
 export function toolActivityDetail(

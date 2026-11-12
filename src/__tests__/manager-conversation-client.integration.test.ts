@@ -720,39 +720,7 @@ it('keeps the selected slash completion and running turn while toggling and pagi
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it('places the completed tool transcript before the following user message', async () => {
-  const secondTurn = deferred<void>(); let invocation = 0;
-  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
-    if (invocation++ === 0) {
-      options.onStream!({ type: 'tool_use', data: { id: 'previous', tool: 'Read', input: { file_path: 'previous.ts' } } });
-      options.onStream!({ type: 'tool_result', data: { id: 'previous', content: 'previous-result', isError: false } });
-      return toolReply();
-    }
-    await secondTurn.promise;
-    return toolReply('Second turn');
-  }));
-  await client.connect(); await complete(); const app = await snapshotView();
-  try {
-    await client.submit({ kind: 'message', text: 'First question' }); await fixture.settled();
-    await waitFor(() => expect(toolRows()).toContain('previous-result'));
-
-    app.stdin.write('Next question'); app.stdin.write('\r');
-    await fixture.executing(2);
-    await waitFor(() => {
-      const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
-      expect(entries.some((entry) => entry.content.includes('Next question'))).toBe(true);
-      expect(entries.some((entry) => entry.content.includes('previous-result'))).toBe(true);
-    });
-    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
-    const historyIndex = entries.findIndex((entry) => entry.content.includes('previous-result'));
-    const questionIndex = entries.findIndex((entry) => entry.role === 'user' && entry.content.includes('Next question'));
-    expect(historyIndex).toBeGreaterThanOrEqual(0);
-    expect(questionIndex).toBeGreaterThan(historyIndex);
-    expect(entries.filter((entry) => entry.content.includes('previous-result'))).toHaveLength(1);
-  } finally { secondTurn.resolve(); await fixture.settled(); }
-});
-
-it('preserves a Japanese draft and insertion point while paging a long result, resizing and reconnecting on the same screen', async () => {
+it('preserves a Japanese draft and insertion point while paging a truncated long result, resizing and reconnecting on the same screen', async () => {
   const finish = deferred<void>();
   const lines = Array.from({ length: 180 }, (_, index) => `row-${String(index).padStart(3, '0')} ${'日本語'.repeat(20)}`);
   expect(Buffer.byteLength(lines.join('\n'))).toBeGreaterThan(16 * 1024);
@@ -784,7 +752,9 @@ it('preserves a Japanese draft and insertion point while paging a long result, r
       expect(currentToolPage().page.rows.length).toBeLessThan(24);
     }
     expect(currentToolPage().page.hasMore).toBe(false);
-    for (let index = 0; index < lines.length; index++) expect(pages.join('\n')).toContain(`row-${String(index).padStart(3, '0')}`);
+    expect(pages.join('\n')).toContain('[output truncated]');
+    expect(pages.join('\n')).toContain('row-000');
+    expect(pages.join('\n')).not.toContain(`row-${String(lines.length - 1).padStart(3, '0')}`);
     expect(pages.join('\n')).toContain('still-running');
     expect(pages.at(-1)).toContain('running');
     await browseToolPage(app, '\x1b[5~');

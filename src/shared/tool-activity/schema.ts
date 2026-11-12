@@ -16,7 +16,8 @@ export const ToolActivityEventSchema = z.discriminatedUnion('type', [
 ]) satisfies z.ZodType<ToolActivityEvent>;
 
 const entry = z.object({ key: z.string().regex(/^[1-9]\d*$/), context: context.optional(), toolId: toolId.optional(),
-  tool: z.string(), input, output: z.string(), result: z.string().optional(),
+  tool: z.string(), input, output: z.string(), outputTruncated: z.boolean().optional(), result: z.string().optional(),
+  resultTruncated: z.boolean().optional(),
   status: z.enum(['running', 'success', 'failure']), association: z.enum(['matched', 'unmatched']),
   startedAt: z.number().optional(), completedAt: z.number().optional(),
   startSequence: sequence.optional(), completionSequence: sequence.optional(),

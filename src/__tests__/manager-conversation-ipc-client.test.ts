@@ -183,7 +183,29 @@ it('holds a newer live tool history until the matching running state arrives', a
 
   await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: nextId, generation: 2 } } }, 3);
   expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
-  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: nextId, generation: 2 } } });
+  expect(value.getSnapshot().state?.running).toEqual({ kind: 'turn', operationId: nextId, generation: 2 });
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: current });
+});
+
+it('applies a newer live tool history immediately when it matches the running turn', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const operationId = randomUUID();
+  const runningState = { ...initial.state, running: { kind: 'turn', operationId, generation: 1 } };
+  await sendOutput({ kind: 'running', state: runningState }, 2);
+  const history = new ToolActivityHistory();
+  const context = { callId: 'call', operationId, generation: 1 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'current.ts' } }, toolActivity: context });
+  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const output = vi.fn(); value.onOutput(output);
+
+  await sendOutput({ kind: 'tool_history', history: current }, 3);
+
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: current });
 });
 
 it('does not publish snapshot work items when a live history update arrives mid-transfer', async () => {
@@ -236,7 +258,10 @@ it.each(['live', 'snapshot'] as const)('accepts current %s history after restori
   await connecting;
   expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: previous });
   const output = vi.fn(); value.onOutput(output);
-  if (delivery === 'live') await sendOutput({ kind: 'tool_history', history: current }, 2);
+  if (delivery === 'live') {
+    await sendOutput({ kind: 'tool_history', history: current }, 2);
+    await sendOutput({ kind: 'pending', state: initial.state }, 2);
+  }
   else {
     const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
     const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };

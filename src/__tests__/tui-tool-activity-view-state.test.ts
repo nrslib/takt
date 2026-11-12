@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import {
-  createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
+  createToolActivityViewState, excludeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
   mergeToolActivityTranscript,
   type ToolActivityViewLabels,
 } from '../features/tui/toolActivityViewState.js';
@@ -201,6 +201,16 @@ describe('tool activity view state', () => {
     expect(mergeToolActivityTranscript(ranges, [{ key: 'tool-2/result', offset: 2, text: 'ady', omitted: false }])).toEqual(ranges);
     expect(ranges.filter((range) => range.text === 'ready')).toHaveLength(2);
     expect(ranges.filter((range) => range.key === 'tool-2/result').map((range) => range.offset)).toEqual([0, 10]);
+  });
+  it('returns only transcript text that has not already been appended', () => {
+    const committed = [{ key: 'tool/result', offset: 0, text: 'shown', omitted: false }];
+    expect(excludeToolActivityTranscript([
+      { key: 'tool/result', offset: 0, text: 'shown again', omitted: false },
+      { key: 'other/result', offset: 0, text: 'separate', omitted: false },
+    ], committed)).toEqual([
+      { key: 'tool/result', offset: 5, text: ' again', omitted: false },
+      { key: 'other/result', offset: 0, text: 'separate', omitted: false },
+    ]);
   });
   it('finishes the page safely when the selected unfinished entry is removed at turn termination', () => {
     const { reader, groups } = fixture('completed-result');

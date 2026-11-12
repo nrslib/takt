@@ -24,7 +24,9 @@ export interface ToolActivityEntry {
   tool: string;
   input: Record<string, unknown>;
   output: string;
+  outputTruncated?: boolean;
   result?: string;
+  resultTruncated?: boolean;
   status: ToolActivityStatus;
   association: 'matched' | 'unmatched';
   startedAt?: number;

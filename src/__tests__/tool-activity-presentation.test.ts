@@ -72,6 +72,16 @@ describe('tool activity presentation', () => {
     expect(value.result).toMatchObject({ truncated: true, hasMore: true });
   });
 
+  it('should mark saved output and result truncation in every result presentation', () => {
+    const forOutput = entry({ result: '', output: 'partial output', outputTruncated: true });
+    const forResult = entry({ result: 'partial result', resultTruncated: true });
+    for (const value of [forOutput, forResult]) {
+      for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
+        expect(page.text).toBe('[output truncated]\n' + (value.result || value.output));
+      }
+    }
+  });
+
   it('should group the same read operation across provider spellings while retaining both paths', () => {
     const reads = [entry({ tool: 'read', input: { filePath: '日本語.ts' } }), entry({ tool: 'Read', input: { file_path: 'other.ts' } })];
     expect(groupToolActivities(reads)).toEqual([expect.objectContaining({ summary: 'Read 2 files', entries: expect.any(Array) })]);
