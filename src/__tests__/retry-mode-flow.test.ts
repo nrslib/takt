@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
@@ -71,17 +71,19 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -110,6 +112,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
 import {
   loadRunSessionContext,
@@ -174,15 +177,19 @@ function setupProvider(responses: string[]): MockProviderCapture {
 
 describe('E2E: Retry mode with failure context injection', () => {
   let tmpDir: string;
+  let projectConfigDir: string;
 
   beforeEach(() => {
     tmpDir = createTmpDir();
     vi.clearAllMocks();
+    projectConfigDir = mkdtempSync(join(tmpdir(), 'takt-retry-flow-config-'));
+    vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   });
 
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(projectConfigDir, { recursive: true, force: true });
   });
 
   describe.each(['en', 'ja'] as const)('retry display in %s', (lang) => {

@@ -122,7 +122,7 @@ afterAll(() => {
 
 describe('TeamLeaderRunner with structuredCaller', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
   });
 

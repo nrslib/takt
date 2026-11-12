@@ -5,7 +5,7 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a2
+  goal:
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 保存した進捗を再起動後の一覧で表示する
     outOfScope:
@@ -39,7 +39,7 @@ ja:
       sha: "2222222222222222222222222222222222222222"
       workflowResult: completed
     goalId: 650e8400-e29b-41d4-a716-446655440000
-    createdAt: 2026-10-11T00:20:00Z
+    createdAt: 2026-10-11T00:24:00.000Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -57,6 +57,20 @@ ja:
         workflowResult: completed
       goalWorkKey: state-format
       goalPurpose: 進捗の保存形式をバージョン2にする
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:19:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: 進捗の保存形式をバージョン2にする
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440219
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -68,6 +82,20 @@ ja:
       completion: *a1
       goalWorkKey: state-reader
       goalPurpose: 再起動後に保存された進捗を読み、一覧へ渡す
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:24:00.000Z
+      taskDir: .takt/tasks/result-2
+      summary: 再起動後に保存された進捗を読み、一覧へ渡す
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440220
   readResults:
     - tool: Read
       arguments:
@@ -78,7 +106,29 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a2
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          objective: 保存した進捗を再起動後の一覧で表示する
+          outOfScope:
+            - 本番への公開と外部サービスの追加
+          acceptanceCriteria:
+            - 進捗の保存と再起動後の読み込みを通して、同じ状態が一覧に表示される
+          constraints: []
+          mode: local
+          status: created
+          executionStatus: active
+          acceptanceCriteriaVersion: 1
+          branch: takt/goal/catalog
+          startBranch: main
+          integrationBranch: main
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:20:00Z
+              summary: "result-1 を takt/goal/catalog に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。進捗の保存形式をバージョン2にする"
+            - id: 650e8400-e29b-41d4-a716-000000000033
+              recordedAt: 2026-10-11T00:25:00Z
+              summary: "result-2 を takt/goal/catalog に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。再起動後に保存された進捗を読み、一覧へ渡す"
+          questions: []
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
@@ -102,26 +152,176 @@ ja:
         runSlug: run-result-1
       result:
         runSlug: run-result-1
-        task: 進捗の保存形式をバージョン2にする
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 49
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: 保存形式のバージョン2を実装した。writer.test.ts とビルドは成功した。開始時のゴール用ブランチには、新しい読み込み処理はなかった。
+            sizeBytes: 184
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: task
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: 進捗の保存形式をバージョン2にする
+          totalBytes: 49
+          offset: 0
+          returnedBytes: 49
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 49
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: 保存形式のバージョン2を実装した。writer.test.ts とビルドは成功した。開始時のゴール用ブランチには、新しい読み込み処理はなかった。
+          totalBytes: 184
+          offset: 0
+          returnedBytes: 184
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
         runSlug: run-result-2
       result:
         runSlug: run-result-2
-        task: 再起動後に保存された進捗を読み、一覧へ渡す
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 63
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: 再起動時の読み込み処理を実装した。reader.test.ts とビルドは成功した。開始時点の保存処理で作ったテストデータを使い、一覧表示を確認した。
+            sizeBytes: 195
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: task
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: 再起動後に保存された進捗を読み、一覧へ渡す
+          totalBytes: 63
+          offset: 0
+          returnedBytes: 63
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 63
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: 再起動時の読み込み処理を実装した。reader.test.ts とビルドは成功した。開始時点の保存処理で作ったテストデータを使い、一覧表示を確認した。
+          totalBytes: 195
+          offset: 0
+          returnedBytes: 195
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -140,6 +340,53 @@ ja:
         workflows:
           - name: default
             description: Implementation and review
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: 進捗の保存形式をバージョン2にする
+        workflow: default
+        runSlug: run-result-1
+        runRoot: .takt/runs/run-result-1
+        reportDirectory: .takt/runs/run-result-1/reports
+        contextDirectory: .takt/runs/run-result-1/context
+        logsDirectory: .takt/runs/run-result-1/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:19:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: 進捗の保存形式をバージョン2にする
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:19:00.000Z
+      reports:
+        - filename: implementation.md
+          content: 保存形式のバージョン2を実装した。writer.test.ts とビルドは成功した。開始時のゴール用ブランチには、新しい読み込み処理はなかった。
+    - directory: /workspace/project
+      meta:
+        task: 再起動後に保存された進捗を読み、一覧へ渡す
+        workflow: default
+        runSlug: run-result-2
+        runRoot: .takt/runs/run-result-2
+        reportDirectory: .takt/runs/run-result-2/reports
+        contextDirectory: .takt/runs/run-result-2/context
+        logsDirectory: .takt/runs/run-result-2/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:24:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: 再起動後に保存された進捗を読み、一覧へ渡す
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:24:00.000Z
+      reports:
+        - filename: implementation.md
+          content: 再起動時の読み込み処理を実装した。reader.test.ts とビルドは成功した。開始時点の保存処理で作ったテストデータを使い、一覧表示を確認した。
 en:
   lang: en
   turn: event
@@ -147,7 +394,7 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a4
+  goal:
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Display saved progress in the list after restart
     outOfScope:
@@ -174,14 +421,14 @@ en:
     kind: completion
     taskName: result-2
     runSlug: run-result-2
-    result: &a3
+    result: &a1
       success: true
       interrupted: false
       branch: takt/task/result-2
       sha: "2222222222222222222222222222222222222222"
       workflowResult: completed
     goalId: 650e8400-e29b-41d4-a716-446655440000
-    createdAt: 2026-10-11T00:20:00Z
+    createdAt: 2026-10-11T00:24:00.000Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -199,6 +446,20 @@ en:
         workflowResult: completed
       goalWorkKey: state-format
       goalPurpose: Change saved progress to version 2
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:19:00.000Z
+      taskDir: .takt/tasks/result-1
+      summary: Change saved progress to version 2
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-1
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-1
+      executionId: 650e8400-e29b-41d4-a716-446655440219
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -207,9 +468,23 @@ en:
       startedAt: 2026-10-11T00:05:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-result-2
-      completion: *a3
+      completion: *a1
       goalWorkKey: state-reader
       goalPurpose: Read saved progress after restart and pass it to the list
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:24:00.000Z
+      taskDir: .takt/tasks/result-2
+      summary: Read saved progress after restart and pass it to the list
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/result-2
+      ownerStartTime: null
+      ownerPid: null
+      slug: result-2
+      executionId: 650e8400-e29b-41d4-a716-446655440220
   readResults:
     - tool: Read
       arguments:
@@ -220,7 +495,29 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a4
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          objective: Display saved progress in the list after restart
+          outOfScope:
+            - Production publishing and adding external services
+          acceptanceCriteria:
+            - Saving and reading progress after restart must preserve the same state shown in the list
+          constraints: []
+          mode: local
+          status: created
+          executionStatus: active
+          acceptanceCriteriaVersion: 1
+          branch: takt/goal/catalog
+          startBranch: main
+          integrationBranch: main
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:20:00Z
+              summary: "Integrated result-1 into takt/goal/catalog. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Change saved progress to version 2"
+            - id: 650e8400-e29b-41d4-a716-000000000033
+              recordedAt: 2026-10-11T00:25:00Z
+              summary: "Integrated result-2 into takt/goal/catalog. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Read saved progress after restart and pass it to the list"
+          questions: []
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
@@ -244,26 +541,176 @@ en:
         runSlug: run-result-1
       result:
         runSlug: run-result-1
-        task: Change saved progress to version 2
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 34
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: Implemented version 2 storage. writer.test.ts and build passed. The goal branch at task start did not contain the new reader.
+            sizeBytes: 125
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: task
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: Change saved progress to version 2
+          totalBytes: 34
+          offset: 0
+          returnedBytes: 34
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-1
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-1
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 34
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: Implemented version 2 storage. writer.test.ts and build passed. The goal branch at task start did not contain the new reader.
+          totalBytes: 125
+          offset: 0
+          returnedBytes: 125
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
         runSlug: run-result-2
       result:
         runSlug: run-result-2
-        task: Read saved progress after restart and pass it to the list
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 57
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: Implemented the restart reader. reader.test.ts and build passed. Checked list display with a fixture produced by the writer available at task start.
+            sizeBytes: 148
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: task
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: Read saved progress after restart and pass it to the list
+          totalBytes: 57
+          offset: 0
+          returnedBytes: 57
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-result-2
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-result-2
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 57
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: Implemented the restart reader. reader.test.ts and build passed. Checked list display with a fixture produced by the writer available at task start.
+          totalBytes: 148
+          offset: 0
+          returnedBytes: 148
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -282,3 +729,50 @@ en:
         workflows:
           - name: default
             description: Implementation and review
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: Change saved progress to version 2
+        workflow: default
+        runSlug: run-result-1
+        runRoot: .takt/runs/run-result-1
+        reportDirectory: .takt/runs/run-result-1/reports
+        contextDirectory: .takt/runs/run-result-1/context
+        logsDirectory: .takt/runs/run-result-1/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:19:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: Change saved progress to version 2
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:19:00.000Z
+      reports:
+        - filename: implementation.md
+          content: Implemented version 2 storage. writer.test.ts and build passed. The goal branch at task start did not contain the new reader.
+    - directory: /workspace/project
+      meta:
+        task: Read saved progress after restart and pass it to the list
+        workflow: default
+        runSlug: run-result-2
+        runRoot: .takt/runs/run-result-2
+        reportDirectory: .takt/runs/run-result-2/reports
+        contextDirectory: .takt/runs/run-result-2/context
+        logsDirectory: .takt/runs/run-result-2/logs
+        status: completed
+        startTime: 2026-10-11T00:05:00Z
+        endTime: 2026-10-11T00:24:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: Read saved progress after restart and pass it to the list
+          workflowName: default
+          startTime: 2026-10-11T00:05:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:24:00.000Z
+      reports:
+        - filename: implementation.md
+          content: Implemented the restart reader. reader.test.ts and build passed. Checked list display with a fixture produced by the writer available at task start.

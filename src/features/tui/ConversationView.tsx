@@ -1,5 +1,6 @@
 import { Box, Text, useInput, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
+import { formatElapsedTime, truncateStatusText } from './statusText.js';
 import {
   useCallback,
   useEffect,
@@ -145,21 +146,6 @@ interface Activity {
   readonly tools: readonly ToolActivity[];
 }
 
-function truncateStatusText(text: string, columns: number): string {
-  if (columns <= 0) return '';
-  if (stringWidth(text) <= columns) return text;
-  const graphemes = segmentGraphemes(text);
-  let result = '';
-  let width = stringWidth('…');
-  for (const grapheme of graphemes) {
-    const nextWidth = width + stringWidth(grapheme);
-    if (nextWidth > columns) break;
-    result += grapheme;
-    width = nextWidth;
-  }
-  return `${result}…`;
-}
-
 /** `/go` asks the session for a task instruction rather than for a reply. */
 function isInstructionRequest(text: string): boolean {
   const trimmed = text.trimStart();
@@ -170,7 +156,7 @@ function transcriptEntry(role: TranscriptEntry['role'], content: string): Transc
   return { role, content: toDisplayText(content) };
 }
 
-/** Owns the editable conversation frame, queued turns, confirmation input and terminal handoffs. */
+/** Owns the editable conversation frame, queued turns and terminal handoffs. */
 export function ConversationView({
   ui,
   lang,
@@ -229,8 +215,6 @@ export function ConversationView({
   /** True from the moment this view decides to hand the terminal to a selector. */
   const [isFinishing, setIsFinishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
-  const confirmationRef = useRef<((answer: boolean) => void) | null>(null);
   const liveStatusRef = useRef('');
   const liveStatusListenersRef = useRef(new Set<() => void>());
   const liveStatus = useSyncExternalStore(
@@ -290,9 +274,7 @@ export function ConversationView({
   const slashCompletion = useSlashCompletion(allCompletions);
   const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
-  const elapsed = elapsedSeconds < 60
-    ? `${elapsedSeconds}s`
-    : `${Math.floor(elapsedSeconds / 60)}m${String(elapsedSeconds % 60).padStart(2, '0')}s`;
+  const elapsed = formatElapsedTime(elapsedSeconds);
   const activeTool = activity.kind === 'tool' ? activity.tools.at(-1) : undefined;
   const activityLabel = activeTool !== undefined ? activeTool.name
     : activity.kind === 'thinking' ? ui.extendedThinking
@@ -332,12 +314,6 @@ export function ConversationView({
   // to scrollback.
   // Leave one terminal row free for Ink's trailing line break.
   let remainingLiveRows = Math.max(1, (rows || 24) - 1) - 1;
-  // Keep the caret row; a pending confirmation gets the next row before status
-  // and optional chrome. Its single-line rendering cannot exceed this budget.
-  const showConfirmation = confirmationMessage !== null && remainingLiveRows > 0;
-  if (showConfirmation) {
-    remainingLiveRows -= 1;
-  }
   const showStatusLine = remainingLiveRows > 0;
   if (showStatusLine) {
     remainingLiveRows -= 1;
@@ -425,7 +401,6 @@ export function ConversationView({
   // touching state or leaving the provider call running.
   useEffect(() => () => {
     exitedRef.current = true;
-    confirmationRef.current?.(false);
     for (const work of pendingRef.current) {
       work.controller.abort();
     }
@@ -478,19 +453,6 @@ export function ConversationView({
       const submitInput = {
         text,
         abortSignal: controller.signal,
-        confirmManagedProvider: (message: string): Promise<boolean> => new Promise((resolve) => {
-          if (controller.signal.aborted || !isCurrent()) { resolve(false); return; }
-          const finish = (answer: boolean): void => {
-            controller.signal.removeEventListener('abort', onAbort);
-            confirmationRef.current = null;
-            if (!exitedRef.current) setConfirmationMessage(null);
-            resolve(answer);
-          };
-          const onAbort = (): void => finish(false);
-          confirmationRef.current = finish;
-          setConfirmationMessage(message);
-          controller.signal.addEventListener('abort', onAbort, { once: true });
-        }),
         onAssistantChunk: (chunk: string) => {
           if (!isCurrent()) {
             return;
@@ -654,9 +616,6 @@ export function ConversationView({
   const finishRun = useCallback(async (next: ConversationExit): Promise<void> => {
     cancellingRef.current = true;
     setTurn(null);
-    // Reject any pending answer before waiting on its submission. The drain
-    // also aborts its controller, but confirmation must never hold exit open.
-    confirmationRef.current?.(false);
     // The terminal is about to belong to a selector, so the prompt stops taking
     // keys at the moment the decision is made rather than when the tree goes.
     setIsFinishing(true);
@@ -831,12 +790,6 @@ export function ConversationView({
       return;
     }
 
-    if (confirmationRef.current) {
-      if (input.toLowerCase() === 'y') confirmationRef.current(true);
-      else if (input.toLowerCase() === 'n' || key.return || key.escape) confirmationRef.current(false);
-      return;
-    }
-
     // A terminal pastes a screenshot as raw OSC 1337 bytes, which must be
     // recognized before any key handling or display sanitization sees them.
     if (routeImagePasteInput(input, key)) {
@@ -968,9 +921,6 @@ export function ConversationView({
           showHint={false}
           showBorder={showPromptBorder}
         />
-        {showConfirmation && (
-          <Text wrap="truncate-end">{`${toSingleLineText(confirmationMessage ?? '')} [y/N]`}</Text>
-        )}
         {showStatusLine && (
           <StatusLine
             busy={isBusy}

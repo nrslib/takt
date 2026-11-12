@@ -1,21 +1,15 @@
-import { ConversationIpcClient } from '../manager/conversationIpcClient.js';
-import { createDirectorManagerPort } from './managerPort.js';
-import { resolveDirectorManager } from './managers.js';
+import { randomUUID } from 'node:crypto';
+import type { DaemonBus } from '../../core/daemon/ports.js';
+import type { TurnIdentity } from '../../core/daemon/messages.js';
+import type { DirectorMessageOrigin } from '../../infra/conversations/schema.js';
 
-export async function tellDirectorManager(configDirectory: string, managerId: string, text: string, signal: AbortSignal) {
-  const assignment = await resolveDirectorManager(configDirectory, managerId);
-  const port = createDirectorManagerPort(configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
-  const identity = assignment.kind === 'workspace' ? { kind: 'workspace' as const, workspaceId: assignment.workspaceId }
-    : { kind: 'repository' as const, repositoryDirectory: assignment.repositoryDirectory };
-  const client = new ConversationIpcClient(identity, undefined, { port, reconnect: false });
-  try {
-    signal.throwIfAborted();
-    try { await client.connect(); }
-    catch (error) { if (error instanceof Error && error.cause === 'busy') return { kind: 'busy' as const }; throw error; }
-    signal.throwIfAborted();
-    const submission = await client.submit({ kind: 'message', text });
-    return submission.kind === 'accepted' ? { ...submission, managerId } : submission;
-  } finally {
-    client.close();
-  }
+export async function tellDirectorManager(context: { bus: Pick<DaemonBus, 'request'>; turn: TurnIdentity },
+  managerId: string, text: string, origin: DirectorMessageOrigin, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const id = randomUUID();
+  const reply = await context.bus.request(context.turn, { kind: 'accept_director_message', eventId: id,
+    requestId: id, conversationId: managerId, occurredAt: new Date().toISOString(), text, origin }, signal);
+  if (reply.kind === 'error') return reply;
+  if (reply.kind !== 'event_accepted') throw new Error('Unexpected director message response');
+  return reply.admission.kind === 'accepted' ? { ...reply.admission, managerId } : reply.admission;
 }

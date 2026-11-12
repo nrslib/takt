@@ -31,7 +31,7 @@ vi.mock('node:fs', async (importOriginal) => ({
 
 vi.mock('../shared/utils/private-file.js', () => ({
   capturePrivateDirectoryReadSnapshot: (path: string): PrivateDirectoryReadSnapshot => ({
-    path, stat: io.entries.get(path)!.stat, ancestorIdentities: [],
+    path, stat: io.entries.get(path)!.stat,
   }),
   assertPrivateDirectoryReadSnapshot: vi.fn(),
   readRegularFileNoFollow: io.read,

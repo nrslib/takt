@@ -17,6 +17,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import { isVerboseConsole, resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { ProviderType } from '../shared/types/provider.js';
+import type { WorkflowExecutionEventSink } from '../features/tasks/execute/types.js';
 import { MAX_TERMINAL_OUTPUT_BYTES, sanitizeTerminalText } from '../shared/utils/text.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamDisplay } from '../shared/ui/index.js';
@@ -39,12 +40,13 @@ class TestEngine extends EventEmitter {
 }
 
 function createBridgeHarness(options?: {
+  getCacciaFailureReason?: () => string | undefined;
   runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
   traceDiscovery?: { queries: string[] };
-  eventSink?: ReturnType<typeof vi.fn>;
+  eventSink?: WorkflowExecutionEventSink;
   shouldNotifyRateLimit?: boolean;
   display?: { flush: ReturnType<typeof vi.fn> };
   engine?: TestEngine;
@@ -90,7 +92,9 @@ function createBridgeHarness(options?: {
     current: options?.display ?? null,
   };
   const runMetaManager = {
+    recordStep: vi.fn(),
     updateStep: vi.fn(),
+    recordWorkflowCall: vi.fn(),
     updatePhase: vi.fn(),
     updateResumePoint: vi.fn(),
     finalize: vi.fn(),
@@ -149,6 +153,7 @@ function createBridgeHarness(options?: {
         }),
   });
   const bridge = bindWorkflowExecutionEvents({
+    getCacciaFailureReason: options?.getCacciaFailureReason,
     runtimeReportDiagnostics: options?.runtimeReportDiagnostics,
     engine: engine as never,
     workflowConfig: options?.workflowConfig ?? {
@@ -451,8 +456,8 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
-    const { engine, sessionLogger } = createBridgeHarness();
+  it('workflow_call lifecycle を SessionLogger と run の回数記録へ橋渡しする', () => {
+    const { engine, sessionLogger, runMetaManager } = createBridgeHarness();
     const lifecycle = {
       parentWorkflow: 'project:sha256:parent',
       step: 'delegate',
@@ -474,6 +479,7 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('workflow_call:start', lifecycle);
     engine.emit('workflow_call:complete', complete);
 
+    expect(runMetaManager.recordWorkflowCall).toHaveBeenCalledExactlyOnceWith(lifecycle.stack);
     expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
     expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
   });
@@ -914,6 +920,29 @@ describe('bindWorkflowExecutionEvents', () => {
     );
 
     expect(bridge.state.abortKind).toBe('step_transition');
+  });
+
+  it.each(['step_transition', 'interrupt', 'step_error'] as const)(
+    'Cacciaの診断は通常のABORT遷移だけで保持する: %s', (kind) => {
+      const diagnostic = '設計判断が必要; missing T4, T5';
+      const { bridge, engine } = createBridgeHarness({ getCacciaFailureReason: () => diagnostic });
+      engine.emit('workflow:abort', { iteration: 3 }, 'Original failure', kind,
+        { kind, step: 'review', reason: 'Original failure', error: 'Original failure' });
+      const expected = kind === 'step_transition' ? diagnostic : 'Original failure';
+      expect(bridge.state.abortReason).toBe(expected);
+      expect(bridge.state.failure?.error).toBe(expected);
+      expect(bridge.getStagedAbort()?.reason).toBe(expected);
+    },
+  );
+
+  it('Cacciaの診断が解除された後のABORTはその時点の理由を保持する', () => {
+    let diagnostic: string | undefined = 'Earlier Caccia failure';
+    const { bridge, engine } = createBridgeHarness({ getCacciaFailureReason: () => diagnostic });
+    diagnostic = undefined;
+    engine.emit('workflow:abort', { iteration: 3 }, 'Current failure', 'step_transition',
+      { kind: 'step_transition', step: 'review', reason: 'Current failure', error: 'Current failure' });
+    expect(bridge.state.abortReason).toBe('Current failure');
+    expect(bridge.state.failure?.error).toBe('Current failure');
   });
 
   it('タスク中断の終端イベントで別タスクのClaude queryを停止しない', () => {

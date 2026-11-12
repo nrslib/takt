@@ -17,6 +17,7 @@ import {
   type AgentFailureCategory,
 } from '../../../shared/types/agent-failure.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
+import { RunStepExecutionsSchema, type RunStepExecution } from './step-executions.js';
 import {
   decodePullRequestContext,
   type PullRequestContext,
@@ -56,6 +57,7 @@ export interface RunMeta {
   iterations?: number;
   currentStep?: string;
   currentIteration?: number;
+  stepExecutions?: RunStepExecution[];
   phase?: 1 | 2 | 3;
   updatedAt?: string;
   observability?: RunMetaObservability;
@@ -224,6 +226,7 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     ...(optionalInteger(raw.iterations, 'iterations')),
     ...(optionalString(raw.currentStep, 'currentStep')),
     ...(optionalInteger(raw.currentIteration, 'currentIteration')),
+    ...(raw.stepExecutions === undefined ? {} : { stepExecutions: RunStepExecutionsSchema.parse(raw.stepExecutions) }),
     ...(raw.phase === undefined ? {} : { phase: requiredPhase(raw.phase) }),
     ...(optionalString(raw.updatedAt, 'updatedAt')),
     ...(raw.observability === undefined

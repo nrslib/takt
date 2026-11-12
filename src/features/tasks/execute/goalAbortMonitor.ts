@@ -15,13 +15,28 @@ export class GoalAbortedError extends Error {
   }
 }
 
+export class GoalPausedError extends Error {
+  constructor(goalId: string) {
+    super(`Goal ${goalId} was paused`);
+    this.name = 'GoalPausedError';
+  }
+}
+
+export class GoalNotAwaitingMergeError extends Error {
+  constructor(goalId: string, status: string) {
+    super(`Goal ${goalId} is no longer awaiting_merge (current status: ${status})`);
+    this.name = 'GoalNotAwaitingMergeError';
+  }
+}
+
 export class GoalAbortMonitor {
   private readonly store: GoalStore | undefined;
   private readonly taskStore: TaskStore;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(cwd: string, private readonly goalId: string | undefined, private readonly controller: AbortController,
-    private readonly execution: { taskName: string; executionId: string }) {
+    private readonly execution: { taskName: string; executionId: string },
+    private readonly options?: { requireAwaitingMerge: boolean }) {
     this.store = goalId === undefined ? undefined : new GoalStore(cwd);
     this.taskStore = new TaskStore(cwd);
     this.check();
@@ -37,6 +52,10 @@ export class GoalAbortMonitor {
       try {
         const goal = this.store.getSync(this.goalId);
         if (goal?.executionStatus === 'aborted') this.controller.abort(new GoalAbortedError(this.goalId));
+        if (goal?.executionStatus === 'paused') this.controller.abort(new GoalPausedError(this.goalId));
+        if (!this.controller.signal.aborted && this.options?.requireAwaitingMerge && goal.status === 'created') {
+          this.controller.abort(new GoalNotAwaitingMergeError(this.goalId, goal.status));
+        }
       } catch (error) {
         log.error('Cannot read goal execution state; will retry', {
           goalId: this.goalId, error: sanitizeSensitiveText(getErrorMessage(error)),

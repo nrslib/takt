@@ -122,7 +122,7 @@ steps:
         body: "TAKT evaluation: approved=false. GitHub review decision is CHANGES_REQUESTED; reviewer-requested changes must be addressed before merge."
     rules:
       - condition: when(effect.changes_requested.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: collect_ci_failure
@@ -263,7 +263,7 @@ steps:
         body: "TAKT evaluation failed: waiting for CI exceeded 120 retries (30 minutes)."
     rules:
       - condition: when(effect.timeout.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: unmergeable
@@ -275,7 +275,7 @@ steps:
         body: "TAKT evaluation failed: mergeability is {context:wait_ci.status.mergeable}."
     rules:
       - condition: when(effect.unmergeable.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: review_failed
@@ -287,7 +287,7 @@ steps:
         body: "TAKT evaluation failed: child review workflow aborted."
     rules:
       - condition: when(effect.review_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: merged
@@ -311,7 +311,7 @@ steps:
         body: "TAKT evaluation failed: sync_with_root: {effect:sync.sync_with_root.error}"
     rules:
       - condition: when(effect.sync_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: conflict_failed
@@ -323,7 +323,7 @@ steps:
         body: "TAKT evaluation failed: resolve_conflicts_with_ai: {effect:resolve_conflicts.resolve_conflicts_with_ai.error}"
     rules:
       - condition: when(effect.conflict_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: push_failed
@@ -335,7 +335,7 @@ steps:
         body: "TAKT evaluation failed: commit_and_push: {effect:push.commit_and_push.error}"
     rules:
       - condition: when(effect.push_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: merge_failed
@@ -347,7 +347,7 @@ steps:
         body: "TAKT evaluation passed but merge_pr failed: {effect:merge.merge_pr.error}"
     rules:
       - condition: when(effect.merge_failed.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
@@ -359,7 +359,7 @@ steps:
         body: "Caccia reached its iteration limit. Unresolved threads: {effect:caccia.caccia.unresolvedCount}"
     rules:
       - condition: when(effect.caccia_limit.comment_pr.success == true)
-        next: COMPLETE
+        next: ABORT
       - condition: when(true)
         next: ABORT
   - name: caccia_failed

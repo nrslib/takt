@@ -11,8 +11,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const suite = parse(readFileSync(join(repoRoot, 'eval/scenarios/manager-work-split/manager-work-split.yaml'), 'utf8'));
 const instructionMarker = 'OFFLINE_MANAGER_INSTRUCTION_OVERRIDE';
 
-for (const variant of ['red', 'green']) {
-  test(`promptfoo assembles all manager cases with ${variant} instructions and an offline provider`, { timeout: 60000 }, () => {
+const pausePattern = '^(ja|en): (paused-requeue|paused-requeue-before-start|task-stopped-not-resumed|resumed-already-requeued)$';
+for (const { variant, filtered } of [{ variant: 'red', filtered: false }, { variant: 'green', filtered: false }, { variant: 'green', filtered: true }]) {
+  test(`promptfoo assembles ${filtered ? 'only the eight pause inputs' : 'all manager cases'} with ${variant} instructions and an offline provider`, { timeout: 60000 }, () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-manager-promptfoo-'));
     try {
       const instructionRoot = join(root, 'instructions');
@@ -46,15 +47,17 @@ for (const variant of ['red', 'green']) {
       delete env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
       const run = spawnSync(process.execPath, [
         join(repoRoot, 'node_modules/promptfoo/dist/src/entrypoint.js'), 'eval',
-        '-c', configPath, '--no-cache', '--no-write', '--no-share', '--no-progress-bar', '--no-table', '-o', reportPath,
+        '-c', configPath, ...(filtered ? ['--filter-pattern', pausePattern] : []), '--no-cache', '--no-write', '--no-share', '--no-progress-bar', '--no-table', '-o', reportPath,
       ], { cwd: repoRoot, env, encoding: 'utf8', timeout: 55000, maxBuffer: 2 * 1024 * 1024 });
       assert.ifError(run.error);
       assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
       const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-      assert.equal(report.results.stats.successes, suite.tests.length);
+      const selected = filtered ? suite.tests.filter(({ description }) => new RegExp(pausePattern).test(description)) : suite.tests;
+      assert.equal(selected.length, filtered ? 8 : 172);
+      assert.equal(report.results.stats.successes, selected.length);
       assert.equal(report.results.stats.failures, 0);
       assert.equal(report.results.stats.errors, 0);
-      assert.equal(report.results.results.length, suite.tests.length);
+      assert.equal(report.results.results.length, selected.length);
       for (const { prompt, vars } of report.results.results) {
         if (vars.case.endsWith('-execution')) continue;
         assert.equal(prompt.raw.includes(`${instructionMarker}_${vars.lang}`), variant === 'red',

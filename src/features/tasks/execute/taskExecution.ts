@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import type { TaskRunner, TaskInfo, TaskResult } from '../../../infra/task/index.js';
+import type { TaskRunner, TaskInfo, TaskResult, WorktreeResult } from '../../../infra/task/index.js';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { GoalTaskResult } from '../../../infra/goals/schema.js';
@@ -20,7 +20,7 @@ import type {
 import { resolveTaskExecution, resolveTaskIssue, type ResolveTaskExecutionOptions } from './resolveTask.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
-import { GoalAbortMonitor, GoalAbortedError } from './goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from './goalAbortMonitor.js';
 import { TaskStoppedError } from '../../../infra/task/taskStop.js';
 import {
   buildBooleanTaskResult,
@@ -128,9 +128,14 @@ export async function executeTaskAndCompleteWithDetails(
         taskColorIndex: parallelOptions?.taskColorIndex,
         taskDisplayLabel: parallelOptions?.taskDisplayLabel,
       });
-      return { success: result.merged };
+      return { success: result.success,
+        ...(result.completion === undefined ? {} : {
+          completion: result.completion, runSlug: result.runSlug, failureReason: result.completion.failureReason,
+        }) };
     } catch (error) {
-      return { success: false, failureReason: getErrorMessage(error) };
+      const saved = taskRunner.listTaskStateItems().find((item) => item.name === task.name);
+      return { success: false, failureReason: getErrorMessage(error),
+        ...(saved?.completion === undefined ? {} : { completion: saved.completion, runSlug: saved.runSlug }) };
     }
   }
   const startedAt = new Date().toISOString();
@@ -227,6 +232,11 @@ export async function executeTaskAndCompleteWithDetails(
       prContext,
     } = await resolveTaskExecution(task, cwd, taskAbortSignal, {
       ...buildResolveTaskExecutionOptions(parallelOptions, taskContext),
+      ...(goalId === undefined ? {} : { onCloneCreated: (clone: WorktreeResult) => {
+        taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, {
+          runSlug: runSlug!, worktreePath: clone.path, branch: clone.branch,
+        });
+      } }),
     });
     executionCwd = execCwd;
     executionBranch = branch;
@@ -302,7 +312,7 @@ export async function executeTaskAndCompleteWithDetails(
     if (isManagedTaskInterruption(taskAbortController.signal.reason)) {
       if (taskAbortController.signal.reason instanceof TaskStoppedError) taskStopError = taskAbortController.signal.reason;
       taskRunResult = { ...taskRunResult, success: false, interrupted: true, reason: taskAbortController.signal.reason.message,
-        exceeded: false, retryable: false };
+        exceeded: false, retryable: taskAbortController.signal.reason instanceof GoalPausedError };
     }
     interrupted = taskRunResult.interrupted === true;
     workflowResult = taskRunResult.setupFailed === true ? 'error'
@@ -429,6 +439,10 @@ export async function executeTaskAndCompleteWithDetails(
       : isManagedTaskInterruption(taskAbortController.signal.reason) ? taskAbortController.signal.reason : err;
     const completedAt = new Date().toISOString();
     const saveFailure = (failure: unknown): TaskCompletionResult => {
+      if (failure instanceof GoalPausedError && !workflowStarted) {
+        // 準備中の識別子を再試行元の run として保存しない。
+        taskForPersistence = { ...taskForPersistence, runSlug: undefined };
+      }
       if (failure instanceof TaskStoppedError) taskStopError = failure;
       if (isManagedTaskInterruption(failure)) {
         interrupted = true;
@@ -459,8 +473,8 @@ export async function executeTaskAndCompleteWithDetails(
   }
 }
 
-function isManagedTaskInterruption(error: unknown): error is GoalAbortedError | TaskStoppedError {
-  return error instanceof GoalAbortedError || error instanceof TaskStoppedError;
+function isManagedTaskInterruption(error: unknown): error is GoalAbortedError | GoalPausedError | TaskStoppedError {
+  return error instanceof GoalAbortedError || error instanceof GoalPausedError || error instanceof TaskStoppedError;
 }
 
 function buildExceededFailureReason(exceeded: ExceededInfo): string {

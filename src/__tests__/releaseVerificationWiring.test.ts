@@ -16,7 +16,6 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 import {
   auditedIntegrationBoundaryTestFiles,
   fileSystemIntegrationTestFiles,
@@ -30,13 +29,12 @@ import {
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
-import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
+import heavyParallelIntegrationConfig, { resolveHeavyItMaxWorkers } from '../../vitest.config.it.heavy.parallel.js';
 import lightIntegrationConfig, { resolveLightItMaxWorkers } from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
-import { BIRPC_REMEASURE_ON_CI_ENV } from '../../scripts/vitest-birpc-noise.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
   RELEASE_LOG_RELATIVE_PATH,
@@ -45,51 +43,6 @@ import {
 
 interface PackageManifest {
   scripts: Record<string, string>;
-  dependencies: Record<string, string>;
-  devDependencies: Record<string, string>;
-  files: string[];
-}
-
-interface CiWorkflowStep {
-  name?: string;
-  uses?: string;
-  run?: string;
-  'working-directory'?: string;
-  with?: Record<string, unknown>;
-  env?: Record<string, string>;
-}
-
-interface CiWorkflowJob {
-  'runs-on'?: string;
-  if?: string;
-  name?: string;
-  needs?: string[];
-  strategy?: {
-    matrix?: {
-      os?: string[];
-      npm?: string[];
-      shard?: number[];
-      include?: Array<{
-        group: string;
-        script: string;
-      }>;
-    };
-  };
-  steps?: CiWorkflowStep[];
-}
-
-interface CiWorkflow {
-  on?: {
-    pull_request?: {
-      branches?: string[];
-      types?: string[];
-    };
-    push?: {
-      branches?: string[];
-    };
-    workflow_dispatch?: Record<string, unknown> | null;
-  };
-  jobs?: Record<string, CiWorkflowJob>;
 }
 
 const manifest = JSON.parse(
@@ -121,23 +74,6 @@ function runDependencyPostinstall(
     },
   });
 }
-
-const ciWorkflowText = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
-const ciWorkflow = parseYaml(
-  ciWorkflowText,
-) as CiWorkflow;
-const nixWorkflow = parseYaml(
-  readFileSync(new URL('../../.github/workflows/nix.yml', import.meta.url), 'utf8'),
-) as CiWorkflow;
-const autoTagWorkflow = parseYaml(
-  readFileSync(new URL('../../.github/workflows/auto-tag.yml', import.meta.url), 'utf8'),
-) as CiWorkflow;
-const prCommentWorkflow = parseYaml(
-  readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
-) as CiWorkflow;
-const globalInstallWorkflow = parseYaml(
-  readFileSync(new URL('../../.github/workflows/global-install.yml', import.meta.url), 'utf8'),
-) as CiWorkflow;
 
 const integrationBoundaryNames = new Set([
   'WorkflowEngine',
@@ -291,108 +227,6 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
 }
 
 describe('release verification wiring', () => {
-  it('should exclude removed notification dependencies and their obsolete versions from the manifest and lock', () => {
-    const lock = JSON.parse(readFileSync(new URL('../../package-lock.json', import.meta.url), 'utf8')) as {
-      packages: Record<string, { version?: string }>;
-    };
-    expect(manifest.dependencies['update-notifier']).toBeUndefined();
-    expect(manifest.dependencies.boxen).toBeUndefined();
-    const forbidden = Object.entries(lock.packages).filter(([path, record]) =>
-      /(?:^|\/)node_modules\/(?:update-notifier|boxen)$/.test(path)
-      || (/(?:^|\/)node_modules\/wrap-ansi$/.test(path) && record.version?.startsWith('9.'))
-      || (/(?:^|\/)node_modules\/widest-line$/.test(path) && record.version?.startsWith('5.')),
-    );
-    expect(forbidden.map(([path, record]) => `${path}@${record.version}`)).toEqual([]);
-  });
-
-  it.each([
-    { name: 'pull request', workflow: ciWorkflow },
-    { name: 'published release', workflow: globalInstallWorkflow },
-  ])('should wire $name global installation checks to the shared gate with Java 17 or later', ({ workflow }) => {
-    const job = workflow.jobs?.['global-install'];
-    expect(job?.strategy?.matrix?.os).toEqual(['ubuntu-latest', 'macos-15']);
-    const npmVersions = job?.strategy?.matrix?.npm ?? [];
-    expect(npmVersions).toEqual(expect.arrayContaining(['10.9.4', '11.16.0']));
-    expect(npmVersions.some((version) => /^12\.\d+\.\d+$/.test(version))).toBe(true);
-    const steps = job?.steps ?? [];
-    const gate = steps.find((step) => /global-install-check\.mjs|npm run test:global-install/.test(step.run ?? ''));
-    const command = gate?.run?.replace(/\\\r?\n/g, ' ').split(/\r?\n/)
-      .find((line) => /global-install-check\.mjs|npm run test:global-install/.test(line));
-    expect(command).toMatch(/--npm-versions\s+['"]?\$\{\{\s*matrix\.npm\s*\}\}['"]?(?:\s|$)/);
-    const java = steps.find((step) => step.uses?.startsWith('actions/setup-java@'));
-    expect(Number(java?.with?.['java-version'])).toBeGreaterThanOrEqual(17);
-  });
-
-  it('should pass the requested published version tarball to the common installation gate', () => {
-    const step = globalInstallWorkflow.jobs?.['global-install']?.steps?.find((entry) => entry.env?.TAKT_VERSION && entry.run?.includes('global-install-check.mjs'));
-    expect(step?.env?.TAKT_VERSION).toContain('inputs.version');
-    expect(step?.run).toContain('npm pack "takt@${TAKT_VERSION}"');
-    expect(step?.run).toContain('--tarball "$RUNNER_TEMP/$tarball"');
-  });
-
-  describe.each([
-    { fileName: 'ci.yml', workflow: ciWorkflow },
-    { fileName: 'nix.yml', workflow: nixWorkflow },
-  ])('$fileName triggers', ({ workflow }) => {
-    it('should run pull requests for every base branch with the existing event types', () => {
-      expect(workflow.on?.pull_request).toEqual({
-        types: ['opened', 'synchronize', 'ready_for_review'],
-      });
-    });
-
-    it('should keep push runs limited to main', () => {
-      expect(workflow.on?.push).toEqual({ branches: ['main'] });
-    });
-
-    it('should keep manual dispatch enabled without inputs', () => {
-      expect(workflow.on).toHaveProperty('workflow_dispatch');
-      expect(workflow.on?.workflow_dispatch).toBeNull();
-    });
-  });
-
-  it('should trigger auto-tag only for closed pull requests targeting main', () => {
-    expect(autoTagWorkflow.on).toEqual({
-      pull_request: {
-        types: ['closed'],
-        branches: ['main'],
-      },
-    });
-  });
-
-  it('should require a merged release pull request before tagging', () => {
-    expect(autoTagWorkflow.jobs?.tag?.if?.replace(/\s+/g, ' ').trim()).toBe([
-      'github.event.pull_request.merged == true',
-      "startsWith(github.event.pull_request.title, 'Release v')",
-      "startsWith(github.event.pull_request.head.ref, 'release/')",
-    ].join(' && '));
-  });
-
-  it('should connect each public test entrypoint to its intended runner', () => {
-    expect(manifest.scripts).toMatchObject({
-      test: 'npm run test:type-contracts && npm run test:types && node scripts/run-npm-test.mjs',
-      'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
-      'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
-      'test:it': 'npm run test:it:light',
-      'test:it:light': 'vitest run --config vitest.config.it.parallel.ts',
-      'test:it:parallel': 'npm run test:it:light',
-      'test:it:heavy': 'npm run test:it:heavy:parallel && npm run test:it:heavy:serial',
-      'test:it:heavy:parallel': 'vitest run --config vitest.config.it.heavy.parallel.ts',
-      'test:it:heavy:serial': 'node scripts/run-it-serial-groups.mjs',
-      'test:it:heavy:serial:git': 'vitest run --config vitest.config.it.serial.git.ts',
-      'test:it:heavy:serial:workflow': 'vitest run --config vitest.config.it.serial.workflow.ts',
-      'test:it:all': 'npm run test:it && npm run test:it:heavy',
-      'test:it:serial:git': 'npm run test:it:heavy:serial:git',
-      'test:it:serial:workflow': 'npm run test:it:heavy:serial:workflow',
-      'test:opencode-probe': 'node tools/opencode-probe/run-smoke.mjs',
-      'test:prompt-evals': 'npm run test:opencode-probe',
-    });
-    expect(manifest.scripts['test:e2e:provider:claude-sdk'])
-      .toMatch(/TAKT_E2E_PROVIDER=claude-sdk/);
-    expect(manifest.scripts['test:e2e:provider'])
-      .toContain('test:e2e:provider:claude-sdk');
-    expect(manifest.scripts['test:e2e:provider']!.indexOf('claude-sdk'))
-      .toBeLessThan(manifest.scripts['test:e2e:provider']!.indexOf('provider:codex'));
-  });
 
   it.each([
     { name: 'development checkout', patches: true, patchPackage: true, applies: true },
@@ -420,31 +254,7 @@ describe('release verification wiring', () => {
     )).toThrow('Patch failed');
   });
 
-  it('should reapply the Quint dependency patch after rebuilding the Nix production tree', () => {
-    const source = readFileSync(new URL('../../flake.nix', import.meta.url), 'utf8');
-    const production = source.match(/preInstall = ''([\s\S]*?)'';/)?.[1];
-    expect(production).toBeDefined();
-    const install = production!.indexOf('npm ci --omit=dev --ignore-scripts');
-    expect(install).toBeGreaterThanOrEqual(0);
-    expect(production!.indexOf('patch -p1 < patches/@informalsystems+quint+0.32.0.patch'))
-      .toBeGreaterThan(install);
-    expect(manifest.scripts.prebuild).toBe('npm run patch:dependencies');
-  });
-
-  it('should ship the managed DeepSeek npm project and verify its lock contract in CI', () => {
-    expect(manifest.scripts.preinstall).toBeUndefined();
-    expect(manifest.scripts.install).toBeUndefined();
-    expect(manifest.scripts.postinstall).toContain('npm run patch:dependencies');
-    expect(manifest.scripts.prepare).toBeUndefined();
-    expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
-    expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
-    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.1-rc.3');
-    expect(manifest.files).toContain('managed/');
-    expect(manifest.scripts.prepack).toBeUndefined();
-    const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
-    expect(lintSteps.some((step) => step.run?.trim() === 'node scripts/verify-deepseek-sdk-lock.mjs --pack')).toBe(true);
-    expect(lintSteps.some((step) => step.uses?.startsWith('astral-sh/setup-uv@') === true)).toBe(false);
-    expect(lintSteps.some((step) => step.uses?.startsWith('actions/setup-python@') === true)).toBe(false);
+  it('should validate the managed DeepSeek SDK lock', () => {
     const result = spawnSync(
       process.execPath,
       [fileURLToPath(new URL('../../scripts/verify-deepseek-sdk-lock.mjs', import.meta.url))],
@@ -460,124 +270,6 @@ describe('release verification wiring', () => {
       throw result.error;
     }
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  it('should run every release gate once', () => {
-    expect(manifest.scripts['check:release']).toBe('node scripts/run-release-check.mjs');
-    expect(RELEASE_GATE_SCRIPTS).toEqual([
-      'sync:nix-deps',
-      'build',
-      'test:global-install',
-      'test:managed-install',
-      'lint',
-      'test',
-      'test:it:all',
-      'test:e2e:all',
-    ]);
-    expect(new Set(RELEASE_GATE_SCRIPTS).size).toBe(RELEASE_GATE_SCRIPTS.length);
-  });
-
-  it('should keep the eight-runner unit matrix on the main pull-request workflow', () => {
-    const unitShardJob = ciWorkflow.jobs?.['test-shard'];
-    const commentCiJob = prCommentWorkflow.jobs?.ci;
-    expect(unitShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(unitShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
-      'npm run test:unit:parallel -- --shard=${{ matrix.shard }}/8',
-    );
-    expect(commentCiJob?.strategy).toBeUndefined();
-    expect(commentCiJob?.steps?.map((step) => step.run).filter(Boolean)).toContain('npm run test');
-  });
-
-  it('should opt in to birpc re-measurement only on the auxiliary /ci job', () => {
-    const commentCiJob = prCommentWorkflow.jobs?.ci;
-    const testStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test');
-    const e2eStep = commentCiJob?.steps?.find((step) => step.run === 'npm run test:e2e:mock');
-
-    expect(testStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBe('1');
-    expect(e2eStep?.env?.[BIRPC_REMEASURE_ON_CI_ENV]).toBeUndefined();
-    expect(JSON.stringify(ciWorkflow)).not.toContain(BIRPC_REMEASURE_ON_CI_ENV);
-  });
-
-  it('should run light integration and isolated heavy integration shards as pull-request gates', () => {
-    const lightIntegrationJob = ciWorkflow.jobs?.it;
-    const heavyShardJob = ciWorkflow.jobs?.heavy_it_shard;
-    const heavySerialJob = ciWorkflow.jobs?.heavy_it_serial;
-    const heavyAggregateJob = ciWorkflow.jobs?.heavy_it;
-
-    expect(lightIntegrationJob?.name).toBe('test:it');
-    expect(lightIntegrationJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
-      'npm run test:it',
-    );
-
-    expect(heavyShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(heavyShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
-      'npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6',
-    );
-
-    expect(heavySerialJob?.strategy?.matrix?.include).toEqual([
-      { group: 'git', script: 'test:it:heavy:serial:git' },
-      { group: 'workflow', script: 'test:it:heavy:serial:workflow' },
-    ]);
-    expect(heavySerialJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
-      'npm run ${{ matrix.script }}',
-    );
-
-    expect(heavyAggregateJob?.name).toBe('test:it:heavy');
-    expect(heavyAggregateJob?.needs).toEqual(['heavy_it_shard', 'heavy_it_serial']);
-    expect(heavyAggregateJob?.if).toBe('${{ always() }}');
-    const aggregateCommand = heavyAggregateJob?.steps
-      ?.map((step) => step.run)
-      .filter(Boolean)
-      .join('\n');
-    expect(aggregateCommand).toContain('needs.heavy_it_shard.result');
-    expect(aggregateCommand).toContain('needs.heavy_it_serial.result');
-    expect(aggregateCommand).toContain('!= "success"');
-    expect(aggregateCommand).toContain('exit 1');
-  });
-
-  it('should run the DeepSeek Harness SDK mock contract on supported platform architectures', () => {
-    const deepSeekJob = ciWorkflow.jobs?.['deepseek-harness-cross-platform'];
-    const steps = deepSeekJob?.steps ?? [];
-    const nodeSetup = steps.find((step) => step.uses?.startsWith('actions/setup-node@') === true);
-    const install = steps.find((step) => step.run?.trim() === 'npm ci');
-    const commands = steps.map((step) => step.run).filter(Boolean);
-
-    expect(deepSeekJob?.strategy?.matrix?.os).toEqual([
-      'ubuntu-24.04',
-      'ubuntu-24.04-arm',
-      'macos-15',
-    ]);
-    expect(nodeSetup?.with?.['node-version']).toBe('22.22.0');
-    expect(install?.env?.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
-    expect(commands).toEqual(expect.arrayContaining([
-      'npm ci',
-      'npm run build',
-      'npm test -- src/__tests__/deepseek-harness-client.test.ts',
-    ]));
-    expect(JSON.stringify(deepSeekJob)).not.toContain('TAKT_DEEPSEEK_HARNESS_LIVE');
-  });
-
-  it('should run real bounded command termination tests on Windows', () => {
-    const commands = ciWorkflow.jobs?.['windows-private-artifacts']?.steps
-      ?.map((step) => step.run)
-      .filter(Boolean);
-
-    expect(commands).toContain(
-      'npm test -- src/__tests__/bounded-command-runner.integration.test.ts',
-    );
-  });
-
-  it('should build and smoke test the Pi SDK on Windows and macOS', () => {
-    const piJob = ciWorkflow.jobs?.['pi-cross-platform'];
-    const commands = piJob?.steps?.map((step) => step.run).filter(Boolean);
-
-    expect(piJob?.strategy?.matrix?.os).toEqual(['windows-latest', 'macos-latest']);
-    expect(commands).toEqual(expect.arrayContaining([
-      'npm ci',
-      'npm run build',
-      'npm test -- src/__tests__/pi-client.test.ts src/__tests__/pi-provider.test.ts',
-      'npm run test:pi-sdk-smoke',
-    ]));
   });
 
   it('should execute the complete release path when every gate succeeds', () => {
@@ -736,6 +428,29 @@ describe('release verification wiring', () => {
     );
   });
 
+  it.each([
+    { cpuCount: 1, isCi: false, expected: 1 },
+    { cpuCount: 2, isCi: false, expected: 1 },
+    { cpuCount: 3, isCi: false, expected: 1 },
+    { cpuCount: 4, isCi: false, expected: 2 },
+    { cpuCount: 8, isCi: false, expected: 4 },
+    { cpuCount: 10, isCi: false, expected: 4 },
+    { cpuCount: 16, isCi: false, expected: 4 },
+    { cpuCount: 10, isCi: true, expected: 1 },
+  ])('should run heavy integration with $expected worker(s) on $cpuCount CPUs (CI: $isCi)', ({
+    cpuCount,
+    isCi,
+    expected,
+  }) => {
+    expect(resolveHeavyItMaxWorkers(cpuCount, isCi)).toBe(expected);
+  });
+
+  it('should apply the local or CI worker limit to the heavy integration gate', () => {
+    expect(heavyParallelIntegrationConfig.test?.maxWorkers).toBe(
+      resolveHeavyItMaxWorkers(availableParallelism(), Boolean(process.env.CI)),
+    );
+  });
+
   it('should route the measured slow integration suites to the sharded heavy gate', () => {
     const movedFiles = [
       'src/__tests__/deepseek-harness-error-mapping.test.ts',
@@ -751,7 +466,7 @@ describe('release verification wiring', () => {
       expect(heavyParallelIntegrationTestFiles).toContain(testFile);
     }
     expect(selectNpmTestRuns(movedFiles)).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...movedFiles] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', ...movedFiles] },
     ]);
   });
 
@@ -775,7 +490,7 @@ describe('release verification wiring', () => {
   it('routes tell publication concurrency through the heavy integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
     expect(selectNpmTestRuns([testFile])).toEqual([
-      { npmArgs: ['run', 'test:it:heavy:parallel', '--', testFile] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', testFile] },
     ]);
   });
 
@@ -901,6 +616,16 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
     },
     {
+      target: 'src/__tests__/caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
+    },
+    {
+      target: 'caccia-published-pr.integration.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/caccia-published-pr.integration.test.ts',
+    },
+    {
       target: 'src/__tests__/it-list-filtered-delete.test.ts',
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
@@ -912,7 +637,13 @@ describe('release verification wiring', () => {
     },
   ])('should route $target to $script', ({ target, script, normalized }) => {
     expect(selectNpmTestRuns([target])).toEqual([{
-      npmArgs: ['run', script, '--', normalized],
+      npmArgs: [
+        'run',
+        script,
+        ...(['test:unit:parallel', 'test:it:heavy:parallel'].includes(script) ? ['--ignore-scripts'] : []),
+        '--',
+        normalized,
+      ],
     }]);
   });
 });

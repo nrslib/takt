@@ -42,17 +42,19 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
-  getProjectConfigDir: vi.fn(() => '/tmp'),
+  getProjectConfigDir: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
-  StreamDisplay: vi.fn().mockImplementation(() => ({
-    createHandler: vi.fn(() => vi.fn()),
-    flush: vi.fn(),
-  })),
+  StreamDisplay: vi.fn().mockImplementation(function () {
+    return {
+      createHandler: vi.fn(() => vi.fn()),
+      flush: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -92,6 +94,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { getProjectConfigDir } from '../infra/config/paths.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { writeRunSessionLogFixture } from './helpers/run-session-log-fixture.js';
@@ -115,6 +118,7 @@ const mockLoadTemplate = vi.mocked(loadTemplate);
 const mockConfirm = vi.mocked(confirm);
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
+let projectConfigDir: string;
 
 function setupMockProvider(responses: string[]): MockProviderCapture {
   const { provider, capture } = createMockProvider(responses);
@@ -134,12 +138,15 @@ beforeEach(() => {
   mockLoadTemplate.mockReset().mockReturnValue('Mock template content');
   vi.mocked(loadGlobalConfig).mockReturnValue({ provider: 'mock', language: 'en', autoFetch: false });
   process.env.TMPDIR = TEST_TMPDIR;
+  projectConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-instruct-config-'));
+  vi.mocked(getProjectConfigDir).mockReturnValue(projectConfigDir);
   mockSelectOption.mockResolvedValue('execute');
 });
 
 afterEach(() => {
   invalidateResolvedConfigCache('/project');
   restoreStdin();
+  fs.rmSync(projectConfigDir, { recursive: true, force: true });
   if (originalTmpDir === undefined) {
     delete process.env.TMPDIR;
   } else {

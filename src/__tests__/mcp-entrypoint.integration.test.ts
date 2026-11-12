@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
@@ -17,12 +18,8 @@ describe('MCP stdio entrypoint integration', () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [
-        'node_modules/.bin/vite-node',
-        // --script mode ignores --config, so run in normal mode: the config
-        // sets an esbuild target that lowers `using` declarations, which raw
-        // Node < 24 cannot parse.
-        '--config',
-        'src/__tests__/helpers/vite-node.config.ts',
+        '--import',
+        TSX_ESM_LOADER,
         SOURCE_STDIO_ENTRYPOINT_RUNNER,
       ],
       cwd: process.cwd(),

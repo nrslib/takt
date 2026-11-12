@@ -1,4 +1,4 @@
-import type { UserConfig } from 'vitest/config';
+import type { TestUserConfig } from 'vitest/config';
 import { createRequire } from 'node:module';
 import {
   heavyParallelIntegrationTestFiles,
@@ -83,22 +83,17 @@ export const commonSrcTestConfig = {
     include: ['src/**/*.ts'],
     exclude: ['src/__tests__/**', 'src/**/*.d.ts'],
   },
-} satisfies UserConfig['test'];
+} satisfies TestUserConfig;
 
 export const parallelSrcRunnerConfig = {
   pool: 'forks',
   fileParallelism: true,
-  minWorkers: 1,
   maxWorkers: '50%',
-} satisfies UserConfig['test'];
+} satisfies TestUserConfig;
 
 export const serialSrcRunnerConfig = {
   testTimeout: 120_000,
   passWithNoTests: true,
   pool: 'threads',
-  poolOptions: {
-    threads: {
-      singleThread: true,
-    },
-  },
-} satisfies UserConfig['test'];
+  maxWorkers: 1,
+} satisfies TestUserConfig;

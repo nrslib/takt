@@ -272,7 +272,9 @@ describe('cwd propagation: addTask wiring', () => {
 
     vi.mock('../infra/task/index.js', async (importOriginal) => ({
       ...(await importOriginal<Record<string, unknown>>()),
-      TaskRunner: vi.fn().mockImplementation(() => ({ addTask: vi.fn(() => ({ name: 'task-1' })) })),
+      TaskRunner: vi.fn().mockImplementation(function () {
+        return { addTask: vi.fn(() => ({ name: 'task-1' })) };
+      }),
       summarizeTaskName: vi.fn(async () => 'slug'),
       resolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => {
         if (!data) {

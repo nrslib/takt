@@ -8,6 +8,7 @@ import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/cons
 import { resolveRuntimeProviderFile } from '../infra/config/runtime-provider/loader.js';
 import { resolveInternalAgentMcpServers, resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { hasActiveMcpSection } from '../infra/config/runtime-provider/mode.js';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -270,9 +271,8 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [
-        'node_modules/.bin/vite-node',
-        '--config',
-        'src/__tests__/helpers/vite-node.config.ts',
+        '--import',
+        TSX_ESM_LOADER,
         fixtureRunner,
       ],
       cwd: process.cwd(),
@@ -301,6 +301,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_list_workflows',
+        'takt_get_workflow',
         'takt_enqueue_goal_task',
         'takt_merge_goal_task',
         'takt_requeue_goal_task',
@@ -315,6 +316,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_get_goal_history',
         'takt_get_goal_relation',
         'takt_ask_goal_question',
+        'takt_ask_standalone_question',
         'takt_list_goal_questions',
         'takt_get_goal_question',
         'takt_withdraw_goal_question',
@@ -363,9 +365,8 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         '    echo:',
         '      command: node',
         '      args:',
-        '        - node_modules/.bin/vite-node',
-        '        - --config',
-        '        - src/__tests__/helpers/vite-node.config.ts',
+        '        - --import',
+        `        - ${JSON.stringify(TSX_ESM_LOADER)}`,
         `        - ${fixtureRunner}`,
         '  defaults:',
         '    servers:',

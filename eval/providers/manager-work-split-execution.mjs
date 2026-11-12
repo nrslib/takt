@@ -5,14 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
 
+import { noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
+
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-export const executionCases = new Set(['stopped-background-execution', 'integrated-task-execution']);
+export const executionCases = new Set(['stopped-background-execution', 'integrated-task-execution', ...noWaitExecutionCases]);
 
 export function executionConfig(config, vars) {
   if (!executionCases.has(vars.case) || !['ja', 'en'].includes(vars.lang)) throw new Error('Invalid execution case');
   if (typeof config.model !== 'string' || !config.model.trim()) throw new Error('Execution model is required');
   if (!Number.isSafeInteger(config.timeout_ms) || config.timeout_ms <= 0) throw new Error('Positive timeout_ms is required');
-  if (config.judge_effort !== 'low') throw new Error('Execution judge_effort must be low');
   return { ...config, case: vars.case, lang: vars.lang };
 }
 
@@ -73,6 +74,7 @@ export default class ManagerExecutionProvider {
       mkdirSync(root, { recursive: true });
       artifactDir = mkdtempSync(join(root, `${config.case}-${config.lang}-`));
       config.instruction_root = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+      config.policy_root = process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
       config.sdk_root = resolve(process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt'), 'claude-sdk');
       const result = await runExecutionWorker(config, artifactDir, options.abortSignal);
       if (!result.complete) throw new Error(result.error);

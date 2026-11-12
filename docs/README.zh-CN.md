@@ -279,7 +279,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑` 批准 / `↓` 继续 / `Enter` 确定，选择批准后按 `Enter` 注册。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑↓` 选择「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」，按 `Enter` 确定。默认返回对话并撤回草案；注册时需选择「Register goal」。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
 | `takt director` | 打开统览所有 manager 的实验性对话 TUI；参阅 [director](#director实验性) |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
@@ -296,13 +296,13 @@ manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮
 
 重新打开 TUI 时，不会重新显示之前的发言和回复。对话历史由 provider 的会话管理。等待中的发言正文由 TAKT 保存到开始执行为止。等待批准的目标摘要和目标记录会单独保存。
 
-巡检、事件或对话正在处理时，人的发言仍会保存并接受，界面会显示接受通知和等待数量。当前处理结束后按保存顺序执行。中断只影响当前对话轮次，不会删除等待中的发言。daemon 重启后仍会处理等待中的发言，原先正在执行的轮次则视为中断。总结批准等非发言操作在处理期间仍会被拒绝。
+daemon 由事件驱动，有人工输入和其他事件两条队列。下一轮优先处理人工输入，每条队列按接受顺序执行。发言、批准和询问回答在处理期间仍可持久化接受；accepted 表示已保存，不表示完成。读取界面和中断不进入模型队列。中断只影响当前轮次，等待输入会保留。人工输入和事件共用一个对话与会话。失败或中断后，manager 检查当前状态和副作用，自行判断恢复、修正后重试或提交新工作。
 
 只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
 
 **Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
 
-在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Register goal（注册目标）」或「Return to conversation without registering（不注册并返回对话）」操作；旧版本提案的按钮无效。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
@@ -333,26 +333,13 @@ daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 
 
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
 
-### manager 工具执行前的权限审查
+### manager 的判断与工作
 
-可以在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中添加敏感文件或目录。
+manager 是熟悉 TAKT、负责完成指定目标的工程师。它自行调查、实现、验证、执行 Git 操作，并在需要时委派任务。它以 `full` 权限使用普通 provider 工具及分配的 MCP 服务，保留配置的 provider options。manager 不再使用专门的权限判断 agent、读取范围审查或基于已保存批准的执行控制。
 
-```yaml
-manager:
-  sensitive_paths: [private, config/credentials.json]
-```
+Facet 方针要求：向 main 等集成目标反映变更、force push、删除远程分支或未保存成果、中止目标以及在请求范围外发布新内容时，必须有明确说明对象和作用的人工指令。指令可以直接发给 manager、由 director 转达，或作为已保存的持续指令。创建 PR、普通 push 和已配置的通知属于请求的工作。合并 PR 的指令包含删除该 PR 分支；不重复确认已给出的指令。读取秘密值需要涵盖该必要性的人工指令，秘密值不得写入回复、记录或成果。
 
-两个列表都会在默认项的基础上追加，即使其中一个列表为空也不会改变默认项。每一项指定文件名或目录名。详情请参阅 [manager 敏感文件设置](./configuration.zh-CN.md#manager-敏感文件设置)。
-
-在 `takt manager` 使用 claude（claude-sdk）或 codex provider 的对话中，AI 权限判断 agent 会在工具执行前进行审查，代替每次都向用户请求批准。判断结果为允许、拒绝并附带理由，或请求人工确认。审查默认启用，没有开关设置。
-
-使用 claude（claude-sdk）时，`Read` 只有在解析后的目标是 manager 负责的仓库内非敏感且可读取的普通文件时，才能跳过审查。`Glob` 以目录为搜索根目录，只有确认搜索候选文件、遍历的目录和符号链接都在负责范围内、不涉及敏感目标且可以安全搜索时，才能跳过审查。`Grep` 对普通文件的搜索需满足与 `Read` 相同的条件，对目录的搜索需通过与 `Glob` 相同的安全检查，才能跳过审查。负责范围为 workspace 的成员仓库；没有 workspace 时则为当前仓库。相对路径以工具实际的工作目录为基准，`~`、`..` 和符号链接会在比较前解析。范围外的目标、敏感文件，以及无法确定目标或搜索范围的操作都会交给权限判断 agent。默认敏感文件包括 `.env`、`.env.*`、SSH 私钥名称（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`），以及 `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。全局和项目的 `manager.sensitive_paths` 只能追加到这些默认项，不能删除默认项。`ToolSearch` 和 manager 自身的 TAKT MCP 工具仍然可以跳过审查。使用 Codex 时，只有 manager 自身的 TAKT MCP 工具可以跳过审查，所有内置工具都需要审查。对于这两种 provider，其他所有工具（包括未知工具和外部 MCP 工具）在没有适用的已保存批准时都需要审查。Shell 执行（包括 `Bash`）在没有适用的已保存批准时每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。使用 Codex 时，`spawn_agent` 也一律拒绝，不经过权限判断 agent 审查。
-
-拒绝理由会返回给 manager，供其在下一次回复中考虑。判定为请求人工确认时，操作也会先被拒绝，并通过 TUI 和 Slack 通知正在等待人工确认及其理由。不会挂起工具操作来等待确认。通知使用现有类型，不增加新的通知类型。
-
-判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
-
-判断的期限为30秒。超时与请求人工确认采用相同流程：保存批准询问，停止操作并等待确认，同时发送通知。异常或判断格式不符合要求时仍会拒绝操作。不会自动重试判断。
+旧设置 `manager.sensitive_paths` 和 runtime 的 `provider.targets.internal_agents.manager-permission-judge` 已弃用。保留旧配置不会导致启动失败，但这些设置被忽略且不再生效。旧权限 Markdown 和批准回答不再决定执行。历史询问记录仍可读取和撤回。
 
 ### 即时 exec 模式
 
@@ -373,13 +360,13 @@ takt director
 takt director --help
 ```
 
-对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和定期巡检都会调用 provider 并产生费用。
+对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和事件处理都会调用 provider 并产生费用。
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
 
-通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和巡检会说明无法读取的 project 及其原因，并继续处理其余 manager。
+通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和状态确认会说明无法读取的 project 及其原因，并继续处理其余 manager。
 
-在全局 `~/.takt/config.yaml` 中设置 `director.patrol_interval`（秒，默认 `900`）和 `director.slack.channel_id` / `director.slack.allowed_user_ids`。参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
+在全局 `~/.takt/config.yaml` 中设置 `director.slack.channel_id` 和 `director.slack.allowed_user_ids`。
 
 **director 的 Slack：** 使用与 manager 相同的 Slack App 和 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`，将机器人邀请到 director 频道，并在修改 Slack 配置后重新启动 daemon。配置 `director.slack` 后，可以接收汇总通知并允许获准用户对话，回复发送到原消息列。连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)，完整的分工与限制参阅 [director CLI 说明](./cli-reference.zh-CN.md#director实验性)。
 

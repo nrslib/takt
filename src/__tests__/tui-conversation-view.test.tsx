@@ -2450,7 +2450,7 @@ describe('ConversationView activity status', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-activity-labels-'));
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const run = runTuiConversation({
-      cwd, lang, conversation, initialEntries: [], submitMode: 'chat', autoSubmit: false,
+      cwd, lang, conversation, getProvider: () => 'mock', initialEntries: [], submitMode: 'chat', autoSubmit: false,
       modelLabel: () => MODEL_LABEL, chooseAction: async () => null, continuePrompt: 'continue',
     });
     void run.catch(() => undefined);
@@ -2584,66 +2584,6 @@ describe('ConversationView activity status', () => {
 });
 
 describe('ConversationView', () => {
-  it.each([CTRL_C, CTRL_D])('should exit a pending install confirmation after one interrupt (%j)', async (interrupt) => {
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const onExit = vi.fn();
-    const answers: boolean[] = [];
-    conversation.submit = async (input) => {
-      answers.push(await input.confirmManagedProvider!('Install pi (52 MB)?'));
-      return { kind: 'assistant_response', content: 'must not be committed after cancellation' };
-    };
-    const draft = 'retained draft';
-    const view = renderConversation(conversation, 'chat', onExit, {
-      autoSubmit: true, initialDraft: { text: draft, cursor: draft.length },
-    });
-    try {
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install pi (52 MB)?'));
-      view.stdin.write(interrupt);
-      await vi.waitFor(() => expect(onExit).toHaveBeenCalledOnce());
-      expect(answers).toEqual([false]);
-      expect(onExit).toHaveBeenCalledWith(
-        { kind: 'result', result: { action: 'cancel', task: '' } },
-        { history: [], queue: [], draft: { text: draft, cursor: draft.length } },
-      );
-      expect(view.lastFrame()).not.toContain('must not be committed');
-    } finally {
-      view.unmount();
-    }
-  });
-
-  it.each([1, 2, 3, 4, 6, 8])('should budget one truncated confirmation row in a %s-row terminal', async (rows) => {
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const requested = vi.fn();
-    conversation.submit = async (input) => {
-      requested();
-      await input.confirmManagedProvider!(`Install pi?\n${'long description '.repeat(10)}`);
-      return { kind: 'error', message: 'installation declined' };
-    };
-    const stdout = new ResizableOutput(40, rows);
-    const app = renderInk(<ConversationView
-      ui={UI} lang="en" conversation={conversation} initialEntries={[]}
-      userMessageColors={FALLBACK_USER_MESSAGE_COLORS} submitMode="chat" autoSubmit
-      initialHistory={[]} initialDraft={{ text: 'retained draft', cursor: 14 }} initialQueue={[]} residentSession={false}
-      modelLabel={() => MODEL_LABEL} onExit={() => undefined}
-    />, {
-      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
-      stdin: createTestInput(), exitOnCtrlC: false, debug: true, patchConsole: false,
-    });
-    try {
-      await vi.waitFor(() => expect(requested).toHaveBeenCalledOnce());
-      await app.waitUntilRenderFlush();
-      const frame = stripAnsi(stdout.frames.filter((value) => value.includes('❯')).at(-1) ?? '');
-      expect(frame).toContain('❯ retained draft');
-      expect(frame.replace(/\n$/, '').split('\n').length).toBeLessThanOrEqual(Math.max(1, rows - 1));
-      if (rows > 2) expect(frame).toContain('Install pi? long description');
-      else expect(frame).not.toContain('Install pi?');
-    } finally {
-      app.unmount();
-      await app.waitUntilExit();
-      app.cleanup();
-    }
-  });
-
   it('should preserve original tabs when submitting a normalized display draft', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const text = 'a\t日\tb';
@@ -2685,82 +2625,6 @@ describe('ConversationView', () => {
       const calls = submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]?.text).toBe('やあ、てすと');
-    } finally {
-      view.unmount();
-    }
-  });
-
-  it.each(['abort', 'unmount'] as const)('releases a pending install confirmation on %s and retains an in-progress draft on abort', async (action) => {
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const answers: boolean[] = [];
-    let beginConfirmation!: () => void;
-    const ready = new Promise<void>((resolve) => { beginConfirmation = resolve; });
-    let submitted = false;
-    conversation.submit = async (input) => {
-      submitted = true;
-      await ready;
-      const accepted = await input.confirmManagedProvider!('Install pi (52 MB)?');
-      answers.push(accepted);
-      return { kind: 'error', message: 'takt install pi' };
-    };
-    const view = renderConversation(conversation, 'chat', vi.fn());
-    try {
-      await flushFrames();
-      view.stdin.write('First question');
-      await flushFrames();
-      view.stdin.write(ENTER);
-      await vi.waitFor(() => expect(submitted).toBe(true));
-      view.stdin.write('retained draft');
-      await flushFrames();
-      beginConfirmation();
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install pi (52 MB)?'));
-      if (action === 'unmount') view.unmount();
-      else view.stdin.write(CTRL_C);
-      await vi.waitFor(() => expect(answers).toEqual([false]));
-      if (action === 'abort') expect(view.lastFrame()).toContain('retained draft');
-    } finally {
-      beginConfirmation();
-      view.unmount();
-    }
-  });
-
-  it('owns install confirmation input and keeps the same conversation after refusal and later approval', async () => {
-    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
-    const onExit = vi.fn();
-    const answers: boolean[] = [];
-    conversation.submit = async (input) => {
-      const confirmationInput = input as TuiSubmitInput & { confirmManagedProvider: (message: string) => Promise<boolean> };
-      const accepted = await confirmationInput.confirmManagedProvider('Install deepseek-harness (80 MB)?');
-      answers.push(accepted);
-      return accepted
-        ? { kind: 'assistant_response', content: 'Answer after installation' }
-        : { kind: 'error', message: 'Run takt install deepseek-harness later' };
-    };
-    const view = renderConversation(conversation, 'chat', onExit);
-    try {
-      await flushFrames();
-      view.stdin.write('First question');
-      await flushFrames();
-      view.stdin.write(ENTER);
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install deepseek-harness (80 MB)?'));
-      view.stdin.write('n');
-      view.stdin.write(ENTER);
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Run takt install deepseek-harness later'));
-      expect(onExit).not.toHaveBeenCalled();
-      expect(view.lastFrame()).toContain('seeded task');
-      view.stdin.write('Second question');
-      await flushFrames();
-      view.stdin.write(ENTER);
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install deepseek-harness (80 MB)?'));
-      view.stdin.write('y');
-      view.stdin.write(ENTER);
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Answer after installation'));
-      expect(answers).toEqual([false, true]);
-      expect(view.lastFrame()).toContain('seeded task');
-      expect(view.lastFrame()).toContain('First question');
-      expect(view.lastFrame()).toContain('Second question');
-      expect(view.lastFrame()).toContain('Run takt install deepseek-harness later');
-      expect(onExit).not.toHaveBeenCalled();
     } finally {
       view.unmount();
     }
@@ -6011,6 +5875,7 @@ describe('TUI scrollback output', () => {
       cwd,
       lang: 'en',
       conversation,
+      getProvider: () => 'mock',
       initialEntries: [
         { role: 'system', content: 'archive-entry-alpha' },
         { role: 'system', content: 'archive-entry-beta' },

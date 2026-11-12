@@ -1,5 +1,3 @@
-const manager = vi.hoisted(() => ({ create: vi.fn() }));
-vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: manager.create }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
@@ -321,7 +319,6 @@ describe('runWithWorkerPool', () => {
     await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10))
       .resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
     expect(runner.claimNextTasks).toHaveBeenCalledOnce();
-    expect(manager.create).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する: success=%s', async (success) => {
@@ -334,7 +331,6 @@ describe('runWithWorkerPool', () => {
     expect(saveEvent).toHaveBeenCalledExactlyOnceWith('/cwd', {
       kind: 'completion', goalId: task.data!.goal_id, taskName: task.name, runSlug: 'run-goal-task', result: completion,
     });
-    expect(manager.create).not.toHaveBeenCalled();
   });
 
   it('入口の停止信号を使い、SIGINT ハンドラを重複登録しない', async () => {

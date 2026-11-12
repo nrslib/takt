@@ -18,17 +18,11 @@ import { UUID_PATTERN } from '../../../core/execution/locations.js';
 const REGISTRY_VERSION = 2;
 const LOCATION_ID_PATTERN = /^[a-f0-9]{64}$/u;
 
-export interface DirectoryFingerprint {
-  readonly dev: number;
-  readonly ino: number;
-}
-
 interface StoredProjectRegistration {
   readonly version: typeof REGISTRY_VERSION;
   readonly locationId: string;
   readonly stateId: string;
   readonly canonicalDirectory: string;
-  readonly fingerprint: DirectoryFingerprint;
   readonly displayName: string;
   readonly createdAt: string;
   readonly lastSeenAt: string;
@@ -72,17 +66,6 @@ function requireTimestamp(value: unknown, label: string): string {
   return result;
 }
 
-function parseFingerprint(value: unknown): DirectoryFingerprint {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('fingerprint is invalid');
-  }
-  const raw = value as Readonly<Record<string, unknown>>;
-  if (!Number.isSafeInteger(raw.dev) || !Number.isSafeInteger(raw.ino)) {
-    throw new Error('fingerprint is invalid');
-  }
-  return { dev: raw.dev as number, ino: raw.ino as number };
-}
-
 function parseRegistration(value: unknown, expectedLocationId: string): StoredProjectRegistration {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('registration must be an object');
@@ -108,7 +91,6 @@ function parseRegistration(value: unknown, expectedLocationId: string): StoredPr
     locationId,
     stateId,
     canonicalDirectory,
-    fingerprint: parseFingerprint(raw.fingerprint),
     displayName: requireString(raw.displayName, 'displayName'),
     createdAt: requireTimestamp(raw.createdAt, 'createdAt'),
     lastSeenAt: requireTimestamp(raw.lastSeenAt, 'lastSeenAt'),
@@ -141,7 +123,7 @@ function hasExpectedRegistrationIdentity(
 /**
  * Explicit registration repairs only unreadable JSON or an older schema whose
  * identity still matches this location. A current-schema record that fails
- * validation remains untouched so fingerprint and state protections cannot be
+ * validation remains untouched so state identity checks cannot be
  * bypassed by re-registering the directory.
  */
 function canReplaceInvalidRegistration(value: unknown, expectedLocationId: string): boolean {
@@ -163,12 +145,11 @@ function toPublicProject(stored: StoredProjectRegistration, available: boolean):
   };
 }
 
-async function readDirectoryFingerprint(directory: string): Promise<DirectoryFingerprint> {
+async function verifyProjectDirectory(directory: string): Promise<void> {
   const stats = await lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error('Project directory must be a regular directory');
   }
-  return { dev: stats.dev, ino: stats.ino };
 }
 
 async function isAvailableDirectory(stored: StoredProjectRegistration): Promise<boolean> {
@@ -176,8 +157,8 @@ async function isAvailableDirectory(stored: StoredProjectRegistration): Promise<
     const canonical = await realpath(stored.canonicalDirectory);
     if (canonical !== stored.canonicalDirectory) return false;
     await access(canonical, constants.R_OK | constants.X_OK);
-    const fingerprint = await readDirectoryFingerprint(canonical);
-    return fingerprint.dev === stored.fingerprint.dev && fingerprint.ino === stored.fingerprint.ino;
+    await verifyProjectDirectory(canonical);
+    return true;
   } catch {
     return false;
   }
@@ -212,7 +193,7 @@ export async function registerProject(options: {
   readonly managerUsed?: true;
 }): Promise<RegisteredProject> {
   const canonicalDirectory = await realpath(options.projectDirectory);
-  const fingerprint = await readDirectoryFingerprint(canonicalDirectory);
+  await verifyProjectDirectory(canonicalDirectory);
   const locationId = projectIdForCanonicalDirectory(canonicalDirectory);
   const directory = registryDirectory(options.globalConfigDirectory);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -245,14 +226,8 @@ export async function registerProject(options: {
   } catch (error) {
     if (!isMissing(error)) throw error;
   }
-  if (existing !== undefined && (
-    existing.canonicalDirectory !== canonicalDirectory
-    || existing.fingerprint.dev !== fingerprint.dev
-    || existing.fingerprint.ino !== fingerprint.ino
-  )) {
-    // The path name is a lookup key, not permission to attach to a replacement
-    // directory. Keep the old state for an explicit relink in a later release.
-    throw new Error('Registered project fingerprint does not match; explicit relink is required');
+  if (existing !== undefined && existing.canonicalDirectory !== canonicalDirectory) {
+    throw new Error('Registered project canonical directory does not match');
   }
   const now = new Date().toISOString();
   const stored: StoredProjectRegistration = existing === undefined
@@ -261,7 +236,6 @@ export async function registerProject(options: {
         locationId,
         stateId: randomUUID(),
         canonicalDirectory,
-        fingerprint,
         displayName: basename(canonicalDirectory),
         createdAt: now,
         lastSeenAt: now,

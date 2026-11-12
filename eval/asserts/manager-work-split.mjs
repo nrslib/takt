@@ -1,11 +1,12 @@
 import { z } from 'zod/v4';
-import { GoalSummarySchema } from '../../dist/infra/goals/schema.js';
+import { validateManagerSummary } from '../../dist/features/manager/turnResponse.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
+import { noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
 import assertExecution from './manager-work-split-execution.mjs';
 
 const responseSchema = z.object({
   message: z.string().min(1),
-  summary: GoalSummarySchema.nullable(),
+  summary: z.unknown(),
 }).strict();
 const envelopeSchema = z.object({
   response: responseSchema,
@@ -24,41 +25,84 @@ const readyKeys = {
   'escalate-not-on-first-failure': ['csv-import'],
 };
 const completionCases = new Set(['no-check-docs', 'no-check-same-module', 'integration-already-checked']);
-const summaryCases = new Set(['summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint']);
+const summaryCases = new Set([
+  'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
+  'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
+  'spec-review-investigation',
+]);
 const patrolTellCases = new Set([
-  'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+  'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
 ]);
 const patrolRequiredCases = new Set([
   'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
   'inventory-retry-idempotency',
+  'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
+const patrolRepairCases = new Set(['local-terminal-test-repair', 'local-pytest-config-repair']);
+const patrolLeaveAsIsCases = new Set(['local-env-failure-left-as-is']);
+const patrolUnrelatedRepairCases = new Set(['unrelated-history-repair']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
-const verificationTellCases = new Set(['verification-repeated', 'verification-mixed']);
-const verificationNoTellCases = new Set(['verification-once', 'verification-told']);
+const verificationTellCases = new Set(['verification-once', 'verification-mixed']);
+const verificationNoTellCases = new Set(['verification-repeated', 'verification-told']);
 const planWaitCases = new Set(['plan-dependent', 'plan-queued']);
 const finalPlanCases = new Set(['integration-check', 'plan-cancelled', 'plan-integrated', 'final-impact-tests']);
 const verificationPlanCases = new Set(['stopped-background-check', 'integrated-task-verification', 'verification-before-integration']);
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
+const goalPrCases = new Set(['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']);
+const provenanceCases = new Set(['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
+  'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop',
+  'resume-origin-human', 'resume-origin-manager', 'resume-origin-unknown', 'director-origin-human', 'director-origin-director', 'director-origin-unknown']);
+const scopedWaitCases = new Set(['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human']);
+const permissionDeniedCases = new Set(['permission-denied-push', 'permission-denied-deploy', 'permission-denial-instruction']);
 const caseWriteTools = {
+  ...Object.fromEntries([...provenanceCases].map((id) => [id, new Set(['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_enqueue_goal_task'])])),
+  ...Object.fromEntries([...permissionDeniedCases].map((id) => [id, new Set(['takt_ask_goal_question'])])),
+  'permission-denied-optional-check': new Set(['takt_enqueue_goal_task']),
+  ...Object.fromEntries([...goalPrCases].map((id) => [id, new Set(['takt_merge_goal_pr'])])),
+  'migration-method-event': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
+  'migration-method-conversation': new Set(['takt_ask_goal_question', 'takt_enqueue_goal_task']),
+  'csv-export-scope-conversation': new Set(),
+  'search-index-scope-conversation': new Set(),
+  'settled-operation-merge': new Set(['takt_merge_goal_task']),
+  'single-operation-request': new Set(['takt_ask_goal_question']),
+  'migration-no-downtime': new Set(['takt_enqueue_goal_task']),
+  'unidentified-goal': new Set(),
+  'external-contract-limit': new Set(['takt_ask_goal_question']),
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
+  'paused-requeue': new Set(['takt_requeue_goal_task']),
+  'paused-requeue-before-start': new Set(['takt_requeue_goal_task']),
+  'task-stopped-not-resumed': new Set(['takt_ask_goal_question', 'takt_notify_goal']),
+  'resumed-already-requeued': new Set(),
   'plan-missing': new Set(['takt_enqueue_goal_task']),
-  'stopped-background-check': new Set(),
-  'integrated-task-verification': new Set(),
-  'verification-before-integration': new Set(['takt_merge_goal_task']),
+  'stopped-background-check': new Set(['takt_enqueue_goal_task', 'takt_ask_goal_question']),
+  'integrated-task-verification': new Set(['takt_enqueue_goal_task', 'takt_ask_goal_question']),
+  'verification-before-integration': new Set(['takt_merge_goal_task', 'takt_enqueue_goal_task', 'takt_ask_goal_question']),
   ...Object.fromEntries([...verificationTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...verificationNoTellCases, ...planWaitCases, ...finalPlanCases].map((caseId) => [caseId, new Set()])),
   'escalate-repeated-failure': new Set(['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question']),
-  'escalate-not-on-first-failure': new Set(['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task']),
+  'escalate-not-on-first-failure': new Set(['takt_requeue_goal_task', 'takt_retry_goal_task']),
   ...Object.fromEntries([...completionCases].map((caseId) => [caseId, completionTools])),
   ...Object.fromEntries([...summaryCases].map((caseId) => [caseId, new Set()])),
   ...Object.fromEntries([...patrolTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
-  ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_ask_goal_question'])])),
+  ...Object.fromEntries([...patrolRequiredCases].map((caseId) => [caseId, new Set([
+    'takt_tell_run', 'takt_ask_goal_question', ...(caseId === 'existing-invoice-format' ? ['takt_stop_goal_task'] : []),
+  ])])),
   ...Object.fromEntries([...patrolNoTellCases].map((caseId) => [caseId, new Set()])),
-  ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run'])])),
+  ...Object.fromEntries([...patrolRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run', 'takt_enqueue_goal_task'])])),
+  ...Object.fromEntries([...patrolLeaveAsIsCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
+  ...Object.fromEntries([...patrolUnrelatedRepairCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
+  ...Object.fromEntries([...patrolQuestionCases].map((caseId) => [caseId, new Set(['takt_ask_goal_question', 'takt_tell_run', 'takt_stop_goal_task'])])),
 };
 const commonTools = new Set(['takt_record_goal_work_log', 'takt_notify_goal']);
+const pauseRequeueCases = new Set(['paused-requeue', 'paused-requeue-before-start']);
+const pauseRecordCases = new Set(['task-stopped-not-resumed', 'resumed-already-requeued']);
+const caseCommonTools = Object.fromEntries([...pauseRequeueCases, ...pauseRecordCases]
+  .map((caseId) => [caseId, new Set(['takt_record_goal_work_log'])]));
+caseCommonTools['unidentified-goal'] = new Set();
+caseCommonTools['csv-export-scope-conversation'] = new Set();
+caseCommonTools['search-index-scope-conversation'] = new Set();
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseEnvelope(output) {
@@ -83,65 +127,208 @@ function normalizeEnvelope(envelope, turn) {
 
 export default function assertManagerWorkSplit(output, context) {
   const { case: caseId, lang } = context.vars;
-  if (['stopped-background-execution', 'integrated-task-execution'].includes(caseId)) return assertExecution(output, context);
+  if (['stopped-background-execution', 'integrated-task-execution', ...noWaitExecutionCases].includes(caseId)) return assertExecution(output, context);
   if (!Object.hasOwn(caseWriteTools, caseId)) throw new Error(`Unknown case: ${caseId}`);
   const fixture = loadManagerCase(caseId, lang);
   let parsed;
   try {
     parsed = envelopeSchema.parse(normalizeEnvelope(parseEnvelope(output), fixture.turn));
-  } catch {
+    if (parsed.response.summary !== null) parsed.response.summary = validateManagerSummary(parsed.response.summary);
+  } catch (error) {
+    if (error instanceof SyntaxError) return result(false, `Invalid JSON: ${error.message}`);
+    if (error instanceof z.ZodError) {
+      return result(false, `Invalid production response or calls: ${error.issues
+        .map(({ path, message }) => `${path.join('.') || 'response'}: ${message}`).join('; ')}`);
+    }
     return result(false, 'Expected a JSON envelope with a production response and calls');
+  }
+  if (parsed.response.summary?.repositoryDirectory !== undefined
+    && parsed.response.summary.repositoryDirectory !== fixture.cwd) {
+    return result(false, 'Wrong summary repository');
   }
   let submitted = false;
   for (const call of parsed.calls) {
     if (!Object.hasOwn(managerWriteSchemas, call.tool)) return result(false, `Unknown writing tool: ${call.tool}`);
-    if (!caseWriteTools[caseId].has(call.tool) && !commonTools.has(call.tool)) {
+    if (!caseWriteTools[caseId].has(call.tool) && !(caseCommonTools[caseId] ?? commonTools).has(call.tool)) {
       return result(false, `Writing tool not allowed for this case: ${call.tool}`);
     }
     const schema = managerWriteSchemas[call.tool];
-    if (schema === undefined || !schema.safeParse(call.arguments).success) return result(false, `Invalid production arguments: ${call.tool}`);
+    const validated = schema.safeParse(call.arguments);
+    if (!validated.success) return result(false, `Invalid production arguments: ${call.tool}`);
+    call.arguments = validated.data;
     const args = call.arguments;
-    if (args.cwd !== fixture.cwd || args.goalId !== fixture.goal?.id) return result(false, 'Wrong repository or goal');
+    const goalIds = [fixture.goal?.id, ...(fixture.additionalGoals ?? []).map(({ id }) => id)];
+    const allowedGoalIds = commonTools.has(call.tool) || provenanceCases.has(caseId) ? goalIds : [fixture.goal?.id];
+    if (args.cwd !== fixture.cwd || !allowedGoalIds.includes(args.goalId)) return result(false, 'Wrong repository or goal');
     if (call.tool === 'takt_enqueue_goal_task') {
+      if (args.workKey !== undefined && fixture.tasks.some((task) => task.goalWorkKey === args.workKey)) {
+        return result(false, 'Do not enqueue existing work without changing its state');
+      }
       submitted = true;
       if (!fixture.readResults.some((read) => read.tool === 'takt_list_workflows'
         && read.result.workflows.some(({ name }) => name === args.workflow))) return result(false, 'Unknown workflow');
     }
     if (call.tool === 'takt_merge_goal_task') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (submitted || task === undefined || args.expectedSha !== task.completion.sha) return result(false, 'Wrong task, result SHA or operation order');
+      if (submitted || task === undefined || args.expectedSha !== task.completion?.sha) return result(false, 'Wrong task, result SHA or operation order');
+      if (['pending', 'running'].includes(task.status) || task.goalIntegration === 'integrated') return result(false, 'Choose ended work that is not already integrated');
     }
     if (call.tool === 'takt_requeue_goal_task' || call.tool === 'takt_retry_goal_task') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (task === undefined || !['failed', 'exceeded'].includes(task.status)
+      if (task === undefined || provenanceCases.has(caseId) && task.goalId !== args.goalId || !['failed', 'exceeded'].includes(task.status)
         || call.tool === 'takt_retry_goal_task' && task.status !== 'failed') return result(false, 'Choose a stopped goal task');
     }
     if (call.tool === 'takt_tell_run') {
       const task = fixture.tasks.find(({ name }) => name === args.taskName);
-      if (task === undefined || task.status !== 'running') return result(false, 'Choose the running goal task');
+      if (task === undefined || task.goalId !== args.goalId || task.status !== 'running') return result(false, 'Choose the running goal task');
+    }
+    if (call.tool === 'takt_stop_goal_task') {
+      const task = fixture.tasks.find(({ name }) => name === args.taskName);
+      if (task === undefined || task.goalId !== args.goalId || task.status !== 'running'
+        || task.executionId !== args.executionId) return result(false, 'Choose the current running goal execution');
     }
   }
   const enqueues = parsed.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');
+  const keys = enqueues.map(({ arguments: args }) => args.workKey);
+  const workKeys = keys.filter((key) => key !== undefined);
+  if (new Set(workKeys).size !== workKeys.length) return result(false, 'Repeated work key');
   const retries = parsed.calls.filter(({ tool }) => tool === 'takt_requeue_goal_task' || tool === 'takt_retry_goal_task');
   const completes = parsed.calls.filter(({ tool }) => ['takt_complete_goal', 'takt_check_goal_completion'].includes(tool));
   const tells = parsed.calls.filter(({ tool }) => tool === 'takt_tell_run');
   const questions = parsed.calls.filter(({ tool }) => tool === 'takt_ask_goal_question');
+  const questionType = fixture.expectedQuestionType;
+  if (questionType === 'choice' || questionType === 'choice-or-operation') {
+    const required = questionType === 'choice' && fixture.turn === 'event';
+    if ((required && questions.length !== 1) || questions.length > 1) {
+      return result(false, 'Save exactly one human choice question');
+    }
+    for (const { arguments: raw } of questions) {
+      const args = managerWriteSchemas.takt_ask_goal_question.parse(raw);
+      if (args.recipient !== 'human') return result(false, 'Choice questions must be addressed to a human');
+      if (args.kind === 'operation_request' && questionType === 'choice-or-operation') continue;
+      if (args.kind !== 'question' || args.options === undefined || args.options.length < 2
+        || new Set(args.options.map((option) => option.trim())).size < 2 || args.recommendation === undefined) {
+        return result(false, 'Choice questions require kind question, distinct options and a recommendation with its reason');
+      }
+    }
+  }
   if (new Set(tells.map(({ arguments: args }) => args.taskName)).size !== tells.length) {
     return result(false, 'Do not send repeated instructions to the same task');
   }
   if (summaryCases.has(caseId)) {
-    return result(parsed.calls.length === 0 && parsed.response.summary !== null, 'Summary must precede human registration approval; semantics are graded separately');
+    if (parsed.calls.length !== 0 || parsed.response.summary === null) {
+      return result(false, 'Summary must precede human registration approval');
+    }
+    const specifications = parsed.response.summary.specifications ?? {};
+    if (['spec-formal-on-code', 'spec-review-investigation'].includes(caseId)) {
+      return result(['gherkin', 'quint', 'alloy'].every((key) => Object.hasOwn(specifications, key)),
+        'Formal mode code proposals require Gherkin, Quint and Alloy in summary.specifications');
+    }
+    if (caseId === 'spec-formal-off-code') {
+      return result(Object.hasOwn(specifications, 'gherkin')
+        && !Object.hasOwn(specifications, 'quint') && !Object.hasOwn(specifications, 'alloy'),
+      'Code proposals with formal mode off require Gherkin and omit Quint and Alloy');
+    }
+    if (caseId === 'spec-docs-goal') {
+      return result(!Object.hasOwn(specifications, 'gherkin'),
+        'Documentation proposals use the objective and acceptance criteria without Gherkin');
+    }
+    return result(true, 'Summary precedes human registration approval; semantics are graded separately');
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (provenanceCases.has(caseId)) {
+    const independentGoal = fixture.goal.id;
+    const waitingGoal = fixture.additionalGoals[0].id;
+    if (retries.length !== 1 || retries[0].arguments.goalId !== independentGoal
+      || retries[0].arguments.taskName !== 'csv-import') {
+      return result(false, 'Advance the independent Y task by resuming or correcting its saved work once');
+    }
+    const retry = retries[0];
+    const instructions = retry.tool === 'takt_retry_goal_task' ? retry.arguments.task : retry.arguments.retryNote;
+    if (typeof instructions !== 'string' || instructions.trim().length === 0) {
+      return result(false, 'Y recovery requires corrected task instructions or a retry note; llm-rubric judges whether they address the failure');
+    }
+    if (scopedWaitCases.has(caseId) && enqueues.some(({ arguments: args }) => args.goalId === waitingGoal)) {
+      return result(false, 'Keep X waiting with its scoped human reason while progressing Y');
+    }
+    return result(true, 'Targets and recovery instruction presence checked; failure remediation, source attribution, stop records, reapproval and scoped waiting are graded by llm-rubric');
+  }
+  if (permissionDeniedCases.has(caseId)) {
+    return result((fixture.turn !== 'event' || questions.length === 1) && questions.length <= 1
+      && questions.every(({ arguments: args }) => args.recipient === 'human'),
+    'Ask the human through the turn-appropriate channel without further work; denied operation, purpose, reason, permission and turn-ending semantics are graded by llm-rubric');
+  }
+  if (caseId === 'permission-denied-optional-check') {
+    return result(enqueues.length === 1,
+      'Continue with one independent task; legitimate evidence, denial reporting and absence of a workaround are graded by llm-rubric');
+  }
+  if (patrolRepairCases.has(caseId) || patrolLeaveAsIsCases.has(caseId) || patrolUnrelatedRepairCases.has(caseId)) {
+    if (!workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
+      return result(false, 'Record the repair decision and its reason in the target goal work log');
+    }
+    return result(patrolUnrelatedRepairCases.has(caseId) ? tells.length === 1 : enqueues.length <= 1,
+      'Respect the reasoned run plan with a target work log; for unrelated work send one correction. Decision, reasons and instruction content are graded by llm-rubric');
+  }
+  if (caseId === 'existing-invoice-format'
+    && !workLogs.some(({ arguments: args }) => args.goalId === fixture.goal.id)) {
+    return result(false, 'Record the finding decision in the invoice-export goal work log');
+  }
+  if (questionType === 'information') {
+    if (questions.length !== 1) return result(false, 'Save exactly one human information question');
+    const args = questions[0].arguments;
+    return result(args.kind === 'question' && args.recipient === 'human'
+      && !Object.hasOwn(args, 'options') && !Object.hasOwn(args, 'recommendation'),
+    'Save one human information question without options or recommendation; body content is graded by llm-rubric');
+  }
+  if (['migration-method-event', 'migration-method-conversation', 'unidentified-goal',
+    'csv-export-scope-conversation', 'search-index-scope-conversation'].includes(caseId)) {
+    return result(true, 'Question content and withholding answer-dependent work are graded by llm-rubric');
+  }
+  if (caseId === 'single-operation-request') {
+    const blocked = parsed.calls.filter(({ tool, arguments: args }) => tool === 'takt_notify_goal' && args.kind === 'blocked');
+    return result(questions.length === 0 && blocked.length > 0
+      || questions.length === 1 && questions[0].arguments.kind === 'operation_request',
+    'Notify the required action or save one operation request; action and absence of policy choices are graded semantically');
+  }
+  if (goalPrCases.has(caseId)) {
+    const merges = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_pr');
+    const until = caseId === 'explicit-goal-pr-merge' ? 'merge' : 'prepare';
+    return result(merges.length === 1 && merges[0].arguments.prNumber === fixture.goal.pullRequest.number
+      && merges[0].arguments.until === until, 'Enqueue exactly one saved goal PR merge task with the required until');
+  }
+  if (caseId === 'settled-operation-merge') {
+    const merges = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
+    return result(merges.length === 1 && merges[0].arguments.taskName === fixture.event.taskName
+      && merges[0].arguments.expectedSha === fixture.event.result.sha,
+    'Integrate the reviewed task result once with its result SHA without another question');
+  }
+  if (caseId === 'migration-no-downtime') {
+    return result(enqueues.length === 1, 'Proceed with the constrained migration; method and instructions are graded semantically');
+  }
+  if (pauseRequeueCases.has(caseId)) {
+    if (retries.length !== 1 || retries[0].arguments.taskName !== fixture.event.taskName) {
+      return result(false, 'Requeue the interrupted task exactly once');
+    }
+    const args = managerWriteSchemas.takt_requeue_goal_task.parse(retries[0].arguments);
+    const allowedStart = caseId === 'paused-requeue-before-start' && args.startStep === 'plan';
+    return result(args.startStep === undefined || allowedStart,
+      'Preserve the saved position, or the initial step before a run starts; note and message semantics are graded separately');
+  }
+  if (pauseRecordCases.has(caseId)) {
+    const humanQuestions = questions.every(({ arguments: args }) =>
+      managerWriteSchemas.takt_ask_goal_question.parse(args).recipient === 'human');
+    return result(humanQuestions,
+      'Only permitted work logs, human scope questions or notifications; message, stop reason, scope, notification and stale-event semantics are graded separately');
+  }
   if (verificationPlanCases.has(caseId)) {
     const integrations = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
     return result(workLogs.length > 0 && integrations.length <= 1,
-      'Record the verification target and method without redundant integration; waiting and commit semantics are graded by llm-rubric');
+      'Record the verification target and method without redundant integration; delegation, target SHA, isolation and result semantics are graded by llm-rubric');
   }
   if (verificationTellCases.has(caseId)) {
     return result(tells.length === 1 && workLogs.length > 0,
-      'Send one verification instruction and record its reason; substance is graded by llm-rubric');
+      'Correct the out-of-scope requirement and record its reason; substance is graded by llm-rubric');
   }
   if (verificationNoTellCases.has(caseId) || planWaitCases.has(caseId)) {
     return result(true, 'No new task or instruction; assess the reason with llm-rubric');
@@ -190,15 +377,18 @@ export default function assertManagerWorkSplit(output, context) {
     && parsed.calls.some(({ tool, arguments: args }) => tool === 'takt_notify_goal' && args.kind === 'blocked')) {
     return result(false, 'Do not stop for human action on a first failure the manager can resolve');
   }
-  if (caseId === 'escalate-not-on-first-failure' && retries.length > 0) {
-    return result(retries.length === 1 && enqueues.length === 0, 'Resume or revise one stopped task; instruction semantics are graded separately');
+  if (caseId === 'escalate-not-on-first-failure') {
+    const startStep = retries.length === 1
+      ? managerWriteSchemas[retries[0].tool].parse(retries[0].arguments).startStep : undefined;
+    return result(retries.length === 1 && enqueues.length === 0
+      && (startStep === undefined || ['plan', 'implement', 'review'].includes(startStep)),
+    'Resume or revise one stopped task from an available step; instruction semantics are graded separately');
   }
-  const keys = enqueues.map(({ arguments: args }) => args.workKey);
   if (caseId === 'shared-resource') {
     return result(keys.length === 1 && typeof keys[0] === 'string' && keys[0].trim().length > 0,
       'Submit one permissions task, either ordered or combined; instruction semantics are graded separately');
   }
-  if (new Set(keys).size !== keys.length || keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected or repeated work key');
+  if (keys.some((key) => !readyKeys[caseId].includes(key))) return result(false, 'Unexpected work key');
   const minimum = ['parallel-cli', 'parallel-docs-migration'].includes(caseId) ? readyKeys[caseId].length
     : caseId === 'constraint-once' ? 2 : 1;
   const maximum = ['shared-resource', 'shared-definition', 'human-order', 'constraint-carryover', 'constraint-carryover-data', 'escalate-not-on-first-failure'].includes(caseId) ? 1 : fixture.concurrency;

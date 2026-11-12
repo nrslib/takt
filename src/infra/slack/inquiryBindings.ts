@@ -3,9 +3,8 @@ import { isAbsolute, join } from 'node:path';
 import { z } from 'zod/v4';
 import { ManagerConversationAssignmentSchema } from '../conversations/schema.js';
 import { GoalIdSchema } from '../goals/schema.js';
-import { ensurePrivateDirectory, readPrivateFileState } from '../../shared/utils/private-file.js';
-import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
-import { writeFileAtomic } from '../config/project/sessionStore.js';
+import { readPrivateFile, writePrivateFile } from '../daemon/privateFile.js';
+import { FileAsyncLock } from '../daemon/lock.js';
 
 const targetSchema = z.union([
   z.object({ goalId: GoalIdSchema, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),
@@ -23,45 +22,38 @@ export function slackInquiryKey(target: SlackInquiryBinding['target'], questionI
 }
 
 export class SlackInquiryBindings {
-  private readonly directory: string;
   private readonly path: string;
 
   constructor(configDirectory: string, repositoryDirectory: string) {
-    this.directory = join(configDirectory, 'slack-inquiries');
-    this.path = join(this.directory, `${createHash('sha256').update(repositoryDirectory).digest('hex')}.json`);
+    this.path = join(configDirectory, 'slack-inquiries', `${createHash('sha256').update(repositoryDirectory).digest('hex')}.json`);
   }
 
-  find(channelId: string, parentTs: string): SlackInquiryBinding | undefined {
-    return this.read().find((binding) => binding.channelId === channelId && binding.parentTs === parentTs);
+  async find(channelId: string, parentTs: string): Promise<SlackInquiryBinding | undefined> {
+    return (await this.read()).find((binding) => binding.channelId === channelId && binding.parentTs === parentTs);
   }
 
-  question(channelId: string, target: SlackInquiryBinding['target'], questionId: string): SlackInquiryBinding | undefined {
+  async question(channelId: string, target: SlackInquiryBinding['target'], questionId: string): Promise<SlackInquiryBinding | undefined> {
     const key = slackInquiryKey(target, questionId);
-    return this.read().find((binding) => binding.channelId === channelId && slackInquiryKey(binding.target, binding.questionId) === key);
+    return (await this.read()).find((binding) => binding.channelId === channelId && slackInquiryKey(binding.target, binding.questionId) === key);
   }
 
-  save(value: SlackInquiryBinding): void {
+  async save(value: SlackInquiryBinding): Promise<void> {
     const binding = bindingSchema.parse(value);
-    const bindings = this.read();
-    const key = slackInquiryKey(binding.target, binding.questionId);
-    if (bindings.some((entry) => entry.channelId === binding.channelId
-      && (entry.parentTs === binding.parentTs || slackInquiryKey(entry.target, entry.questionId) === key))) {
-      throw new Error('Slack inquiry is already bound');
-    }
-    this.write([...bindings, binding]);
+    await new FileAsyncLock().exclusive(`${this.path}.lock`, async () => {
+      const bindings = await this.read();
+      const key = slackInquiryKey(binding.target, binding.questionId);
+      if (bindings.some((entry) => entry.channelId === binding.channelId
+        && (entry.parentTs === binding.parentTs || slackInquiryKey(entry.target, entry.questionId) === key))) {
+        throw new Error('Slack inquiry is already bound');
+      }
+      const content = JSON.stringify([...bindings, binding]);
+      if (Buffer.byteLength(content) > 1024 * 1024) throw new Error('Slack inquiry bindings exceed storage capacity');
+      await writePrivateFile(this.path, content);
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
-  private write(bindings: SlackInquiryBinding[]): void {
-    ensurePrivateDirectory(this.directory);
-    assertSafePath(this.path, false);
-    writeFileAtomic(this.path, JSON.stringify(bindings), 0o600);
-  }
-
-  private read(): SlackInquiryBinding[] {
-    assertSafePath(this.directory, true);
-    if (lstatOrUndefined(this.directory) === undefined) return [];
-    const snapshot = readPrivateFileState(this.path);
-    if (!('content' in snapshot)) return [];
-    return bindingsSchema.parse(JSON.parse(snapshot.content.toString('utf8')) as unknown);
+  private async read(): Promise<SlackInquiryBinding[]> {
+    const content = await readPrivateFile(this.path, 1024 * 1024);
+    return content === undefined ? [] : bindingsSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
   }
 }

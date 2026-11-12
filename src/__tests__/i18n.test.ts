@@ -2,12 +2,9 @@
  * Tests for UI label loader utility (src/shared/i18n/index.ts)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getLabel, getLabelObject, _resetLabelCache } from '../shared/i18n/index.js';
+import { describe, it, expect } from 'vitest';
+import { getLabel, getLabelObject } from '../shared/i18n/index.js';
 
-beforeEach(() => {
-  _resetLabelCache();
-});
 
 describe('getLabel', () => {
   it.each(['ja', 'en'] as const)('expands the manager, operation and result in every director result notice for %s', (lang) => {
@@ -36,20 +33,9 @@ describe('getLabel', () => {
     expect(new Set(labels).size).toBe(3);
   });
 
-  it('uses a distinct Japanese label for extended thinking', () => {
-    expect(getLabel('tui.ui.extendedThinking', 'ja')).toBe('推論中...');
-  });
-
   it('returns a label by key (defaults to en)', () => {
     const result = getLabel('interactive.ui.intro');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
-  });
-
-  it('returns an English label when lang is "en"', () => {
-    const result = getLabel('interactive.ui.intro', 'en');
-    expect(result).toBeTypeOf('string');
-    expect(result.length).toBeGreaterThan(0);
+    expect(result).toBe(getLabel('interactive.ui.intro', 'en'));
   });
 
   it.each(['en', 'ja'] as const)('returns the localized /verify command label for %s', (lang) => {

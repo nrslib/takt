@@ -35,11 +35,11 @@ export async function goalWrite(
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
     if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr'].includes(tool)) {
-      throw new Error('Goal is paused. Resume it in the manager TUI before continuing work.');
+      throw new Error('Goal is paused. Resume it before continuing work.');
     }
     const options = resolveManagerNotificationOptions(input.cwd);
     const result = await action(options);
     await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), options.webhookUrl);
-    return jsonResult(result);
+    return jsonResult(result, tool === 'complete' && typeof result.pullRequestBodyError === 'string');
   } catch (error) { return errorResult(errorContext, error); }
 }

@@ -17,7 +17,7 @@ import { createManagerConversationPlan } from '../features/manager/conversationP
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { ManagerServiceClient } from './helpers/manager-service-client.js';
-import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
@@ -26,8 +26,9 @@ import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValu
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../infra/goals/standalone-inquiries.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { formatGoalNotification } from '../infra/goals/notifications.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
-import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
+import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { getLabel } from '../shared/i18n/index.js';
@@ -115,6 +116,106 @@ describe('standalone inquiries through manager MCP tools', () => {
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
     return firstTextContent(result.content);
   }
+
+  async function askStandalone(input: Record<string, unknown>) {
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: input });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    return z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content))).questionId;
+  }
+
+  it('creates a distinct pending question without changing an existing standalone inquiry', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const collision = '650e8400-e29b-41d4-a716-446655440001';
+    const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto');
+    let existing: Awaited<ReturnType<StandaloneInquiryStore['create']>>;
+    try {
+      vi.mocked(crypto.randomUUID).mockReturnValue(collision);
+      existing = await store.create({ body: '既存の相談' });
+    } finally { vi.mocked(crypto.randomUUID).mockImplementation(actual.randomUUID); }
+    await connect('manager');
+
+    const questionId = await askStandalone({ cwd, body: '対象のゴールを教えてください',
+      options: ['A', 'B'], recommendation: 'A' });
+
+    expect(questionId).not.toBe(existing.id);
+    expect(await store.get(questionId)).toMatchObject({ id: questionId, kind: 'question', status: 'pending',
+      recipient: 'human', body: '対象のゴールを教えてください', options: ['A', 'B'], recommendation: 'A',
+      operation: { cwd, toolName: 'takt_ask_standalone_question' } });
+    expect((await list()).inquiries.map(({ id }) => id).sort()).toEqual([existing.id, questionId].sort());
+    expect(await store.get(existing.id)).toEqual(existing);
+    expect(await store.list()).toHaveLength(2);
+  });
+
+  it('rejects a generated standalone question ID collision without overwriting the existing inquiry', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const collision = '650e8400-e29b-41d4-a716-446655440001';
+    const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto');
+    try {
+      vi.mocked(crypto.randomUUID).mockReturnValue(collision);
+      const existing = await store.create({ body: '既存の相談' });
+      await connect('manager');
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+      const result = await client.callTool({ name: 'takt_ask_standalone_question',
+        arguments: { cwd, body: '対象のゴールを教えてください' } });
+      expect(result.isError).toBe(true);
+      expect(await store.list()).toEqual([existing]);
+    } finally { vi.mocked(crypto.randomUUID).mockImplementation(actual.randomUUID); }
+  });
+
+  it('uses the current workspace owner and canonical repository root for a nested cwd', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '担当', repositoryDirectories: [cwd, outside] });
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+    const nested = join(outside, 'nested');
+    mkdirSync(nested);
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    expect(TAKT_MCP_MANAGER_TOOL_NAMES).toContain('takt_ask_standalone_question');
+    const questionId = await askStandalone({ cwd: nested, body: 'どのゴールですか' });
+    expect(await new StandaloneInquiryStore(configDirectory, owner).get(questionId))
+      .toMatchObject({ operation: { cwd: outside }, status: 'pending' });
+    expect((await list({ cwd: outside })).inquiries.map(({ id }) => id)).toEqual([questionId]);
+    expect(await new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside }).list()).toEqual([]);
+  });
+
+  it.each(['outside', 'relative', 'missing'] as const)('rejects a %s cwd without saving a standalone question', async (condition) => {
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: {
+      ...(condition === 'missing' ? {} : { cwd: condition === 'outside' ? outside : 'relative/path' }), body: '担当先の確認',
+    } });
+    expect(result.isError).toBe(true);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([]);
+    expect(await new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside }).list()).toEqual([]);
+  });
+
+  it('creates and lists a standalone operation request', async () => {
+    await connect('manager');
+    const questionId = await askStandalone({ cwd, body: 'この操作を実行してください', kind: 'operation_request' });
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    expect(await store.get(questionId)).toMatchObject({
+      id: questionId,
+      kind: 'operation_request',
+      status: 'pending',
+      body: 'この操作を実行してください',
+      operation: { cwd, toolName: 'takt_ask_standalone_question' },
+    });
+    expect(await list()).toMatchObject({
+      inquiries: expect.arrayContaining([expect.objectContaining({
+        id: questionId,
+        kind: 'operation_request',
+        body: 'この操作を実行してください',
+      })]),
+      totalCount: 1,
+    });
+  });
+
+  it('does not create standalone approval inquiries through the question tool', async () => {
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_ask_standalone_question');
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd, body: '確認', kind: 'approval' } });
+    expect(result.isError).toBe(true);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([]);
+  });
 
   it('reads only pending standalone inquiries with approval identity, kind, body and creation time without saving', async () => {
     const store = new StandaloneInquiryStore(configDirectory, owner);
@@ -394,17 +495,16 @@ describe('manager goal execution tools through MCP', () => {
     for (const name of names) expect(TAKT_MCP_MANAGER_TOOL_NAMES.some((allowed) => allowed === name)).toBe(false);
   });
 
-  it.each([false, true])('transfers goal execution exposure to the actual MCP child: %s', async (enableGoalExecutionTools) => {
+  it('exposes goal execution tools through the actual MCP child', async () => {
     const connect: (
       cwd: string,
-      assignment: Parameters<typeof connectManagerMcp>[1],
-      servers: Parameters<typeof connectManagerMcp>[2],
-      options: { enableGoalExecutionTools: boolean },
-    ) => ReturnType<typeof connectManagerMcp> = connectManagerMcp;
-    const connection = await connect(cwd, undefined, undefined, { enableGoalExecutionTools });
+      assignment: Parameters<typeof connectTestManagerMcp>[1],
+      servers: Parameters<typeof connectTestManagerMcp>[2],
+    ) => ReturnType<typeof connectTestManagerMcp> = connectTestManagerMcp;
+    const connection = await connect(cwd, undefined, undefined);
     try {
       const tools = (await connection.client.listTools()).tools.map(({ name }) => name);
-      for (const name of names) expect(tools.includes(name)).toBe(enableGoalExecutionTools);
+      for (const name of names) expect(tools).toContain(name);
       expect(tools).toContain('takt_list_goals');
     } finally { await connection.dispose(); }
   }, 30_000);
@@ -419,7 +519,9 @@ describe('manager goal execution tools through MCP', () => {
     const originalArgv = process.argv;
     const reader = new Client({ name: 'public-goal-execution-test', version: '1' });
     const [a, b] = InMemoryTransport.createLinkedPair();
-    stdioTransport.mockReturnValueOnce(b);
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() {
+      return b;
+    });
     try {
       process.argv = [...originalArgv.slice(0, 2), '--tool-set', 'manager', '--enable-goal-execution-tools'];
       await connectTaktMcpServerToStdio();
@@ -477,8 +579,8 @@ describe('manager goal execution tools through MCP', () => {
     const before = await store.get(goalId);
     const branchSha = () => execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
     const sha = branchSha();
-    const controller = new AbortController();
-    const monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
+    let controller = new AbortController();
+    let monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
     const invoke = async (name: string, extra: Record<string, unknown> = {}) => {
       const result = await client.callTool({ name, arguments: { cwd, goalId, ...extra } });
       expect(result.isError, firstTextContent(result.content)).not.toBe(true);
@@ -492,7 +594,8 @@ describe('manager goal execution tools through MCP', () => {
       expect(runner.listPendingTaskItems().map(({ name }) => name)).toContain(task.name);
       expect(readManagerEvents(cwd).map(({ event }) => event.goalId)).toContain(goalId);
       monitor.check();
-      expect(controller.signal.aborted).toBe(false);
+      expect(controller.signal.reason).toBeInstanceOf(GoalPausedError);
+      monitor.stop();
       expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
 
       await invoke('takt_resume_goal');
@@ -501,6 +604,8 @@ describe('manager goal execution tools through MCP', () => {
       expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
       expect(autoRun.ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
       expect((await store.get(goalId)).questions).toEqual([question]);
+      controller = new AbortController();
+      monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
       monitor.check();
       expect(controller.signal.aborted).toBe(false);
 
@@ -600,7 +705,7 @@ const askedQuestion = {
 function expectAnswerSelectionGuidance(text: string, questionId: string): void {
   const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
-  expect(guidance[0]).toMatch(/list|select|choose/iu);
+  expect(guidance[0]).toContain('takt manager');
   expect(guidance[0]).not.toContain(questionId);
 }
 
@@ -617,7 +722,7 @@ describe('manager questions, answers and notifications through production bounda
   let responseStatus: number;
   let session: ManagerServiceClient | undefined;
   let app: ReturnType<typeof render> | undefined;
-  let connection: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
+  let connection: Awaited<ReturnType<typeof connectTestManagerMcp>> | undefined;
 
   function git(args: string[], input?: string): string {
     return execFileSync('git', args, { cwd, input, encoding: 'utf8', stdio: 'pipe', env: {
@@ -626,11 +731,13 @@ describe('manager questions, answers and notifications through production bounda
     } }).trim();
   }
 
-  function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve'): void {
+  function configure(disabled?: NotificationKind, mode: 'auto' | 'approve' = 'approve', completedOnly = false): void {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'language: en', 'branch_name_strategy: romaji', 'manager:',
-      '  auto_run: false', `  main_merge: ${mode}`,
-      ...(disabled === undefined ? [] : ['  notifications:', `    ${disabled}: false`]),
+      '  auto_run: false', '  workflows: [safe]', `  main_merge: ${mode}`,
+      ...((disabled === undefined && !completedOnly) ? [] : ['  notifications:',
+        ...(disabled === undefined ? [] : [`    ${disabled}: false`]),
+        ...(completedOnly ? ['    awaiting_merge: false'] : [])]),
     ].join('\n'));
     invalidateResolvedConfigCache(cwd);
   }
@@ -639,6 +746,8 @@ describe('manager questions, answers and notifications through production bounda
     vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
     vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     resetScenario();
+    vi.stubEnv('COLUMNS', '100');
+    vi.stubEnv('LINES', '24');
     vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
     const temporaryRoot = join(process.cwd(), '.tmp');
     mkdirSync(temporaryRoot, { recursive: true });
@@ -733,6 +842,63 @@ describe('manager questions, answers and notifications through production bounda
     return questionSchema.parse((await invoke('takt_get_goal_question', { questionId })).question);
   }
 
+  async function askStandaloneQuestion(directory: string) {
+    const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd: directory, ...askedQuestion } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+    return new StandaloneInquiryStore(process.env.TAKT_CONFIG_DIR!, { kind: 'repository', repositoryDirectory: cwd }).get(questionId);
+  }
+
+  it.each(['ja', 'en'] as const)('sends a standalone question using the selected repository notification policy and %s language', async (language) => {
+    configure('question');
+    const selected = join(cwd, 'second-repository');
+    mkdirSync(join(selected, '.takt'), { recursive: true });
+    initializeGitFixture(selected, []);
+    writeFileSync(join(selected, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${language}\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n`);
+    const workspace = await createWorkspace({ globalConfigDirectory: process.env.TAKT_CONFIG_DIR!, name: '通知の担当', repositoryDirectories: [cwd, selected] });
+    const nested = join(selected, 'nested');
+    mkdirSync(nested);
+    try {
+      const result = await client.callTool({ name: 'takt_ask_standalone_question', arguments: { cwd: nested, ...askedQuestion } });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      const { questionId } = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+      const question = await new StandaloneInquiryStore(process.env.TAKT_CONFIG_DIR!, { kind: 'workspace', workspaceId: workspace.id }).get(questionId);
+      expect(question).toMatchObject({ ...askedQuestion, status: 'pending', operation: { cwd: selected } });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
+      const text = requests[0]!.text;
+      expect(text.split('\n')).toEqual([
+        language === 'ja' ? '質問があります — second-repository' : 'Question — second-repository',
+        askedQuestion.body,
+        language === 'ja' ? '1. CSV（推奨）' : '1. CSV (recommended)',
+        '2. JSON',
+        language === 'ja' ? 'takt manager を開き、Ctrl+R で答えてください。' : 'Open takt manager and press Ctrl+R to answer.',
+      ]);
+      expect(text).not.toContain(goalId);
+    } finally { invalidateResolvedConfigCache(selected); }
+  });
+
+  it.each(['disabled', 'no URL'] as const)('saves a standalone question without a webhook POST when notifications are %s', async (condition) => {
+    if (condition === 'disabled') configure('question');
+    else vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
+    const question = await askStandaloneQuestion(cwd);
+    expect(question).toMatchObject({ ...askedQuestion, status: 'pending' });
+    expect(requests).toEqual([]);
+    expect((await readManagerTestDisplay(cwd)).questions).toEqual([expect.objectContaining({ goalId: null, question: expect.objectContaining({ id: question.id }) })]);
+  });
+
+  it.each(['HTTP error', 'connection error'] as const)('returns a saved standalone question and logs a webhook %s', async (failure) => {
+    responseStatus = failure === 'HTTP error' ? 503 : 0;
+    const stderr = vi.spyOn(process.stderr, 'write');
+    const question = await askStandaloneQuestion(cwd);
+    expect(question.status).toBe('pending');
+    expect(requests).toHaveLength(1);
+    expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
+      ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
+    expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
+    expect((await readManagerTestDisplay(cwd)).questions).toEqual([expect.objectContaining({ goalId: null, question: expect.objectContaining({ id: question.id }) })]);
+  });
+
   async function enqueue(workKey?: string) {
     return client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
       cwd, goalId, task: 'Implement output validation', purpose: '出力を検証する', workflow: 'safe',
@@ -741,7 +907,7 @@ describe('manager questions, answers and notifications through production bounda
   }
 
   async function mountManager(): Promise<void> {
-    connection = await connectManagerMcp(cwd);
+    connection = await connectTestManagerMcp(cwd);
     const plan = createManagerConversationPlan(cwd, {});
     session = new ManagerServiceClient({ cwd,
       plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
@@ -804,7 +970,7 @@ describe('manager questions, answers and notifications through production bounda
   it('exposes the manager question and notification tools while preserving the read-only tool set', async () => {
     const added = ['takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
     const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-    expect(names).toEqual([...TAKT_MCP_MANAGER_TOOL_NAMES].sort());
+    expect(names).toEqual(TAKT_MCP_MANAGER_TOOL_NAMES.filter((name) => name !== 'takt_wait_command').sort());
     expect(names).toEqual(expect.arrayContaining(added));
     const server = createTaktMcpServer({}, { toolSet: 'read-only', allowedProjectRoot: cwd });
     const reader = new Client({ name: 'question-read-only-test', version: '1.0.0' });
@@ -822,10 +988,11 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
-    for (const value of [goalId.slice(0, 8), askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
+    for (const value of [goalRecord().objective, askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(requests[0]!.text).not.toContain(goalId);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const displayed = await readManagerTestDisplay(cwd);
     expect(displayed.events).toEqual([]);
     expect(displayed.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
@@ -859,7 +1026,8 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests).toHaveLength(1);
     const severity = language === 'ja' ? '重要度: 警告' : 'Severity: Warning';
     expect(requests[0]!.text.split('\n')).toContain(body);
-    expect(requests[0]!.text.split('\n')[2]).toBe(severity);
+    expect(requests[0]!.text.split('\n')[1]).toBe(severity);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toEqual([expect.objectContaining({ kind, body, severity: 'warning' })]);
     const display = await readManagerTestDisplay(cwd, language);
@@ -936,45 +1104,48 @@ describe('manager questions, answers and notifications through production bounda
       expect(await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha })).toMatchObject({ status: 'merged' });
     } else {
       git(['update-ref', `refs/heads/${branch}`, sha]);
-      await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' });
+      expect(await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' })).toMatchObject({ status: 'awaiting_merge' });
+      if (kind === 'completed') {
+        git(['update-ref', 'refs/heads/main', sha]);
+        expect(await invoke('takt_check_goal_completion')).toMatchObject({ included: true });
+      }
     }
   }
 
   it.each(['progress', 'awaiting_merge', 'completed'] as const)('notifies Slack and the persisted TUI event after actual %s work', async (kind) => {
-    configure(undefined, kind === 'completed' ? 'auto' : 'approve');
+    configure(undefined, kind === 'completed' ? 'auto' : 'approve', kind === 'completed');
     await produce(kind);
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.text).toContain(goalId.slice(0, 8));
+    expect(requests[0]!.text).toContain(goalRecord().objective);
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expect(requests[0]!.text).not.toContain(goalId);
+    expect(requests[0]!.text).not.toContain(goalId.slice(0, 8));
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
     const display = await readManagerTestDisplay(cwd);
-    expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
+    expect(display.events).toHaveLength(1);
     expect(display.events).toContainEqual({
-      id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
+      id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]),
+      message: formatGoalNotification(saved, saved.notifications![0]!, 'en', basename(cwd), 'tui'),
     });
     if (kind === 'progress') {
       expect(saved.workLog).toHaveLength(1);
-      expect(display.events[0]).toEqual({
-        id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
-      });
+      expect(saved.workLog[0]!.summary).toContain('Integrated');
       expect(requests[0]!.text).toContain('出力の検証');
     }
   });
 
   it.each(kinds)('disables only %s notification delivery while preserving the underlying operation', async (kind) => {
-    configure(kind, kind === 'completed' ? 'auto' : 'approve');
+    configure(kind, kind === 'completed' ? 'auto' : 'approve', kind === 'completed');
     await produce(kind);
     expect(requests).toEqual([]);
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toBeUndefined();
-    expect((await readManagerTestDisplay(cwd)).events).toEqual(kind === 'progress' ? [{
-      id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
-    }] : []);
+    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
     const goal = (await invoke('takt_get_goal')).goal;
     if (kind === 'question') expect(goal).toMatchObject({ questions: [expect.objectContaining({ status: 'pending' })] });
     else if (kind === 'progress') {
+      expect(saved.workLog).toHaveLength(1);
       const taskSha = git(['rev-parse', 'takt/question-fixture-work']);
       expect(git(['merge-base', '--is-ancestor', taskSha, goalRecord().branch])).toBe('');
     }
@@ -1010,7 +1181,7 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
   });
 
-  it('does not announce completion or human merge readiness after an actual merge conflict', async () => {
+  it('publishes a conflicting goal as a PR under auto and waits for the merge task', async () => {
     configure(undefined, 'auto');
     const base = git(['rev-parse', 'main']);
     for (const branch of ['main', goalRecord().branch]) {
@@ -1024,10 +1195,10 @@ describe('manager questions, answers and notifications through production bounda
       expectedSha: git(['rev-parse', goalRecord().branch]), summary: 'reviewed conflicting work',
     });
 
-    expect(result).toMatchObject({ status: 'conflict' });
-    expect((await new GoalStore(cwd).get(goalId)).status).toBe('created');
-    expect(requests).toEqual([]);
-    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
+    expect(result).toMatchObject({ status: 'awaiting_merge' });
+    expect((await new GoalStore(cwd).get(goalId)).status).toBe('awaiting_merge');
+    expect(requests).toHaveLength(1);
+    expect((await readManagerTestDisplay(cwd)).events).toHaveLength(1);
   });
 
   it('records a free-text TUI answer without treating an AI self-report as a human operation', async () => {
@@ -1080,8 +1251,9 @@ describe('manager questions, answers and notifications through production bounda
   it('shows new notifications in the same mounted TUI without replaying saved notifications on reopening', async () => {
     const first = ['保存済みの進捗', '保存済みの確認事項', '保存済みの次の作業', '保存済みの詳細末尾'];
     const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
-    const counts = getLabel('manager.counts', 'en', { goals: '1', questions: '0' }).replace(/\s+/gu, ' ');
     const project = basename(cwd);
+    const status = [getLabel('manager.assignmentHeading', 'en', { name: project }),
+      getLabel('manager.counts', 'en', { goals: '1', awaiting: '0', questions: '0' })].join(' | ');
     const customHeading = getLabel('manager.notificationHeadings.custom', 'en', { project });
     const blockedHeading = getLabel('manager.notificationHeadings.blocked', 'en', { project });
     const goalLine = getLabel('manager.notificationGoal', 'en', { objective: goalRecord().objective, id: goalId.slice(0, 8) });
@@ -1091,7 +1263,7 @@ describe('manager questions, answers and notifications through production bounda
     await mountManager();
     await vi.waitFor(() => {
       const frame = app!.lastFrame()!;
-      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame.split('\n').at(-1)).toBe(status);
       expect(frame).not.toContain('Working');
       for (const line of first) expect(frame).not.toContain(line);
       expect(frame).not.toContain(customHeading);
@@ -1124,7 +1296,7 @@ describe('manager questions, answers and notifications through production bounda
     app = render(createElement(ManagerView, { cwd, lang: 'en', client: session!, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => {
       const frame = app!.lastFrame()!;
-      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame.split('\n').at(-1)).toBe(status);
       expect(frame).not.toContain('Working');
       for (const line of [...first, ...second]) expect(frame).not.toContain(line);
       expect(frame).not.toContain(customHeading);

@@ -1,0 +1,482 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 顧客台帳を新しい保存先へ移行する
+    outOfScope:
+      - 本番環境の切り替え
+    acceptanceCriteria:
+      - 顧客と住所の全件を移行し、件数と参照関係を維持する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440011
+        recordedAt: 2026-11-01T00:27:00.000Z
+        summary: ledger-reader の成果 2222222222222222222222222222222222222222 の差分とレビューを確認した。顧客・住所の件数と参照関係が一致し、同期中の更新も転送先に保持されている。追加修正はない。記録は docs/ledger-review.md。
+    questions:
+      - id: 650e8400-e29b-41d4-a716-446655440010
+        kind: question
+        recipient: human
+        body: 台帳の書き込みを停止して一括転送するか、書き込みを継続して段階的に移すか、どちらにしますか？
+        options:
+          - 約40分書き込みを停止して一括転送する
+          - 書き込みを継続し、差分を同期しながら段階的に移す
+        recommendation: 書き込みを継続する段階移行を推奨します。日中の台帳更新を続けられるためです。
+        status: answered
+        createdAt: 2026-11-01T00:01:00.000Z
+        answer:
+          text: 日中も更新があるので、書き込みを続けたまま差分を同期して段階的に移してください。検証に数日かかっても構いません。
+          source: tui
+          answeredAt: 2026-11-01T00:03:00.000Z
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: ledger-reader
+    runSlug: run-ledger-reader
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/ledger-reader
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks:
+    - name: ledger-reader
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-11-01T00:04:00.000Z
+      startedAt: 2026-11-01T00:05:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-ledger-reader
+      completion: *a1
+      goalWorkKey: ledger-reader
+      goalPurpose: 顧客と住所の全件を移行し、件数と参照関係を維持する。
+      goalIntegration: not_integrated
+      completedAt: 2026-11-01T00:25:00.000Z
+      taskDir: .takt/tasks/ledger-reader
+      summary: 顧客と住所の全件を移行し、件数と参照関係を維持する。
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/ledger-migration
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/ledger-reader
+      ownerStartTime: null
+      ownerPid: null
+      slug: ledger-reader
+      executionId: 650e8400-e29b-41d4-a716-446655440218
+      worktreePath: /workspace/project/.takt/worktrees/ledger-reader
+  readResults:
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/ledger-migration
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/ledger-review.md
+      result: ledger-reader の成果 2222222222222222222222222222222222222222。書き込みを継続した段階移行の実装をレビューした。顧客・住所の全件比較で件数と参照関係が一致し、同期中に加えた更新も転送先に保持された。指摘は残っていない。
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 設計、実装、レビューを実行する。
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project status --short --branch
+      result: |
+        ## main
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project rev-parse takt/goal/ledger-migration
+      result: |
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-ledger-reader
+      result:
+        runSlug: run-ledger-reader
+        workflow: default
+        status: completed
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-11-01T00:06:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 78
+          returnedBytes: 0
+          truncated: true
+        stepLogs:
+          - index: 0
+            step: review
+            persona: reviewer
+            status: done
+            timestamp: 2026-11-01T00:24:00.000Z
+            iteration: 1
+        reports:
+          - filename: review.md
+            sizeBytes: 252
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-ledger-reader
+        view: report
+        report: review.md
+      result:
+        runSlug: run-ledger-reader
+        workflow: default
+        status: completed
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-11-01T00:06:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 78
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: review.md
+          content: 書き込みを継続する段階移行を実装した。顧客・住所の全件比較で件数と参照関係が一致し、同期中の更新も転送先に保持された。対象テストとレビューは完了し、指摘は残っていない。
+          totalBytes: 252
+          offset: 0
+          returnedBytes: 252
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/ledger-reader status --short --branch
+      result: |
+        ## takt/task/ledger-reader
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/ledger-reader rev-parse takt/task/ledger-reader
+      result: |
+        2222222222222222222222222222222222222222
+  runArtifacts:
+    - directory: /workspace/project/.takt/worktrees/ledger-reader
+      meta:
+        task: 顧客と住所の全件を移行し、件数と参照関係を維持する。
+        workflow: default
+        runSlug: run-ledger-reader
+        runRoot: .takt/runs/run-ledger-reader
+        reportDirectory: .takt/runs/run-ledger-reader/reports
+        contextDirectory: .takt/runs/run-ledger-reader/context
+        logsDirectory: .takt/runs/run-ledger-reader/logs
+        status: completed
+        startTime: 2026-11-01T00:05:00.000Z
+        endTime: 2026-11-01T00:25:00.000Z
+        currentStep: review
+        currentIteration: 1
+        phase: 1
+      sessionLog:
+        - type: workflow_start
+          task: 顧客と住所の全件を移行し、件数と参照関係を維持する。
+          workflowName: default
+          startTime: 2026-11-01T00:05:00.000Z
+        - type: step_start
+          step: review
+          persona: reviewer
+          iteration: 1
+          timestamp: 2026-11-01T00:06:00.000Z
+        - type: step_complete
+          step: review
+          persona: reviewer
+          iteration: 1
+          status: done
+          content: 書き込みを継続する段階移行を実装した。顧客・住所の全件比較で件数と参照関係が一致し、同期中の更新も転送先に保持された。対象テストとレビューは完了し、指摘は残っていない。
+          instruction: ""
+          timestamp: 2026-11-01T00:24:00.000Z
+        - type: workflow_complete
+          iterations: 1
+          endTime: 2026-11-01T00:25:00.000Z
+      reports:
+        - filename: review.md
+          content: 書き込みを継続する段階移行を実装した。顧客・住所の全件比較で件数と参照関係が一致し、同期中の更新も転送先に保持された。対象テストとレビューは完了し、指摘は残っていない。
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Migrate the customer ledger to the new store
+    outOfScope:
+      - Production cutover
+    acceptanceCriteria:
+      - Migrate all customers and addresses, preserving counts and references.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440011
+        recordedAt: 2026-11-01T00:27:00.000Z
+        summary: The diff and review of ledger-reader result 2222222222222222222222222222222222222222 were checked. Customer and address counts and references match, and concurrent writes are retained at the destination. No additional repairs are needed. Evidence is in docs/ledger-review.md.
+    questions:
+      - id: 650e8400-e29b-41d4-a716-446655440010
+        kind: question
+        recipient: human
+        body: Should we pause ledger writes for a bulk transfer or keep writes active and migrate in stages?
+        options:
+          - Pause writes for about 40 minutes and transfer in bulk
+          - Keep writes active and migrate in stages with change synchronization
+        recommendation: Use staged migration with writes active because daytime ledger updates can continue.
+        status: answered
+        createdAt: 2026-11-01T00:01:00.000Z
+        answer:
+          text: We receive updates during the day, so keep writes active and migrate in stages with change synchronization. Several days of validation are fine.
+          source: tui
+          answeredAt: 2026-11-01T00:03:00.000Z
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: ledger-reader
+    runSlug: run-ledger-reader
+    result: &a2
+      success: true
+      interrupted: false
+      branch: takt/task/ledger-reader
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks:
+    - name: ledger-reader
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-11-01T00:04:00.000Z
+      startedAt: 2026-11-01T00:05:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-ledger-reader
+      completion: *a2
+      goalWorkKey: ledger-reader
+      goalPurpose: Migrate all customers and addresses, preserving counts and references.
+      goalIntegration: not_integrated
+      completedAt: 2026-11-01T00:25:00.000Z
+      taskDir: .takt/tasks/ledger-reader
+      summary: Migrate all customers and addresses, preserving counts and references.
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/ledger-migration
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/ledger-reader
+      ownerStartTime: null
+      ownerPid: null
+      slug: ledger-reader
+      executionId: 650e8400-e29b-41d4-a716-446655440218
+      worktreePath: /workspace/project/.takt/worktrees/ledger-reader
+  readResults:
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/ledger-migration
+        goalSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        targetBranch: main
+        targetSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        included: true
+        ahead: 0
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/ledger-review.md
+      result: ledger-reader result 2222222222222222222222222222222222222222. Reviewed the staged migration implementation with writes active. Comparing all customers and addresses confirmed matching counts and references; updates made during synchronization were retained at the destination. No findings remain.
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Plan, implement and review the assigned work.
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project status --short --branch
+      result: |
+        ## main
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project rev-parse takt/goal/ledger-migration
+      result: |
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-ledger-reader
+      result:
+        runSlug: run-ledger-reader
+        workflow: default
+        status: completed
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-11-01T00:06:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 70
+          returnedBytes: 0
+          truncated: true
+        stepLogs:
+          - index: 0
+            step: review
+            persona: reviewer
+            status: done
+            timestamp: 2026-11-01T00:24:00.000Z
+            iteration: 1
+        reports:
+          - filename: review.md
+            sizeBytes: 223
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-ledger-reader
+        view: report
+        report: review.md
+      result:
+        runSlug: run-ledger-reader
+        workflow: default
+        status: completed
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-11-01T00:06:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        taskOmission:
+          totalBytes: 70
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: review.md
+          content: Implemented staged migration with writes active. Full customer/address comparisons confirmed matching counts and references and retention of concurrent writes. Targeted tests and review completed with no remaining findings.
+          totalBytes: 223
+          offset: 0
+          returnedBytes: 223
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/ledger-reader status --short --branch
+      result: |
+        ## takt/task/ledger-reader
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project/.takt/worktrees/ledger-reader rev-parse takt/task/ledger-reader
+      result: |
+        2222222222222222222222222222222222222222
+  runArtifacts:
+    - directory: /workspace/project/.takt/worktrees/ledger-reader
+      meta:
+        task: Migrate all customers and addresses, preserving counts and references.
+        workflow: default
+        runSlug: run-ledger-reader
+        runRoot: .takt/runs/run-ledger-reader
+        reportDirectory: .takt/runs/run-ledger-reader/reports
+        contextDirectory: .takt/runs/run-ledger-reader/context
+        logsDirectory: .takt/runs/run-ledger-reader/logs
+        status: completed
+        startTime: 2026-11-01T00:05:00.000Z
+        endTime: 2026-11-01T00:25:00.000Z
+        currentStep: review
+        currentIteration: 1
+        phase: 1
+      sessionLog:
+        - type: workflow_start
+          task: Migrate all customers and addresses, preserving counts and references.
+          workflowName: default
+          startTime: 2026-11-01T00:05:00.000Z
+        - type: step_start
+          step: review
+          persona: reviewer
+          iteration: 1
+          timestamp: 2026-11-01T00:06:00.000Z
+        - type: step_complete
+          step: review
+          persona: reviewer
+          iteration: 1
+          status: done
+          content: Implemented staged migration with writes active. Full customer/address comparisons confirmed matching counts and references and retention of concurrent writes. Targeted tests and review completed with no remaining findings.
+          instruction: ""
+          timestamp: 2026-11-01T00:24:00.000Z
+        - type: workflow_complete
+          iterations: 1
+          endTime: 2026-11-01T00:25:00.000Z
+      reports:
+        - filename: review.md
+          content: Implemented staged migration with writes active. Full customer/address comparisons confirmed matching counts and references and retention of concurrent writes. Targeted tests and review completed with no remaining findings.

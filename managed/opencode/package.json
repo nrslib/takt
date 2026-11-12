@@ -4,6 +4,6 @@
   "private": true,
   "dependencies": {
     "@opencode-ai/sdk": "1.18.28",
-    "@opencode/client": "2.0.18"
+    "@opencode/client": "2.2.5"
   }
 }

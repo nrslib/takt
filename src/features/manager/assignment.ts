@@ -1,10 +1,12 @@
 import { findWorkspaceForRepository, readWorkspace } from '../../infra/config/global/workspaceRegistry.js';
+import { realpath } from 'node:fs/promises';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import { z } from 'zod/v4';
 import type { McpServerConfig } from '../../core/models/index.js';
 import { isStdioServer } from '../../infra/providers/mcp/types.js';
+import { hasCode } from '../../infra/daemon/privateFile.js';
 
 export type ManagerAssignmentIdentity =
   | { readonly kind: 'repository'; readonly repositoryDirectory: string }
@@ -37,8 +39,14 @@ export async function resolveCurrentManagerAssignment(identity: ManagerAssignmen
 
 export async function resolveAssignedProjectRoot(cwd: string, assignment: ManagerAssignment): Promise<string> {
   const root = await resolveGitRepositoryDirectory(cwd);
-  if (!assignment.repositoryDirectories.includes(root)) throw new Error(`Git repository is not assigned to this manager: ${root} (cwd: ${cwd})`);
-  return root;
+  if (assignment.repositoryDirectories.includes(root)) return root;
+  for (const directory of assignment.repositoryDirectories) {
+    let assignedRoot: string;
+    try { assignedRoot = await realpath(directory); }
+    catch (error) { if (hasCode(error, 'ENOENT')) continue; throw error; }
+    if (assignedRoot === root) return root;
+  }
+  throw new Error(`Git repository is not assigned to this manager: ${root} (cwd: ${cwd})`);
 }
 
 export async function findAssignedGoalRepository(goalId: string, assignment: ManagerAssignment): Promise<string> {

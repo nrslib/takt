@@ -36,7 +36,8 @@ export function mergePrEffect(
       const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: options.cwd, encoding: 'utf8', stdio: 'pipe',
       }).trim();
-      result = gitProvider.mergePr(payload.pr, options.projectCwd, options.mergeMethod, headSha);
+      result = gitProvider.mergePr(payload.pr, options.projectCwd, options.mergeMethod, headSha,
+        ...(options.prExecutionContext.preserveHeadBranch === true ? [{ deleteBranch: false }] : []));
     } catch (error) {
       return { success: false, failed: true, error: String(error) };
     }

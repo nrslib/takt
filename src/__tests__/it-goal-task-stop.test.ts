@@ -10,6 +10,9 @@ import type { ExecuteTaskOptions, WorkflowExecutionResult } from '../features/ta
 import { GoalStore } from '../infra/goals/store.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
+import { TaskRetryService } from '../infra/task/taskRetryService.js';
+import { setGoalExecutionStatus } from '../infra/goals/execution.js';
+import { GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -69,6 +72,50 @@ describe('goal task stop through manager MCP and the same live worker', () => {
   const stopTool = 'takt_stop_goal_task';
   const request = (taskName: string, executionId: string) => ({ name: stopTool,
     arguments: { cwd, goalId, taskName, executionId } });
+
+  it.each((['paused', 'aborted'] as const).flatMap((status) =>
+    (['return', 'throw'] as const).map((outcome) => ({ status, outcome }))))(
+    '実行中のゴールを $status にすると停止し、再試行可否を保存する ($outcome)', async ({ status, outcome }) => {
+      runner.addTask('work', { goal_id: goalId, worktree: false, slug: 'target' });
+      const task = runner.claimNextTasks(1)[0]!;
+      const executor = vi.fn(async (options: ExecuteTaskOptions): Promise<WorkflowExecutionResult> => {
+        const signal = options.abortSignal!;
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        if (outcome === 'throw') throw signal.reason;
+        return { success: false, interrupted: true, reason: 'Workflow interrupted', retryable: false, lastStep: 'implement' };
+      });
+      const execution = executeTaskAndCompleteWithDetails(task, runner, cwd, executor, undefined, { outputMode: 'silent' });
+      try {
+        await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+        await setGoalExecutionStatus(cwd, goalId, status, new AbortController().signal);
+        const result = await execution;
+        const signal = executor.mock.calls[0]![0].abortSignal!;
+        expect(signal.reason).toBeInstanceOf(status === 'paused' ? GoalPausedError : GoalAbortedError);
+        expect(result).toMatchObject({ success: false, completion: { interrupted: true, workflowResult: 'aborted' } });
+        const saved = store.read().tasks[0]!;
+        expect(saved).toMatchObject({ status: 'failed', owner_pid: null, failure: { error: signal.reason.message } });
+        expect(saved.completed_at).toEqual(expect.any(String));
+        expect(saved.failure!.retryable === false).toBe(status === 'aborted');
+        expect(doubles.post).not.toHaveBeenCalled();
+        if (status === 'paused') {
+          await setGoalExecutionStatus(cwd, goalId, 'active', new AbortController().signal);
+          const retries = new TaskRetryService(cwd, runner.getTasksFilePath(), store);
+          retries.requeueTask(task.name, ['failed'], { freshStart: false });
+          expect(store.read().tasks[0]!.status).toBe('pending');
+          const retried = runner.claimNextTasks(1)[0]!;
+          expect(retried.executionId).not.toBe(task.executionId);
+          const nextExecutor = async (options: ExecuteTaskOptions) => {
+            expect(options.abortSignal!.aborted).toBe(false);
+            return { success: true };
+          };
+          expect((await executeTaskAndCompleteWithDetails(retried, runner, cwd, nextExecutor, undefined,
+            { outputMode: 'silent' })).success).toBe(true);
+        }
+      } finally {
+        await setGoalExecutionStatus(cwd, goalId, 'aborted', new AbortController().signal);
+        await execution;
+      }
+    });
 
   it('publishes the stop tool and keeps running until the signalled worker finishes, then isolates its retry', async () => {
     runner.addTask('work', { goal_id: goalId, worktree: false, slug: 'target' });

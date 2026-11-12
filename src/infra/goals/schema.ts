@@ -3,6 +3,9 @@ import { z } from 'zod/v4';
 import { isValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
+export const GoalExecutionOriginSchema = z.enum(['human', 'manager']);
+export type GoalExecutionOrigin = z.infer<typeof GoalExecutionOriginSchema>;
+
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
 const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -18,6 +21,7 @@ const GoalOperationInputSchema = z.object({
   args: z.string(),
   cwd: z.string().refine(isAbsolute),
 }).strict();
+// Approval fields remain readable for historical manager records; they no longer authorize tool execution.
 export const GoalInquiryInputSchema = GoalQuestionInputSchema.extend({
   kind: z.enum(['question', 'approval', 'operation_request']).default('question'),
   operation: GoalOperationInputSchema.optional(),
@@ -46,12 +50,16 @@ export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
   createdAt: z.iso.datetime().optional(),
   answer: GoalAnswerSchema.optional(),
+  answerPublicationPending: z.literal(true).optional(),
   withdrawalReason: goalText.optional(),
   withdrawnAt: z.iso.datetime().optional(),
   consumedAt: z.iso.datetime().optional(),
 }).superRefine((question, ctx) => {
   if ((question.status === 'answered') !== (question.answer !== undefined)) {
     ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Only answered questions require an answer' });
+  }
+  if (question.answerPublicationPending && question.status !== 'answered') {
+    ctx.addIssue({ code: 'custom', path: ['answerPublicationPending'], message: 'Only answered questions can await publication' });
   }
   if (question.kind === 'approval' && question.operation === undefined) {
     ctx.addIssue({ code: 'custom', path: ['operation'], message: 'An approval requires an operation' });
@@ -76,6 +84,7 @@ export const GoalNotificationInputSchema = z.object({
   kind: z.enum(MANAGER_NOTIFICATION_KINDS),
   body: z.string().refine((value) => value.trim().length > 0),
   severity: z.enum(['info', 'warning', 'error']).optional(),
+  source: z.literal('manager_turn_failure').optional(),
 }).strict();
 // Existing callers may construct questions without kind; parsing always supplies it.
 export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {
@@ -84,6 +93,14 @@ export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {
 export type GoalQuestionInput = z.input<typeof GoalInquiryInputSchema>;
 export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
 
+export const GoalBranchSyncSchema = z.object({
+  status: z.enum(['no_origin', 'unpublished', 'unchanged', 'local_ahead', 'fast_forward', 'diverged', 'checked_out']),
+  localSha: goalSha,
+  remoteSha: goalSha.optional(),
+  worktrees: z.array(z.string()).optional(),
+}).strict();
+export type GoalBranchSync = z.infer<typeof GoalBranchSyncSchema>;
+
 export const GoalTaskResultSchema = z.object({
   success: z.boolean(),
   interrupted: z.boolean(),
@@ -91,15 +108,25 @@ export const GoalTaskResultSchema = z.object({
   sha: z.string().optional(),
   shaUnavailableReason: z.string().optional(),
   failureReason: z.string().optional(),
+  mergeOutcome: z.enum(['prepared', 'merged', 'unresolved']).optional(),
+  branchSynchronization: GoalBranchSyncSchema.optional(),
   workflowResult: z.enum(['completed', 'aborted', 'exceeded', 'error']).optional(),
 }).strict();
 export type GoalTaskResult = z.infer<typeof GoalTaskResultSchema>;
+
+export const GoalSpecificationsSchema = z.object({
+  gherkin: goalText.optional(),
+  quint: goalText.optional(),
+  alloy: goalText.optional(),
+}).strict();
+export type GoalSpecifications = z.infer<typeof GoalSpecificationsSchema>;
 
 const summaryShape = {
   objective: goalText,
   outOfScope: z.array(goalText),
   acceptanceCriteria: z.array(goalText).min(1),
   constraints: z.array(goalText),
+  specifications: GoalSpecificationsSchema.optional(),
 };
 
 export const GoalSummarySchema = z.object({
@@ -167,7 +194,9 @@ export const GoalRecordObjectSchema = z.object({
   completion: GoalCompletionSchema.optional(),
   pullRequest: z.object({ number: z.number().int().safe().positive(), url: z.url() }).strict().optional(),
 }).strict();
-export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
+const readableGoal = GoalRecordObjectSchema.extend({ pullRequestFailure: z.unknown().optional() })
+  .transform(({ pullRequestFailure: _retiredFailure, ...goal }) => goal);
+export const GoalSchema = readableGoal.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {
     ctx.addIssue({ code: 'custom', path: ['completion'], message: 'Completion evidence is required' });
   }

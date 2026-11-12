@@ -1,3 +1,4 @@
+import { readdir, readFile } from 'node:fs/promises';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,10 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { expect, vi } from 'vitest';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { readDaemonOwner } from '../../infra/daemon/owner.js';
-import { ConversationStore } from '../../infra/conversations/store.js';
+import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
-import { PrivateArtifactPublicationConflictError } from '../../shared/utils/private-file.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -33,7 +33,7 @@ interface Observation {
   operationId?: string;
   connection?: 'connecting' | 'connected' | 'disconnected';
   readStatus?: 'reading' | 'complete' | 'incomplete';
-  kind?: 'accepted' | 'busy' | 'error';
+  kind?: 'accepted' | 'error';
   code?: string;
 }
 
@@ -53,7 +53,7 @@ export interface ManagerTuiProcess {
   exit(): Promise<void>;
 }
 
-export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[]) {
+export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[], activity = false) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'team-a', 'takt3');
   const home = join(directory, 'home');
@@ -71,6 +71,8 @@ export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly s
   writeFileSync(observations, '');
   const gate = join(directory, 'provider-release');
   const release = (): void => { writeFileSync(gate, 'release'); };
+  const toolGate = join(directory, 'provider-use-tool');
+  const useTool = (): void => { writeFileSync(toolGate, 'tool'); };
   const scenario = join(directory, 'scenario.json');
   const summary = { objective: 'Export CSV from the daemon', outOfScope: ['Remote upload'],
     acceptanceCriteria: ['CSV is available'], constraints: ['Keep the existing format'] };
@@ -176,13 +178,14 @@ import { registerHooks } from 'node:module';
 import { appendFileSync, existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Socket } from 'node:net';
-import { ConversationStore } from ${JSON.stringify(built('infra/conversations/store.js'))};
+import { ConversationStateStore } from ${JSON.stringify(built('infra/daemon/conversationStateStore.js'))};
 import { MockProvider } from ${JSON.stringify(built('infra/providers/mock.js'))};
 import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
-const save = ConversationStore.prototype.write;
-ConversationStore.prototype.write = function(value) {
-  const result = save.call(this, value);
+const save = ConversationStateStore.prototype.write;
+ConversationStateStore.prototype.write = async function(stored, signal) {
+  const result = await save.call(this, stored, signal);
+  const value = stored.record;
   record({ event: 'write', conversationId: value.id, revision: value.revision, running: value.running !== null,
     approvalState: value.approval?.state ?? null });
   return result;
@@ -194,10 +197,25 @@ MockProvider.prototype.setup = function(config) {
     record({ event: 'provider_start', agent: config.name, model: options.model,
       summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
     const deadline = Date.now() + 60000;
+    const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';
+    if (showActivity) options.onStream?.({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
+    let toolShown = false;
     while (!existsSync(${JSON.stringify(gate)})) {
       if (options.abortSignal?.aborted) throw options.abortSignal.reason;
       if (Date.now() >= deadline) throw new Error('Test provider was not released');
+      if (showActivity && !toolShown && existsSync(${JSON.stringify(toolGate)})) {
+        toolShown = true;
+        options.onStream?.({ type: 'text', data: { text: 'コードを読んで' } });
+        options.onStream?.({ type: 'text', data: { text: 'いるところです。' } });
+        options.onStream?.({ type: 'tool_use', data: { id: 'activity-tool', tool: 'Bash', input: {
+          description: '見回りの予定のコードを読む', command: 'private-input-marker',
+        } } });
+      }
       await delay(20);
+    }
+    if (showActivity && toolShown) {
+      options.onStream?.({ type: 'tool_result', data: { id: 'activity-tool', content: 'private-result-marker', isError: false } });
+      options.onStream?.({ type: 'text', data: { text: '調べがつきました。' } });
     }
     const result = await agent.call(prompt, options);
     record({ event: 'provider_complete', agent: config.name });
@@ -231,13 +249,22 @@ registerHooks({ resolve(specifier, context, nextResolve) {
     .filter(Boolean).map((line) => JSON.parse(line) as Observation);
   const state = async (path = repository) => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: path };
-    const read = () => new ConversationStore(directory).read(conversationId(assignment), assignment);
-    try {
-      return read();
-    } catch (error) {
-      if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
-      return vi.waitFor(read, { timeout: 30000 });
+    const id = conversationId(assignment);
+    const record = (await new ConversationStateStore(directory).read(id))?.record;
+    if (record === undefined) return undefined;
+    let turn: { operationId: string; generation: number } | null = null;
+    const events = join(directory, 'daemon-events');
+    let names: string[];
+    try { names = await readdir(events); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; names = []; }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const value = JSON.parse(await readFile(join(events, name), 'utf8')) as {
+        state: string; event: { conversationId: string }; turn?: { operationId: string; generation: number };
+      };
+      if (value.state === 'running' && value.event.conversationId === id) turn = value.turn!;
     }
+    return { ...record, turn };
   };
   const start = async (path: string, model: string | undefined): Promise<ManagerTuiProcess> => {
     const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, '--input-type=module', '-e', `
@@ -267,7 +294,7 @@ finally { process.disconnect(); }
       }, { timeout: 30000 });
     } catch (cause) {
       throw new Error(`TUI startup failed: ${JSON.stringify({ pid: child.pid, exitCode: child.exitCode,
-        signalCode: child.signalCode, errors, owner: readDaemonOwner(directory), observations: readObservations() })}`, { cause });
+        signalCode: child.signalCode, errors, owner: await readDaemonOwner(directory), observations: readObservations() })}`, { cause });
     }
     const key = (input: string): void => { child.send({ kind: 'key', input }); };
     const frame = async (): Promise<string> => {
@@ -322,10 +349,10 @@ finally { process.disconnect(); }
     for (const { child, owned } of clients) {
       if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
     }
-    const owner = readDaemonOwner(directory);
+    const owner = await readDaemonOwner(directory);
     if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
   };
-  return { directory, repository, summary, start, release, state, readObservations, cleanup, createRepository };
+  return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository };
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {

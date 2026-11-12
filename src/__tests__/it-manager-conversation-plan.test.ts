@@ -1,11 +1,16 @@
 import type { CodexOptions } from '@openai/codex-sdk';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { parse } from 'yaml';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
+import { renderTemplate } from '../shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../features/interactive/formalSpecPrompts.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
@@ -16,7 +21,6 @@ import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { callClaudeCustom } from '../infra/claude/client.js';
 import { resolveNonWorkflowProviderOptions } from '../infra/config/index.js';
 import { runCodexMcpList } from '../infra/codex/mcp-list.js';
-import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../infra/codex/tool-permission-hook-protocol.js';
 import { invalidateGlobalConfigCache,loadGlobalConfig,saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { loadProjectConfig,saveProjectConfig } from '../infra/config/project/projectConfig.js';
@@ -24,9 +28,11 @@ import * as providers from '../infra/providers/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
+import * as ui from '../shared/ui/index.js';
+import * as workflowLoader from '../infra/config/loaders/workflowLoader.js';
+import * as configTrace from '../infra/config/traced/tracedConfigLoader.js';
 
-const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn(), trust: vi.fn() }));
-vi.mock('../infra/codex/hook-trust.js', () => ({ resolveCodexHookTrust: codex.trust }));
+const codex = vi.hoisted(() => ({ constructor: vi.fn(), startThread: vi.fn() }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: class {
   constructor(options: CodexOptions) { codex.constructor(options); }
   startThread = codex.startThread;
@@ -40,9 +46,9 @@ vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCode
 vi.mock('../infra/claude/client.js', () => ({ callClaude: vi.fn(), callClaudeCustom: vi.fn() }));
 
 
-async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor>, input: { text: string; onNotification?: (message: string) => void }, assignment?: ManagerAssignmentIdentity) {
-  return executor.execute({ prompt: input.text, instruction: input.text, sessionId: undefined, assignment,
-    abortSignal: new AbortController().signal, configDirectory: getGlobalConfigDir(), onNotification: input.onNotification });
+async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor>, input: { text: string }, assignment?: ManagerAssignmentIdentity) {
+  return executor.execute({ prompt: input.text, sessionId: undefined, assignment,
+    abortSignal: new AbortController().signal });
 }
 
 describe('manager conversation configuration and provider boundary', () => {
@@ -50,7 +56,6 @@ describe('manager conversation configuration and provider boundary', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    codex.trust.mockReset().mockResolvedValue({ key: '/<session-flags>/config.toml:pre_tool_use:0:0', trustedHash: 'sha256:fixture-current' });
     const root = join(process.cwd(), '.tmp');
     mkdirSync(root, { recursive: true });
     cwd = mkdtempSync(join(root, 'manager-plan-'));
@@ -59,6 +64,72 @@ describe('manager conversation configuration and provider boundary', () => {
   });
 
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); invalidateGlobalConfigCache(); rmSync(cwd, { recursive: true, force: true }); });
+
+  it.each(['project', 'global'] as const)('preserves manager workflows through %s configuration load and save', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, 'config.yaml');
+    for (const workflows of [['default', { simple: 'Small changes' }], 'all']) {
+      writeFileSync(path, `provider: mock\nmanager:\n  workflows: ${JSON.stringify(workflows)}\n`);
+      invalidateGlobalConfigCache();
+      if (scope === 'project') saveProjectConfig(cwd, loadProjectConfig(cwd));
+      else saveGlobalConfig(loadGlobalConfig());
+      invalidateGlobalConfigCache();
+      expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { workflows } });
+      expect(resolveManagerConfig(cwd)).toMatchObject({ workflows });
+    }
+  });
+
+  it('warns about unavailable manager workflows while creating the conversation plan', () => {
+    saveProjectConfig(cwd, { provider: 'mock', manager: { workflows: ['missing-manager-workflow', 'simple'] } });
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('missing-manager-workflow'));
+  });
+
+  it('uses one configuration snapshot during candidate validation and refreshes it for the next plan', () => {
+    const projectPath = join(cwd, '.takt', 'config.yaml');
+    const globalPath = join(getGlobalConfigDir(), 'config.yaml');
+    mkdirSync(getGlobalConfigDir(), { recursive: true });
+    writeFileSync(projectPath, 'provider: mock\nmodel: before\nmanager:\n  workflows: [research, simple]\nworkflow_overrides:\n  quality_gates: [snapshot-project-before]\n');
+    writeFileSync(globalPath, 'language: en\nworkflow_overrides:\n  quality_gates: [snapshot-global-before]\n');
+    const loadWorkflow = workflowLoader.loadWorkflowByIdentifier;
+    const candidates = vi.spyOn(workflowLoader, 'loadWorkflowByIdentifier').mockImplementationOnce((...args) => {
+      const workflow = loadWorkflow(...args);
+      writeFileSync(projectPath, 'provider: mock\nmodel: after\nmanager:\n  workflows: [research, simple]\nworkflow_overrides:\n  quality_gates: [snapshot-project-after]\n');
+      writeFileSync(globalPath, 'language: ja\nworkflow_overrides:\n  quality_gates: [snapshot-global-after]\n');
+      return workflow;
+    });
+    const projectReads = vi.spyOn(configTrace, 'loadProjectConfigTrace');
+    const globalReads = vi.spyOn(configTrace, 'loadGlobalConfigTrace');
+    const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
+    const description = (language: string, name: string): string => parse(readFileSync(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), 'utf8')).description;
+
+    const first = createManagerConversationPlan(cwd, {});
+
+    expect(first.ctx).toMatchObject({ lang: 'en', model: 'before' });
+    expect(candidates.mock.results.map(({ value }) => value?.description)).toEqual([description('en', 'research'), description('en', 'simple')]);
+    for (const { value } of candidates.mock.results) {
+      expect(new Set(value.steps[0].qualityGates.filter((gate: unknown) => typeof gate === 'string' && gate.startsWith('snapshot-'))))
+        .toEqual(new Set(['snapshot-project-before', 'snapshot-global-before']));
+    }
+    expect(warning).not.toHaveBeenCalled();
+    expect(projectReads).toHaveBeenCalledTimes(1);
+    expect(globalReads).toHaveBeenCalledTimes(1);
+
+    const next = createManagerConversationPlan(cwd, {});
+
+    expect(next.ctx).toMatchObject({ lang: 'ja', model: 'after' });
+    expect(candidates.mock.results.slice(2).map(({ value }) => value?.description)).toEqual([description('ja', 'research'), description('ja', 'simple')]);
+    for (const { value } of candidates.mock.results.slice(2)) {
+      expect(new Set(value.steps[0].qualityGates.filter((gate: unknown) => typeof gate === 'string' && gate.startsWith('snapshot-'))))
+        .toEqual(new Set(['snapshot-project-after', 'snapshot-global-after']));
+    }
+    expect(warning).not.toHaveBeenCalled();
+    expect(projectReads).toHaveBeenCalledTimes(2);
+    expect(globalReads).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     ['legacy configuration', false, {}, 'mock'],
@@ -83,14 +154,110 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(plan.ctx.model).toBe(expected.model);
   });
 
+  it('starts with retired manager settings present without constructing a judge', async () => {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'language: en\nmanager:\n  sensitive_paths: [private]\n');
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), [
+      'version: 1', 'provider:', '  profiles:', '    manager: { provider: mock, model: legacy-compatible }',
+      '  defaults: { profile: manager }', '  targets:', '    internal_agents:',
+      '      manager-permission-judge: { profile: no-longer-installed }',
+    ].join('\n'));
+    const plan = createManagerConversationPlan(cwd, {});
+    expect(plan.ctx.model).toBe('legacy-compatible');
+    expect(plan).not.toHaveProperty('permissionJudge');
+    expect(resolveManagerConfig(cwd)).not.toHaveProperty('sensitivePaths');
+    expect((await executeTurn(createManagerTurnExecutor(cwd, plan), { text: 'Continue' })).summary).toBeNull();
+  });
+
   it('uses the default concurrency and resolves project concurrency ahead of global configuration', () => {
     invalidateGlobalConfigCache();
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 1');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 1']);
     saveGlobalConfig({ ...loadGlobalConfig(), concurrency: 2 });
     invalidateGlobalConfigCache();
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 2');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 2']);
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), concurrency: 3 });
-    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').at(-1)).toBe('Concurrency limit: 3');
+    expect(createManagerConversationPlan(cwd, {}).strategy.systemPrompt.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
+  });
+
+  it.each(['auto', 'full'] as const)('rebuilds the conversation runtime after global manager permission changes from %s', async (permission) => {
+    const globalConfigPath = join(getGlobalConfigDir(), 'config.yaml');
+    writeFileSync(globalConfigPath, `manager:\n  permission: ${permission}\n`);
+    const preflight = vi.fn();
+    vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({
+      supportsStructuredOutput: true, supportedMcpTransports: new Set(['stdio']), preflight,
+    }));
+    const dispose = vi.fn(async () => {});
+    const client = new Client({ name: 'manager-runtime-test', version: '1.0.0' });
+    const connect = vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose });
+    const runtime = createConversationRuntime(getGlobalConfigDir());
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const signal = new AbortController().signal;
+    try {
+      const first = await runtime.resolve(assignment, signal);
+      expect(preflight).toHaveBeenLastCalledWith(expect.objectContaining({ aiReviewPermissions: permission === 'auto' }));
+
+      writeFileSync(globalConfigPath, `manager:\n  permission: ${permission === 'auto' ? 'full' : 'auto'}\n`);
+      const second = await runtime.resolve(assignment, signal);
+
+      expect(preflight).toHaveBeenLastCalledWith(expect.objectContaining({ aiReviewPermissions: permission !== 'auto' }));
+      expect(second.contextKey).not.toBe(first.contextKey);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(await runtime.resolve(assignment, signal)).toBe(second);
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('reloads cached project configuration on the next conversation resolve', async () => {
+    const dispose = vi.fn(async () => {});
+    const client = new Client({ name: 'manager-runtime-test', version: '1.0.0' });
+    vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose });
+    const runtime = createConversationRuntime(getGlobalConfigDir());
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const signal = new AbortController().signal;
+    try {
+      const first = await runtime.resolve(assignment, signal);
+      expect(first.language).toBe('en');
+
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmodel: legacy-manager\nlanguage: ja\n');
+      const second = await runtime.resolve(assignment, signal);
+
+      expect(second.language).toBe('ja');
+      expect(second.contextKey).not.toBe(first.contextKey);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it.each([true, 'Y/n', false, 'y/N'] as const)('resolves manager formal_spec %s without prompting', (mode) => {
+    const enabled = mode === true || mode === 'Y/n';
+    saveGlobalConfig({ ...loadGlobalConfig(), assistant: { formalSpec: { mode: !enabled, comments: true, modelCheckTimeoutSeconds: 42 } } });
+    invalidateGlobalConfigCache();
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), assistant: { formalSpec: { mode, comments: false } } });
+    const prompt = createManagerConversationPlan(cwd, {}).strategy.systemPrompt;
+    expect(prompt).toContain(`Formal specification configuration: ${JSON.stringify({ mode: enabled, comments: false, modelCheckTimeoutSeconds: 42 })}`);
+    const notation = readFileSync(join(process.cwd(), 'builtins', 'en', 'facets', 'partials', 'instructions', 'manager-specification-notation.md'), 'utf8');
+    const formalBody = notation.split('{{#if formalSpec}}')[1]!.split('{{/if}}')[0]!;
+    const commentsBody = notation.split('{{#if formalSpecCommentsEnabled}}')[1]!.split('{{/if}}')[0]!;
+    expect(prompt.includes(renderTemplate(formalBody.trim(), {
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints('en'),
+    }))).toBe(enabled);
+    expect(prompt).not.toContain(commentsBody.trim());
+    expect(prompt).not.toMatch(/\{\{(?:#if|\/if|else)/);
+    expect(prompt).toContain('Gherkin');
+  });
+
+  it('passes repository formal specification overrides to workspace manager prompts', () => {
+    const other = join(cwd, 'other'); mkdirSync(other); mkdirSync(join(other, '.takt'));
+    writeFileSync(join(other, '.takt', 'config.yaml'), 'assistant:\n  formal_spec:\n    mode: true\n    comments: false\n');
+    const prompt = createManagerConversationPlan(cwd, { repositoryDirectories: [cwd, other] }).strategy.systemPrompt;
+    const line = prompt.split('\n').find((line) => line.startsWith('Formal specification configuration: '))!;
+    expect(JSON.parse(line.slice('Formal specification configuration: '.length))).toEqual([
+      { repositoryDirectory: cwd, mode: false, comments: true, modelCheckTimeoutSeconds: 900 },
+      { repositoryDirectory: other, mode: true, comments: false, modelCheckTimeoutSeconds: 900 },
+    ]);
   });
 
   it('passes resolved runtime provider options without manager overrides', () => {
@@ -137,7 +304,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(persona.trim().length).toBeGreaterThan(0);
       expect(instruction.trim().length).toBeGreaterThan(0);
       expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(persona.trim());
-      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(instruction.trim());
+      expect(setup.mock.calls[0]?.[0].systemPrompt).toContain(renderTemplate(instruction.trim(), { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(language) }));
       for (const kind of ['policies', 'knowledge']) {
         const content = readFileSync(join(facetsRoot, kind, 'manager.md'), 'utf8').trim();
         expect(content.length).toBeGreaterThan(0);
@@ -153,16 +320,22 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
+  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager guidance', (language) => {
     const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
-    const heading = language === 'ja' ? '## 道具' : '## Tools';
-    const paragraph = knowledge.split(heading)[1]?.trim().split('\n\n')[0];
+    const paragraph = knowledge.split('\n\n').find((body) => body.includes('goalIntegration'));
     expect(paragraph).toBeDefined();
     const terms = paragraph?.match(/[A-Za-z_]+/g);
-    for (const field of ['takt_list_tasks', 'goalIntegration', 'integrated', 'not_integrated', 'unknown']) {
+    for (const field of ['takt_list_tasks', 'goalIntegration', 'goalIntegrationReason', 'integrated', 'not_integrated', 'unknown', 'direct_push']) {
       expect(terms).toContain(field);
     }
-    expect(paragraph).toMatch(language === 'ja' ? /理由/ : /reason/i);
+    const plan = createManagerConversationPlan(cwd, { language });
+    expect(plan.strategy.systemPrompt).toContain(paragraph!);
+  });
+
+  it.each(['ja', 'en'] as const)('exposes PR finishing workflow selection in the %s manager guidance', (language) => {
+    const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
+    const paragraph = knowledge.split('\n\n').find((body) => body.includes('takt_merge_goal_pr') && body.includes('until: prepare'));
+    expect(paragraph).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*until: merge.*merge\.workflow.*merge-review-fix-simple/u);
     const plan = createManagerConversationPlan(cwd, { language });
     expect(plan.strategy.systemPrompt).toContain(paragraph!);
   });
@@ -209,87 +382,42 @@ describe('manager conversation configuration and provider boundary', () => {
     }
   });
 
-  it('provides the configured default workflow to the manager turn', async () => {
-    const workflows = join(cwd, '.takt', 'workflows');
-    mkdirSync(workflows, { recursive: true });
-    writeFileSync(join(workflows, 'fixture-fallback-workflow.yaml'), [
-      'name: fixture-fallback-workflow', 'description: default workflow fixture',
-      'max_steps: 2', 'initial_step: work', 'steps:',
-      '  - name: work', '    persona: coder', '    instruction: Implement validation',
-      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
-    ].join('\n'));
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  default_workflow: fixture-fallback-workflow\n');
-    const provider = new MockProvider();
-    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
-      persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'),
-      content: JSON.stringify({ message: '確認しました', summary: null }),
-    });
-    const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
-    vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
-    const session = createManagerTurnExecutor(cwd, createManagerConversationPlan(cwd, {}));
-    {
-      expect((await executeTurn(session, { text: 'workflowを選んでください' })).message).toBeTypeOf('string');
-      expect(`${setup.mock.calls[0]![0].systemPrompt}\n${call.mock.calls[0]![0]}`)
-        .toContain('fixture-fallback-workflow');
-    }
-  });
-
   it.each([false, true])('preserves manager settings through project configuration load and save (auto run: %s)', (autoRun) => {
     const path = join(cwd, '.takt', 'config.yaml');
-    writeFileSync(path, [
-      'provider: mock', 'manager:', `  auto_run: ${autoRun}`,
-      '  default_workflow: fixture-fallback-workflow',
-    ].join('\n'));
+    writeFileSync(path, `provider: mock\nmanager:\n  auto_run: ${autoRun}\n`);
 
     const loaded = loadProjectConfig(cwd);
     saveProjectConfig(cwd, loaded);
 
     expect(parse(readFileSync(path, 'utf8'))).toMatchObject({
-      manager: { auto_run: autoRun, default_workflow: 'fixture-fallback-workflow' },
+      manager: { auto_run: autoRun },
     });
     expect(loadProjectConfig(cwd)).toEqual(loaded);
   });
 
-  it('preserves patrol intervals through project and global load/save and resolves project precedence', () => {
-    const globalDirectory = join(cwd, 'patrol-global');
-    mkdirSync(globalDirectory); vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
-    writeFileSync(join(globalDirectory, 'config.yaml'), 'provider: mock\nmanager:\n  patrol_interval: 900\n');
-    invalidateGlobalConfigCache();
-    saveGlobalConfig(loadGlobalConfig()); invalidateGlobalConfigCache();
-    expect(loadGlobalConfig().manager?.patrolInterval).toBe(900);
-    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { patrol_interval: 900 } });
-    const projectPath = join(cwd, '.takt', 'config.yaml');
-    writeFileSync(projectPath, 'provider: mock\nmanager:\n  patrol_interval: 60\n');
-    saveProjectConfig(cwd, loadProjectConfig(cwd));
-    expect(loadProjectConfig(cwd).manager?.patrolInterval).toBe(60);
-    expect(parse(readFileSync(projectPath, 'utf8'))).toMatchObject({ manager: { patrol_interval: 60 } });
-    expect(resolveManagerConfig(cwd).patrolInterval).toBe(60);
-    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: undefined });
-    expect(resolveManagerConfig(cwd).patrolInterval).toBe(900);
-  });
   it.each([false, true])('preserves global manager settings and resolves project fields independently (auto run: %s)', (autoRun) => {
     const globalDirectory = join(cwd, 'global');
     mkdirSync(globalDirectory);
     vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
-    writeFileSync(join(globalDirectory, 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${autoRun}\n  default_workflow: global-fallback\n`);
+    writeFileSync(join(globalDirectory, 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${autoRun}\n`);
     invalidateGlobalConfigCache();
     const loaded = loadGlobalConfig();
     saveGlobalConfig(loaded);
     invalidateGlobalConfigCache();
-    expect(loadGlobalConfig().manager).toEqual({ autoRun, defaultWorkflow: 'global-fallback' });
-    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun, default_workflow: 'global-fallback' } });
+    expect(loadGlobalConfig().manager).toEqual({ autoRun });
+    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { auto_run: autoRun } });
     writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: ${!autoRun}\n`);
-    expect(resolveManagerConfig(cwd)).toMatchObject({ autoRun: !autoRun, defaultWorkflow: 'global-fallback', mainMerge: 'approve' });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ autoRun: !autoRun, mainMerge: 'approve' });
   });
 
   it.each(['auto', 'approve'])('loads and saves repository main merge permission %s without losing other manager settings', (mainMerge) => {
     const path = join(cwd, '.takt', 'config.yaml');
-    writeFileSync(path, `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n  default_workflow: default\n`);
+    writeFileSync(path, `provider: mock\nmanager:\n  main_merge: ${mainMerge}\n  auto_run: false\n`);
     const loaded = loadProjectConfig(cwd);
-    expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    expect(loaded.manager).toMatchObject({ mainMerge, autoRun: false });
     saveProjectConfig(cwd, loaded);
-    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false, default_workflow: 'default' } });
-    expect(resolveManagerConfig(cwd)).toMatchObject({ mainMerge, autoRun: false, defaultWorkflow: 'default' });
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { main_merge: mainMerge, auto_run: false } });
+    expect(resolveManagerConfig(cwd)).toMatchObject({ mainMerge, autoRun: false });
   });
 
   it.each(['project', 'global'] as const)('preserves notification switches through %s configuration load and save', (scope) => {
@@ -315,6 +443,39 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(() => loadProjectConfig(cwd)).toThrow();
   });
 
+  it.each(['project', 'global'] as const)('loads and saves manager permissions at the %s scope', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    const path = join(directory, 'config.yaml');
+    writeFileSync(path, 'provider: mock\nmanager:\n  permission: full\n  provider_permissions:\n    claude: auto\n    codex: full\n');
+    invalidateGlobalConfigCache();
+    const loaded = scope === 'project' ? loadProjectConfig(cwd) : loadGlobalConfig();
+    expect(loaded.manager).toMatchObject({ permission: 'full', providerPermissions: { claude: 'auto', codex: 'full' } });
+    if (scope === 'project') saveProjectConfig(cwd, loaded);
+    else saveGlobalConfig({ ...loadGlobalConfig(), manager: loaded.manager });
+    invalidateGlobalConfigCache();
+    expect(parse(readFileSync(path, 'utf8'))).toMatchObject({ manager: { permission: 'full', provider_permissions: { claude: 'auto', codex: 'full' } } });
+    expect(createManagerConversationPlan(cwd, { provider: 'claude-sdk' }).ctx.aiReviewPermissions).toBe(true);
+    expect(createManagerConversationPlan(cwd, { provider: 'codex' }).ctx.aiReviewPermissions).toBe(false);
+    expect(createManagerConversationPlan(cwd, { provider: 'opencode', model: 'test/model' }).ctx.aiReviewPermissions).toBe(false);
+  });
+
+  it.each(['project', 'global'] as const)('rejects invalid manager permissions when loading %s config', (scope) => {
+    const directory = scope === 'project' ? join(cwd, '.takt') : getGlobalConfigDir();
+    for (const setting of ['permission: edit', 'provider_permissions: { codex: never }']) {
+      writeFileSync(join(directory, 'config.yaml'), `provider: mock\nmanager:\n  ${setting}\n`);
+      invalidateGlobalConfigCache();
+      expect(() => scope === 'project' ? loadProjectConfig(cwd) : loadGlobalConfig()).toThrow();
+    }
+  });
+
+  it('defaults manager permission to AI review after resolving the actual provider override', () => {
+    saveProjectConfig(cwd, { provider: 'mock', manager: { permission: 'full', providerPermissions: { 'claude-sdk': 'auto' } } });
+    expect(createManagerConversationPlan(cwd, { provider: 'claude' }).ctx.aiReviewPermissions).toBe(true);
+    expect(createManagerConversationPlan(cwd, {}).ctx.aiReviewPermissions).toBe(false);
+    saveProjectConfig(cwd, { provider: 'codex' });
+    expect(createManagerConversationPlan(cwd, {}).ctx.aiReviewPermissions).toBe(true);
+  });
+
   it.each([
     { supportsStructuredOutput: false, supportedMcpTransports: new Set(['stdio'] as const) },
     { supportsStructuredOutput: true, supportedMcpTransports: new Set(['http'] as const) },
@@ -334,7 +495,11 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
   });
 
-  it.each([false, true])('starts Codex manager with full permissions and user MCP (extra server: %s)', async (hasAmbientServer) => {
+  it.each([
+    { hasAmbientServer: false, permission: 'auto' }, { hasAmbientServer: true, permission: 'auto' },
+    { hasAmbientServer: false, permission: 'full' }, { hasAmbientServer: true, permission: 'full' },
+  ] as const)('starts Codex manager with $permission permissions and user MCP (extra server: $hasAmbientServer)', async ({ hasAmbientServer, permission }) => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { permission } });
     const codexHome = join(cwd, 'codex-home');
     mkdirSync(codexHome);
     const configPath = join(codexHome, 'config.toml');
@@ -365,66 +530,24 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(sdkOptions.config?.mcp_servers).toMatchObject({
         [TAKT_MANAGER_MCP_SERVER_NAME]: { url: 'http://127.0.0.1:12345/', http_headers: managerHeaders }, browser: { command: '/browser-mcp' },
       });
-      expect(codex.trust).toHaveBeenCalledOnce();
-      expect(sdkOptions.config?.features).toMatchObject({ hooks: true });
-      const definitions = (sdkOptions.config!.hooks as { PreToolUse: { matcher?: string; hooks: { command: string; timeout: number }[] }[] }).PreToolUse;
-      expect(definitions.length).toBe(1);
-      expect(definitions[0]!.hooks.length).toBe(1);
-      expect(definitions[0]!.hooks[0]!.command.trim().length).toBeGreaterThan(0);
-      const trustInput = codex.trust.mock.calls[0]![0];
-      expect(trustInput.definition.command === definitions[0]!.hooks[0]!.command).toBe(true);
-      expect(trustInput.definition.timeout).toBe(definitions[0]!.hooks[0]!.timeout);
-      expect(trustInput.definition.matcher).toBe(definitions[0]!.matcher);
-      expect(trustInput.executablePath).toBe(sdkOptions.codexPathOverride);
-      const stateOverrides = sdkOptions.configOverrides?.filter((override) => override.startsWith('hooks.state='));
-      expect(stateOverrides).toHaveLength(1);
-      expect(stateOverrides![0]).toContain('/<session-flags>/config.toml:pre_tool_use:0:0');
-      expect(stateOverrides![0]).toMatch(/"\/<session-flags>\/config\.toml:pre_tool_use:0:0"\s*=\s*\{\s*"?trusted_hash"?\s*=\s*"sha256:fixture-current"/u);
-      expect(sdkOptions.configOverrides?.some((override) => override.startsWith('hooks.state.'))).toBe(false);
+      expect(sdkOptions.config?.hooks).toBeUndefined();
       const manager = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>)[TAKT_MANAGER_MCP_SERVER_NAME]!;
-      expect(manager.tools).toEqual(Object.fromEntries(TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.tools).toEqual(Object.fromEntries([...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'].map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.tools).toHaveProperty('takt_ask_standalone_question', { approval_mode: 'approve' });
       expect(manager.default_tools_approval_mode).toBeUndefined();
       const browser = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>).browser!;
       expect(browser.tools).toBeUndefined();
       expect(browser.default_tools_approval_mode).toBeUndefined();
-      expect(codex.startThread.mock.calls[0]![0]).toMatchObject({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' });
-      expect(codex.startThread.mock.calls[0]![0].networkAccessEnabled).toBeUndefined();
+      expect(codex.startThread.mock.calls[0]![0]).toMatchObject(permission === 'auto'
+        ? { sandboxMode: 'workspace-write', approvalPolicy: 'on-request', networkAccessEnabled: true }
+        : { sandboxMode: 'danger-full-access', approvalPolicy: 'never' });
+      if (permission === 'full') expect(codex.startThread.mock.calls[0]![0].networkAccessEnabled).toBeUndefined();
+      expect(sdkOptions.config?.approvals_reviewer).toBe(permission === 'auto' ? 'auto_review' : undefined);
       expect(codex.startThread.mock.calls[0]![0].webSearchMode).toBeUndefined();
       expect(runCodexMcpList).not.toHaveBeenCalled();
     }
     expect(readFileSync(configPath, 'utf8')).toBe(config);
     expect(readFileSync(authPath, 'utf8')).toBe(auth);
-  });
-
-  it('returns a manager error without credentials when SDK stderr echoes the hook command', async () => {
-    const codexHome = join(cwd, 'codex-home');
-    mkdirSync(codexHome);
-    vi.stubEnv('CODEX_HOME', codexHome);
-    vi.stubEnv('TAKT_CODEX_CLI_PATH', process.execPath);
-    let command = '';
-    codex.constructor.mockImplementationOnce((options: CodexOptions) => {
-      const hooks = options.config!.hooks as { PreToolUse: { hooks: { command: string }[] }[] };
-      command = hooks.PreToolUse[0]!.hooks[0]!.command;
-    });
-    codex.startThread.mockReturnValue({ runStreamed: async () => {
-      throw new Error(`Codex Exec exited with code 1: fixture diagnostic ${command}`);
-    } });
-    const plan = createManagerConversationPlan(cwd, { provider: 'codex' });
-    const session = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: {} } });
-    const onNotification = vi.fn();
-    {
-      let failure: unknown;
-      try { await executeTurn(session, { text: '相談', onNotification }); } catch (error) { failure = error; }
-      expect(failure).toBeInstanceOf(Error);
-      const result = { message: (failure as Error).message };
-      expect('message' in result && result.message.includes('fixture diagnostic')).toBe(true);
-      expect(onNotification).not.toHaveBeenCalled();
-      for (const name of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
-        const secret = new RegExp(`${name}='([^']+)'`, 'u').exec(command)?.[1];
-        expect(secret !== undefined).toBe(true);
-        expect(JSON.stringify(result).includes(secret!)).toBe(false);
-      }
-    }
   });
 
   it.each(['claude', 'codex', 'opencode'] as const)('accepts %s manager conversations', (provider) => {
@@ -452,7 +575,10 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(optionsResolved?.codex).toMatchObject(expected);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('passes owned HTTP headers and the permission hook through the %s SDK adapter', async (provider) => {
+  it.each((['claude', 'claude-sdk'] as const).flatMap((provider) =>
+    (['auto', 'full'] as const).map((permission) => ({ provider, permission }))))(
+    'passes $permission permission and owned HTTP headers through the $provider SDK adapter', async ({ provider, permission }) => {
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { permission } });
     vi.mocked(callClaudeCustom).mockResolvedValue({
       persona: 'manager', status: 'done', timestamp: new Date(), content: JSON.stringify({ message: '確認', summary: null }),
     });
@@ -467,10 +593,15 @@ describe('manager conversation configuration and provider boundary', () => {
     {
       expect((await executeTurn(session, { text: '確認' }, assignment)).message).toBeTypeOf('string');
       const options = buildSdkOptions(vi.mocked(callClaudeCustom).mock.calls[0]![3]);
-      expect(options.permissionMode).toBe('bypassPermissions');
+      expect(options.permissionMode).toBe(permission === 'auto' ? 'auto' : 'bypassPermissions');
+      if (permission === 'auto') expect(options).not.toHaveProperty('allowDangerouslySkipPermissions');
+      else expect(options.allowDangerouslySkipPermissions).toBe(true);
       expect(options.mcpServers).toEqual(servers);
-      expect(options.hooks?.PreToolUse?.some(({ hooks }) => hooks.length > 0)).toBe(true);
-      expect(options.allowedTools).toBeUndefined();
+      expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
+      expect(options.allowedTools).toEqual([
+        ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+      ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
+      expect(options.tools).toBeUndefined();
     }
   });
 

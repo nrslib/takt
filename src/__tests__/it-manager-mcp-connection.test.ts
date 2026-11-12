@@ -8,7 +8,9 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
 import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { TurnToolScope } from '../features/daemonTurn/toolScope.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { MANAGER_ASSIGNMENT_HEADER, withManagerAssignment } from '../features/manager/assignment.js';
 import { readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
@@ -48,6 +50,43 @@ describe('manager MCP connection confirmation', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it('records every patrol entry as inspection and preserves ordinary work kinds on the same MCP connection', async () => {
+    const turnScope = new TurnToolScope();
+    let patrol = true;
+    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined,
+      { turnScope, conversationTurn: () => ({ patrol }) });
+    try {
+      for (const isPatrol of [true, false]) {
+        patrol = isPatrol;
+        turnScope.begin(new AbortController().signal);
+        for (const kind of [undefined, 'patrol'] as const) {
+          const result = await connection.client.callTool({ name: 'takt_record_goal_work_log', arguments: {
+            cwd, goalId, summary: 'inspection details', ...(kind === undefined ? {} : { kind }),
+          } });
+          expect(result.isError).not.toBe(true);
+        }
+        await turnScope.end();
+      }
+      expect((await store.get(goalId)).workLog.map((entry) => entry.kind)).toEqual(['patrol', 'patrol', undefined, 'patrol']);
+    } finally { await turnScope.end(); await connection.dispose(); }
+  });
+
+  it('passes the turn operation ID to goal notification deduplication', async () => {
+    const turnScope = new TurnToolScope();
+    turnScope.begin(new AbortController().signal, '650e8400-e29b-41d4-a716-446655440099');
+    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { turnScope });
+    try {
+      const input = { cwd, goalId, kind: 'custom', body: '再配信される通知', severity: 'info' };
+      const first = await connection.client.callTool({ name: 'takt_notify_goal', arguments: input });
+      const replayed = await connection.client.callTool({ name: 'takt_notify_goal', arguments: input });
+      expect(first.isError).not.toBe(true);
+      expect(replayed.isError).not.toBe(true);
+      expect((await store.get(goalId)).notifications).toHaveLength(1);
+      expect(JSON.parse(firstTextContent(replayed.content)).notificationId)
+        .toBe(JSON.parse(firstTextContent(first.content)).notificationId);
+    } finally { await turnScope.end(); await connection.dispose(); }
+  });
+
   const operations = [
     { name: 'takt_pause_goal', executionStatus: 'active', expected: 'paused' },
     { name: 'takt_resume_goal', executionStatus: 'paused', expected: 'active' },
@@ -67,7 +106,7 @@ describe('manager MCP connection confirmation', () => {
 
   it.each(operations)('executes $name over the owned HTTP server using the provider configuration', async ({ name, executionStatus, expected }) => {
     await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
-    const connection = await connectManagerMcp(cwd, undefined, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, undefined, undefined);
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const reader = new Client({ name: 'provider-manager-test', version: '1' });
@@ -132,7 +171,7 @@ describe('manager MCP connection confirmation', () => {
     initializeGitFixture(other, []);
     const otherStore = new GoalStore(other);
     await otherStore.create(goalRecord());
-    const connection = await connectManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, { kind: 'repository', repositoryDirectory: cwd }, undefined);
     const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
     if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
     const readers: { client: Client; transport: StreamableHTTPClientTransport }[] = [];
@@ -172,7 +211,7 @@ describe('manager MCP connection confirmation', () => {
 
   it('restores the assignment changed in the provider turn into the next turn HTTP configuration', async () => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
-    const connection = await connectManagerMcp(cwd, assignment, undefined, { enableGoalExecutionTools: true });
+    const connection = await connectTestManagerMcp(cwd, assignment, undefined);
     const other = join(cwd, '担当B');
     mkdirSync(other); initializeGitFixture(other, []);
     const observed: ManagerAssignmentIdentity[] = [];
@@ -200,15 +239,13 @@ describe('manager MCP connection confirmation', () => {
     const executor = createManagerTurnExecutor(cwd, {
       ctx: { provider, providerType: 'claude', lang: 'ja', model: undefined, mcpServers: connection.servers },
       strategy: { systemPrompt: 'manager fixture' },
-      permissionJudge: { resolution: { provider: 'mock', model: undefined, providerOptions: {} }, language: 'ja',
-        systemPrompt: 'judge fixture', managerPersona: 'manager fixture', managerPolicy: 'policy fixture' },
     });
     try {
       const input = { prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
         configDirectory: getGlobalConfigDir(), abortSignal: new AbortController().signal };
       const first = await executor.execute(input);
       expect(first.message).toBe('担当を更新しました');
-      expect(await executor.execute({ ...input, assignment: first.assignment, prompt: '担当を確認', instruction: '担当を確認' }))
+      expect(await executor.execute({ ...input, assignment: first.assignment, prompt: '担当を確認' }))
         .toMatchObject({ message: '担当を更新しました' });
       const workspace = (await readWorkspaceRegistry(getGlobalConfigDir()))[0]!;
       expect(observed).toEqual([assignment, { kind: 'workspace', workspaceId: workspace.id }]);

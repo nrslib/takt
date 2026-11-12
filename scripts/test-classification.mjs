@@ -11,6 +11,9 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-process.test.ts',
+  'src/__tests__/daemon-storage.integration.test.ts',
+  'src/__tests__/daemon-watch-goals.integration.test.ts',
+  'src/__tests__/daemon-turn-process.integration.test.ts',
   'src/__tests__/it-daemon-conversations.test.ts',
   'src/__tests__/it-conversation-goal-registration.test.ts',
   'src/__tests__/projectLocalTaktSync.test.ts',
@@ -149,8 +152,8 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/opencode-stream-handler.test.ts',
   'src/__tests__/otelFoundation.test.ts',
   'src/__tests__/parallel-runner-terminal-status.test.ts',
+  'src/__tests__/pending-inquiry-answers.test.ts',
   'src/__tests__/phase-runner-report-history.test.ts',
-  'src/__tests__/private-artifact-helper-error.test.ts',
   'src/__tests__/private-file-lock-acquisition.test.ts',
   'src/__tests__/private-file.test.ts',
   'src/__tests__/project-provider-profiles.test.ts',
@@ -287,8 +290,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/lstatIfExists.test.ts',
   'src/__tests__/managed-provider-retry-preflight.test.ts',
   'src/__tests__/managed-sdk-version-alignment.test.ts',
-  'src/__tests__/manager-read-scope.integration.test.ts',
-  'src/__tests__/manager-scoped-permission-storage.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',
   'src/__tests__/monitorJsonMetricExporter.test.ts',
@@ -357,6 +358,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tmpdir.test.ts',
   'src/__tests__/traceReport.test.ts',
   'src/__tests__/tui-live-intervention-status.test.tsx',
+  'src/__tests__/tui-managed-provider.test.ts',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
   'src/__tests__/web-ui-directory-browser.test.ts',
@@ -381,6 +383,9 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/daemon-dispatcher.integration.test.ts',
+  'src/__tests__/daemon-manager-patrol.integration.test.ts',
+  'src/__tests__/daemon-reachability.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 
@@ -389,9 +394,10 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
-  'src/__tests__/conversation-store.integration.test.ts',
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
+  'src/__tests__/daemon-retired-watch-events.integration.test.ts',
+  'src/__tests__/daemon-startup.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
@@ -413,7 +419,8 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-live-intervention-task-spec.test.ts',
   'src/__tests__/it-manager-compact-display.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
-  'src/__tests__/it-manager-patrol.test.ts',
+  'src/__tests__/it-manager-goal-specifications.test.ts',
+  'src/__tests__/it-manager-verification-interruption.test.ts',
   'src/__tests__/it-mcp-task-cleanup.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-opencode-v2-assistant-mcp.test.ts',
@@ -435,7 +442,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/manager-conversation-client.integration.test.ts',
   'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
   'src/__tests__/manager-conversation-service.integration.test.ts',
-  'src/__tests__/manager-tool-permission-inquiries.integration.test.ts',
+  'src/__tests__/manager-turn-failure-webhook.integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
   'src/__tests__/merge-pagination.integration.test.ts',
   'src/__tests__/merge-settings.integration.test.ts',
@@ -461,7 +468,11 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
-  'src/__tests__/caccia-published-pr.integration.test.ts',
+  'src/__tests__/daemon-wait-command.integration.test.ts',
+  'src/__tests__/workflow-resume-results.integration.test.ts',
+  'src/__tests__/it-cli-react-production.test.ts',
+  'src/__tests__/it-goal-task-pause-retry.test.ts',
+  'src/__tests__/it-daemon-worktree-run-log.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Measured slow suites dominate the serial light gate; CI shards this gate.
@@ -481,12 +492,16 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // Escape hatch for tests that must not run concurrently with the rest of the
 // IT slice. A 2026-08 audit found zero files with shared mutable state (all
 // use mkdtemp isolation under pool:'forks'), so membership is not about
-// correctness. The files below are fsync/spawnSync storms: their IO
-// serializes at the device level, so running them in the parallel pool only
-// adds contention and can block a worker synchronously past the 60s vitest
-// RPC timeout (spurious "Timeout calling onTaskUpdate" unhandled errors).
+// correctness. Their fsync/spawnSync-heavy workloads compete for CPU and IO
+// in the parallel pool, which can exceed hook deadlines or block a worker
+// synchronously past the 60s vitest RPC timeout (spurious "Timeout calling
+// onTaskUpdate" unhandled errors).
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
+  // 2026-11: On a loaded 10-CPU machine, the 4-worker heavy run exceeded
+  // the 10s beforeEach limit in synchronous Git fixture setup; the same suite
+  // passed alone with 1 worker. Isolate its init/commit/push/clone workload.
+  'src/__tests__/caccia-published-pr.integration.test.ts',
   'src/__tests__/companion-diff-runtime.integration.test.ts',
   'src/__tests__/it-list-filtered-delete.test.ts',
   // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+filesystem I/O の重量級になった(#1264 shard 飽和の主因)。

@@ -1,14 +1,14 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
-import { formatGoalQuestionNotification } from '../infra/goals/notifications.js';
+import { formatGoalNotification, formatGoalQuestionNotification, formatStandaloneQuestionNotification, managerTurnFailureNotification } from '../infra/goals/notifications.js';
 const doubles = vi.hoisted(() => ({ config: vi.fn(), language: vi.fn(), webhook: vi.fn(), send: vi.fn() }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
 vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
   ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
 }));
 vi.mock('../shared/utils/slackWebhook.js', () => ({ getSlackWebhookUrl: doubles.webhook, sendSlackNotification: doubles.send }));
-import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../features/manager/notifications.js';
+import { resolveManagerNotificationOptions, sendSavedGoalNotifications, sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -17,6 +17,50 @@ beforeEach(() => {
   doubles.language.mockReturnValue('ja');
 });
 const notice = { id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom' as const, body: 'saved notice', recordedAt: '2026-10-08T00:00:00Z' };
+
+it.each(['ja', 'en'] as const)('formats a standalone question with the same %s details and guidance as a goal question', (language) => {
+  const question: GoalQuestion = { id: notice.id, recipient: 'human', status: 'pending', body: 'Which output format?',
+    options: ['CSV', 'JSON', 'TSV', 'XML', 'YAML', 'Parquet'], recommendation: 'CSV'.repeat(100) };
+  const before = structuredClone(question);
+  const goal = { ...goalRecord(), questions: [question] };
+  const goalText = formatGoalNotification(goal, { kind: 'question', body: formatGoalQuestionNotification(question, language) }, language, 'project').split('\n');
+  const standaloneText = formatStandaloneQuestionNotification(question, language, 'project').split('\n');
+  expect(standaloneText[0]).toBe(language === 'ja' ? '質問があります — project' : 'Question — project');
+  expect(goalText[0]).toBe(language === 'ja'
+    ? `[project] 質問があります（ゴール: ${goal.objective}）`
+    : `[project] Question (Goal: ${goal.objective})`);
+  expect(standaloneText[1]).toBe(question.body);
+  expect(standaloneText.slice(1)).toEqual(goalText.slice(1));
+  expect(standaloneText.at(-1)).toBe(language === 'ja'
+    ? 'takt manager を開き、Ctrl+R で答えてください。'
+    : 'Open takt manager and press Ctrl+R to answer.');
+  expect(question).toEqual(before);
+});
+
+it('awaits standalone question delivery using the policy and language of its repository', async () => {
+  const question: GoalQuestion = { id: notice.id, recipient: 'human', status: 'pending', body: 'Which goal?' };
+  let delivered!: () => void;
+  const pending = new Promise<void>((resolve) => { delivered = resolve; });
+  doubles.send.mockReturnValue(pending);
+  const sending = sendSavedStandaloneQuestionNotification('/work/selected', question);
+  expect(doubles.config).toHaveBeenCalledExactlyOnceWith('/work/selected');
+  expect(doubles.language).toHaveBeenCalledExactlyOnceWith('/work/selected', 'language');
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', formatStandaloneQuestionNotification(question, 'ja', 'selected'));
+  const finished = vi.fn();
+  void sending.then(finished);
+  await Promise.resolve();
+  expect(finished).not.toHaveBeenCalled();
+  delivered();
+  await sending;
+  expect(finished).toHaveBeenCalledOnce();
+});
+
+it.each(['disabled', 'no webhook'] as const)('skips standalone notification delivery when %s', async (condition) => {
+  if (condition === 'disabled') doubles.config.mockReturnValue({ notifications: { ...policy, question: false }, mainMerge: 'approve' });
+  else doubles.webhook.mockReturnValue(undefined);
+  await sendSavedStandaloneQuestionNotification('/project', { id: notice.id, recipient: 'human', status: 'pending', body: 'Which goal?' });
+  expect(doubles.send).not.toHaveBeenCalled();
+});
 
 it('resolves notification switches and webhook once at the operation boundary', () => {
   expect(resolveManagerNotificationOptions('/project')).toEqual({ policy, mainMerge: 'approve', webhookUrl: 'https://example.test/secret' });
@@ -36,6 +80,41 @@ it('skips Slack delivery with no webhook while retaining saved notifications', a
   expect(doubles.send).not.toHaveBeenCalled();
 });
 
+it.each([
+  { kind: 'blocked' as const, severity: 'error' as const },
+  { kind: 'blocked' as const, severity: 'warning' as const },
+  { kind: 'blocked' as const, severity: undefined },
+  { kind: 'custom' as const, severity: 'error' as const },
+])('preserves mention syntax for non-failure $kind notifications (severity=$severity)', async ({ kind, severity }) => {
+  const body = '<@U012AB3CD> <!channel> <https://example.test|details>';
+  const current = { ...goalRecord(), notifications: [{ ...notice, kind, severity, body }] };
+
+  await sendSavedGoalNotifications('/project', goalRecord(), current, 'https://example.test/secret');
+
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret', expect.stringContaining(body));
+});
+
+it.each(['ja', 'en'] as const)('escapes only the %s turn failure webhook after a locale change while preserving the saved body and TUI text', async (language) => {
+  doubles.language.mockReturnValue(language);
+  const reason = 'failed <@U012AB3CD> <!channel> <https://example.test|details>';
+  const previous = goalRecord();
+  const storedLanguage = language === 'ja' ? 'en' : 'ja';
+  const failure = { ...notice, ...managerTurnFailureNotification(previous.id, new Error(reason), storedLanguage) };
+  const current = { ...previous, notifications: [failure] };
+  const before = structuredClone(current);
+  const tuiText = formatGoalNotification(current, failure, language, 'project', 'tui');
+
+  await sendSavedGoalNotifications('/project', previous, current, 'https://example.test/secret');
+
+  expect(doubles.send).toHaveBeenCalledExactlyOnceWith('https://example.test/secret',
+    formatGoalNotification(current, failure, language, 'project').replace(/<(?=[@!])/gu, '&lt;'));
+  expect(doubles.send.mock.calls[0]![1]).toContain('failed &lt;@U012AB3CD> &lt;!channel> <https://example.test|details>');
+  expect(current).toEqual(before);
+  expect(failure.body).toContain(reason);
+  expect(formatGoalNotification(current, failure, language, 'project', 'tui')).toBe(tuiText);
+  expect(tuiText).toContain(reason);
+});
+
 it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspace name resolved from cwd', async (language) => {
   doubles.language.mockReturnValue(language);
   const current = { ...goalRecord(), notifications: [notice] };
@@ -47,8 +126,8 @@ it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspac
   const lines = text.split('\n');
   expect(lines[0]).toContain('customer-workspace');
   expect(lines[0]).toMatch(language === 'ja' ? /お知らせ|通知/u : /notification|update/iu);
-  expect(lines[1]).toContain(current.id.slice(0, 8));
-  expect(lines[1]).not.toContain(current.id);
+  expect(lines[0]).toContain(current.objective);
+  expect(text).not.toContain(current.id.slice(0, 8));
   expect(lines).toContain(notice.body);
   expect(current).toEqual(before);
 });
@@ -63,15 +142,13 @@ it('delivers the saved human question with localized details and its ID-free ans
   const text = doubles.send.mock.calls[0]![1] as string;
   expect(text.split('\n')[0]).toContain('customer-export');
   expect(text).toContain(question.body);
-  expect(text).toMatch(/選択肢:\s*CSV.*JSON/u);
-  expect(text).toMatch(/推奨:\s*CSV/u);
+  expect(text.split('\n')).toContain('1. CSV（推奨）');
+  expect(text.split('\n')).toContain('2. JSON');
   const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
   expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
   expect(guidance[0]).not.toContain(question.id);
-  expect(guidance[0]).toMatch(/一覧|選択/u);
   expect(text).toContain('takt manager');
-  expect(text).toContain('TUI');
   expect(text).not.toMatch(/Options:|Recommendation:/u);
 });
 
@@ -91,17 +168,16 @@ it.each([
   await sendSavedGoalNotifications('/work/customer-export', goalRecord(), current, 'https://example.test/secret');
   expect(doubles.send).toHaveBeenCalledOnce();
   const lines = (doubles.send.mock.calls[0]![1] as string).split('\n');
-  expect(lines[3]).toBe((language === 'ja' ? '選択肢: ' : 'Options: ') + question.options!.slice(0, 5).join(', '));
-  expect(lines[4]).toBe(language === 'ja'
+  expect(lines.slice(2, 7)).toEqual(question.options!.slice(0, 5).map((option, index) => `${index + 1}. ${option}`));
+  expect(lines[7]).toBe(language === 'ja'
     ? 'ほかに1件の選択肢があります。すべての選択肢はTUIで確認できます。'
     : 'Additional options: 1. View all options in the TUI.');
-  expect(lines[4]).toContain('TUI');
+  expect(lines[7]).toContain('TUI');
   const guidance = lines.filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(status === 'pending' ? 1 : 0);
   if (status === 'pending') {
     expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
     expect(guidance[0]).not.toContain(question.id);
-    expect(guidance[0]).toMatch(language === 'ja' ? /一覧|選択/u : /list|select|choose/iu);
   }
   expect(current).toEqual(before);
 });
@@ -125,11 +201,11 @@ it.each([
   expect(current).toEqual(before);
   const lines = text.split('\n');
   expect(lines[0]).toContain('customer-export');
-  expect(lines.slice(2, 4).join('\n')).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
-  const guidance = lines.slice(4).join('\n');
-  expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
+  expect(lines.slice(1, 3).join('\n')).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
+  const guidance = lines.slice(3).join('\n');
+  if (kind === 'custom') expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
   expect(guidance).not.toMatch(/Ctrl\+N|\^N/u);
-  expect(guidance).toContain('TUI');
+  if (kind === 'custom') expect(guidance).toContain('TUI');
   expect(guidance).toContain('takt manager');
-  expect(guidance).toContain('customer-export');
+  if (kind === 'custom') expect(guidance).toContain('customer-export');
 });

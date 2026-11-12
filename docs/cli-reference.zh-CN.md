@@ -88,33 +88,32 @@ takt director --help
 
 `takt director` 打开与 director 对话的 TUI。对话由 daemon 持有并执行；关闭并重新打开 TUI 后，会继续同一个对话。从任何负责的仓库启动，都会连接到该 daemon 共享的同一个对话。重新打开时不会重新显示之前的发言和回复，对话历史由 provider 的会话管理。
 
-director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话会产生 provider 费用；定期巡检也会调用 provider 并产生费用。
+director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话会产生 provider 费用；事件处理也会调用 provider 并产生费用。
 
 ### 与 manager 的分工和人工决定
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，对需要人工处理的事项保存通知，包括等待合并、已暂停的目标、已保存的 `blocked` 通知和未回答的询问。向 manager 提问或传达信息时，通过 manager 对话发送，并将 `director` 记录为发言者。同一对象的保存状态不变时，不会重复通知。
 
-`takt_tell_manager` 会将消息以“等待执行”的状态保存到 manager 的对话记录中，即使 manager 正忙也会接受。保存后立即返回操作 ID 和 manager，无需等待回复。每个 manager 的对话轮次和收件箱事件共用一个执行名额。当前处理结束后，等待的消息按保存顺序、优先于收件箱事件，以 `director` 为发言者各执行一次。人从 TUI 或 Slack 发送的消息也使用同一个持久队列，与 director 的消息按共同的保存顺序处理。
+`takt_tell_manager` 将 director_message 提交给 daemon 中心，即使 manager 正在处理其他轮次也可接受。持久化后立即返回操作 ID 和 manager，无需等待回复。daemon 有人工输入与其他事件两条队列，人工输入优先，director 消息进入其他事件队列；每条队列按接受顺序执行。人工输入与事件共用一个对话和 provider 会话。失败只在人明确要求时重试。
 
 回复、失败和中断结果会以同一操作 ID 保存，稍后在 director 界面中通知。如果消息保存失败，工具会返回失败，不会接受该消息。接受后即使连接中断，已保存的消息仍会保留，director 不会自动重发。
 
-daemon 重启后，尚未开始的消息即使没有客户端连接也会执行。已经开始但在结果保存前停止的消息，会向 director 和人报告为中断，不会自动重新执行。
+daemon 重启后，尚未开始的消息即使没有客户端连接也会执行。因 daemon 停止而中断的传言，以及启动时仍为 `running` 的传言，会按原始接收顺序重新投递。用户明确中断的传言不会重新投递。
 
 director 不能执行 shell 命令、写入文件或修改配置。run 阶段、裁定、日志等任务内部信息由各 manager 检查。合并决策、规格决策以及删除等不可逆操作仍由人决定；director 不代替人回答询问。
 
 只有人明确指示“合并目标 G”时，director 才会请 G 的 manager 使用 `takt merge` 合并其 PR。转发前，director 会唯一确定仓库、目标和 manager，确认当前目标为 `awaiting_merge`，并读取已保存的 PR 编号和 URL。如果对象不明确、状态不同、没有保存 PR 或读取失败，会向人说明原因而不转发。director 自己不执行合并；manager 通过 `takt_merge_goal_pr` 调用 `takt merge`。转发或接受指令本身不代表合并成功；director 会根据稍后收到的同一操作 ID 的结果报告成败。执行时仍会通过现有检查：如果目标已暂停、已中止、不再是 `awaiting_merge`，或 PR 编号与保存的编号不符，则不会合并。
 
-manager 列表（`takt_list_managers`）和巡检按 project 分别读取。无法读取的 project（例如不是 Git 仓库的目录）会连同原因一起说明，并返回其余 manager、继续巡检。单个 project 的读取失败不会导致整个列表或巡检失败。
+manager 列表（`takt_list_managers`）和状态确认按 project 分别读取。无法读取的 project（例如不是 Git 仓库的目录）会连同原因一起说明，并返回其余 manager、继续状态确认。单个 project 的读取失败不会导致整个列表或状态确认失败。
 
-### 巡检配置
+### 事件与通知
 
-daemon 运行期间，director 会定期检查已注册的 repository manager 和 workspace manager。巡检独立于人的对话运行，不会被视为人的合并指令。daemon 原有的空闲退出行为不变。
+daemon 使用异步代码监测状态变化和异常，仅在发现变化或异常时产生事件，不按时钟调用模型。人工输入优先于其他事件；事件与人工输入共用同一个对话。失败只在人明确要求时重试。事件不代表人的合并指令。
 
 在全局 `~/.takt/config.yaml` 中设置 director，不要写入项目的 `.takt/config.yaml`：
 
 | 配置项 | 含义 |
 |--------|------|
-| `director.patrol_interval` | 巡检间隔，单位为秒，必须是正整数，默认 `900`（15 分钟）。 |
 | `director.slack.channel_id` | 用于 director 对话和汇总通知的 Slack 频道。 |
 | `director.slack.allowed_user_ids` | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
 
@@ -124,7 +123,7 @@ daemon 运行期间，director 会定期检查已注册的 repository manager �
 
 使用与 manager 相同的 Slack App 和环境变量 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`。将机器人邀请到 director 频道，在启动 `takt daemon` 的 shell 中设置这两个变量，并在修改 Slack 配置后重新启动 daemon。令牌通过环境变量传递，不写入配置文件。
 
-获准用户的发言进入同一个 director 对话，回复发送到原消息列。一次对话或巡检中新产生的通知会汇总为频道中的一条消息。未配置 `director.slack` 时，director 不会通过 Slack 发送或接收消息。App 的创建和连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)。
+获准用户的发言进入同一个 director 对话，回复发送到原消息列。一次对话或状态确认中新产生的通知会汇总为频道中的一条消息。未配置 `director.slack` 时，director 不会通过 Slack 发送或接收消息。App 的创建和连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)。
 
 ## 交互模式
 
@@ -692,9 +691,9 @@ takt purge --retention-days 14
 
 所有候选均返回有效的结构化判断后，显示选中的 PR 编号及理由和排除的 PR 编号，无需确认即可执行选中的 PR workflow。判断缺失或无效、提供商错误、材料获取失败或文件列表不完整时，不启动任何 PR workflow，并以非零退出码结束。候选或选中结果为空时，处理数和合并数均为 0，退出码为 0。处理数和实际合并数的显示保持原有含义。
 
-默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
-`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功和 CI timeout 行为不变，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功的行为不变，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
 
 GitLab 支持指定 MR 编号和批量选择。Caccia 返回原因是 `github_unavailable` 的 `skipped`，然后 workflow 等待返回 head 的 CI。合并方式和 head 限制仍不受支持，使用这些参数的合并操作会失败。仅完成 CI 等待不计为合并成功。
 

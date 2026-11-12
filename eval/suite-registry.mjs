@@ -19,7 +19,7 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を日英17ケースで測る（Python データ処理と Web アプリを含む）',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を86ケース・日英172入力（再生82ケース・164入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
     suites: ['manager-work-split'],
   },
   {
@@ -266,7 +266,7 @@ const EXECUTION_OVERRIDES = {
   },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で86ケース・日英172入力（再生82ケース・164入力、SDK実行4ケース・8入力）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・権限審査拒否後の判断を比較する明示選択の評価',
   },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -546,7 +546,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: 'キャッシュなしの3モデル反復を行う production-condition suite である',
+    reason: '既存ケースと修正方式6種の日英・両フェーズ（25ケース）を3モデル・3反復で比較する',
   },
   'fix-plan-impact-closure-primary': {
     defaultEligible: false,
@@ -624,7 +624,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+    reason: '既存3ケースと修正方式6種の日英・両フェーズ（27ケース）を3モデルで比較する',
   },
   'review-adjudication-report': {
     defaultEligible: false,
@@ -719,6 +719,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'review-adjudication': ['review-adjudication', 'repair-strategy'],
+  'fix-plan-bounded-proof': ['fix-plan-bounded-proof', 'repair-strategy'],
   'adjudicator-no-fix': ADJUDICATOR_TARGETS,
   ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
     ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>

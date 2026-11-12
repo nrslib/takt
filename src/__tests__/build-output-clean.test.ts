@@ -135,6 +135,7 @@ describe('build output cleanup', () => {
       encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
     }).split('\n');
     expect(archiveEntries).not.toContain(`package/${staleArtifact}`);
+    expect(archiveEntries.some((entry) => /^package\/managed\/[^/]+\/node_modules\//u.test(entry))).toBe(false);
     // Verify actual archive contents without extracting unrelated bundled peers.
     const requiredAssets = [
       'package/dist/index.js',

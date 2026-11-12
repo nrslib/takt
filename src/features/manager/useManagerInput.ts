@@ -11,13 +11,14 @@ import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelectio
 export const MAKE_GOAL_COMMAND = '/make-goal';
 
 export function useManagerInput({
-  exiting, active, registering, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
+  exiting, active, registering, savingAnswer, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
   openMenu, slashCompletion,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
   registering: RefObject<boolean>;
+  savingAnswer: RefObject<{ operationId: string | null } | null>;
   editorRef: RefObject<EditorState>;
   edit: (next: EditorState) => void;
   submit: (text: string) => void;
@@ -44,14 +45,14 @@ export function useManagerInput({
     if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
       && next.text !== editorRef.current.text
-      && !(next.text.trim() !== '' && MAKE_GOAL_COMMAND.startsWith(next.text.trim()))) {
+      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify'].some((command) => command.startsWith(next.text.trim())))) {
       summaryApproval.dismiss(pending);
     }
     edit(next);
     slashCompletion.reset();
   };
   const insertText = (text: string): void => {
-    if (exiting.current || (answerTarget !== null && active.current)) return;
+    if (exiting.current || savingAnswer.current) return;
     if (selection.selection !== null) return;
     if (abortTarget !== null) { onInputUnavailable(); return; }
     if (answerTarget !== null) questionAnswer.switchToFreeText();
@@ -65,6 +66,7 @@ export function useManagerInput({
       onExit();
       return;
     }
+    if (savingAnswer.current) return;
     if (key.ctrl && (input === 'r' || input === 'g')) {
       openMenu(input === 'r' ? 'answer' : 'goal');
       return;
@@ -84,8 +86,7 @@ export function useManagerInput({
     if (registering.current && key.escape) {
       return;
     }
-    if (answerTarget !== null && active.current) return;
-    if (!registering.current && !active.current && abortTarget !== null) {
+    if (abortTarget !== null) {
       if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
       return;
@@ -100,8 +101,8 @@ export function useManagerInput({
       && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
     if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
     const submitInput = key.return || trailingEnter;
-    if (!registering.current && !active.current && answerTarget !== null) {
-      if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
+    if (answerTarget !== null) {
+      if (questionAnswer.handleInput(key, submitInput, editorRef, saveAnswer)) return;
     }
     if (!registering.current && canApprove && answerTarget === null && pending !== null
       && (key.escape || (editorRef.current.text === ''

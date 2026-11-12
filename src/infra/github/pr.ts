@@ -6,7 +6,7 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import { z } from 'zod';
-import { PrHeadObservationMismatchError } from '../../core/workflow/system/pr-execution-context.js';
+import { PrHeadObservationMismatchError, type PrDetails } from '../../core/workflow/system/pr-execution-context.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
@@ -113,6 +113,8 @@ export interface CodeRabbitReviewStatus {
 
 export interface CacciaPullRequestDetails {
   number: number;
+  title: string;
+  body: string;
   headBranch: string;
   headSha: string;
   headRepositoryUrl: string;
@@ -442,6 +444,8 @@ query($owner:String!, $repo:String!, $number:Int!) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
       number
+      title
+      body
       headRefName
       headRefOid
       headRepository {
@@ -1567,6 +1571,8 @@ export async function fetchCacciaPullRequestDetails(
       repository?: {
         pullRequest?: {
           number: number;
+          title: string;
+          body: string;
           headRefName: string;
           headRefOid: string;
           headRepository: { sshUrl: string } | null;
@@ -1585,6 +1591,9 @@ export async function fetchCacciaPullRequestDetails(
   if (pullRequest.headRefOid !== locator.headSha) {
     throw new PrHeadObservationMismatchError(prNumber, locator.headSha, pullRequest.headRefOid);
   }
+  if (typeof pullRequest.title !== 'string' || typeof pullRequest.body !== 'string') {
+    throw new Error(`Missing pull request title or body for pull request #${prNumber}`);
+  }
   const headRepositorySshUrl = pullRequest.headRepository.sshUrl;
   const originUrl = await readCacciaOriginUrlOutput(cwd, 'fetch', signal);
   const headRepositoryUrl = resolveCacciaHeadRepositoryUrl(
@@ -1596,6 +1605,8 @@ export async function fetchCacciaPullRequestDetails(
   ));
   return {
     number: pullRequest.number,
+    title: pullRequest.title,
+    body: pullRequest.body,
     headBranch: pullRequest.headRefName,
     headSha: pullRequest.headRefOid,
     headRepositoryUrl,
@@ -1603,7 +1614,7 @@ export async function fetchCacciaPullRequestDetails(
   };
 }
 
-export async function fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal, target?: GitHubPullRequestTarget) {
+export async function fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal, target?: GitHubPullRequestTarget): Promise<PrDetails> {
   const head = await fetchCacciaPullRequestDetails(prNumber, cwd, signal, target);
   const raw = await runGhCommand(['pr', 'view', target?.url ?? String(prNumber), '--json',
     target === undefined ? 'baseRefName,isCrossRepository' : 'url,baseRefName,isCrossRepository'], cwd, undefined, signal);
@@ -1750,14 +1761,15 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
   }
 }
 
-export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string, target?: GitHubPullRequestTarget): MergeResult {
+export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string, target?: GitHubPullRequestTarget, options?: { deleteBranch: boolean }): MergeResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'merge', target?.url ?? String(prNumber), `--${method}`, '--delete-branch',
+    execFileSync('gh', ['pr', 'merge', target?.url ?? String(prNumber), `--${method}`,
+      ...(options?.deleteBranch === false ? [] : ['--delete-branch']),
       ...(expectedHeadSha === undefined ? [] : ['--match-head-commit', expectedHeadSha])], {
       cwd,
       encoding: 'utf-8',

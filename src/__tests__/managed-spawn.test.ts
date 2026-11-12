@@ -10,7 +10,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { spawnManagedProcess } from '../shared/utils/spawn.js';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { spawnManagedProcess, terminateManagedProcesses } from '../shared/utils/spawn.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -260,7 +262,7 @@ describe('spawnManagedProcess', () => {
   });
 
   it.runIf(process.platform !== 'win32')(
-    'should invoke Windows taskkill after the leader has already exited',
+    'should tolerate failed Windows taskkill after the leader has already exited',
     async () => {
       const directory = mkdtempSync(join(tmpdir(), 'takt-managed-spawn-taskkill-after-exit-'));
       temporaryDirectories.push(directory);
@@ -275,7 +277,7 @@ describe('spawnManagedProcess', () => {
         'const { writeFileSync } = require("node:fs");',
         'const pidIndex = process.argv.indexOf("/pid");',
         'writeFileSync(process.env.TAKT_TASKKILL_STATE, JSON.stringify({ targetPid: Number(process.argv[pidIndex + 1]) }));',
-        'process.exit(0);',
+        'process.exit(128);',
         '',
       ].join('\n'));
       chmodSync(taskkillPath, 0o755);
@@ -322,9 +324,6 @@ describe('spawnManagedProcess', () => {
       `#!${process.execPath}`,
       'const pidIndex = process.argv.indexOf("/pid");',
       'const targetPid = Number(process.argv[pidIndex + 1]);',
-      'try { process.kill(targetPid, "SIGKILL"); } catch (error) {',
-      '  if (error.code !== "ESRCH") throw error;',
-      '}',
       exitScript,
       '',
     ].join('\n'));
@@ -345,9 +344,22 @@ describe('spawnManagedProcess', () => {
       await expect(managed.terminate())
         .rejects.toThrow(`taskkill for process ${targetPid} exited with ${expectedExit}`);
     } finally {
+      process.kill(targetPid, 'SIGKILL');
+      await managed.waitForExit();
       Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
       if (originalSystemRoot === undefined) delete process.env.SystemRoot;
       else process.env.SystemRoot = originalSystemRoot;
     }
   });
+});
+
+it('cleans up managed providers while leaving independently spawned runs alive', async () => {
+  const provider = spawnManagedProcess(process.execPath, ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'ignore'] }, undefined);
+  const run = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  try {
+    await once(provider.child.stdout!, 'data');
+    await terminateManagedProcesses();
+    expect(isProcessRunning(provider.child.pid!)).toBe(false);
+    expect(isProcessRunning(run.pid!)).toBe(true);
+  } finally { run.kill('SIGKILL'); await once(run, 'exit'); await provider.terminate(); }
 });

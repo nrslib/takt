@@ -12,6 +12,9 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { basename } from 'node:path';
 import { formatGoalNotification } from '../infra/goals/notifications.js';
+import { conversationProjection } from '../features/daemon/conversationProjection.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { DaemonDisplayFiles } from '../infra/daemon/displayFiles.js';
 let directory: string;
 let repository: string;
 function assignment() { return { kind: 'repository' as const, repositoryDirectory: repository, repositoryDirectories: [repository] }; }
@@ -22,6 +25,30 @@ function save(goal: Goal) {
 async function collect<T>(source: AsyncIterable<T>) { const values: T[] = []; for await (const value of source) values.push(value); return values; }
 beforeEach(() => { directory = getGlobalConfigDir(); repository = join(directory, 'repository'); mkdirSync(repository); });
 afterEach(() => vi.restoreAllMocks());
+
+it('reports corrupt tasks while projecting goals and inquiries with awaiting-merge goals treated as human waits', async () => {
+  const active = { ...goalRecord(), questions: [createInquiry({ body: 'Goal question' })] };
+  const waiting: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440000', status: 'awaiting_merge', completion: {
+    goalBranch: active.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'verified', instructions: [],
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  save(active); save(waiting);
+  const standalone = await new StandaloneInquiryStore(directory, assignment()).create({ body: 'Standalone question' });
+  const tasksPath = join(repository, '.takt', 'tasks.yaml');
+  writeFileSync(tasksPath, 'tasks: [');
+
+  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment(), () => false));
+
+  expect(items.filter((item) => item.kind === 'goal')).toEqual([active, waiting].map((goal) => ({ kind: 'goal', goal: {
+    id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
+    repositoryDirectory: repository, awaitingHumanMerge: goal.id === waiting.id,
+  } })));
+  expect(items.filter((item) => item.kind === 'inquiry').map((item) => item.inquiry.question.id).sort())
+    .toEqual([active.questions[0]!.id, standalone.id].sort());
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual([{ kind: 'display_event', event: {
+    id: JSON.stringify(['diagnostic', tasksPath]), message: expect.stringContaining(tasksPath),
+  } }]);
+});
 
 it('reads only the demanded goal payload and reports corruption discovered before the next pull', async () => {
   const first = goalRecord(); const second = { ...first, id: '650e8400-e29b-41d4-a716-446655440000' };
@@ -56,7 +83,7 @@ it('retains inquiry ordering and full values without either goal or standalone a
   expect(list).not.toHaveBeenCalled(); expect(standalone).not.toHaveBeenCalled();
 });
 
-it('projects work logs and notifications sequentially with the existing IDs, formatting and startup exclusion', async () => {
+it('projects notifications sequentially with the existing IDs, formatting and startup exclusion while hiding work logs', async () => {
   const boundary = Date.parse('2026-10-24T00:00:01.000Z');
   const goal = { ...goalRecord(), workLog: [{ id: '650e8400-e29b-41d4-a716-446655440001',
     summary: 'old work', recordedAt: '2026-10-24T00:00:00.000Z' }], notifications: [{
@@ -64,16 +91,16 @@ it('projects work logs and notifications sequentially with the existing IDs, for
     body: 'current notice', recordedAt: '2026-10-24T00:00:02.000Z',
   }] };
   save(goal);
-  const boundaries = new Map([[repository, boundary]]);
   const expected = [
     { id: JSON.stringify([repository, goal.id, 'notification', goal.notifications[0]!.id]),
       message: formatGoalNotification(goal, goal.notifications[0]!, 'en', basename(repository), 'tui') },
   ];
   const list = vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(new Error('forbidden array read'));
-  expect(await collect(iterateTestDisplayEvents(assignment(), 'en', boundaries, boundary))).toEqual(expected);
+  expect(await collect(iterateTestDisplayEvents(assignment(), 'en', boundary))).toEqual(expected);
   expect(list).not.toHaveBeenCalled();
-  const addedRepository = await collect(iterateTestDisplayEvents(assignment(), 'en', new Map(), boundary));
-  expect(addedRepository[0]).toEqual({ id: JSON.stringify([repository, goal.id, 'work-log', goal.workLog[0]!.id]), message: goal.id + ': old work' });
+  const unbounded = await collect(iterateTestDisplayEvents(assignment(), 'en', -Infinity));
+  expect(unbounded).toEqual(expected);
+  expect(await new GoalStore(repository).get(goal.id)).toEqual(goal);
 });
 
 it('reads each goal once when independently ordering multiple inquiries or display events', async () => {
@@ -84,7 +111,7 @@ it('reads each goal once when independently ordering multiple inquiries or displ
   }));
   for (const goal of goals) save(goal);
   const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
-  for (const source of [iteratePendingInquiries(directory, assignment()), iterateTestDisplayEvents(assignment(), 'en', new Map(), -Infinity)]) {
+  for (const source of [iteratePendingInquiries(directory, assignment()), iterateTestDisplayEvents(assignment(), 'en', -Infinity)]) {
     reads.mockClear();
     const items = await collect<unknown>(source);
     expect(items).toHaveLength(8);

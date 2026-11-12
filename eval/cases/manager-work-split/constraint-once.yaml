@@ -5,14 +5,14 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a4
+  goal:
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 管理 APIのログとページングを改善する
     outOfScope:
       - 本番への公開と外部サービスの追加
-    acceptanceCriteria: &a2
+    acceptanceCriteria:
       - ping のログに requestIdを追加し、利用者 API が次のページを返す
-    constraints: &a3
+    constraints:
       - "作業の制約: 作業の途中は対象のテストファイルだけを npx vitest run --config <分類に合った config> <ファイル> で直接流す。型チェック（npm run test:types）・npm run build・npm run lint はゴール全体の最後にまとめて1回。最後に追加・変更したテストを個別に流す。heavy IT 全体（npm run test:it:heavy）と E2E 全体は流さない。"
     mode: local
     status: created
@@ -55,14 +55,30 @@ ja:
       completion: *a1
       goalWorkKey: foundation
       goalPurpose: 保存と読み込みの土台を用意する
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/foundation
+      summary: 保存と読み込みの土台を用意する
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/foundation
+      ownerStartTime: null
+      ownerPid: null
+      slug: foundation
+      executionId: 650e8400-e29b-41d4-a716-446655440204
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 管理 APIのログとページングを改善する
-        acceptanceCriteria: *a2
-        constraints: *a3
+        acceptanceCriteria: &a2
+          - ping のログに requestIdを追加し、利用者 API が次のページを返す
+        constraints: &a3
+          - "作業の制約: 作業の途中は対象のテストファイルだけを npx vitest run --config <分類に合った config> <ファイル> で直接流す。型チェック（npm run test:types）・npm run build・npm run lint はゴール全体の最後にまとめて1回。最後に追加・変更したテストを個別に流す。heavy IT 全体（npm run test:it:heavy）と E2E 全体は流さない。"
         work:
           - workKey: ping-log
             purpose: ping のログに requestIdを追加する
@@ -78,19 +94,117 @@ ja:
         runSlug: run-foundation
       result:
         runSlug: run-foundation
-        task: 保存と読み込みの土台を用意する
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 45
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: 保存と読み込みを実装し、対象のテストは通った。成果を確認して取り込み済み。
+            sizeBytes: 111
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+        view: task
+      result:
+        runSlug: run-foundation
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: 保存と読み込みの土台を用意する
+          totalBytes: 45
+          offset: 0
+          returnedBytes: 45
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-foundation
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 45
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: 保存と読み込みを実装し、対象のテストは通った。成果を確認して取り込み済み。
+          totalBytes: 111
+          offset: 0
+          returnedBytes: 111
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_goal
       arguments:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a4
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          objective: 管理 APIのログとページングを改善する
+          outOfScope:
+            - 本番への公開と外部サービスの追加
+          acceptanceCriteria: *a2
+          constraints: *a3
+          mode: local
+          status: created
+          executionStatus: active
+          acceptanceCriteriaVersion: 1
+          branch: takt/goal/catalog
+          startBranch: main
+          integrationBranch: main
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-446655440010
+              recordedAt: 2026-10-10T23:01:00Z
+              summary: |-
+                ping-log: ping のログに requestIdを追加する
+                users-paging: 利用者 API のカーソルによるページングを追加する
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:10:00Z
+              summary: "foundation を takt/goal/catalog に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。保存と読み込みの土台を用意する"
+          questions: []
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -109,6 +223,30 @@ ja:
         workflows:
           - name: default
             description: 作業の調査、実装、レビューと確認
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: 保存と読み込みの土台を用意する
+        workflow: default
+        runSlug: run-foundation
+        runRoot: .takt/runs/run-foundation
+        reportDirectory: .takt/runs/run-foundation/reports
+        contextDirectory: .takt/runs/run-foundation/context
+        logsDirectory: .takt/runs/run-foundation/logs
+        status: completed
+        startTime: 2026-10-11T00:00:00Z
+        endTime: 2026-10-11T00:09:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: 保存と読み込みの土台を用意する
+          workflowName: default
+          startTime: 2026-10-11T00:00:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:09:00.000Z
+      reports:
+        - filename: implementation.md
+          content: 保存と読み込みを実装し、対象のテストは通った。成果を確認して取り込み済み。
 en:
   lang: en
   turn: event
@@ -116,14 +254,14 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a8
+  goal:
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Improve administration API logging and pagination
     outOfScope:
       - Production publishing and adding external services
-    acceptanceCriteria: &a6
+    acceptanceCriteria:
       - Add requestId to ping logs and return users API next pages
-    constraints: &a7
+    constraints:
       - "Work constraint: During work, directly run only the targeted test files with npx vitest run --config <matching config> <file>. Run type checking (npm run test:types), npm run build and npm run lint together once at the end of the whole goal. Then run added or changed tests individually. Do not run the full heavy IT suite (npm run test:it:heavy) or the full E2E suite."
     mode: local
     status: created
@@ -146,7 +284,7 @@ en:
     kind: completion
     taskName: foundation
     runSlug: run-foundation
-    result: &a5
+    result: &a1
       success: true
       interrupted: false
       branch: takt/task/foundation
@@ -163,17 +301,33 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a5
+      completion: *a1
       goalWorkKey: foundation
       goalPurpose: Provide the storage and loading foundation
+      goalIntegration: integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/foundation
+      summary: Provide the storage and loading foundation
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/catalog
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/foundation
+      ownerStartTime: null
+      ownerPid: null
+      slug: foundation
+      executionId: 650e8400-e29b-41d4-a716-446655440204
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Improve administration API logging and pagination
-        acceptanceCriteria: *a6
-        constraints: *a7
+        acceptanceCriteria: &a2
+          - Add requestId to ping logs and return users API next pages
+        constraints: &a3
+          - "Work constraint: During work, directly run only the targeted test files with npx vitest run --config <matching config> <file>. Run type checking (npm run test:types), npm run build and npm run lint together once at the end of the whole goal. Then run added or changed tests individually. Do not run the full heavy IT suite (npm run test:it:heavy) or the full E2E suite."
         work:
           - workKey: ping-log
             purpose: Add requestId to ping logs
@@ -189,19 +343,117 @@ en:
         runSlug: run-foundation
       result:
         runSlug: run-foundation
-        task: Provide the storage and loading foundation
         workflow: default
         status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 42
+          returnedBytes: 0
+          truncated: true
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: Implemented storage and loading; targeted tests passed. Result reviewed and integrated.
+            sizeBytes: 87
+        stepLogPage:
+          collection: stepLogs
+          totalCount: 0
+          returnedCount: 0
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        reportPage:
+          collection: reports
+          totalCount: 1
+          returnedCount: 1
+          omittedCount: 0
+          offset: 0
+          nextOffset: null
+          truncated: false
+        retrieval: Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 text; pass task.nextOffset as offset to continue. Use view log with stepIndex (default last), or view report with report filename. Use view instructions with offset/limit for saved instructions, then instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Use offset/maxBytes for artifact text and offset/limit for step/report lists.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+        view: task
+      result:
+        runSlug: run-foundation
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        task:
+          content: Provide the storage and loading foundation
+          totalBytes: 42
+          offset: 0
+          returnedBytes: 42
+          direction: forward
+          truncated: false
+          nextOffset: null
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-foundation
+        view: report
+        report: implementation.md
+      result:
+        runSlug: run-foundation
+        workflow: default
+        status: completed
+        currentStep: null
+        currentIteration: null
+        currentStepStartedAt: null
+        currentStepExecutionCount: null
+        phase: null
+        taskOmission:
+          totalBytes: 42
+          returnedBytes: 0
+          truncated: true
+        report:
+          filename: implementation.md
+          content: Implemented storage and loading; targeted tests passed. Result reviewed and integrated.
+          totalBytes: 87
+          offset: 0
+          returnedBytes: 87
+          direction: forward
+          truncated: false
+          nextOffset: null
     - tool: takt_get_goal
       arguments:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a8
+        goal:
+          id: 650e8400-e29b-41d4-a716-446655440000
+          objective: Improve administration API logging and pagination
+          outOfScope:
+            - Production publishing and adding external services
+          acceptanceCriteria: *a2
+          constraints: *a3
+          mode: local
+          status: created
+          executionStatus: active
+          acceptanceCriteriaVersion: 1
+          branch: takt/goal/catalog
+          startBranch: main
+          integrationBranch: main
+          workLog:
+            - id: 650e8400-e29b-41d4-a716-446655440010
+              recordedAt: 2026-10-10T23:01:00Z
+              summary: |-
+                ping-log: Add requestId to ping logs
+                users-paging: Add cursor pagination to users API
+            - id: 650e8400-e29b-41d4-a716-000000000032
+              recordedAt: 2026-10-11T00:10:00Z
+              summary: "Integrated foundation into takt/goal/catalog. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide the storage and loading foundation"
+          questions: []
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -220,3 +472,27 @@ en:
         workflows:
           - name: default
             description: Investigate, implement, review and check the work
+  runArtifacts:
+    - directory: /workspace/project
+      meta:
+        task: Provide the storage and loading foundation
+        workflow: default
+        runSlug: run-foundation
+        runRoot: .takt/runs/run-foundation
+        reportDirectory: .takt/runs/run-foundation/reports
+        contextDirectory: .takt/runs/run-foundation/context
+        logsDirectory: .takt/runs/run-foundation/logs
+        status: completed
+        startTime: 2026-10-11T00:00:00Z
+        endTime: 2026-10-11T00:09:00.000Z
+      sessionLog:
+        - type: workflow_start
+          task: Provide the storage and loading foundation
+          workflowName: default
+          startTime: 2026-10-11T00:00:00Z
+        - type: workflow_complete
+          iterations: 0
+          endTime: 2026-10-11T00:09:00.000Z
+      reports:
+        - filename: implementation.md
+          content: Implemented storage and loading; targeted tests passed. Result reviewed and integrated.

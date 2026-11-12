@@ -13,7 +13,15 @@ import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-si
 import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
 import { runAssistantRetryCommand } from '../features/interactive/assistantRetryCommand.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
-import { createRunEventManager } from '../features/manager/runEventManager.js';
+import * as turnFailureNotification from '../features/manager/turnFailureNotification.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import { receiveInboxChange } from '../features/daemon/inbox.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { deferred } from './helpers/controlledDaemon.js';
+import type { TurnEvent } from '../core/daemon/events.js';
 import { ManagerEventSchema, type ManagerEvent } from '../infra/goals/events.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -104,7 +112,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     git(cwd, ['config', 'user.email', 'takt-test@example.invalid']);
     initialSha = git(cwd, ['rev-parse', 'HEAD']);
     mkdirSync(join(cwd, '.takt', 'workflows', 'personas'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nauto_pr: false\nmanager:\n  auto_run: false\n');
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nauto_pr: false\nmanager:\n  workflows: []\n  auto_run: false\n');
     writeFileSync(join(cwd, '.takt', 'workflows', `${workflowName}.yaml`), [
       `name: ${workflowName}`, 'max_steps: 10', 'initial_step: plan', 'steps:',
       '  - name: plan', '    persona: ./personas/planner.md', '    instruction: "{task}"',
@@ -580,13 +588,17 @@ describe('goal task retry through manager MCP and persistent task execution', ()
   async function runAndMerge(expectedPersona: 'planner' | 'reviewer', expectedOrder: string, expectedNote?: string) {
     const originalSetup = MockProvider.prototype.setup;
     const started: string[] = [];
-    const processed: ManagerEvent[] = [];
+    const processed: TurnEvent[] = [];
+    const failures = vi.spyOn(turnFailureNotification, 'notifyManagerTurnFailure');
     vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'run-fixture', version: '1' }), servers: {}, dispose: async () => {} });
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = originalSetup.call(this, config);
       return { call: async (prompt, options) => {
         if (config.name === 'manager') {
-          processed.push(ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event));
+          expect(options.cwd).toBe(cwd);
+          const payload = prompt.split('\n').map((line) => line.trim()).find((line) => line.startsWith('{\"event\":'));
+          if (payload === undefined) throw new Error('Manager event payload was not sent');
+          processed.push((JSON.parse(payload) as { event: TurnEvent }).event);
           return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'Retry result inspected', summary: null }, sessionId: 'run-manager' };
         }
         started.push(config.name);
@@ -613,16 +625,33 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         result: completed.completion, createdAt: expect.any(String) },
     ]);
     expect(processed).toEqual([]);
-    expect((await store.get(goalId)).workLog.filter(({ summary }) => summary === 'Retry result inspected')).toEqual([]);
-    const manager = createRunEventManager(cwd);
+    const workLogBeforeEvents = (await store.get(goalId)).workLog;
+    expect(workLogBeforeEvents).toEqual([expect.objectContaining({ summary: expect.stringContaining(taskName) })]);
+    const directory = getGlobalConfigDir();
+    const daemon = await conversationDaemon(directory, createConversationRuntime(directory));
+    const files = new DaemonPersistedFiles(directory);
+    const done = deferred<void>();
+    let applied = 0;
+    const outcomes: unknown[] = [];
+    const apply = daemon.conversations.apply.bind(daemon.conversations);
+    vi.spyOn(daemon.conversations, 'apply').mockImplementation(async (result) => {
+      outcomes.push(result.outcome);
+      await apply(result); if (++applied === saved.length) done.resolve();
+    });
     try {
-      expect(await manager.processPending(new AbortController().signal, 10)).toBe(true);
-    } finally { await manager.close(); }
-    expect(processed).toEqual(saved);
-    const event = processed.find((event) => event.kind === 'completion' && event.runSlug === completed.runSlug);
+      const inbox = await files.inboxDirectory(cwd);
+      for (const record of readManagerEvents(cwd)) await receiveInboxChange({ target: { targetId: cwd, generation: 'inbox',
+        conversationId: conversationId({ kind: 'repository', repositoryDirectory: cwd }), kind: 'inbox', directory: inbox },
+        path: record.filePath, generation: record.event.createdAt, value: record.event, removed: false }, files, daemon.conversations, daemon.dispatcher);
+      await done.promise; await daemon.dispatcher.drain();
+    } finally { await daemon.close(); }
+    expect(failures.mock.calls.map(([, , error]) => error)).toEqual([]);
+    expect(outcomes).toEqual(saved.map(() => expect.objectContaining({ kind: 'completed', result: { kind: 'reply', message: 'Retry result inspected' } })));
+    expect(processed.map((event) => event.kind)).toEqual(['goal_registered', 'task_completed']);
+    const event = processed.find((event) => event.kind === 'task_completed');
     expect(readManagerEvents(cwd)).toEqual([]);
-    expect((await store.get(goalId)).workLog).toContainEqual(expect.objectContaining({ summary: 'Retry result inspected' }));
-    expect(event).toMatchObject({ taskName, runSlug: completed.runSlug, result: { success: true, branch } });
+    expect((await store.get(goalId)).workLog).toEqual(workLogBeforeEvents);
+    expect(event).toMatchObject({ task: { taskName, runSlug: completed.runSlug }, result: { success: true, branch } });
     const stagedOrder = join(clone, '.takt', 'runs', completed.runSlug!, 'context', 'task', 'order.md');
     expect(readFileSync(stagedOrder, 'utf8')).toBe(expectedOrder);
     const merged = await withClient((client) => client.callTool({ name: 'takt_merge_goal_task', arguments: {
@@ -645,6 +674,38 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     }, 'read-only');
   });
 
+  it('cancels a pending task while paused without resuming its goal', async () => {
+    expect((await call('requeue')).isError).toBeUndefined();
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'paused' }));
+    await withClient(async (client) => {
+      const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: { cwd, goalId, taskName, reason: 'Cancel obsolete planned work' } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    });
+    expect(runner.listTaskStateItems()).toEqual([]);
+    expect((await store.get(goalId)).executionStatus).toBe('paused');
+    expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain('Cancel obsolete planned work');
+    expect(existsSync(clone)).toBe(false);
+  });
+
+  it('requires an explicit discard flag before deleting an unintegrated completed result', async () => {
+    runner.requeueFailedTask(taskName, 'review');
+    const task = runner.claimNextTasks(1)[0]!;
+    const running = runner.updateRunningTaskExecution(task.name, { runSlug: 'completed-run', worktreePath: clone, branch });
+    runner.completeTask({ task: running, success: true, response: 'Result ready', executionLog: [], branch, worktreePath: clone,
+      startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z',
+      completion: { success: true, interrupted: false, branch, sha: resultSha, workflowResult: 'completed' } });
+    await withClient(async (client) => {
+      const args = { cwd, goalId, taskName, reason: 'Discard the obsolete result' };
+      expect((await client.callTool({ name: 'takt_remove_goal_task', arguments: args })).isError).toBe(true);
+      expect(existsSync(clone)).toBe(true);
+      const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: { ...args, discardUnmerged: true } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    });
+    expect(runner.listTaskStateItems()).toEqual([]);
+    expect(existsSync(clone)).toBe(false);
+    expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain('discardUnmerged: true');
+  });
+
   it.each(['requeue', 'retry', 'remove'] as const)('retrieves saved %s results through task and work-log read tools', async (kind) => {
     await withClient(async (client) => {
       const read = async (name: string, args: Record<string, unknown> = {}) => {
@@ -655,7 +716,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       await read('takt_record_goal_work_log', { summary: '操作前' });
       const reason = '別の方法に変更'.repeat(3000);
       const result = await read(`takt_${kind}_goal_task`, { taskName,
-        ...(kind === 'retry' ? { task: revisedOrder } : kind === 'remove' ? { reason } : { retryNote: note }),
+        ...(kind === 'retry' ? { task: revisedOrder } : kind === 'remove' ? { reason, discardUnmerged: true } : { retryNote: note }),
       });
       expect(result.status).toBe(kind === 'remove' ? 'removed' : 'pending');
       await read('takt_record_goal_work_log', { summary: '操作後' });
@@ -672,7 +733,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
         if (text.nextOffset === null) break;
         textOffset = text.nextOffset;
       }
-      if (kind === 'remove') expect(summary).toBe(`Removed ${taskName}: ${reason}`);
+      if (kind === 'remove') expect(summary).toBe(`Removed ${taskName} (discardUnmerged: true): ${reason}`);
       else expect(summary).toContain(`${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${taskName}`);
       const tasks = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1 } });
       expect(tasks.isError).toBeUndefined();

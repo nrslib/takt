@@ -84,9 +84,17 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   offset: readOffsetSchema,
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
 });
+export const getWorkflowInputSchema = goalIdentityInputSchema.extend({
+  workflow: z.string().trim().min(1).describe('Workflow name, scope reference or file path from takt_list_workflows.'),
+  callPath: z.array(z.number().int().safe().nonnegative()).optional()
+    .describe('Workflow-call step indices returned in getInput; preserves parent resolution and callable arguments.'),
+  limit: goalReadLimitSchema,
+  offset: readOffsetSchema,
+});
+export type GetWorkflowInput = z.infer<typeof getWorkflowInputSchema>;
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
 export const abortGoalInputSchema = goalWriteInputSchema.extend({
-  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. Included in the operation submitted for human confirmation.'),
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. This tool does not save the reason; use takt_record_goal_work_log to record it.'),
 });
 export type AbortGoalInput = z.infer<typeof abortGoalInputSchema>;
 export const reopenGoalInputSchema = goalWriteInputSchema.extend({
@@ -94,7 +102,7 @@ export const reopenGoalInputSchema = goalWriteInputSchema.extend({
 });
 export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
 export const getGoalInputSchema = goalWriteInputSchema.extend({
-  path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|body|summary|humanChecks|number|url|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
+  path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|specifications|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|gherkin|quint|alloy|body|summary|humanChecks|number|url|error|goalSha|recordedAt|id|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
     .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),
   recordId: z.uuid().optional().describe('Select a saved record by ID when path selects questions, workLog or notifications.'),
   limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
@@ -105,16 +113,20 @@ export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   workKey: z.string().min(1).max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0).optional()
     .describe('Stable work key used to find work already submitted to this goal.'),
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
-  task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
-  workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
+  task: taskContentSchema.describe('Self-contained instructions for ready goal work.'),
+  workflow: workflowSchema.describe('Workflow name, scope reference or file path selected by the manager.'),
+  autoPr: z.boolean().optional().describe('Push and create a PR after successful worktree execution. Omission saves false.'),
+  shouldPublishBranchToOrigin: z.boolean().optional().describe('Publish the task branch to origin. Omission saves false; autoPr true also publishes it.'),
 });
 export const askGoalQuestionInputSchema = goalWriteInputSchema.extend({
   ...GoalQuestionInputSchema.shape,
   kind: z.enum(['question', 'operation_request'], {
-    error: 'Only question and operation_request are allowed. Approvals cannot be created by the manager; they are created through the judgment path.',
+    error: 'Tool approvals are retired. Only question and operation_request are supported; human answers cannot be issued by the manager.',
   }).default('question'),
   targetSha: GoalInquiryInputSchema.shape.targetSha,
 });
+export const askStandaloneQuestionInputSchema = askGoalQuestionInputSchema.omit({ goalId: true });
+export type AskStandaloneQuestionInput = z.infer<typeof askStandaloneQuestionInputSchema>;
 export const getGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid(),
   path: z.string().regex(/^(body|recommendation|answer\.text|options\.\d+|withdrawalReason)$/).optional(), ...textReadShape });
 export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit: goalReadLimitSchema, offset: readOffsetSchema });
@@ -135,7 +147,7 @@ export const withdrawStandaloneInquiryInputSchema = standaloneInquiryIdentityInp
 export type ListStandaloneInquiriesInput = z.infer<typeof listStandaloneInquiriesInputSchema>;
 export type WithdrawStandaloneInquiryInput = z.infer<typeof withdrawStandaloneInquiryInputSchema>;
 export const notifyGoalInputSchema = goalWriteInputSchema.extend({
-  ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
+  ...GoalNotificationInputSchema.omit({ source: true }).shape, kind: z.enum(['blocked', 'custom']),
 });
 export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
 export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;
@@ -147,11 +159,11 @@ export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({
 });
 export const completeGoalInputSchema = goalWriteInputSchema.extend({
   expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
-  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR.'),
+  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR unless retrying the same SHA with saved humanChecks. Same-SHA PR preparation retries reuse saved humanChecks; a supplied value is saved only when humanChecks was missing. Review an advanced goal tip again and provide new humanChecks with its new expectedSha and summary.'),
 });
 export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
-  conversationOperationId: z.uuid().describe('Current conversation operation ID supplied with this turn. Never reuse an ID from an earlier turn.'),
-  prNumber: z.number().int().safe().positive().describe('Saved goal PR number to pass to takt merge.'),
+  prNumber: z.number().int().safe().positive().describe('Saved goal PR number.'),
+  until: z.enum(['prepare', 'merge']).describe('Prepare the PR for human merge, or finish by merging it.'),
 });
 export type MergeGoalPrInput = z.infer<typeof mergeGoalPrInputSchema>;
 export const goalDiffInputSchema = goalWriteInputSchema.extend({

@@ -65,6 +65,7 @@ import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfig
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { getProjectConfigSnapshot } from '../configSnapshot.js';
 import {
   omitDeprecatedAssistantGherkin,
   warnDeprecatedAssistantGherkin,
@@ -77,6 +78,8 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 /** Load project configuration with provenance, validating it before normalizing provider options. */
 export function loadProjectConfig(projectDir: string): ProjectConfig {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.project;
   const configPath = getProjectConfigPath(projectDir);
   const loadedTrace = loadProjectConfigTrace(
     configPath,
@@ -192,7 +195,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     caccia,
     merge,
     assistant: normalizeAssistantConfig(assistant),
-    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, patrolInterval: manager.patrol_interval, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications, sensitivePaths: manager.sensitive_paths,
+    manager: manager === undefined ? undefined : { permission: manager.permission, providerPermissions: manager.provider_permissions, patrolInterval: manager.patrol_interval, autoRun: manager.auto_run, workflows: manager.workflows, mainMerge: manager.main_merge, notifications: manager.notifications,
       slack: manager.slack === undefined ? undefined : { channelId: manager.slack.channel_id, allowedUserIds: manager.slack.allowed_user_ids } },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
@@ -242,6 +245,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
 }
 
 export function loadProjectConfigTraceState(projectDir: string): ConfigTrace {
+  const snapshot = getProjectConfigSnapshot(projectDir);
+  if (snapshot !== undefined) return snapshot.projectTrace;
   const cached = getCachedProjectConfigTrace(projectDir);
   if (cached) {
     return cached;
@@ -326,7 +331,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.caccia;
   delete savePayload.manager;
   if (config.manager !== undefined) {
-    savePayload.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths,
+    savePayload.manager = { permission: config.manager.permission, provider_permissions: config.manager.providerPermissions, patrol_interval: config.manager.patrolInterval, auto_run: config.manager.autoRun, workflows: config.manager.workflows, main_merge: config.manager.mainMerge, notifications: config.manager.notifications,
       slack: config.manager.slack === undefined ? undefined : { channel_id: config.manager.slack.channelId, allowed_user_ids: config.manager.slack.allowedUserIds } };
   }
   delete savePayload.merge;

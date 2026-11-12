@@ -78,6 +78,7 @@ export const CacciaConfigSchema = z.object({
 
 export const MergeConfigSchema = z.object({
   workflow: z.string().min(1).optional(),
+  prepare_workflow: z.string().min(1).optional(),
   method: z.enum(['squash', 'merge', 'rebase']).optional(),
   concurrency: z.number().int().positive().safe().optional(),
   auto_start: z.boolean().optional(),
@@ -87,6 +88,7 @@ export const MergeConfigSchema = z.object({
   where: PrListWhereRawSchema.optional(),
 }).strict().transform((config): MergeConfig => ({
   ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+  ...(config.prepare_workflow === undefined ? {} : { prepareWorkflow: config.prepare_workflow }),
   ...(config.method === undefined ? {} : { method: config.method }),
   ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
   ...(config.auto_start === undefined ? {} : { autoStart: config.auto_start }),
@@ -151,13 +153,24 @@ export const WorkflowCategoryOverlaySchema = z.object({
   others_category_name: z.string().min(1).optional(),
 }).strict();
 
+const ManagerPermissionSchema = z.enum(['auto', 'full']);
+
+const ManagerWorkflowEntrySchema = z.union([
+  z.string().trim().min(1),
+  z.record(z.string(), z.string()).refine((entry) => Object.keys(entry).length === 1, {
+    message: 'A manager workflow entry must contain exactly one name and description pair',
+  }).pipe(z.record(z.string().trim().min(1), z.string())),
+]);
+
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
+    permission: ManagerPermissionSchema.optional(),
+    provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
-    patrol_interval: z.number().int().positive().optional(),
-    default_workflow: z.string().trim().min(1).optional(),
-    sensitive_paths: z.array(z.string().trim().min(1)).optional(),
+    workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
+    // Deprecated: accepted for existing configuration files and ignored.
+    sensitive_paths: z.unknown().optional(),
     notifications: z.object({
       question: z.boolean().optional(),
       awaiting_merge: z.boolean().optional(),
@@ -166,6 +179,7 @@ const ProjectConfigObjectBaseSchema = z.object({
       blocked: z.boolean().optional(),
       custom: z.boolean().optional(),
     }).strict().optional(),
+    patrol_interval: z.number().int().positive().optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
@@ -232,7 +246,7 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
-  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
+  director: z.object({ slack: SlackConfigSchema.optional(), patrol_interval: z.unknown().optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),

@@ -1,10 +1,10 @@
 import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/schema.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
-import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
+import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -13,10 +13,9 @@ export type ConversationCommand =
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
-      source?: 'tui' | 'slack';
-      permission?: { scope: WritablePermissionScope; sentence: string } }
+      source?: 'tui' | 'slack' }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
-  | { kind: 'abort_turn'; operationId: string };
+  | { kind: 'abort_turn'; operationId: string; generation?: number };
 export type QuestionTarget = { goalId: string; repositoryDirectory: string } | { goalId: null; owner: InquiryOwner };
 export interface ConversationState {
   conversationId: string;
@@ -24,14 +23,14 @@ export interface ConversationState {
   revision: number;
   pending: ConversationRecord['pending'];
   approval: ConversationRecord['approval'];
-  running: { operationId: string; kind: string } | null;
+  running: { operationId: string; kind: string; generation?: number; startedAt?: number } | null;
   interrupted: boolean;
   queuedMessageCount?: number;
 }
 export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
-  | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
+  | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
   | { kind: 'display_event'; event: ManagerDisplayEvent };
 export type SnapshotItem = SnapshotValue | { kind: 'remove'; key: string };
@@ -45,15 +44,18 @@ export interface SnapshotRead extends OutputVersion {
   complete(): void;
   cancel(): void;
 }
-export type Submission = { kind: 'accepted'; operationId: string; queuedMessageCount?: number }
-  | { kind: 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
+export type Submission = { kind: 'accepted'; operationId: string; eventId?: string; acceptedSequence?: number; queuedMessageCount?: number }
+  | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
+  | { kind: 'notice'; message: string }
   | { kind: 'goal_registered'; goal: Goal }
   | { kind: 'answer_saved'; answerSaved: boolean; message: string }
-  | { kind: 'error'; code: string; message: string; answerSaved?: boolean; permissionAppended?: boolean };
+  | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
+  | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
@@ -61,7 +63,7 @@ export type PortOutput =
   | { kind: 'inquiry'; target: QuestionTarget; question: GoalQuestion }
   | { kind: 'result'; operationId: string; result: OperationResult };
 export interface ConversationDelivery {
-  deliver(conversationId: string, output: PortOutput, version: OutputVersion): Promise<
+  deliver(conversationId: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal): Promise<
     { kind: 'delivered' } | { kind: 'unavailable'; reason: string }>;
 }
 export interface ConversationOpen {

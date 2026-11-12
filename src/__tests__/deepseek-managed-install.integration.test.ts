@@ -595,11 +595,11 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
       const manifest = JSON.parse(await readFile(join(directory, 'node_modules', packageName, 'package.json'), 'utf8')) as { version: string };
       return manifest.version;
     }));
-    expect(installedPiPackageVersions).toEqual(['1.4.0', '1.4.0']);
+    expect(installedPiPackageVersions).toEqual(['1.5.0', '1.5.0']);
     expect(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))).toMatchObject({
       dependencies: {
-        '@earendil-works/pi-ai': '1.4.0',
-        '@earendil-works/pi-coding-agent': '1.4.0',
+        '@earendil-works/pi-ai': '1.5.0',
+        '@earendil-works/pi-coding-agent': '1.5.0',
       },
     });
     const [piAgent] = loaded.modules;
@@ -1428,7 +1428,7 @@ process.exit(2);
     expect(await getReadyDeepSeekHarnessPackageDirectory()).toEqual(expect.any(String));
   });
 
-  it.each(['message', 'go'] as const)('keeps one TUI conversation usable after declining %s and later installing its provider', async (turn) => {
+  it.each(['message', 'go'] as const)('keeps one TUI conversation usable after a missing provider error during %s and later installing its provider', async (turn) => {
     await prepareTerminalManagedTask();
     const providerCall = vi.fn().mockResolvedValue({
       persona: 'interactive', status: 'done', content: 'Answer after installation', timestamp: new Date(),
@@ -1444,19 +1444,29 @@ process.exit(2);
       cwd: temporaryRoot, plan, userMessage: 'Keep this task context',
       attachmentStore: createSessionImageAttachmentStore(temporaryRoot),
     });
-    const input = (text: string) => ({ text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(), confirmManagedProvider: mockConfirm });
+    const input = (text: string) => ({ text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn() });
     const declined = turn === 'go' ? await conversation.createInstruction(input('')) : await conversation.submit(input('First question'));
     expect(declined).toMatchObject({ kind: 'error', message: expect.stringContaining('takt install deepseek-harness') });
+    expect(mockConfirm).not.toHaveBeenCalled();
     expect(providerCall).not.toHaveBeenCalled();
-    expect(await conversation.submit(input('Another question'))).toMatchObject({ kind: 'error' });
+    expect(await conversation.submit(input('Another question'))).toMatchObject({
+      kind: 'error', message: expect.stringContaining('takt install deepseek-harness'),
+    });
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(providerCall).not.toHaveBeenCalled();
     await useFakeNpmForCurrentProcess();
-    mockConfirm.mockResolvedValue(true);
+    const installed = await runManagedCli(['install', 'deepseek-harness']);
+    expect(installed.code, installed.output).toBe(0);
     expect(await conversation.submit(input('After installation'))).toMatchObject({ kind: 'assistant_response', content: 'Answer after installation' });
+    expect(mockConfirm).not.toHaveBeenCalled();
     expect(providerCall).toHaveBeenCalledTimes(1);
+    expect(providerCall.mock.calls[0]![0]).toContain('Keep this task context');
+    expect(providerCall.mock.calls[0]![0]).toContain('After installation');
     expect(conversation.snapshotHistory!().map((message) => message.content)).toEqual(expect.arrayContaining(['Keep this task context', 'After installation', 'Answer after installation']));
   });
 
   it.each(['rule', 'fallback'].flatMap((route) => [true, false].map((accepted) => ({ route, accepted }))))('prepares the $route candidate from public configuration before step start (accepted=$accepted)', async ({ route, accepted }) => {
+    const emit = WorkflowEngine.prototype.emit;
     const { workflowPath, stepStarts } = await prepareTerminalManagedTask();
     if (route === 'fallback') {
       const installed = await runManagedCli(['install', 'codex']);
@@ -1498,7 +1508,6 @@ steps:
     const packageName = route === 'rule' ? '@openai/codex-sdk' : '@anthropic-ai/claude-agent-sdk';
     const firstCall = vi.fn().mockResolvedValue({ persona: 'worker', status: 'done', content: 'Completed', timestamp: new Date() });
     vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call: firstCall });
-    const emit = WorkflowEngine.prototype.emit;
     const observations: string[] = [];
     vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (this: WorkflowEngine, ...args) {
       if (args[0] === 'step:start') {
@@ -1804,7 +1813,7 @@ steps:
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const first = await getReadyDeepSeekHarnessPackageDirectory();
     expect((await loadManagedDeepSeekHarnessModules()).directory).toBe(first);
-    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.3');
+    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.5');
 
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
     await installDeepSeekHarness({ npmPath: fakeNpmPath });

@@ -13,18 +13,24 @@ import { runManagerExecution } from './manager-work-split-execution-worker.mjs';
 import ManagerExecutionProvider, { executionConfig, runExecutionWorker } from './manager-work-split-execution.mjs';
 import assertExecution, { gradeExecution } from '../asserts/manager-work-split-execution.mjs';
 import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-split-execution-result.mjs';
-import { getProvider } from '../../dist/infra/providers/index.js';
 import { GoalStore } from '../../dist/infra/goals/store.js';
+import { buildManagerEventPrompt } from '../../dist/features/daemon/inboxEvent.js';
+import { prepareQuestionFacetVariants } from '../fixtures/manager-question-options/facets.mjs';
+import { resolveManagerEvalFacet } from '../manager-work-split-prompt.mjs';
+import { renderTemplate } from '../../dist/shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../../dist/features/interactive/formalSpecPrompts.js';
 
 const lines = (dir, path) => readFileSync(join(dir, path), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000, judge_effort: 'low' });
+const config = (caseId) => ({ case: caseId, lang: 'ja', model: 'fake-only', timeout_ms: 10000 });
 
 function runPassingCheck(options) {
   const workspace = join(dirname(options.cwd), 'check');
   const run = (command, args, cwd) => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: 'pipe' });
   options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'check', input: { command: 'npm test' } } });
   run('git', ['worktree', 'add', '--detach', workspace, 'goal/inventory'], options.cwd);
-  assert.match(run('npm', ['test'], workspace), /PASS inventory import/);
+  const output = run('npm', ['test'], workspace);
+  assert.match(output, /PASS inventory import/);
+  options.onStream({ type: 'tool_result', data: { id: 'check', content: output, isError: false } });
 }
 
 function fakeProvider(action) {
@@ -35,14 +41,22 @@ function fakeProvider(action) {
       calls++;
       assert.equal(options.sessionId, undefined);
       assert.equal(options.permissionMode, 'full');
-      assert.equal(typeof options.onToolPermissionDecision, 'function');
+      assert.equal(options.onToolPermissionDecision, undefined);
       options.abortSignal.throwIfAborted();
       const server = Object.values(options.mcpServers)[0];
       const client = new Client({ name: 'fake-manager', version: '1' });
       const transport = new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } });
       await client.connect(transport);
       try {
-        const context = JSON.parse(prompt.split('\n\n')[0]);
+        const eventBody = prompt.split('\n\n').map((part) => part.trim()).find((part) => part.startsWith('{"event":'));
+        assert.ok(eventBody, 'The turn prompt must include the production event payload');
+        const input = JSON.parse(eventBody);
+        assert.deepEqual(Object.keys(input), ['event', 'instruction']);
+        assert.equal(input.event.kind, 'goal_resumed');
+        assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(input.event)));
+        const read = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId } });
+        const logs = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: input.event.goalId, path: 'workLog' } });
+        const context = { ...input, goal: { ...JSON.parse(read.content[0].text).goal, workLog: JSON.parse(logs.content[0].text).items } };
         const goalRead = await client.callTool({ name: 'takt_get_goal', arguments: { cwd: options.cwd, goalId: context.goal.id, path: 'objective' } });
         assert.equal(JSON.parse(goalRead.content[0].text).path, 'objective');
         const history = await client.callTool({ name: 'takt_get_goal_history', arguments: { cwd: options.cwd, goalId: context.goal.id, limit: 1 } });
@@ -73,6 +87,71 @@ test('execution provider reports invalid input before starting a worker', async 
   assert.equal(response.output, undefined);
   assert.equal(response.metadata.artifact_dir, undefined);
   assert.equal(provider.id(), 'manager-execution:fake-only');
+});
+
+test('execution provider passes both facet roots to the worker configuration', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-facet-config-'));
+  const keys = ['TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', 'TAKT_EVAL_MANAGER_POLICY_ROOT'];
+  const prior = keys.map((key) => [key, process.env[key]]);
+  const received = [];
+  const originalSpawn = spawn;
+  const mock = t.mock.method(childProcess, 'spawn', (_command, args, options) => {
+    received.push(JSON.parse(readFileSync(args[1], 'utf8')));
+    return originalSpawn(process.execPath, ['-e', 'process.exit(1)'], options);
+  });
+  syncBuiltinESMExports();
+  try {
+    const provider = new ManagerExecutionProvider({ config: { ...config('integrated-task-execution'), artifact_root: root } });
+    for (const phase of ['red', 'green']) {
+      process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, phase, 'instructions');
+      process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, phase, 'policies');
+      const response = await provider.callApi('', { vars: { case: 'integrated-task-execution', lang: 'ja' } });
+      assert.equal(response.output, undefined);
+      assert.match(response.error, /Execution worker failed/);
+      assert.equal(received.at(-1).instruction_root, process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT);
+      assert.equal(received.at(-1).policy_root, process.env.TAKT_EVAL_MANAGER_POLICY_ROOT);
+    }
+    assert.equal(received.length, 2);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+    for (const [key, value] of prior) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('SDK execution prompts contain only their selected red or green question rules in both languages', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-sdk-facets-'));
+  try {
+    for (const lang of ['ja', 'en']) {
+      prepareQuestionFacetVariants(root, lang);
+      for (const caseId of ['stopped-background-execution', 'integrated-task-execution']) {
+        for (const phase of ['red', 'green']) {
+          const artifactDir = join(root, 'artifacts', lang, caseId, phase);
+          const trial = await runManagerExecution({ ...config(caseId), lang,
+            instruction_root: join(root, phase, 'instructions'), policy_root: join(root, phase, 'policies'),
+          }, artifactDir, new AbortController().signal, fakeProvider(async () => {}));
+          assert.equal(trial.error, undefined);
+          assert.equal(trial.complete, true);
+          const prompt = readFileSync(join(artifactDir, 'system-prompt.txt'), 'utf8');
+          const other = phase === 'red' ? 'green' : 'red';
+          for (const kind of ['policies', 'instructions']) {
+            const bodies = Object.fromEntries([phase, other].map((variant) => [variant, renderTemplate(
+              resolveManagerEvalFacet(kind, 'FACET_ROOT', { projectDir: root, lang }, join(root, variant, kind)).trim(),
+              { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang) },
+            )]));
+            assert.notEqual(bodies[phase], bodies[other]);
+            assert.ok(prompt.includes(bodies[phase]), `${lang}/${caseId}/${phase}/${kind}: includes chosen facet`);
+            assert.ok(!prompt.includes(bodies[other]), `${lang}/${caseId}/${phase}/${kind}: excludes other facet`);
+          }
+          assert.doesNotMatch(prompt, /\{\{include:/);
+        }
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('work-log MCP returns the production saved entry and count and retains matching evaluation evidence', async () => {
@@ -215,7 +294,10 @@ test('grading rejects a goal-tip check in the caller checkout even under a symli
     });
     const trial = await runManagerExecution(config('integrated-task-execution'), join(root, 'artifacts'), new AbortController().signal, provider);
     assert.equal(trial.error, undefined);
-    assert.deepEqual(trial.after.git, trial.before.git);
+    const { checkoutHistory: beforeHistory, ...beforeGit } = trial.before.git;
+    const { checkoutHistory: afterHistory, ...afterGit } = trial.after.git;
+    assert.deepEqual(afterGit, beforeGit);
+    assert.notEqual(afterHistory, beforeHistory);
     const checks = lines(join(root, 'artifacts'), 'checks.jsonl');
     assert.equal(checks[0].cwd, trial.cwd);
     assert.equal(checks[0].head, trial.goalSha);
@@ -351,19 +433,15 @@ test('direct questions persist their kind, details and notification and reuse th
   }
 });
 
-test('permission decisions are delegated and an approval inquiry is persisted rather than auto-approved', async (t) => {
+test('manager execution uses normal provider tools without a permission callback', async () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-execution-test-'));
-  t.mock.method(getProvider('claude-sdk'), 'setupIsolatedStructured', () => ({ call: async () => ({ status: 'done', content: '', structuredOutput: { decision: 'ask', reason: 'Commit needs approval' } }) }));
   try {
     const provider = fakeProvider(async ({ options }) => {
-      const decision = await options.onToolPermissionDecision({ toolName: 'Bash', toolInput: { command: 'git commit -m verify' }, cwd: options.cwd, abortSignal: options.abortSignal });
-      assert.equal(decision.decision, 'deny');
+      assert.equal(options.onToolPermissionDecision, undefined);
     });
     const trial = await runManagerExecution(config('integrated-task-execution'), root, new AbortController().signal, provider);
     assert.equal(trial.error, undefined);
-    assert.equal(trial.after.questions.length, 1);
-    assert.equal(trial.after.questions[0].kind, 'approval');
-    assert.equal(gradeExecution(trial, lines(root, 'events.jsonl'), []).pass, false);
+    assert.equal(trial.after.questions.length, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -396,3 +474,107 @@ test('worker startup failure is not returned as a completed evaluation', async (
     assert.equal(typeof readFileSync(join(root, 'worker-stderr.log'), 'utf8'), 'string');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution']) {
+  test(`${caseId}: records actual tool calls, external queries and a returned followup turn`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'manager-no-wait-test-'));
+    const priorPath = process.env.PATH;
+    try {
+      const provider = fakeProvider(async ({ options, calls, client, context }) => {
+        if (calls !== 1) return;
+        const tools = (await client.listTools()).tools;
+        assert.ok(tools.some(({ name }) => name === 'takt_get_workflow'));
+        if (caseId === 'two-goal-pr-execution') {
+          assert.ok(!options.allowedTools || options.allowedTools.some((name) => name.endsWith('__takt_get_workflow')));
+          const goals = JSON.parse((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: options.cwd } })).content[0].text).goals;
+          assert.equal(goals.length, 2);
+          const detail = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: options.cwd, workflow: 'merge-prepare' } });
+          assert.notEqual(detail.isError, true, detail.content[0].text);
+          const steps = JSON.parse(detail.content[0].text).steps;
+          assert.ok(steps.some(({ name, wait }) => name === 'wait_ci' && wait));
+          const target = goals.find(({ id }) => id !== context.goal.id);
+          const submitted = await client.callTool({ name: 'takt_merge_goal_pr', arguments: {
+            cwd: options.cwd, goalId: target.id, prNumber: target.pullRequest.number, until: 'prepare',
+          } });
+          assert.notEqual(submitted.isError, true, submitted.content[0].text);
+          const command = `gh pr view ${target.pullRequest.number} --json statusCheckRollup`;
+          options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'status', input: { command } } });
+          execFileSync('gh', ['pr', 'view', String(target.pullRequest.number), '--json', 'statusCheckRollup'], { cwd: options.cwd });
+        } else {
+          const missing = await client.callTool({ name: 'takt_get_workflow', arguments: { cwd: options.cwd, workflow: 'missing-fixture-workflow' } });
+          assert.equal(missing.isError, true);
+          runPassingCheck(options);
+          const observer = join(dirname(options.cwd), 'external-status.mjs');
+          const command = `node ${observer}`;
+          options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'status', input: { command } } });
+          execFileSync(process.execPath, [observer], { cwd: options.cwd });
+        }
+      });
+      const trial = await runManagerExecution(config(caseId), root, new AbortController().signal, provider);
+      assert.equal(trial.error, undefined);
+      const evidence = readExecutionEvidence(root);
+      const verdict = gradeExecution(trial, evidence.events, evidence.checks);
+      assert.equal(verdict.pass, true, verdict.reason);
+      const output = buildExecutionOutput(root, evidence);
+      assert.equal(output.workflowDetailsRead, caseId === 'two-goal-pr-execution');
+      assert.ok(output.commands.length > 0);
+      assert.equal(output.externalObservations.length, 1);
+      assert.equal(trial.turns.length, 2);
+      assert.equal(process.env.PATH, priorPath);
+      assert.equal(assertExecution(JSON.stringify(output), { vars: { case: caseId, lang: 'ja' } }).pass, true);
+      const forged = { ...output, workflowDetailsRead: !output.workflowDetailsRead };
+      assert.equal(assertExecution(JSON.stringify(forged), { vars: { case: caseId, lang: 'ja' } }).pass, false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('two-goal fixture withdraws the specified goal question without changing the other goal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-question-target-'));
+  try {
+    const provider = fakeProvider(async ({ options, calls, client, context }) => {
+      if (calls !== 1) return;
+      const store = new GoalStore(options.cwd);
+      const before = await store.get(context.goal.id);
+      const goals = JSON.parse((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: options.cwd } })).content[0].text).goals;
+      const target = goals.find(({ id }) => id !== context.goal.id);
+      const args = { cwd: options.cwd, goalId: target.id };
+      const asked = await client.callTool({ name: 'takt_ask_goal_question', arguments: { ...args, body: '確認記録の保存先を教えてください。' } });
+      assert.notEqual(asked.isError, true);
+      const { questionId } = JSON.parse(asked.content[0].text);
+      const withdrawn = await client.callTool({ name: 'takt_withdraw_goal_question', arguments: {
+        ...args, questionId, reason: '保存先を確認できたため。',
+      } });
+      assert.notEqual(withdrawn.isError, true, withdrawn.content[0].text);
+      assert.deepEqual(JSON.parse(withdrawn.content[0].text), { goalId: target.id, questionId, questionStatus: 'withdrawn' });
+      assert.equal((await store.get(target.id)).questions.find(({ id }) => id === questionId).status, 'withdrawn');
+      assert.deepEqual(await store.get(context.goal.id), before);
+    });
+    const trial = await runManagerExecution(config('two-goal-pr-execution'), root, new AbortController().signal, provider);
+    assert.equal(trial.error, undefined);
+    assert.equal(trial.complete, true);
+    assert.equal(trial.cleaned, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const repeated of [false, true]) {
+  test(`execution observations ${repeated ? 'reject repeated queries' : 'accept different fields queried once'} inside a separately invoked script`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'manager-hidden-wait-'));
+    try {
+      const provider = fakeProvider(async ({ options, calls }) => {
+        if (calls !== 1) return;
+        runPassingCheck(options);
+        // The script name contains no waiting keywords; observation is at the external query boundary.
+        const script = join(dirname(options.cwd), 'check-status.sh');
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(script, `gh run view 9001 --json status\ngh run view 9001 --json ${repeated ? 'status' : 'conclusion'}\n`);
+        options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'script', input: { command: `bash ${script}` } } });
+        execFileSync('bash', [script], { cwd: options.cwd });
+      });
+      const trial = await runManagerExecution(config('finite-check-external-execution'), root, new AbortController().signal, provider);
+      assert.equal(trial.error, undefined);
+      const evidence = readExecutionEvidence(root);
+      assert.equal(evidence.checks.filter(({ kind }) => kind === 'external').length, 2);
+      assert.equal(gradeExecution(trial, evidence.events, evidence.checks).pass, !repeated);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}

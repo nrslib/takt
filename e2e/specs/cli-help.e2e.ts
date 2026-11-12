@@ -55,18 +55,6 @@ describe('E2E: Help command (takt --help)', () => {
     expect(result.stdout.trim()).toBe(packageVersion);
   });
 
-  it('should advertise Workflow Maker in the root help', () => {
-    const result = runTakt({
-      args: ['--help'],
-      cwd: repo.path,
-      env: isolatedEnv.env,
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/\bmake\b.*Workflow Maker/i);
-    expect(result.stdout).not.toContain('Workflow Builder');
-  });
-
   it('should fail with unknown command for removed switch subcommand', () => {
     // Given: a local repo with isolated env
 

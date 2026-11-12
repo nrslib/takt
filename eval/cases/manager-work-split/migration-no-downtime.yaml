@@ -1,0 +1,116 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: 顧客台帳を新しい保存先へ移行する
+    outOfScope:
+      - 本番環境の切り替え
+    acceptanceCriteria:
+      - 顧客と住所の全件を移行し、件数と参照関係を維持する。
+    constraints:
+      - 移行中も書き込みを停止しない。
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: registered
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/migration-study.md
+      result: 現行台帳の書き込みを止めて一括転送すれば約40分で移行できる。書き込みを継続して差分を追い段階的に切り替える方式も実装可能だが、同期処理の追加と数日間の検証が必要。両方式とも件数と参照関係を維持できる。利用者の業務予定と停止可能な時間帯は記録されていない。
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: 設計、実装、レビューを実行する。
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project status --short --branch
+      result: |
+        ## main
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project rev-parse takt/goal/ledger-migration
+      result: |
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: approve
+  goal:
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:00:00.000Z
+    objective: Migrate the customer ledger to the new store
+    outOfScope:
+      - Production cutover
+    acceptanceCriteria:
+      - Migrate all customers and addresses, preserving counts and references.
+    constraints:
+      - Do not stop writes during migration.
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/ledger-migration
+    startBranch: main
+    integrationBranch: main
+    workLog: []
+    questions: []
+  event:
+    kind: registered
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-11-01T00:30:00.000Z
+  tasks: []
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/docs/migration-study.md
+      result: Pausing ledger writes permits a bulk transfer in about 40 minutes. Keeping writes active with staged transfer and change synchronization is also feasible, but needs additional synchronization code and several days of validation. Both preserve counts and references. Users' operating schedules and available downtime windows are not recorded.
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Plan, implement and review the assigned work.
+    - tool: takt_list_standalone_inquiries
+      arguments:
+        cwd: /workspace/project
+      result:
+        inquiries: []
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project status --short --branch
+      result: |
+        ## main
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project rev-parse takt/goal/ledger-migration
+      result: |
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

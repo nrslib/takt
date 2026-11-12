@@ -189,10 +189,12 @@ describe('loop analysis worker', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     workerEvents.length = 0;
     mockExistsSync.mockReturnValue(true);
-    mockLstatSync.mockReturnValue({ isFile: () => true });
+    mockLstatSync.mockReturnValue({ isFile: () => true, isSymbolicLink: () => false });
+    mockAppendLoopAnalysisWorkerFailure.mockReturnValue(undefined);
+    mockPrepareLoopAnalysisReportFileForPublication.mockReturnValue(undefined);
     mockReadLoopAnalysisJob.mockReturnValue(baseJob);
     mockArchiveLoopAnalysisReport.mockReturnValue({
       sourceMetadataPath: join(

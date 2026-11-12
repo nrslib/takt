@@ -1,63 +1,39 @@
-import { PassThrough } from 'node:stream';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { mergeGoalPr } from '../features/manager/mergeGoalPr.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
-const doubles = vi.hoisted(() => ({ spawn: vi.fn(), resolve: vi.fn(), restore: vi.fn() }));
-vi.mock('../infra/goals/git.js', () => ({ restoreGoalBranch: doubles.restore }));
-vi.mock('../shared/utils/spawn.js', () => ({ spawnManagedProcess: doubles.spawn }));
-vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: doubles.resolve }));
+const doubles = vi.hoisted(() => ({ enqueue: vi.fn(), config: vi.fn() }));
+vi.mock('../features/merge/index.js', async (original) => ({
+  ...await original<typeof import('../features/merge/index.js')>(), enqueuePrMergeTask: doubles.enqueue,
+}));
+vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: doubles.config }));
 const signal = new AbortController().signal;
-const branch = 'takt/goal';
-const approvedSha = 'a'.repeat(40);
-let stdout: PassThrough;
-let stderr: PassThrough;
-let wait: ReturnType<typeof vi.fn>;
+const goal = { ...goalRecord(), pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
 beforeEach(() => {
-  vi.resetAllMocks(); stdout = new PassThrough(); stderr = new PassThrough();
-  wait = vi.fn(async () => { stdout.emit('data', Buffer.from('merged')); stderr.emit('data', Buffer.from('details')); return { code: 0, signal: null }; });
-  doubles.resolve.mockReturnValue({ args: ['fixture-cli.js', 'merge'] });
-  doubles.spawn.mockReturnValue({ child: { stdout, stderr }, wait, terminate: vi.fn() });
+  vi.resetAllMocks();
+  doubles.enqueue.mockImplementation(async (request) => ({ name: 'merge-pr-1950', status: 'pending', data: { workflow: request.workflow } }));
 });
-it('runs the resolved CLI in the selected repository and returns both output streams', async () => {
-  expect(await mergeGoalPr('/project', 1950, branch, approvedSha, signal)).toEqual({ success: true, prNumber: 1950, exitCode: 0, output: 'mergeddetails', truncated: false });
-  expect(doubles.resolve).toHaveBeenCalledExactlyOnceWith('merge');
-  expect(doubles.spawn).toHaveBeenCalledExactlyOnceWith(process.execPath, ['fixture-cli.js', 'merge', '1950'],
-    { cwd: '/project', shell: false, stdio: ['ignore', 'pipe', 'pipe'] }, signal);
-  expect(doubles.restore).toHaveBeenCalledExactlyOnceWith('/project', branch, approvedSha);
-});
-it.each([1, 7, null])('rejects unsuccessful completion with exit code %s', async (code) => {
-  wait.mockImplementation(async () => { stderr.emit('data', Buffer.from('failure output')); return { code, signal: code === null ? 'SIGTERM' : null }; });
-  await expect(mergeGoalPr('/project', 1950, branch, approvedSha, signal)).rejects.toThrow('failure output');
-});
-it('propagates process startup failure', async () => {
-  doubles.spawn.mockImplementation(() => { throw new Error('startup failed'); });
-  await expect(mergeGoalPr('/project', 1950, branch, approvedSha, signal)).rejects.toThrow();
-});
-it('propagates cancellation from the managed process', async () => {
-  wait.mockRejectedValue(new DOMException('Cancelled', 'AbortError'));
-  await expect(mergeGoalPr('/project', 1950, branch, approvedSha, signal)).rejects.toMatchObject({ name: 'AbortError' });
-  expect(doubles.spawn.mock.calls[0]![3]).toBe(signal);
-  expect(doubles.restore).toHaveBeenCalledExactlyOnceWith('/project', branch, approvedSha);
-});
-
-it.each([false, true])('reports restoration failure after CLI failure=%s', async (cliFailed) => {
-  const restoreError = new Error('restore failed');
-  doubles.restore.mockRejectedValue(restoreError);
-  if (cliFailed) wait.mockRejectedValue(new Error('CLI failed'));
-  const result = mergeGoalPr('/project', 1950, branch, approvedSha, signal);
-  if (cliFailed) {
-    await expect(result).rejects.toMatchObject({ errors: [expect.any(Error), restoreError], message: expect.stringMatching(/CLI failed.*restore failed/) });
-  } else {
-    await expect(result).rejects.toBe(restoreError);
-  }
-});
-it('bounds combined output while continuing to consume both streams', async () => {
-  wait.mockImplementation(async () => {
-    for (let index = 0; index < 100; index++) {
-      stdout.emit('data', Buffer.alloc(1024, 'x')); stderr.emit('data', Buffer.alloc(1024, 'y'));
-    }
-    return { code: 0, signal: null };
+it.each([
+  { until: 'prepare' as const, config: undefined, workflow: 'merge-prepare' },
+  { until: 'prepare' as const, config: { workflow: 'custom' }, workflow: 'merge-prepare' },
+  { until: 'prepare' as const, config: { prepareWorkflow: 'custom-prepare', workflow: 'custom' }, workflow: 'custom-prepare' },
+  { until: 'merge' as const, config: undefined, workflow: 'merge-review-fix-simple' },
+  { until: 'merge' as const, config: { prepareWorkflow: 'custom-prepare', workflow: 'custom' }, workflow: 'custom' },
+])('enqueues $until using $workflow and returns the pending task', async ({ until, config, workflow }) => {
+  doubles.config.mockReturnValue(config);
+  expect(await mergeGoalPr('/project', goal, until, signal)).toEqual({
+    taskName: 'merge-pr-1950', goalId: goal.id, prNumber: 1950, mergeTask: true, status: 'pending', until, workflow,
   });
-  const result = await mergeGoalPr('/project', 1950, branch, approvedSha, signal);
-  expect(result.truncated).toBe(true); expect(Buffer.byteLength(result.output)).toBeLessThanOrEqual(16 * 1024);
+  expect(doubles.enqueue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    projectCwd: '/project', prNumber: 1950, until, workflow, abortSignal: signal,
+    pullRequest: expect.objectContaining({ number: 1950, url: goal.pullRequest.url }),
+  }), goal);
+});
+it('propagates active target conflicts from the common enqueue path', async () => {
+  const failure = new Error('active target'); doubles.enqueue.mockRejectedValue(failure);
+  await expect(mergeGoalPr('/project', goal, 'prepare', signal)).rejects.toBe(failure);
+});
+it.each([undefined, { number: 1951, url: goal.pullRequest.url }])('rejects a missing or inconsistent saved PR', async (pullRequest) => {
+  await expect(mergeGoalPr('/project', { ...goal, pullRequest }, 'merge', signal)).rejects.toThrow();
+  expect(doubles.enqueue).not.toHaveBeenCalled();
 });

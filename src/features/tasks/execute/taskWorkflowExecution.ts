@@ -194,7 +194,7 @@ export async function executeTaskWorkflow(
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   const concurrency = prExecutionContext?.mergeConcurrency;
   const mergeResyncBudget = concurrency !== undefined
-    && (workflowConfig.name === 'merge-review-fix' || workflowConfig.name === 'merge-review-fix-simple')
+    && ['merge-review-fix', 'merge-review-fix-simple', 'merge-prepare'].includes(workflowConfig.name)
     && getWorkflowTrustInfo(workflowConfig, projectCwd).source === 'builtin'
     ? 5 * Math.max(2, concurrency - 1) : 0;
   const maxSteps = maxStepsOverride ?? workflowConfig.maxSteps;

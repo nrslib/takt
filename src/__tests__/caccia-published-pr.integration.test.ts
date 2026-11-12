@@ -110,7 +110,7 @@ if (args[1]?.startsWith('repos/')) {
   const id = args.find(arg => arg.startsWith('threadId=')).slice(9);
   state.resolved.push(id); save(); send({data:{resolveReviewThread:{thread:{id,isResolved:true}}}});
 } else if (query.includes('headRepository {')) {
-  send({data:{repository:{pullRequest:{number:123,headRefName:'feature/pr',headRefOid:head,
+  send({data:{repository:{pullRequest:{number:123,title:'Published PR',body:'Review this PR',headRefName:'feature/pr',headRefOid:head,
     headRepository:{sshUrl:'git@'+state.hostname+':acme/'+repo+'.git'}}}}});
 } else {
   let data;
@@ -197,9 +197,9 @@ describe('Published PR identity through production Caccia', () => {
       writeFileSync(join(request.cwd, 'fixed.txt'), 'published PR fix\n');
       const report = join(root, 'report'); mkdirSync(report, { recursive: true });
       const state = JSON.parse(readFileSync(statePath, 'utf8')) as { repo: string };
-      writeFileSync(join(report, 'caccia-decisions.json'), JSON.stringify([
+      writeFileSync(join(report, 'caccia-decisions.json'), JSON.stringify({ outcome: 'complete', reason: '', decisions: [
         { thread_id: 'thread-' + state.repo, valid: true, reason: 'Corrected' },
-      ]));
+      ] }));
       return { success: true, reportDirectory: report };
     });
   });
@@ -351,7 +351,7 @@ describe('Published PR identity through production Caccia', () => {
       expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual([]);
     } else {
       const result = await resumed;
-      expect(result, JSON.stringify(await vi.mocked(runWorkflowExecution).mock.results.at(-1)?.value)).toEqual({ merged: true });
+      expect(result, JSON.stringify(await vi.mocked(runWorkflowExecution).mock.results.at(-1)?.value)).toMatchObject({ success: true, merged: true, outcome: 'merged' });
       expect(mergeStarts).toHaveLength(1);
       expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual(['thread-target']);
     }

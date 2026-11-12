@@ -3,9 +3,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const PROJECT_ROOT = resolve('.');
-const VITE_NODE = resolve(PROJECT_ROOT, 'node_modules/.bin/vite-node');
 const PROJECT_TAKT_GITIGNORE = resolve(PROJECT_ROOT, 'builtins/project/dotgitignore');
 const ENTRYPOINT_RUNNER = resolve(
   PROJECT_ROOT,
@@ -176,16 +176,15 @@ function runEntrypoint(
 ): Promise<{ readonly status: number | null; readonly output: string }> {
   const args = entrypoint === 'runtime'
     ? [
-        '--script',
         ENTRYPOINT_RUNNER,
         '--task',
         'Validate the companion entrypoint fixture',
         '--workflow',
         fixture.workflowPath,
       ]
-    : ['--script', ENTRYPOINT_RUNNER];
+    : [ENTRYPOINT_RUNNER];
   return new Promise((resolveResult, reject) => {
-    const child = spawn(VITE_NODE, args, {
+    const child = spawn(process.execPath, ['--import', TSX_ESM_LOADER, ...args], {
       cwd: PROJECT_ROOT,
       timeout: 45_000,
       env: {

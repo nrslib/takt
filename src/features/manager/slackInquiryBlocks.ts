@@ -1,16 +1,10 @@
-import type { Button, KnownBlock, ModalView, SectionBlock } from '@slack/types';
+import type { Button, KnownBlock, SectionBlock } from '@slack/types';
 import type { GoalAnswerInput } from '../../infra/goals/schema.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { approvalScopeChoices, type ApprovalScopeChoice, type PendingQuestion } from './inquiryAnswer.js';
-import type { ManagerAssignment } from './startupResolution.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
 
 export const SLACK_INQUIRY_ACTION = 'takt_inquiry_answer';
-export const SLACK_PERMISSION_CALLBACK = 'takt_inquiry_permission';
-export const SLACK_PERMISSION_BLOCK = 'permission';
-export const SLACK_PERMISSION_INPUT = 'sentence';
-export type SlackInquiryAction =
-  | { kind: 'answer'; answer: GoalAnswerInput }
-  | { kind: 'permission'; choice: ApprovalScopeChoice };
+export type SlackInquiryAction = { kind: 'answer'; answer: GoalAnswerInput };
 
 const SECTION_TEXT_LIMIT = 2900;
 
@@ -26,7 +20,7 @@ function splitText(text: string): string[] {
   return chunks;
 }
 
-export function buildSlackInquiry(target: PendingQuestion, assignment: ManagerAssignment, language: 'ja' | 'en', blockId: string) {
+export function buildSlackInquiry(target: PendingQuestion, language: 'ja' | 'en', blockId: string) {
   const actions = new Map<string, SlackInquiryAction>();
   const button = (key: string, label: string, action: SlackInquiryAction): Button => {
     actions.set(key, action);
@@ -40,18 +34,17 @@ export function buildSlackInquiry(target: PendingQuestion, assignment: ManagerAs
   const section = (text: string): SectionBlock => ({ type: 'section', text: { type: 'plain_text', text } });
   const question = target.question;
   for (const text of splitText(question.body)) add([section(text)]);
-  const buttons: Button[] = [];
-  if (question.kind === 'approval') {
-    for (const choice of approvalScopeChoices(target, assignment)) {
-      buttons.push(button(`allow_${choice.value}`, getLabel(`manager.answerChoices.${choice.label}`, language), choice.permission === undefined
-        ? { kind: 'answer', answer: { decision: 'allow', scope: choice.value } } : { kind: 'permission', choice }));
+  if (question.recommendation !== undefined) {
+    for (const text of splitText(getLabel('manager.notificationRecommendation', language, { recommendation: question.recommendation }))) {
+      add([section(text)]);
     }
-    buttons.push(button('deny', getLabel('manager.answerChoices.deny', language), { kind: 'answer', answer: { decision: 'deny' } }));
-  } else if (question.kind === 'operation_request') {
+  }
+  const buttons: Button[] = [];
+  if (question.kind === 'operation_request') {
     for (const report of ['completed', 'unable'] as const) {
       buttons.push(button(`report_${report}`, getLabel(`manager.answerChoices.${report}`, language), { kind: 'answer', answer: { report } }));
     }
-  } else {
+  } else if (question.kind !== 'approval') {
     for (const [index, option] of (question.options ?? []).entries()) {
       const chunks = splitText(option);
       for (const [part, text] of chunks.entries()) {
@@ -68,14 +61,4 @@ export function buildSlackInquiry(target: PendingQuestion, assignment: ManagerAs
   const blocks: KnownBlock[] = [...contents, { type: 'context', block_id: blockId, elements: [{ type: 'plain_text', text: hint }] }];
   const text = [...contents.flatMap((block) => block.type === 'section' && block.text !== undefined ? [block.text.text] : []), hint].join('\n');
   return { text, blocks, actions };
-}
-
-export function buildSlackPermissionModal(proposal: string, metadata: string, language: 'ja' | 'en'): ModalView {
-  return { type: 'modal', callback_id: SLACK_PERMISSION_CALLBACK, private_metadata: metadata, notify_on_close: true,
-    title: { type: 'plain_text', text: getLabel('manager.slack.permissionTitle', language) },
-    submit: { type: 'plain_text', text: getLabel('manager.slack.confirm', language) },
-    close: { type: 'plain_text', text: getLabel('manager.slack.cancel', language) },
-    blocks: [{ type: 'input', block_id: SLACK_PERMISSION_BLOCK,
-      label: { type: 'plain_text', text: getLabel('manager.slack.permissionSentence', language) },
-      element: { type: 'plain_text_input', action_id: SLACK_PERMISSION_INPUT, initial_value: proposal } }] };
 }

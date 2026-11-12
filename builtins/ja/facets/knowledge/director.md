@@ -1,9 +1,9 @@
 # 担当の分担
 
-director の三つの仕事は、manager の見回り、人への通知、人の「マージして」という指示を manager に伝えることです。会話の発言と daemon の定期見回りで動き、通知は director の会話に保存されます。人の明示的なマージ指示は、既存の道具で対象を確認して manager に伝えます。director.slack が設定されていれば、その turn の新しい通知は director 用チャンネルへ1件にまとめて届きます。許可された人のチャンネル発言は director との会話になり、返事は元投稿のスレッドに届きます。未設定なら Slack で送受信しません。
+daemon はイベントで動きます。キューは人の入力と、それ以外のイベントの2本です。次のターンでは人の入力を先に処理し、各キューでは受け付けた順を守ります。会話は1本で、イベントで知った内容も次の人との会話に引き継ぎます。処理中でも発言・承認・問い合わせ回答を保存して受け付け、画面の読み出しと現在のターンの中断を行えます。accepted は永続化済みの受付で、処理の完了ではありません。中断しても待機中の入力は消えません。失敗した処理は、人が明示的に頼んだときだけやり直します。 コードの見張りがプロセス消失、PR の状態変化などを観測し、変化や異常があるときだけイベントを届けます。時計だけで manager や director を呼びません。PID の生存や開始時刻を確認できない場合は、死亡と決めつけません。会話ごとの常駐子プロセスがターンの準備・AI・MCP・業務操作を行い、daemon は受付・保存・配送・監視を担います。子の異常終了は実行中のターンの失敗として記録し、自動ではやり直しません。
 
-見回りイベント director_patrol の observedAt は観測時刻、patrolIntervalSeconds は見回り間隔です。保存済みの createdAt、workLog の recordedAt、問い合わせの createdAt と比較し、長い未回答や進捗停滞を判断します。kind が patrol の作業記録と lastPatrolCompletedAt は進捗に含めません。blocked はゴールの status ではなく notifications の kind です。
+takt_get_goal / takt_list_goals は保存されたゴールの status と pullRequest（number と url）を返します。マージ指示の転送には、現在の awaiting_merge と保存 PR を確認して使います。takt_tell_manager は対象 manager の会話へ director 経由の伝言を保存し、返事を待たずに accepted・operationId・managerId を返します。保存済みの伝言は順に処理されます。受け付け時は人に「manager に伝えた。順に処理される」旨と操作IDを伝えます。返事・失敗・中断は同じ操作IDを含む通知として後から director の画面に表示されます。受け付け後に自動再送しません。マージの受け付けは成功ではなく、同じ操作IDの結果通知で成否を伝えます。takt_merge_goal_pr で実際にマージするのは manager の担当です。director にはその実行道具を渡しません。
 
-takt_get_goal / takt_list_goals は保存されたゴールの status と pullRequest（number と url）を返します。マージ指示の転送には、現在の awaiting_merge と保存 PR を確認して使います。takt_tell_manager は対象 manager の会話へ director を話し手として伝言を保存し、返事を待たずに accepted・operationId・managerId を返します。保存済みの伝言は順に処理されます。受け付け時は人に「manager に伝えた。順に処理される」旨と操作IDを伝えます。返事・失敗・中断は同じ操作IDを含む通知として後から director の画面に表示されます。受け付け後に自動再送しません。マージの受け付けは成功ではなく、同じ操作IDの結果通知で成否を伝えます。takt_merge_goal_pr で実際にマージするのは manager の担当です。director にはその実行道具を渡しません。
+タスク内部の確認は各 manager の担当です。director は run の段階や裁定を読みません。ゴールの状態、awaiting_merge、paused、保存済み blocked 通知、未回答問い合わせから、人に必要な情報を整理します。読込失敗は空の状態とみなさず報告します。
 
-各 manager がタスクの中を巡回します。director は run の段階や裁定を読みません。ゴールの状態、awaiting_merge、paused、保存済み blocked 通知、未回答問い合わせから、人に必要な情報を整理します。読込失敗は空の状態とみなさず報告します。
+伝言の `origin` は必須です。director 自身の依頼は `director`、人から受け取った指示の中継は `human` を指定します。人の指示と自分の依頼がある場合は、発信元ごとに別の伝言として送り、`text` にその発信元の本文を渡します。発信元は本文中の説明に代わって、この構造で manager へ伝わります。

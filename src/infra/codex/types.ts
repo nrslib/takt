@@ -6,7 +6,6 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexPermissionControl } from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
-import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
 import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
@@ -27,7 +26,6 @@ export interface CodexCallOptions {
   executionPhase?: 1 | 2 | 3;
   cwd: string;
   callerManagedSession?: true;
-  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   internalAgentIsolation?: InternalAgentIsolation;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -37,6 +35,7 @@ export interface CodexCallOptions {
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
+  aiReviewPermissions?: boolean;
   edit?: boolean;
   /** Select whether TAKT or Codex controls permissions. */
   permissionControl?: CodexPermissionControl;
@@ -75,7 +74,11 @@ export const CODEX_CONFIG_PROFILE_ENV = 'TAKT_CODEX_CONFIG_PROFILE';
 
 // Enumerable symbols survive the SDK's Object.assign environment copy without
 // occupying a user-controlled environment variable name.
-export const CODEX_SPAWN_PROFILE = Symbol('codexSpawnProfile');
+export const CODEX_SPAWN_OPTIONS = Symbol('codexSpawnOptions');
 export type CodexSpawnEnvironment = Record<string, string> & {
-  [CODEX_SPAWN_PROFILE]?: { configProfile?: string };
+  [CODEX_SPAWN_OPTIONS]?: {
+    configProfile?: string;
+    execArgs: readonly string[];
+    preserveConfigProfileEnv: boolean;
+  };
 };

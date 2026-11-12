@@ -1,25 +1,32 @@
 import { loadProjectConfig } from './project/projectConfig.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
-import type { ManagerNotificationKind } from '../../core/models/config-types.js';
+import type { ManagerNotificationKind, ManagerPermission, ManagerWorkflowsConfig } from '../../core/models/config-types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 
-const defaultSensitivePaths = [
-  '.env', '.env.*', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
-  '*.key', '*.pem', '*.crt', '*.cer', '*.p12', '*.pfx',
-];
+function providerPermission(permissions: Record<string, ManagerPermission> | undefined, provider: ProviderType | undefined): ManagerPermission | undefined {
+  if (permissions === undefined || provider === undefined) return undefined;
+  const exact = Object.hasOwn(permissions, provider) ? permissions[provider] : undefined;
+  if (provider === 'claude' || provider === 'claude-sdk') {
+    return exact ?? permissions[provider === 'claude' ? 'claude-sdk' : 'claude'];
+  }
+  return exact;
+}
 
-export function resolveManagerConfig(cwd: string): {
-  autoRun: boolean; patrolInterval: number; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
+export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
+  permission: ManagerPermission;
+  autoRun: boolean; mainMerge: 'auto' | 'approve';
+  workflows?: ManagerWorkflowsConfig;
   notifications: Record<ManagerNotificationKind, boolean>;
-  sensitivePaths: string[];
 } {
   const project = loadProjectConfig(cwd).manager;
   const global = loadGlobalConfig().manager;
   return {
+    permission: providerPermission(project?.providerPermissions, provider)
+      ?? providerPermission(global?.providerPermissions, provider)
+      ?? project?.permission ?? global?.permission ?? 'auto',
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
-    patrolInterval: project?.patrolInterval ?? global?.patrolInterval ?? 900,
-    defaultWorkflow: project?.defaultWorkflow ?? global?.defaultWorkflow,
+    workflows: project?.workflows ?? global?.workflows,
     mainMerge: project?.mainMerge ?? 'approve',
-    sensitivePaths: [...new Set([...defaultSensitivePaths, ...(global?.sensitivePaths ?? []), ...(project?.sensitivePaths ?? [])])],
     notifications: {
       question: project?.notifications?.question ?? global?.notifications?.question ?? true,
       awaiting_merge: project?.notifications?.awaiting_merge ?? global?.notifications?.awaiting_merge ?? true,

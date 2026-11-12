@@ -398,7 +398,7 @@ export async function callMock(
   if (scenarioEntry?.mcpToolCalls !== undefined) {
     const outcome = await executeMockMcpCalls(
       scenarioEntry.mcpToolCalls, options, ({ server, tool, result }) => {
-        recordMcpToolCall(personaName, server, 'stdio', tool, result, undefined);
+        recordMcpToolCall(personaName, server, options.preparedMcp?.resolvedServers?.servers[server]?.type ?? 'stdio', tool, result, undefined);
       },
     );
     if (outcome === 'aborted') {

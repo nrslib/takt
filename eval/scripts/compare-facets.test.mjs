@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -107,6 +107,10 @@ test('compares the baseline and candidate with uncached preparation, preserves f
   const manifest = fixture.manifest();
   assert.equal(manifest.base, revision);
   assert.equal(manifest.runs.length, 4);
+  assert.equal(existsSync(join(manifest.inputWorkspace, 'eval/node_modules')), false);
+  for (const run of manifest.runs) {
+    assert.equal(existsSync(join(run.workspace, 'eval/node_modules')), false);
+  }
   assert.notEqual(manifest.files[0].baselineSha256, manifest.files[0].candidateSha256);
   assert.equal(readFileSync(join(fixture.directory, facet), 'utf8'), candidate);
   for (const phase of ['red', 'green']) {
@@ -117,6 +121,34 @@ test('compares the baseline and candidate with uncached preparation, preserves f
       assert.equal(readFileSync(join(workspace, path), 'utf8'), expected);
     }
     assert.equal(readFileSync(join(fixture.directory, '.tmp/result/facets', phase, facet), 'utf8'), expected);
+  }
+});
+
+test('shares eval dependencies in input and phase workspaces and resolves the eval SDK', (t) => {
+  const fixture = setup(t);
+  writeFileSync(join(fixture.directory, '.gitignore'), 'node_modules/\n');
+  const dependencies = join(fixture.directory, 'eval/node_modules');
+  const sdk = join(dependencies, '@openai/codex-sdk');
+  mkdirSync(sdk, { recursive: true });
+  writeFileSync(join(sdk, 'package.json'), JSON.stringify({ name: '@openai/codex-sdk', version: '0.156.1' }));
+  writeFileSync(join(fixture.directory, 'eval/scripts/run-evals.mjs'), `
+    import { readFileSync, writeFileSync } from 'node:fs';
+    import { createRequire } from 'node:module';
+    const require = createRequire(new URL('../scenarios/sample/config.yaml', import.meta.url));
+    const sdk = JSON.parse(readFileSync(require.resolve('@openai/codex-sdk/package.json'), 'utf8'));
+    const args = process.argv.slice(2);
+    writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify({ version: sdk.version }));
+  `);
+  const result = fixture.run();
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = fixture.manifest();
+  for (const workspace of [manifest.inputWorkspace, ...manifest.runs.map((run) => run.workspace)]) {
+    const shared = join(workspace, 'eval/node_modules');
+    assert.equal(lstatSync(shared).isSymbolicLink(), true);
+    assert.equal(realpathSync(shared), realpathSync(dependencies));
+  }
+  for (const run of manifest.runs) {
+    assert.equal(JSON.parse(readFileSync(run.resultFile, 'utf8')).version, '0.156.1');
   }
 });
 
@@ -207,6 +239,51 @@ test('an added facet is absent for red and present for green', (t) => {
   assert.deepEqual(fixture.calls().map((call) => call.added), [false, true]);
   assert.equal(fixture.manifest().files[1].baselineSha256, null);
   assert.equal(readFileSync(join(fixture.directory, added), 'utf8'), 'new facet\n');
+});
+
+test('compares added policies and shared steps together against a pinned HEAD revision in both languages', (t) => {
+  const fixture = setup(t);
+  const red = {};
+  const green = {};
+  for (const lang of ['ja', 'en']) {
+    const policy = `builtins/${lang}/facets/policies/pe-test-only-repair-strategy.md`;
+    assert.equal(execFileSync('git', ['ls-tree', revision, '--', policy], { cwd: repo, encoding: 'utf8' }), '');
+    red[policy] = null;
+    green[policy] = `candidate policy ${lang}\n`;
+    for (const name of ['peer-review-adjudication', 'peer-review-fix-plan', 'peer-review-fix', 'peer-review-fix-verifier', 'peer-review-final-gate']) {
+      const step = `builtins/${lang}/steps/${name}.yaml`;
+      red[step] = execFileSync('git', ['show', `${revision}:${step}`], { cwd: repo, encoding: 'utf8' });
+      green[step] = `name: ${name}\npolicies:\n  - pe-test-only-repair-strategy\n`;
+    }
+  }
+  const files = Object.keys(green);
+  for (const file of files) {
+    mkdirSync(dirname(join(fixture.directory, file)), { recursive: true });
+    writeFileSync(join(fixture.directory, file), green[file]);
+  }
+  writeFileSync(join(fixture.directory, 'eval/scripts/run-evals.mjs'), `
+    import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+    const args = process.argv.slice(2);
+    const files = ${JSON.stringify(files)};
+    const contents = Object.fromEntries(files.map((file) => [file, existsSync(file) ? readFileSync(file, 'utf8') : null]));
+    writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify(contents));
+  `);
+
+  const result = fixture.run(files.flatMap((file) => ['--facet', file]));
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = fixture.manifest();
+  assert.equal(manifest.base, revision);
+  assert.deepEqual(manifest.runs.map((run) => run.phase), ['red', 'green']);
+  for (const run of manifest.runs) {
+    const expected = run.phase === 'red' ? red : green;
+    assert.deepEqual(JSON.parse(readFileSync(run.resultFile, 'utf8')), expected);
+    for (const file of files) {
+      const snapshot = join(fixture.directory, '.tmp/result/facets', run.phase, file);
+      if (expected[file] === null) assert.equal(existsSync(snapshot), false);
+      else assert.equal(readFileSync(snapshot, 'utf8'), expected[file]);
+    }
+  }
+  for (const file of files) assert.equal(readFileSync(join(fixture.directory, file), 'utf8'), green[file]);
 });
 
 test('a deleted facet exists only in red and remains deleted after comparison', (t) => {

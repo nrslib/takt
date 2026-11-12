@@ -1,17 +1,17 @@
+import { deferred } from './helpers/daemon-turn.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonConversationRuntime, prepareDirectorTurn } from '../features/director/conversationRuntime.js';
 import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
 import * as directorMcp from '../features/director/mcp.js';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
-  managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn(), logError: vi.fn() }));
-vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.logError }) }));
+  managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn() }));
 vi.mock('../features/director/conversationPlan.js', () => ({ createDirectorConversationPlan: doubles.plan }));
 vi.mock('../features/mcp/localConnection.js', () => ({ startLocalMcpConnection: doubles.connect }));
 vi.mock('../features/director/turnExecutor.js', () => ({ createDirectorTurnExecutor: doubles.executor }));
 vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.managers }));
 const signal = () => new AbortController().signal;
-const notices = { notify: vi.fn() };
+const notices = { tellManager: vi.fn(async () => ({})), notifyHuman: vi.fn(async (message: string) => ({ id: 'notification', message })) };
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.plan.mockReturnValue({ cwd: '/config', systemPrompt: 'director', ctx: { provider: { preflight: doubles.preflight },
@@ -24,7 +24,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it('prepares an isolated readonly turn and passes its connection to the executor', async () => {
   const abortSignal = signal();
-  const prepared = await prepareDirectorTurn('/config', notices, abortSignal, {}, true);
+  const prepared = await prepareDirectorTurn('/config', notices, abortSignal, {});
   expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, abortSignal }));
   expect(doubles.executor).toHaveBeenCalledWith(doubles.plan.mock.results[0]!.value, expect.objectContaining({ type: 'http' }));
   expect(prepared).toMatchObject({ provider: 'mock', language: 'en', model: null });
@@ -35,14 +35,14 @@ it('prepares an isolated readonly turn and passes its connection to the executor
 
 it.each(['preflight', 'executor'] as const)('disposes the connection after %s preparation failure', async (boundary) => {
   doubles[boundary].mockImplementationOnce(() => { throw new Error('preparation failed'); });
-  await expect(prepareDirectorTurn('/config', notices, signal(), {}, false)).rejects.toThrow('preparation failed');
+  await expect(prepareDirectorTurn('/config', notices, signal(), {})).rejects.toThrow('preparation failed');
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
 it('refuses cancelled preparation before allocating a connection', async () => {
   const controller = new AbortController();
   controller.abort();
-  await expect(prepareDirectorTurn('/config', notices, controller.signal, {}, true)).rejects.toThrow();
+  await expect(prepareDirectorTurn('/config', notices, controller.signal, {})).rejects.toThrow();
   expect(doubles.connect).not.toHaveBeenCalled();
 });
 
@@ -75,7 +75,8 @@ it('delegates manager conversations and closes unresolved director resources des
 
 it('shares an awaited release between the caller and runtime close without disposing another turn', async () => {
   let finish!: () => void;
-  doubles.dispose.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+  const disposing = deferred<void>();
+  doubles.dispose.mockImplementationOnce(() => { disposing.resolve(); return new Promise<void>((resolve) => { finish = resolve; }); });
   const otherDispose = vi.fn();
   const runtime = createDaemonConversationRuntime('/config', notices);
   const first = await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
@@ -83,7 +84,7 @@ it('shares an awaited release between the caller and runtime close without dispo
   await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
   const releasing = first.release!();
   const releasingAgain = first.release!();
-  await Promise.resolve();
+  await disposing.promise;
   expect(doubles.dispose).toHaveBeenCalledOnce();
   expect(otherDispose).not.toHaveBeenCalled();
   let closed = false;
@@ -108,60 +109,22 @@ it('propagates a release failure and shares it with concurrent runtime cleanup',
   expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 
-it('collects notifications separately for a human turn and a patrol and delivers each batch once', async () => {
+it('waits for director MCP tool cleanup before completing the turn', async () => {
   const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
-  const notify = vi.fn(async () => {});
-  const deliver = vi.fn(async () => {});
-  const human = await prepareDirectorTurn('/config', { notify }, signal(), {}, false, { deliver });
-  const patrol = await prepareDirectorTurn('/config', { notify }, signal(), {}, true, { deliver });
-  for (const [factory] of doubles.connect.mock.calls) factory();
-  const first = { id: 'one', message: 'Completed' };
-  const second = { id: 'two', message: 'Merge decision' };
-  const third = { id: 'three', message: 'Inquiry' };
-  await server.mock.calls[0]![1].notify(first);
-  await server.mock.calls[1]![1].notify(second);
-  await server.mock.calls[1]![1].notify(third);
-  expect(notify.mock.calls).toEqual([[first], [second], [third]]);
-  expect(deliver).not.toHaveBeenCalled();
-  await Promise.all([human.dispose(), human.dispose()]);
-  expect(deliver).toHaveBeenCalledExactlyOnceWith([first]);
-  await patrol.dispose();
-  expect(deliver.mock.calls).toEqual([[[first]], [[second, third]]]);
-  expect(doubles.dispose).toHaveBeenCalledTimes(2);
-});
-
-it('does not deliver an empty turn and logs delivery failure without failing cleanup', async () => {
-  const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
-  const deliver = vi.fn(async () => {});
-  const empty = await prepareDirectorTurn('/config', notices, signal(), {}, true, { deliver });
-  await empty.dispose();
-  expect(deliver).not.toHaveBeenCalled();
-  const saved = await prepareDirectorTurn('/config', notices, signal(), {}, false, { deliver });
-  doubles.connect.mock.calls[1]![0]();
-  await server.mock.calls[0]![1].notify({ id: 'one', message: 'Saved notice' });
-  deliver.mockRejectedValueOnce(new Error('Delivery failed'));
-  await saved.dispose();
-  await saved.dispose();
-  await vi.waitFor(() => expect(doubles.logError).toHaveBeenCalledOnce());
-  expect(deliver).toHaveBeenCalledOnce();
-  expect(doubles.dispose).toHaveBeenCalledTimes(2);
-});
-
-it('finishes a successful turn while Slack delivery is still pending', async () => {
-  const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
-  let finish!: () => void;
-  const pending = new Promise<void>((resolve) => { finish = resolve; });
-  const deliver = vi.fn(() => pending);
-  doubles.execute.mockResolvedValue({ message: 'done' });
-  const runtime = createDaemonConversationRuntime('/config', notices, { deliver });
+  const runtime = createDaemonConversationRuntime('/config', notices);
   const prepared = await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
   doubles.connect.mock.calls[0]![0]();
-  await server.mock.calls[0]![1].notify({ id: 'one', message: 'Saved notice' });
-  try {
-    expect(await prepared.executor.execute({ prompt: 'notify', instruction: 'notify', sessionId: undefined,
-      assignment: undefined, configDirectory: '/config', abortSignal: signal() })).toEqual({ message: 'done' });
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(doubles.dispose).toHaveBeenCalledOnce();
-    await runtime.close();
-  } finally { finish(); }
+  const scope = server.mock.calls[0]![3]!;
+  const started = deferred<void>(); const cleanup = deferred<void>();
+  doubles.execute.mockImplementation(async () => {
+    void scope.run(async () => { started.resolve(); await cleanup.promise; });
+    return { message: 'done' };
+  });
+  const execution = prepared.executor.execute({ prompt: 'message', sessionId: undefined,
+    assignment: undefined, abortSignal: signal() });
+  await started.promise;
+  let completed = false; void execution.then(() => { completed = true; });
+  await Promise.resolve(); expect(completed).toBe(false); expect(doubles.dispose).not.toHaveBeenCalled();
+  cleanup.resolve(); await execution; await runtime.close();
+  expect(doubles.dispose).toHaveBeenCalledOnce();
 });

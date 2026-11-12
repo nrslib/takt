@@ -69,7 +69,6 @@ async function createFixture(workflowSource = SYSTEM_WORKFLOW) {
     locationId: project.locationId,
     canonicalDirectory: project.canonicalDirectory,
     displayName: project.displayName,
-    fingerprint: project.fingerprint,
   });
   return { globalConfigDirectory, projectDirectory, project, repository, workflowPath };
 }

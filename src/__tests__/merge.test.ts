@@ -48,7 +48,7 @@ describe('Merge target selection and execution', () => {
     mocks.selectionData.mockImplementation((number: number) => ({ number, title: `PR ${number}`, body: 'Description', files: ['docs/guide.md'] }));
     mocks.agent.mockResolvedValue({ status: 'done', content: '', persona: 'selector', structuredOutput: { selected: true, reason: '意図に合う' } });
     setPrs([pr(123), pr(456)]);
-    executePrWorkflow.mockResolvedValue({ merged: true });
+    executePrWorkflow.mockResolvedValue({ success: true, merged: true, outcome: 'merged' });
   });
 
   it('専用の同時処理数は未設定時2を使う', () => {
@@ -88,7 +88,7 @@ describe('Merge target selection and execution', () => {
     setPrs([]);
     mocks.provider.mockReturnValue({ listOpenPrNumbers, fetchPrListItem });
     expect(await runMerge({ projectCwd: '/project', concurrency: 1, settings: resolveMergeSettings(undefined) }))
-      .toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+      .toEqual({ processedCount: 0, mergedCount: 0, preparedCount: 0, exitCode: 0 });
     expect(listOpenPrNumbers).toHaveBeenCalledWith('/project');
   });
 
@@ -111,7 +111,7 @@ describe('Merge target selection and execution', () => {
       if (number === 123) throw new Error('details unavailable');
       return pr(number);
     });
-    expect(await run()).toEqual({ processedCount: 2, mergedCount: 1, exitCode: 1 });
+    expect(await run()).toEqual({ processedCount: 2, mergedCount: 1, preparedCount: 0, exitCode: 1 });
     expect(processedNumbers()).toEqual([456]);
   });
 
@@ -201,7 +201,7 @@ describe('Merge target selection and execution', () => {
       releases.push(() => {
         active -= 1;
         if (prNumber === 123) reject(new Error('PR failed'));
-        else resolve({ merged: true });
+        else resolve({ success: true, merged: true, outcome: 'merged' });
       });
     }));
     const running = run();
@@ -214,7 +214,7 @@ describe('Merge target selection and execution', () => {
     const result = await running;
     expect(maxActive).toBe(2);
     expect(processedNumbers().sort()).toEqual([123, 456, 789]);
-    expect(result).toMatchObject({ processedCount: 3, mergedCount: 2, exitCode: 1 });
+    expect(result).toMatchObject({ processedCount: 3, mergedCount: 2, preparedCount: 0, exitCode: 1 });
   });
 
   it.each([
@@ -222,22 +222,23 @@ describe('Merge target selection and execution', () => {
     ['一件未マージ', [true, false], 1, 1],
     ['コメントのみでworkflow正常終了', [false, false], 0, 1],
   ] as const)('%sの実際のマージ件数と終了コードを返す', async (_name, outcomes, mergedCount, exitCode) => {
-    for (const merged of outcomes) executePrWorkflow.mockResolvedValueOnce({ merged });
+    for (const merged of outcomes) executePrWorkflow.mockResolvedValueOnce({ success: merged, merged, outcome: merged ? 'merged' : 'unresolved' });
     expect(await run()).toMatchObject({ processedCount: 2, mergedCount, exitCode });
   });
 
   it.each([true, false])('3件のうちPR123のmerged=%sを集計して後続も処理する', async (merged) => {
     setPrs([pr(123), pr(456), pr(789)]);
     executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => ({
-      merged: prNumber === 123 ? merged : true,
+      success: prNumber === 123 ? merged : true,
+      merged: prNumber === 123 ? merged : true, outcome: prNumber === 123 && !merged ? 'unresolved' : 'merged',
     }));
-    expect(await run()).toEqual({ processedCount: 3, mergedCount: merged ? 3 : 2, exitCode: merged ? 0 : 1 });
+    expect(await run()).toEqual({ processedCount: 3, mergedCount: merged ? 3 : 2, preparedCount: 0, exitCode: merged ? 0 : 1 });
     expect(processedNumbers()).toEqual([123, 456, 789]);
   });
 
   it('対象ゼロならworkflowを起動せず成功終了する', async () => {
     setPrs([]);
-    expect(await run()).toMatchObject({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+    expect(await run()).toMatchObject({ processedCount: 0, mergedCount: 0, preparedCount: 0, exitCode: 0 });
     expect(executePrWorkflow).not.toHaveBeenCalled();
   });
 
@@ -246,7 +247,7 @@ describe('Merge target selection and execution', () => {
     mocks.agent.mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } })
       .mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: false, reason: '実装を含む' } });
     expect(await run({ selectionText: 'ドキュメントのみ', where: { author: 'alice' } }))
-      .toEqual({ processedCount: 1, mergedCount: 1, exitCode: 0 });
+      .toEqual({ processedCount: 1, mergedCount: 1, preparedCount: 0, exitCode: 0 });
     expect(mocks.selectionData.mock.calls.map(([number]) => number)).toEqual([10, 11]);
     expect(mocks.agent).toHaveBeenCalledTimes(2);
     expect(processedNumbers()).toEqual([10]);
@@ -295,7 +296,7 @@ describe('Merge target selection and execution', () => {
     });
     executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => {
       events.push(`execute:${prNumber}`);
-      return { merged: true };
+      return { success: true, merged: true, outcome: 'merged' };
     });
 
     const onSelectionResult = vi.fn();
@@ -342,7 +343,7 @@ describe('Merge target selection and execution', () => {
     const onSelectionResult = vi.fn(() => { events.push('report'); });
     executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => {
       events.push(`execute:${prNumber}`);
-      return { merged: true };
+      return { success: true, merged: true, outcome: 'merged' };
     });
 
     await run({ selectionText: '文書のみ', where, onSelectionResult });
@@ -365,7 +366,7 @@ describe('Merge target selection and execution', () => {
     const onSelectionResult = vi.fn();
 
     expect(await run({ selectionText: '文書のみ', onSelectionResult }))
-      .toEqual({ processedCount: draft ? 0 : 1, mergedCount: draft ? 0 : 1, exitCode: 0 });
+      .toEqual({ processedCount: draft ? 0 : 1, mergedCount: draft ? 0 : 1, preparedCount: 0, exitCode: 0 });
     expect(onSelectionResult).toHaveBeenCalledWith([
       { number: 456, selected: !draft, reason: '意図に合う' },
     ]);
@@ -396,7 +397,7 @@ describe('Merge target selection and execution', () => {
       return { status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } };
     });
     const onSelectionResult = vi.fn(() => { events.push('report'); });
-    executePrWorkflow.mockImplementation(async () => { events.push('execute'); return { merged: true }; });
+    executePrWorkflow.mockImplementation(async () => { events.push('execute'); return { success: true, merged: true, outcome: 'merged' }; });
     await run({ selectionText: '文書のみ', onSelectionResult });
     expect(events).toEqual(['judge', 'judge', 'report', 'execute', 'execute']);
     expect(onSelectionResult).toHaveBeenCalledWith([
@@ -442,7 +443,7 @@ describe('Merge target selection and execution', () => {
     mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: { selected: false, reason: '実装を含む' } });
     const onSelectionResult = vi.fn();
     expect(await run({ selectionText: '文書のみ', onSelectionResult }))
-      .toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+      .toEqual({ processedCount: 0, mergedCount: 0, preparedCount: 0, exitCode: 0 });
     expect(executePrWorkflow).not.toHaveBeenCalled();
     expect(onSelectionResult).toHaveBeenCalledWith([
       { number: 123, selected: false, reason: '実装を含む' },
@@ -452,7 +453,7 @@ describe('Merge target selection and execution', () => {
 
   it('機械的候補ゼロならテキスト指定でもAIを呼ばず正常終了する', async () => {
     setPrs([pr(10, { draft: true }), pr(11, { same_repository: false })]);
-    expect(await run({ selectionText: '文書のみ' })).toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+    expect(await run({ selectionText: '文書のみ' })).toEqual({ processedCount: 0, mergedCount: 0, preparedCount: 0, exitCode: 0 });
     expect(mocks.selectionData).not.toHaveBeenCalled();
     expect(mocks.agent).not.toHaveBeenCalled();
     expect(executePrWorkflow).not.toHaveBeenCalled();
@@ -466,7 +467,7 @@ describe('Merge target selection and execution', () => {
     executePrWorkflow.mockImplementation(({ prNumber }: { prNumber: number }) => new Promise((resolve) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      releases.push(() => { active -= 1; resolve({ merged: prNumber !== 10 }); });
+      releases.push(() => { active -= 1; resolve({ success: prNumber !== 10, merged: prNumber !== 10, outcome: prNumber === 10 ? 'unresolved' : 'merged' }); });
     }));
     const running = run({ selectionText: '文書のみ' });
     await vi.waitFor(() => expect(releases).toHaveLength(2));
@@ -474,14 +475,14 @@ describe('Merge target selection and execution', () => {
     await vi.waitFor(() => expect(releases).toHaveLength(3));
     releases[1]!();
     releases[2]!();
-    expect(await running).toEqual({ processedCount: 3, mergedCount: 2, exitCode: 1 });
+    expect(await running).toEqual({ processedCount: 3, mergedCount: 2, preparedCount: 0, exitCode: 1 });
     expect(mocks.agent).toHaveBeenCalledTimes(3);
     expect(maxActive).toBe(2);
     expect(processedNumbers()).toEqual([10, 11, 12]);
   });
 
   it('既定はsimple workflow・squash・自動起動無効・draft除外である', () => {
-    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', method: 'squash', autoStart: false, includeDraft: false,
+    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', prepareWorkflow: 'merge-prepare', method: 'squash', autoStart: false, includeDraft: false,
       includeForks: false, threatCheckMaxDiffBytes: 200_000 });
   });
 
@@ -516,4 +517,14 @@ describe('Merge target selection and execution', () => {
     await expect(executeRealPrWorkflow(request)).rejects.toThrow('different PR');
     expect(mocks.status).not.toHaveBeenCalled();
   });
+});
+
+// Preparation success is independent of whether a PR was merged.
+it('returns zero for completed preparation and counts only prepared workflows', async () => {
+  const result = await runMerge({ projectCwd: '/project', prNumber: 123, concurrency: 1,
+    settings: resolveMergeSettings(undefined), workflow: 'merge-prepare' }, {
+    listOpenPrNumbers: () => [], fetchPrListItem: () => undefined,
+    executePrWorkflow: async () => ({ success: true, merged: false, outcome: 'prepared' }),
+  });
+  expect(result).toEqual({ processedCount: 1, mergedCount: 0, preparedCount: 1, exitCode: 0 });
 });

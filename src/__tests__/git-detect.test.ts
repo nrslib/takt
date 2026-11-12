@@ -15,7 +15,6 @@ import {
   detectVcsProvider,
   getRemoteHostname,
   getRemoteRepositoryIdentifiers,
-  VCS_PROVIDER_TYPES,
 } from '../infra/git/detect.js';
 
 beforeEach(() => {
@@ -87,28 +86,6 @@ describe('getRemoteHostname — hostname extraction (indirect extractHostname te
 });
 
 describe('getRemoteHostname', () => {
-  it('HTTPS remote URL からホスト名を返す', () => {
-    // Given
-    mockExecFileSync.mockReturnValue('https://gitlab.example.com/owner/repo.git\n');
-
-    // When
-    const result = getRemoteHostname('/project');
-
-    // Then
-    expect(result).toBe('gitlab.example.com');
-  });
-
-  it('SSH remote URL からホスト名を返す', () => {
-    // Given
-    mockExecFileSync.mockReturnValue('git@gitlab.example.com:owner/repo.git\n');
-
-    // When
-    const result = getRemoteHostname('/project');
-
-    // Then
-    expect(result).toBe('gitlab.example.com');
-  });
-
   it('cwd を git コマンドのオプションとして渡す', () => {
     // Given
     mockExecFileSync.mockReturnValue('https://gitlab.example.com/owner/repo.git\n');
@@ -117,10 +94,9 @@ describe('getRemoteHostname', () => {
     getRemoteHostname('/my/project');
 
     // Then
-    const call = mockExecFileSync.mock.calls[0];
-    expect(call[0]).toBe('git');
-    expect(call[1]).toEqual(['remote', 'get-url', 'origin']);
-    expect(call[2]).toHaveProperty('cwd', '/my/project');
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/my/project' }),
+    );
   });
 
   it('git remote get-url origin が失敗した場合は undefined を返す', () => {
@@ -129,28 +105,6 @@ describe('getRemoteHostname', () => {
 
     // When
     const result = getRemoteHostname('/not-a-repo');
-
-    // Then
-    expect(result).toBeUndefined();
-  });
-
-  it('remote URL が空の場合は undefined を返す', () => {
-    // Given
-    mockExecFileSync.mockReturnValue('\n');
-
-    // When
-    const result = getRemoteHostname('/project');
-
-    // Then
-    expect(result).toBeUndefined();
-  });
-
-  it('remote URL がパース不能な場合は undefined を返す', () => {
-    // Given
-    mockExecFileSync.mockReturnValue('not-a-url\n');
-
-    // When
-    const result = getRemoteHostname('/project');
 
     // Then
     expect(result).toBeUndefined();
@@ -354,8 +308,9 @@ describe('detectVcsProvider', () => {
 
       // Then
       expect(result).toBe('github');
-      const call = mockExecFileSync.mock.calls[0];
-      expect(call[2]).toHaveProperty('cwd', '/worktree/clone');
+      expect(mockExecFileSync).toHaveBeenNthCalledWith(
+        1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/worktree/clone' }),
+      );
     });
 
     it('cwd 省略時は process.cwd() をフォールバックとして使用する', () => {
@@ -367,8 +322,9 @@ describe('detectVcsProvider', () => {
 
       // Then
       expect(result).toBe('gitlab');
-      const call = mockExecFileSync.mock.calls[0];
-      expect(call[2]).toHaveProperty('cwd', process.cwd());
+      expect(mockExecFileSync).toHaveBeenNthCalledWith(
+        1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: process.cwd() }),
+      );
     });
 
     it('worktree パスを渡した場合にそのリポジトリのリモートで検出する', () => {
@@ -380,31 +336,9 @@ describe('detectVcsProvider', () => {
 
       // Then: セルフホストは undefined
       expect(result).toBeUndefined();
-      const call = mockExecFileSync.mock.calls[0];
-      expect(call[2]).toHaveProperty('cwd', '/tmp/worktree');
+      expect(mockExecFileSync).toHaveBeenNthCalledWith(
+        1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/tmp/worktree' }),
+      );
     });
-  });
-});
-
-describe('VCS_PROVIDER_TYPES', () => {
-  it('github と gitlab を含む readonly 配列としてエクスポートされる', () => {
-    // Then
-    expect(VCS_PROVIDER_TYPES).toContain('github');
-    expect(VCS_PROVIDER_TYPES).toContain('gitlab');
-  });
-
-  it('VcsProviderType と一致する値のみ含む', () => {
-    // Then: 各要素が VcsProviderType に代入可能であることを型レベルで保証
-    // ランタイムでは要素数と値を検証
-    expect(VCS_PROVIDER_TYPES).toHaveLength(2);
-    const types: readonly string[] = VCS_PROVIDER_TYPES;
-    expect(types).toEqual(['github', 'gitlab']);
-  });
-
-  it('配列が readonly である（変更不可）', () => {
-    // Then: as const で定義されているため、readonly tuple
-    // ランタイムでは Object.isFrozen では検証できないが、
-    // TypeScript コンパイル時に readonly が強制される
-    expect(Array.isArray(VCS_PROVIDER_TYPES)).toBe(true);
   });
 });

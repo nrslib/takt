@@ -66,24 +66,29 @@ vi.mock('../shared/utils/spawn.js', async () => {
 
 import {
   cleanupFormalSpecVerificationArtifacts,
-  detectJavaMajorVersion,
   runFormalSpecVerification,
 } from '../features/interactive/formalSpecVerifier.js';
 import { loadFormalSpecVerifierConstraints } from '../features/interactive/formalSpecPrompts.js';
 
 const require = createRequire(import.meta.url);
 
-const java17Available = (() => {
+function probeJavaMajorVersion(): number | undefined {
   const result = spawnSync('java', ['-version'], {
     encoding: 'utf8',
-    timeout: 5_000,
+    timeout: 15_000,
   });
   if (result.status !== 0) {
-    return false;
+    return undefined;
   }
-  const version = detectJavaMajorVersion(`${result.stdout}\n${result.stderr}`);
-  return version !== undefined && version >= 17;
-})();
+  const output = `${result.stdout}\n${result.stderr}`;
+  const match = /\bversion\s+["']?(\d+)(?:\.(\d+))?/iu.exec(output)
+    ?? /\b(?:openjdk|java)\s+["']?(\d+)(?:\.(\d+))?/iu.exec(output);
+  if (!match) {
+    return undefined;
+  }
+  const first = Number.parseInt(match[1]!, 10);
+  return first === 1 ? Number.parseInt(match[2]!, 10) : first;
+}
 
 function runQuint(quintCli: string, args: string[], cwd: string) {
   return spawnSync(process.execPath, [quintCli, ...args], {
@@ -453,6 +458,7 @@ describe('bundled Quint CLI verification boundary', () => {
     const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-declaration-'));
     fakeQuintVerify.mode = 'passed';
     try {
+      const probedJavaMajorVersion = probeJavaMajorVersion();
       const result = await runFormalSpecVerification(runDeclarationResponse(expectation), directory, { modelCheckTimeoutSeconds: 2 });
       const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
       const calls = spawnedProcessCalls.filter(({ command, args }) => command === process.execPath && args[0] === quintCli);
@@ -468,8 +474,11 @@ describe('bundled Quint CLI verification boundary', () => {
       expect(output[status]).toEqual(['runParam']);
       expect(argumentAfter(testCall!.args, '--match')).toBe('^(runParam)$');
       expect(argumentAfter(testCall!.args, '--main')).toBe('workflowModel');
-      expect(result.quint.verify?.status).toBe(status === 'passed' && java17Available ? 'passed' : 'skipped');
-      expect(calls.some(({ args }) => args[1] === 'verify')).toBe(status === 'passed' && java17Available);
+      expect(result.javaMajorVersion).toBe(status === 'passed' ? probedJavaMajorVersion : undefined);
+      const hasJava17 = probedJavaMajorVersion !== undefined && probedJavaMajorVersion >= 17;
+      const shouldVerify = status === 'passed' && hasJava17;
+      expect(result.quint.verify?.status).toBe(shouldVerify ? 'passed' : 'skipped');
+      expect(calls.some(({ args }) => args[1] === 'verify')).toBe(shouldVerify);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -759,7 +768,12 @@ describe('bundled Quint CLI verification boundary', () => {
     }
   });
 
-  it.skipIf(!java17Available)('reports the TLC reason for a non-enumerable temporal model', async () => {
+  it('reports the TLC reason for a non-enumerable temporal model', async (ctx) => {
+    const probedJavaMajorVersion = probeJavaMajorVersion();
+    if (probedJavaMajorVersion === undefined || probedJavaMajorVersion < 17) {
+      ctx.skip();
+      return;
+    }
     const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-tlc-diagnostic-'));
     const prime = String.fromCharCode(39);
     const response = [
@@ -780,6 +794,7 @@ describe('bundled Quint CLI verification boundary', () => {
       const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.verdict).toBe('failed');
+      expect(result.javaMajorVersion).toBe(probedJavaMajorVersion);
       expect(result.quint.verify?.status).toBe('failed');
       expect(result.quint.verify?.message).toMatch(/non-enumerable/i);
       expect(result.quint.verify?.message).not.toMatch(/Parsing file|Semantic processing of module|error: TLC error/);

@@ -2,6 +2,7 @@ import { recordProviderCalls } from './execution-record.mjs';
 import { readFileSync } from 'node:fs';
 import {
   createCliReviewSession,
+  mergeCliReviewConfig,
   prepareWorkingDirectory,
   rewriteWorkingDirectoryPaths,
 } from './cli-review.mjs';
@@ -31,8 +32,9 @@ export default class CliPlanReportProvider {
       if (typeof task !== 'string' || !['phase1', 'phase2'].includes(outputPhase)) {
         throw new Error('Plan report requires task and output_phase (phase1 or phase2)');
       }
-      workingDirectory = this.prepareWorkingDirectory(this.config);
-      const session = this.createCliReviewSession(this.config, {
+      const config = mergeCliReviewConfig(this.config, context);
+      workingDirectory = this.prepareWorkingDirectory(config);
+      const session = this.createCliReviewSession(config, {
         cwd: workingDirectory.cwd,
         abortSignal: options.abortSignal,
       });
@@ -40,7 +42,7 @@ export default class CliPlanReportProvider {
       if (outputPhase === 'phase1') return { output: analysis };
 
       phase = 'phase2';
-      const template = this.readPrompt(resolveAdjudicationPrompt(this.config.report_prompt));
+      const template = this.readPrompt(resolveAdjudicationPrompt(config.report_prompt));
       const reportPrompt = rewriteWorkingDirectoryPaths(renderAdjudicationPrompt(template, {
         task,
         previousResponse: analysis,

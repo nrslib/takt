@@ -10,7 +10,8 @@ import { createElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { resolveAssignedProjectRoot,resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
 import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
-import { connectManagerMcp,TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectTestManagerMcp } from './helpers/manager-mcp.js';
+import {TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createWorkspaceManagerContext,resolveManagerStartup,type ManagerAssignment } from '../features/manager/startupResolution.js';
 import { addManagerRepository,removeManagerRepository,renameManagerWorkspace } from '../features/manager/workspaceOperations.js';
@@ -81,6 +82,18 @@ describe('manager workspace storage and repository boundaries', () => {
     repositoryA = repository('a'); repositoryB = repository('b'); repositoryC = repository('c');
   });
   afterEach(() => { cleanup(); resetScenario(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
+
+  it('uses the selected repository workflow configuration for a workspace manager', async () => {
+    writeFileSync(join(repositoryA, '.takt', 'config.yaml'), 'manager:\n  auto_run: false\n  workflows: [default]\n');
+    writeFileSync(join(repositoryB, '.takt', 'config.yaml'), 'manager:\n  auto_run: false\n  workflows: [simple]\n');
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: 'Workflows', repositoryDirectories: [repositoryA, repositoryB] });
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (client) => {
+      for (const [cwd, expected] of [[repositoryA, 'default'], [repositoryB, 'simple']]) {
+        const result = await call(client, 'takt_list_workflows', { cwd });
+        expect(result.workflows.map((entry: { name: string }) => entry.name)).toEqual([expected]);
+      }
+    });
+  });
 
   it('retrieves every saved repository after bounded add, remove and rename responses without repeating the mutation', async () => {
     const directories = [repositoryA, ...workspaceRepositories(110)];
@@ -343,7 +356,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
   it.each([false, true])('retains the workspace when removing the original repository in the same turn=%s', async (sameTurn) => {
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, assignment);
+    const mcp = await connectTestManagerMcp(repositoryA, assignment);
     const provider = new MockProvider();
     const originalSetup = provider.setup.bind(provider);
     vi.spyOn(provider, 'setup').mockImplementation((config) => {
@@ -362,8 +375,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const executor = createManagerTurnExecutor(repositoryA, {
       ctx: { provider, providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
       strategy: { systemPrompt: 'manager fixture' } });
-    const input: ManagerTurnInput = { prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
-      configDirectory: globalDirectory, abortSignal: new AbortController().signal };
+    const input: ManagerTurnInput = { prompt: '担当を追加', assignment, sessionId: undefined, abortSignal: new AbortController().signal };
     const scenario = (tool: string, args: Record<string, unknown>, removeOriginal = false) => setMockScenario([{ persona: 'manager', status: 'done',
       content: JSON.stringify({ message: '担当を更新', summary: null }),
       streamEvents: [{ type: 'tool_use', tool, id: 'workspace-operation', input: args }],
@@ -379,7 +391,7 @@ describe('manager workspace storage and repository boundaries', () => {
       if (!sameTurn) {
         expect((await readWorkspaceRegistry(globalDirectory))[0]!.repositoryDirectories).toEqual([repositoryA, repositoryB]);
         scenario('takt_remove_workspace_repository', { repositoryDirectory: repositoryA });
-        const second = await executor.execute({ ...input, assignment: current, prompt: '元の担当を削除', instruction: '元の担当を削除' });
+        const second = await executor.execute({ ...input, assignment: current, prompt: '元の担当を削除' });
         expect(second.message).toBe('担当を更新');
         current = second.assignment!;
       }
@@ -388,7 +400,7 @@ describe('manager workspace storage and repository boundaries', () => {
       expect(await resolveCurrentManagerAssignment(current, globalDirectory)).toEqual({ kind: 'workspace', workspaceId: workspace.id,
         name: workspace.name, repositoryDirectories: [repositoryB] });
       scenario('takt_list_goals', { cwd: repositoryB });
-      expect(await executor.execute({ ...input, assignment: current, prompt: '現在の担当を確認', instruction: '現在の担当を確認' }))
+      expect(await executor.execute({ ...input, assignment: current, prompt: '現在の担当を確認' }))
         .toMatchObject({ message: '担当を更新' });
     } finally { await mcp.dispose(); }
   });
@@ -396,7 +408,7 @@ describe('manager workspace storage and repository boundaries', () => {
   it('keeps the standalone assignment after failed additions of missing, non-Git and already assigned repositories', async () => {
     const other = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '別の担当', repositoryDirectories: [repositoryB] });
     const assignment = single();
-    const mcp = await connectManagerMcp(repositoryA, assignment);
+    const mcp = await connectTestManagerMcp(repositoryA, assignment);
     const executor = createManagerTurnExecutor(repositoryA, {
       ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
       strategy: { systemPrompt: 'manager fixture' } });
@@ -407,8 +419,7 @@ describe('manager workspace storage and repository boundaries', () => {
         setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '追加できません', summary: null }),
           streamEvents: [{ type: 'tool_use', tool: 'takt_add_workspace_repository', id: 'add-repository', input: { repositoryDirectory } }],
         }]);
-        const turnResult = await executor.execute({ prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
-          configDirectory: globalDirectory, abortSignal: new AbortController().signal });
+        const turnResult = await executor.execute({ prompt: '担当を追加', assignment, sessionId: undefined, abortSignal: new AbortController().signal });
         expect(turnResult.message).toBe('追加できません');
         expect(await resolveCurrentManagerAssignment(turnResult.assignment!, globalDirectory)).toEqual(assignment);
         expect(await readWorkspaceRegistry(globalDirectory)).toEqual([other]);
@@ -425,8 +436,10 @@ describe('manager workspace storage and repository boundaries', () => {
         strategy: { systemPrompt: 'manager fixture' } } });
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', client, initialDiagnostics: [], onExit: vi.fn() }));
     try {
+      await client.ready;
+      expect(client.getSnapshot().readStatus).toBe('complete');
       await vi.waitFor(() => {
-        expect(app.lastFrame()!.split('\n')[0]).toBe('担当: a ほか 1 件');
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 1 件 | 進行中 1 ／ マージ待ち 0 ／ 未回答 0');
         expect(app.lastFrame()).toMatch(/進行中\s*1/u);
       });
       app.stdin.write('\x07');
@@ -442,7 +455,9 @@ describe('manager workspace storage and repository boundaries', () => {
       app.stdin.write('担当を確認');
       await vi.waitFor(() => expect(app.lastFrame()).toContain('担当を確認'));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(app.lastFrame()!.split('\n')).toContain('担当: a ほか 2 件'), { timeout: 30_000 });
+      await vi.waitFor(() => {
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: a ほか 2 件 | 進行中 1 ／ マージ待ち 0 ／ 未回答 0');
+      }, { timeout: 30_000 });
     } finally { app.unmount(); await client.dispose(); }
   });
 
@@ -463,7 +478,7 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain('処理中');
-        expect(app.lastFrame()!.split('\n').slice(0, 2)).toEqual(['担当: b ほか 2 件', '進行中 0 ／ 未回答 0']);
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe('担当: b ほか 2 件 | 進行中 0 ／ マージ待ち 0 ／ 未回答 0');
       });
       expect(client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment).toMatchObject({ repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
     } finally { app.unmount(); await client.dispose(); }
@@ -486,9 +501,9 @@ describe('manager workspace storage and repository boundaries', () => {
     const app = render(createElement(ManagerView, { cwd, assignment, lang, client, initialDiagnostics: [], onExit: vi.fn() }));
     const checkHeading = () => {
       const rows = app.lastFrame()!.split('\n');
-      expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
-      for (const value of [basename(cwd), workspace.id]) expect(rows[0]).not.toContain(value);
-      expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+      expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
+        getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
+      for (const value of [basename(cwd), workspace.id]) expect(rows.at(-1)).not.toContain(value);
     };
     try {
       checkHeading();
@@ -511,7 +526,8 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
-        expect(app.lastFrame()!.split('\n')[0]).toBe(getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }));
+        expect(app.lastFrame()!.split('\n').at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }),
+          getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
       });
       const currentAssignment = (client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment)!;
       if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
@@ -519,11 +535,11 @@ describe('manager workspace storage and repository boundaries', () => {
       expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
       await vi.waitFor(() => {
         const rows = app.lastFrame()!.split('\n');
-        expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
+        expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),
+          getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
         for (const value of [basename(cwd), workspace.id]) {
-          expect(rows[0]).not.toBe(getLabel('manager.assignmentHeading', lang, { name: value }));
+          expect(rows.at(-1)).not.toContain(getLabel('manager.assignmentHeading', lang, { name: value }));
         }
-        expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
       });
       expect(client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [] });
     } finally { app.unmount(); await client.dispose(); }
@@ -531,7 +547,7 @@ describe('manager workspace storage and repository boundaries', () => {
 
   it('transfers assignment to the real manager MCP child and restricts its operations', async () => {
     const workspace = await addManagerRepository(single(), repositoryB, globalDirectory);
-    const mcp = await connectManagerMcp(repositoryA, { kind: 'workspace', workspaceId: workspace!.id });
+    const mcp = await connectTestManagerMcp(repositoryA, { kind: 'workspace', workspaceId: workspace!.id });
     try {
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryB } })).isError).not.toBe(true);
       expect((await mcp.client.callTool({ name: 'takt_list_goals', arguments: { cwd: repositoryC } })).isError).toBe(true);

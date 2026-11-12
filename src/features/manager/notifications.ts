@@ -1,15 +1,23 @@
 import { basename } from 'node:path';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
-import { formatGoalNotification, type GoalNotificationPolicy } from '../../infra/goals/notifications.js';
-import type { Goal } from '../../infra/goals/schema.js';
+import { formatGoalNotification, formatStandaloneQuestionNotification, type GoalNotificationPolicy } from '../../infra/goals/notifications.js';
+import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 import { getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/slackWebhook.js';
+import { escapeSlackMentions } from '../../shared/utils/slackText.js';
 
 export function resolveManagerNotificationOptions(cwd: string): {
   policy: GoalNotificationPolicy; webhookUrl: string | undefined; mainMerge: 'auto' | 'approve';
 } {
   const config = resolveManagerConfig(cwd);
   return { policy: config.notifications, mainMerge: config.mainMerge, webhookUrl: getSlackWebhookUrl() };
+}
+
+export async function sendSavedStandaloneQuestionNotification(cwd: string, question: GoalQuestion): Promise<void> {
+  const { policy, webhookUrl } = resolveManagerNotificationOptions(cwd);
+  if (!policy.question || !webhookUrl) return;
+  const language = resolveConfigValue(cwd, 'language');
+  await sendSlackNotification(webhookUrl, formatStandaloneQuestionNotification(question, language, basename(cwd)));
 }
 
 export async function sendSavedGoalNotifications(
@@ -21,6 +29,9 @@ export async function sendSavedGoalNotifications(
   const sent = new Set(previous.notifications?.map((notification) => notification.id));
   for (const notification of current.notifications ?? []) {
     if (sent.has(notification.id)) continue;
-    await sendSlackNotification(webhookUrl, formatGoalNotification(current, notification, language, project));
+    const message = formatGoalNotification(current, notification, language, project);
+    const turnFailure = notification.source === 'manager_turn_failure';
+    await sendSlackNotification(webhookUrl, turnFailure
+      ? escapeSlackMentions(message) : message);
   }
 }

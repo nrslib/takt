@@ -78,13 +78,13 @@ it.each(['message', 'approve_summary'] as const)('never resends input rejected w
   const context = mount();
   const operationId = randomUUID();
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId, kind } } });
-  context.client.submit.mockResolvedValueOnce({ kind: 'busy', operationId });
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', 'en') });
   await typeAndSubmit(context, 'Rejected input');
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en')));
+  await waitFor(() => expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, '')));
   context.app.stdin.write('Unsent draft');
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: null } });
   await waitFor(() => expect(promptFrame(context)).toContain('Unsent draft'));
-  await new Promise((resolve) => setTimeout(resolve, 550));
+  await context.client.refresh();
   expect(context.client.commands()).toEqual([{ kind: 'message', text: 'Rejected input' }]);
   expect(context.app.lastFrame()).not.toMatch(/Queued messages|送信待ち/u);
 });
@@ -113,13 +113,13 @@ it.each(['message', 'approve_summary'] as const)('detaches on Ctrl+C during %s w
   expect(context.client.submit).not.toHaveBeenCalled();
 });
 
-it('does not queue a summary instruction rejected as busy or approve a later arriving summary', async () => {
+it('does not queue a summary instruction rejected by queue capacity or approve a later arriving summary', async () => {
   const context = mount();
   const operationId = randomUUID();
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId, kind: 'message' } } });
-  context.client.submit.mockResolvedValueOnce({ kind: 'busy', operationId });
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', 'en') });
   await typeAndSubmit(context, '/make-goal');
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en')));
+  await waitFor(() => expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, '')));
   await showProposal(context, summaryA, 5);
   await waitFor(() => expect(context.client.refresh).toHaveBeenCalled());
   expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]);

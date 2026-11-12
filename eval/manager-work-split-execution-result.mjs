@@ -21,6 +21,10 @@ export function buildExecutionOutput(directory, { trial, events, checksText }) {
     workLog: trial.workLog,
     checks: checksText,
     mcpCalls: events.filter(({ type, turn }) => type === 'mcp_call' && turn === verification.index),
+    commands: events.filter(({ type, turn, data }) => type === 'tool_use' && turn === verification.index && data.tool === 'Bash'),
+    toolResults: events.filter(({ type, turn }) => ['tool_result', 'tool_output'].includes(type) && turn === verification.index),
+    externalObservations: checksText.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter(({ kind }) => kind === 'external'),
+    workflowDetailsRead: events.some(({ type, turn, data }) => type === 'workflow_read' && turn === verification.index && data.success),
     questions: { before: trial.before.questions, after: trial.after.questions },
   };
 }

@@ -41,11 +41,13 @@ vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: vi.fn(),
   summarizeTaskName: vi.fn(),
   resolveBaseBranch: vi.fn(() => ({ branch: 'main' })),
-  TaskRunner: vi.fn(() => ({
-    addTask: mockAddTask,
-    completeTask: (...args: unknown[]) => mockCompleteTask(...args),
-    failTask: (...args: unknown[]) => mockFailTask(...args),
-  })),
+  TaskRunner: vi.fn(function () {
+    return {
+      addTask: mockAddTask,
+      completeTask: (...args: unknown[]) => mockCompleteTask(...args),
+      failTask: (...args: unknown[]) => mockFailTask(...args),
+    };
+  }),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

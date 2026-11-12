@@ -7,7 +7,7 @@ vi.mock('node:child_process', async (original) => ({ ...await original<typeof im
 vi.mock('../shared/utils/spawn.js', () => ({ spawnManagedProcess: doubles.spawn }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: doubles.environment }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync() { return structuredClone(goal); } update = doubles.update; } }));
-import { fetchGoalIntegrationBranchSha, goalGitText, isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync, resolveGoalBranchSha, runGoalGit } from '../infra/goals/git-command.js';
+import { fetchGoalIntegrationBranchSha, goalGitText, hasUnpublishedPrWork, isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync, resolveGoalBranchSha, runGoalGit } from '../infra/goals/git-command.js';
 import { checkGoalCompletion } from '../infra/goals/integration.js';
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
@@ -72,6 +72,40 @@ it('distinguishes a non-ancestor from a Git failure', async () => {
   expect(await isGoalCommitIncluded('/project', 'a', 'b', undefined)).toBe(false);
   processOutput([], 128, 'missing object');
   await expect(isGoalCommitIncluded('/project', 'a', 'b', undefined)).rejects.toThrow();
+});
+it('detects uncommitted PR work without querying the remote', async () => {
+  processOutput([Buffer.from(' M code.txt\n')]);
+  expect(await hasUnpublishedPrWork('/clone', 'feature/pr', undefined, undefined)).toBe(true);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.spawn.mock.calls[0]![1]).toEqual(expect.arrayContaining(['status', '--porcelain', '--untracked-files=all']));
+});
+it.each([0, 1])('checks PR HEAD against the current remote tip (containment: %s)', async (code) => {
+  processOutput([]);
+  processOutput([Buffer.from(`${targetSha}\trefs/heads/feature/pr\n`)]);
+  processOutput([], code);
+  expect(await hasUnpublishedPrWork('/clone', 'feature/pr', undefined, undefined)).toBe(code === 1);
+  expect(doubles.spawn.mock.calls[1]![1]).toEqual(expect.arrayContaining([
+    'ls-remote', '--exit-code', '--heads', 'origin', 'refs/heads/feature/pr',
+  ]));
+  expect(doubles.spawn.mock.calls[2]![1]).toEqual(expect.arrayContaining(['merge-base', '--is-ancestor', 'HEAD', targetSha]));
+});
+it('uses an already observed PR tip when checking cleanup after execution', async () => {
+  processOutput([]);
+  processOutput([], 0);
+  expect(await hasUnpublishedPrWork('/clone', 'feature/pr', targetSha, undefined)).toBe(false);
+  expect(doubles.spawn).toHaveBeenCalledTimes(2);
+});
+it('keeps PR work if the remote branch is missing', async () => {
+  processOutput([]);
+  processOutput([], 2);
+  expect(await hasUnpublishedPrWork('/clone', 'feature/pr', undefined, undefined)).toBe(true);
+});
+it.each(['status', 'remote', 'containment', 'overflow'] as const)('propagates PR work inspection failure at %s', async (stage) => {
+  if (stage !== 'status') processOutput([]);
+  if (stage === 'containment') processOutput([Buffer.from(`${targetSha}\trefs/heads/feature/pr\n`)]);
+  if (stage === 'overflow') processOutput([Buffer.alloc(4097)]);
+  else processOutput([], 128, 'Git unavailable');
+  await expect(hasUnpublishedPrWork('/clone', 'feature/pr', undefined, undefined)).rejects.toThrow();
 });
 it('rejects incomplete output when a complete Git result is required', async () => {
   processOutput([Buffer.alloc(8 * 1024 * 1024 + 1)]);

@@ -131,6 +131,8 @@ export async function probeMcpHeaders(
         config: config as import('@openai/codex-sdk').CodexOptions['config'],
         configOverrides: [...(prepared.configOverrides ?? []),
           'model_provider="probe"', `model_providers.probe={name="probe",base_url="${baseUrl}",wire_api="responses"}`,
+          // Curated plugin sync can leave Git descendants writing into CODEX_HOME after Codex exits.
+          'features.plugins=false',
           'features.shell_snapshot=false', 'allow_login_shell=false', 'sandbox_mode="danger-full-access"'],
       });
       const controller = new AbortController();
@@ -170,7 +172,14 @@ export async function probeMcpHeaders(
     let secretInArtifacts = false;
     for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
       if (!entry.isFile()) continue;
-      const contents = await readFile(join(entry.parentPath, entry.name));
+      let contents: Buffer;
+      try {
+        contents = await readFile(join(entry.parentPath, entry.name));
+      } catch (error) {
+        // CLI descendants can remove temporary artifacts after the CLI itself has exited.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
       if (['synthetic-access-fragment', 'signature-fragment', 'synthetic-key-fragment'].some((fragment) => contents.includes(fragment))) {
         secretInArtifacts = true;
       }

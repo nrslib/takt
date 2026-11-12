@@ -458,7 +458,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
   }
 
   /** Extracts enabled paths of one Pi resource kind from a resolved package. */
-  function enabledResourcePaths(paths: ResolvedPaths, key: keyof ResolvedPaths): string[] {
+  function enabledResourcePaths(paths: ResolvedPaths, key: 'extensions' | 'skills' | 'prompts' | 'themes'): string[] {
     return paths[key]
       .filter((resource) => resource.enabled)
       .map((resource) => resource.path);
@@ -609,9 +609,8 @@ function createPiClient(modules: PiModules['modules']): PiClient {
     source: string,
     failures: ExtensionCandidateFailure[],
     scope: ExtensionSourceScope,
-    error: unknown,
+    reason: string,
   ): void {
-    const reason = extensionCandidateFailureReason(error);
     failures.push({ scope, reason });
     log.debug('Pi extension candidate failed', {
       source: extensionSourceDiagnosticLabel(source),
@@ -775,6 +774,13 @@ function createPiClient(modules: PiModules['modules']): PiClient {
           { temporary: true },
         );
         assertPiSessionNotAborted(abortSignal);
+        if (paths.installFailures && paths.installFailures.length > 0) {
+          const reason = paths.installFailures
+            .map(({ message }) => extensionCandidateFailureReason(message))
+            .join('; ');
+          recordExtensionCandidateFailure(search.source, search.failures, scope, reason);
+          continue;
+        }
         if (countEnabledResolvedResources(paths) === 0) {
           recordExtensionCandidateFailure(
             search.source,
@@ -793,7 +799,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
           search.source,
           search.failures,
           scope,
-          error,
+          extensionCandidateFailureReason(error),
         );
       }
     }

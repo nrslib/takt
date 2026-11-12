@@ -91,7 +91,7 @@ export async function showProposal(context: Tui, summary = summaryA, revision = 
   context.client.proposal(summary, revision);
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(summary.objective);
-    expect(context.app.lastFrame()).toMatch(/Approve registration|登録を承認/u);
+    expect(context.app.lastFrame()).toMatch(/Register goal|登録する/u);
   });
 }
 export async function finish(context: Tui, message = 'Completed'): Promise<void> {

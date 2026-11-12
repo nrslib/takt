@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import '../environment.js';
 import { Readable, Writable } from 'node:stream';
 import type { ReadableStream, WritableStream } from 'node:stream/web';
 import {

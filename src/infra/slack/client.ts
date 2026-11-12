@@ -1,7 +1,7 @@
 import { SocketModeClient, LogLevel, type Logger } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
-import type { KnownBlock, ModalView } from '@slack/types';
-import { createLogger } from '../../shared/utils/debug.js';
+import type { KnownBlock } from '@slack/types';
+import { reportDaemonError } from '../daemon/diagnostics.js';
 
 export interface SlackEvent { type: string; body: unknown }
 export interface SlackThread { channelId: string; parentTs: string }
@@ -11,12 +11,11 @@ export interface SlackClient {
   start(receive: (event: SlackEvent) => Promise<void>): Promise<void>;
   postThreadMessage(thread: SlackThread, text: string, blocks?: KnownBlock[]): Promise<SlackDeliveryResult>;
   postMessage(channelId: string, text: string, blocks: KnownBlock[]): Promise<SlackPostResult>;
-  openModal(triggerId: string, view: ModalView): Promise<SlackDeliveryResult>;
   stopAccepting(): void;
   close(): Promise<void>;
 }
 
-const log = createLogger('slack');
+
 // SDK diagnostics may contain credentials, payloads or connection URLs.
 const sdkLogger: Logger = {
   debug() {}, info() {}, warn() {}, error() {}, setLevel() {}, setName() {},
@@ -39,14 +38,14 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
   const web = new WebClient(tokens.botToken, options);
   let accepting = true;
   let closed = false;
-  socket.on('error', () => log.error('Slack connection error'));
+  socket.on('error', () => reportDaemonError('Slack connection error'));
   return {
     async start(receive) {
       socket.on('slack_event', async (event: SlackEvent & { ack(): Promise<void> }) => {
         try {
           await event.ack();
           if (accepting) await receive({ type: event.type, body: event.body });
-        } catch { log.error('Cannot handle Slack event'); }
+        } catch { reportDaemonError('Cannot handle Slack event'); }
       });
       try {
         const starting = socket.start().then(async () => { if (closed) await socket.disconnect(); });
@@ -59,7 +58,7 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
           text, ...(blocks === undefined ? {} : { blocks }), unfurl_links: false, unfurl_media: false }));
         return { kind: 'delivered' };
       } catch {
-        log.error('Cannot post Slack reply');
+        reportDaemonError('Cannot post Slack reply');
         return { kind: 'unavailable', reason: 'Slack reply unavailable' };
       }
     },
@@ -70,18 +69,8 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
         if (!response.ok || typeof response.ts !== 'string' || response.ts.length === 0) throw new Error('Missing Slack timestamp');
         return { kind: 'delivered', parentTs: response.ts };
       } catch {
-        log.error('Cannot post Slack inquiry');
+        reportDaemonError('Cannot post Slack inquiry');
         return { kind: 'unavailable', reason: 'Slack inquiry unavailable' };
-      }
-    },
-    async openModal(triggerId, view) {
-      try {
-        const response = await bounded(web.views.open({ trigger_id: triggerId, view }));
-        if (!response.ok) throw new Error('Slack modal unavailable');
-        return { kind: 'delivered' };
-      } catch {
-        log.error('Cannot open Slack modal');
-        return { kind: 'unavailable', reason: 'Slack modal unavailable' };
       }
     },
     stopAccepting() { accepting = false; },
@@ -89,7 +78,7 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
       accepting = false;
       closed = true;
       try { await bounded(socket.disconnect()); }
-      catch { log.error('Cannot close Slack connection'); }
+      catch { reportDaemonError('Cannot close Slack connection'); }
     },
   };
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { toJSONSchema } from 'zod/v4';
-import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
+import { buildManagerCurrentInput, loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
 
 export default class ManagerWorkSplitOfflineProvider {
   id() {
@@ -24,13 +24,8 @@ export default class ManagerWorkSplitOfflineProvider {
     const reads = JSON.parse(prompt.split(`${label}:\n`)[1].split('\n\n')[0]);
     assert.equal(reads.length, fixture.readResults.length);
     assert.deepEqual(reads.map(({ tool }) => tool), fixture.readResults.map(({ tool }) => tool));
-    if (fixture.turn === 'event') {
-      const user = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-      assert.equal(user.goal.id, fixture.goal.id);
-      assert.equal(user.event.kind, fixture.event.kind);
-    } else {
-      assert.ok(prompt.includes(`USER:\n${fixture.user}`));
-    }
+    const input = prompt.split('USER:\n')[1].split(/\n\n(?:このターンで既に読んだ結果|Results already read this turn):\n/)[0];
+    assert.equal(input, buildManagerCurrentInput(fixture));
     return { output: `${vars.case}/${vars.lang}` };
   }
 }

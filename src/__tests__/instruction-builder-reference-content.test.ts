@@ -36,6 +36,21 @@ describe('InstructionBuilder reference content', () => {
     expect(result).toContain('/tmp/reference.md');
   });
 
+  it.each(['en', 'ja'] as const)('matches direct policy injection with a merged snapshot reference (%s)', (language) => {
+    const contents = ['FIRST-RULE\nFIRST-RULE\n' + 'a'.repeat(2_100), 'LAST-RULE'];
+    const combined = contents.join('\n\n---\n\n');
+    const step = makeStep({ policyContents: contents.map(content => ({ content, sourcePath: '/original.md' })) });
+    const context = makeInstructionContext({ language, policySourcePath: '/snapshot.md' });
+    const direct = new InstructionBuilder(step, context).build();
+    const snapshot = new InstructionBuilder(step, {
+      ...context,
+      policyContents: [{ content: combined, sourcePath: '/snapshot.md' }],
+    }).build();
+
+    expect(snapshot).toBe(direct);
+    expect(snapshot).toContain('/snapshot.md');
+  });
+
   it('omits source metadata when a previous response is not truncated', () => {
     const result = preparePreviousResponseContent('完了内容', '/tmp/response.md', false, 'ja');
 

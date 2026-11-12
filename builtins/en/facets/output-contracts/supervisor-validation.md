@@ -13,6 +13,11 @@
 |---------------------|---------------------|--------|----------|
 | {ID and report name} | {Original acceptance criteria; if an adjudication exists, note any criteria it removed and the reasons} | {Resolved / Unresolved / Unsupported / Unnecessary expansion / Outside this task} | {Current-code file:line or a verification result in a preceding report} |
 
+## Repair History
+| Problem ID | Earlier Method and Assumptions | Resolved Conditions and Verification | Current Counterexample and Scope Evidence | Shared Cause and Remaining Assumption | Why Earlier Verification Missed It | Fixed-Version References | Actual Method and Fit to Latest Requirements / Adjudication |
+|------------|--------------------------------|--------------------------------------|------------------------------------------|---------------------------------------|------------------------------------|--------------------------| -------------------------- |
+| {Target ID, or N/A and reason} | {Earlier method and required assumptions} | {Checked inputs, paths, and results} | {New failure condition and requirement/code basis} | {Confirmed mechanism or unresolved hypotheses} | {Conditions not observed} | {Fixed paths and locations for the plan, repair, and verification from the same execution; note missing records} | {Actual method and evidence explaining its fit to the latest requirements and adjudication} |
+
 ## Unresolved Problems
 | Problem ID | Related Requirement or Finding | Violated Condition | Cause | Relevant Paths | Evidence | Completion Criteria | Required Action |
 |------------|--------------------------------|--------------------|-------|----------------|----------|---------------------|-----------------|

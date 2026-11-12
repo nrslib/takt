@@ -12,18 +12,6 @@ export interface PrivateFileInspection {
   expectedStat: Stats | undefined;
 }
 
-export class PrivateArtifactAncestorIdentityMismatchError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'PrivateArtifactAncestorIdentityMismatchError';
-  }
-}
-
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
-}
-
 export function lstatOrUndefined(path: string): Stats | undefined {
   try {
     return lstatSync(path) as Stats;
@@ -158,26 +146,10 @@ export function hasMatchingDirectoryIdentity(expected: Stats, actual: Stats): bo
     && expected.isDirectory() === actual.isDirectory();
 }
 
+/** 古い Store が渡すディレクトリ一覧の種別だけを確認する。祖先の同一性は検査しない。 */
 export function assertAncestorIdentities(identities: readonly DirectoryIdentity[]): void {
   for (const identity of identities) {
-    let current: Stats;
-    try {
-      current = identity.followSymbolicLink
-        ? statSync(identity.path) as Stats
-        : lstatSync(identity.path) as Stats;
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      throw new PrivateArtifactAncestorIdentityMismatchError(
-        `Private artifact ancestor disappeared while opening: ${identity.path}`,
-        { cause: error },
-      );
-    }
-    if (!current.isDirectory() || !hasMatchingDirectoryIdentity(identity.stat, current)) {
-      throw new PrivateArtifactAncestorIdentityMismatchError(
-        `Private artifact ancestor identity changed while opening: ${identity.path}`,
-      );
-    }
+    const stat = identity.followSymbolicLink ? statSync(identity.path) : lstatSync(identity.path);
+    if (!stat.isDirectory()) throw new Error(`Private artifact ancestor is not a directory: ${identity.path}`);
   }
 }

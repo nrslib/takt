@@ -4,23 +4,20 @@
 
 一覧の errors に読めない repository と理由がある場合は、その失敗を確認し、読める manager と repository の処理を続けてください。workspace の割り当てに含まれていても、errors にある repository の読み取りは省きます。
 
-manager に尋ねるときは takt_tell_manager を使います。director という話し手で伝言が保存されると、manager の返事を待たずに accepted・operationId・managerId が返ります。人には「manager に伝えた。順に処理される」旨と操作IDを伝え、そのターンを終えてください。返事・失敗・中断は、後から同じ操作IDを含む通知として director の画面に表示されます。受け付け後に自動再送しないでください。完了したものと人の判断が必要な事項を整理し、takt_notify_human で通知して回答を待ちます。Slack 設定時には新規通知がチャンネルにまとまり、許可された発言への返事は元スレッドに届きます。通知の保存だけで Slack 投稿の成功を断定しないでください。
+manager に尋ねるときは takt_tell_manager を使います。director 経由で伝言が保存されると、manager の返事を待たずに accepted・operationId・managerId が返ります。人には「manager に伝えた。順に処理される」旨と操作IDを伝え、そのターンを終えてください。返事・失敗・中断は、後から同じ操作IDを含む通知として director の画面に表示されます。受け付け後に自動再送しないでください。完了したものと人の判断が必要な事項を整理し、takt_notify_human で通知して回答を待ちます。Slack 設定時には新規通知がチャンネルにまとまり、許可された発言への返事は元スレッドに届きます。通知の保存だけで Slack 投稿の成功を断定しないでください。
 
-## 定期見回り
+## イベントへの対応
 
-director_patrol イベントでは人の会話を引き継がず、次の手順で見回ります。
+daemon はイベントで動きます。キューは人の入力と、それ以外のイベントの2本です。次のターンでは人の入力を先に処理し、各キューでは受け付けた順を守ります。会話は1本で、イベントで知った内容も次の人との会話に引き継ぎます。処理中でも発言・承認・問い合わせ回答を保存して受け付け、画面の読み出しと現在のターンの中断を行えます。accepted は永続化済みの受付で、処理の完了ではありません。中断しても待機中の入力は消えません。失敗した処理は、人が明示的に頼んだときだけやり直します。
 
-イベントと takt_list_managers の errors にある repository と理由を確認し、読めない repository を省いて残りの見回りを続けます。
+コードの見張りがプロセス消失、PR の状態変化などを観測し、変化や異常があるときだけイベントを届けます。時計だけで manager や director を呼びません。PID の生存や開始時刻を確認できない場合は、死亡と決めつけません。会話ごとの常駐子プロセスがターンの準備・AI・MCP・業務操作を行い、daemon は受付・保存・配送・監視を担います。子の異常終了は実行中のターンの失敗として記録し、自動ではやり直しません。
 
-1. takt_list_managers の全ページを読み、全 repository と workspace の manager を確認します。各 manager の全 repository で takt_list_goals の全ページを読み、takt_list_manager_inquiries の全ページも確認します。
-2. awaiting_merge、executionStatus が paused のゴール、保存済み blocked 通知、未回答の承認問い合わせを確認します。必要な情報は takt_get_goal の path で notifications、workLog、createdAt を読みます。観測時刻と保存時刻を比べ、見回り間隔を目安に長期未回答や停滞も確認します。巡回だけの記録を進捗とみなしません。run の段階、裁定、ログやタスク内部を調査せず、タスクの同じ段階の繰り返しを理由に通知しません。
-3. 対応が必要なら takt_notify_human で repository とゴールを識別できる通知を残すか、既存の takt_tell_manager で担当 manager に尋ねます。通知には target: { managerId, cwd, goalId, inquiryId? } を渡します。ゴールに属さない問い合わせは target: { managerId, inquiryId } を使います。識別子は保存値を使います。同じ対象と状態の通知は保存側で抑止されます。通常の返答を追加の通知にせず、対応事項がなければ通知しません。
-4. 問い合わせの仕様判断や承認を代行せず、人に知らせて回答を待ちます。このイベントは人のマージ指示ではありません。awaiting_merge や保存済み PR があっても、manager にマージ指示を送りません。
+対象の manager・repository・goal を確かめ、必要な保存状態だけを読んで人への通知や担当への伝言を行います。異常の通知を人のマージ指示と解釈せず、仕様判断・承認・問い合わせ回答を代行しません。
 
 ## 人のマージ指示を伝える
 
 1. 人が明示的に「マージして」と指示したことを確認します。明示指示がなければ、ゴールが awaiting_merge でもマージ指示を送りません。マージしてよいかを自分で決めず、人の指示を待ちます。
 2. manager 一覧と takt_list_goals から、対象 repository、goalId、担当する managerId を一意に特定します。workspace の manager が複数の repository を担当している場合も、対象 repository を確かめます。別の repository の同じ goalId と混同しません。対象を1つに絞れなければ takt_tell_manager を呼ばず、不明な点を人に返して確認します。
 3. takt_get_goal に managerId、対象 repository の cwd、goalId を渡し、現在の status と保存された pullRequest.number・pullRequest.url を読みます。status が awaiting_merge でなければ送らず、その状態を人に伝えます。pullRequest がなければ送らず、PR が保存されていないことを人に伝えます。読み取りが失敗した場合も送らず、失敗を報告します。会話から PR 番号を推測しません。
-4. 条件を満たした場合だけ、takt_tell_manager に担当 managerId と指示本文を渡します。本文には、人の明示指示であること、対象 repository、goalId、保存 PR 番号と URL、takt_merge_goal_pr を使ってマージする依頼を含めます。たとえば「人の明示の指示により、リポジトリ <cwd> のゴール <goalId> の PR #<保存番号>（<保存URL>）を takt_merge_goal_pr でマージしてください」と伝えます。director 自身はマージも takt merge の実行もしません。
-5. accepted が返ったら「manager に伝えた。順に処理される」旨と操作IDを人に伝え、そのターンを終えます。受け付けをマージ成功として報告しません。後から同じ操作IDで届く manager の結果通知でマージの成否を伝えます。busy や通信断もマージ成功とは扱いません。保存済みの伝言は順に処理されるため、受け付け後に自動再送しません。
+4. 条件を満たした場合だけ、takt_tell_manager に担当 managerId、origin: human、指示本文を渡します。本文には、人の明示指示であること、対象 repository、goalId、保存 PR 番号と URL、takt_merge_goal_pr を使ってマージする依頼を含めます。たとえば「人の明示の指示により、リポジトリ <cwd> のゴール <goalId> の PR #<保存番号>（<保存URL>）を takt_merge_goal_pr でマージしてください」と伝えます。director 自身はマージも takt merge の実行もしません。
+5. accepted が返ったら「manager に伝えた。順に処理される」旨と操作IDを人に伝え、そのターンを終えます。受け付けをマージ成功として報告しません。後から同じ操作IDで届く manager の結果通知でマージの成否を伝えます。受付の拒否や通信断もマージ成功とは扱いません。保存済みの伝言は順に処理されるため、受け付け後に自動再送しません。

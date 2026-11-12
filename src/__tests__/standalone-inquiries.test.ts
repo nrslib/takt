@@ -3,6 +3,13 @@ import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
+import { askTaktStandaloneQuestion } from '../features/mcp/standaloneInquiryOperations.js';
+import { askStandaloneQuestionInputSchema } from '../features/mcp/schemas.js';
+import { sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+
+vi.mock('../features/manager/notifications.js', () => ({ sendSavedStandaloneQuestionNotification: vi.fn() }));
+vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
 
 const io = vi.hoisted(() => ({
   read: vi.fn(), syncRead: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(),
@@ -14,7 +21,7 @@ vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
   readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access,
 }));
-vi.mock('../infra/config/project/sessionStore.js', () => ({ writeFileAtomic: io.write }));
+vi.mock('../shared/utils/atomic-file.js', () => ({ writeFileAtomic: io.write }));
 vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('node:crypto', async (original) => {
@@ -75,6 +82,32 @@ beforeEach(() => {
   })());
 });
 afterEach(() => vi.useRealTimers());
+
+it('saves a standalone MCP question before notifying and returns its saved ID', async () => {
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?', options: ['A', 'B'], recommendation: 'A' });
+  const result = await askTaktStandaloneQuestion(input, config, workspace, new AbortController().signal);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: firstId });
+  const saved = await new StandaloneInquiryStore(config, workspace).get(firstId);
+  expect(saved).toMatchObject({ body: input.body, options: input.options, recommendation: input.recommendation,
+    status: 'pending', kind: 'question', operation: { cwd: input.cwd, toolName: 'takt_ask_standalone_question', args: JSON.stringify(input) } });
+  expect(sendSavedStandaloneQuestionNotification).toHaveBeenCalledExactlyOnceWith(input.cwd, saved);
+  expect(io.write.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(sendSavedStandaloneQuestionNotification).mock.invocationCallOrder[0]!);
+});
+
+it('does not notify when saving a standalone MCP question fails', async () => {
+  io.write.mockImplementationOnce(() => { throw new Error('write failed'); });
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?' });
+  await expect(askTaktStandaloneQuestion(input, config, workspace, new AbortController().signal)).rejects.toThrow();
+  expect(files.size).toBe(0);
+  expect(sendSavedStandaloneQuestionNotification).not.toHaveBeenCalled();
+});
+
+it('does not save or notify a cancelled standalone MCP question', async () => {
+  const input = askStandaloneQuestionInputSchema.parse({ cwd: repository.repositoryDirectory, body: 'Which goal?' });
+  await expect(askTaktStandaloneQuestion(input, config, workspace, AbortSignal.abort())).rejects.toThrow();
+  expect(files.size).toBe(0);
+  expect(sendSavedStandaloneQuestionNotification).not.toHaveBeenCalled();
+});
 
 describe('standalone inquiry ownership and persistence', () => {
   it('stores a workspace inquiry in its config directory and restores the full shared record', async () => {
@@ -434,172 +467,6 @@ describe('standalone pending inquiry pages', () => {
   });
 });
 
-describe('standalone approval retrieval and creation', () => {
-  const input = { kind: 'approval' as const, body: '出力先を確認してください',
-    operation: { toolName: 'Write', args: '{"content":"hello"}', cwd: '/operation' } };
-
-  it.each([workspace, repository])('reuses the saved ID for sequential $kind requests and after reopening', async (owner) => {
-    const store = new StandaloneInquiryStore(config, owner);
-    const first = await store.getOrCreateApproval(input);
-    const second = await store.getOrCreateApproval(input);
-    expect(first.id).toBe(firstId);
-    expect(first.id).toBe(second.id);
-    expect(files.size).toBe(1);
-    expect(await new StandaloneInquiryStore(config, owner).getOrCreateApproval({ ...input, body: '再確認してください' })).toEqual(first);
-    expect(await store.listPending()).toEqual([first]);
-    expect(io.write).toHaveBeenCalledOnce();
-  });
-
-  it.each(['toolName', 'args', 'cwd', 'targetSha'] as const)('creates a distinct approval when %s differs', async (field) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const first = await store.getOrCreateApproval(input);
-    const changed = field === 'targetSha' ? { ...input, targetSha: 'a'.repeat(40) }
-      : { ...input, operation: { ...input.operation, [field]: field === 'toolName' ? 'Edit' : field === 'args' ? '{}' : '/other' } };
-    const second = await store.getOrCreateApproval(changed);
-    expect(second.id).not.toBe(first.id);
-    expect(await store.listPending()).toEqual([first, second]);
-  });
-
-  it.each([secondId, firstId] as const)('preserves another operation when the candidate ID is %s', async (candidateId) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const previous = await store.create({ ...input, operation: { ...input.operation, args: '{"content":"previous"}' } });
-    const before = new Map(files);
-    vi.mocked(crypto.randomUUID).mockReset().mockReturnValue(candidateId);
-
-    if (candidateId === firstId) {
-      await expect(store.getOrCreateApproval(input)).rejects.toThrow();
-      expect(files).toEqual(before);
-      expect(await store.list()).toEqual([previous]);
-    } else {
-      const created = await store.getOrCreateApproval(input);
-      expect(created).toMatchObject({ id: secondId, kind: 'approval', status: 'pending',
-        operation: { ...input.operation, argsDigest: crypto.createHash('sha256').update(input.operation.args).digest('hex') } });
-      expect(files.get(workspaceFile(firstId))).toBe(before.get(workspaceFile(firstId)));
-      expect(await store.list()).toEqual([previous, created]);
-    }
-  });
-
-  it.each(['pending', 'answered', 'withdrawn'] as const)('handles a candidate ID matching a %s approval without replacing it', async (status) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const previous = await store.create(input);
-    const saved = status === 'answered' ? await store.answer(previous.id, { decision: 'allow' })
-      : status === 'withdrawn' ? await store.withdraw(previous.id) : previous;
-    const before = new Map(files);
-    vi.mocked(crypto.randomUUID).mockReset().mockReturnValue(firstId);
-
-    if (status === 'pending') expect(await store.getOrCreateApproval(input)).toEqual(saved);
-    else await expect(store.getOrCreateApproval(input)).rejects.toThrow();
-
-    expect(files).toEqual(before);
-    expect(await store.list()).toEqual([saved]);
-  });
-
-  it('selects the first matching filename regardless of directory enumeration order and validates all records', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    vi.mocked(crypto.randomUUID).mockReset().mockReturnValueOnce(secondId).mockReturnValue(firstId);
-    await store.create(input);
-    const first = await store.create({ ...input, body: '以前の確認' });
-    expect(await store.getOrCreateApproval(input)).toEqual(first);
-    expect(io.read).toHaveBeenCalledTimes(2);
-    expect(io.close).toHaveBeenCalledOnce();
-    expect(files.size).toBe(2);
-    expect(io.write).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(['answered', 'withdrawn', 'question', 'operation_request'] as const)('does not reuse a matching %s inquiry', async (state) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const previous = await store.create({ ...input, kind: state === 'question' || state === 'operation_request' ? state : 'approval' });
-    if (state === 'answered') await store.answer(previous.id, { decision: 'allow' });
-    if (state === 'withdrawn') await store.withdraw(previous.id);
-    const created = await store.getOrCreateApproval(input);
-    expect(created.id).not.toBe(previous.id);
-    expect(files.size).toBe(2);
-    expect(created).toMatchObject({ kind: 'approval', status: 'pending' });
-  });
-
-  it.each(['{', JSON.stringify({ id: firstId, status: 'answered' }),
-    JSON.stringify({ id: secondId, recipient: 'human', body: '別のID', status: 'pending' })])('rejects invalid saved data without saving: %s', async (serialized) => {
-    files.set(workspaceFile(firstId), serialized);
-    const before = new Map(files);
-    await expect(new StandaloneInquiryStore(config, workspace).getOrCreateApproval(input)).rejects.toThrow();
-    expect(files).toEqual(before);
-    expect(io.write).not.toHaveBeenCalled();
-  });
-
-  it('validates history even after finding a matching approval', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    await store.getOrCreateApproval(input);
-    files.set(workspaceFile(secondId), '{');
-    await expect(store.getOrCreateApproval(input)).rejects.toThrow();
-    expect(io.write).toHaveBeenCalledOnce();
-  });
-
-  it('rejects invalid filenames before saving a new approval', async () => {
-    files.set(workspaceFile('invalid'), '{}');
-    await expect(new StandaloneInquiryStore(config, workspace).getOrCreateApproval(input)).rejects.toThrow();
-    expect(io.read).not.toHaveBeenCalled();
-    expect(io.write).not.toHaveBeenCalled();
-  });
-
-  it.each(['directory creation', 'directory read', 'file read', 'ID access', 'save'] as const)(
-    'propagates %s failure and preserves saved records', async (stage) => {
-      const store = new StandaloneInquiryStore(config, workspace);
-      const previous = await store.create({ body: '既存の相談' });
-      const before = new Map(files);
-      const failure = Object.assign(new Error('storage failed'), { code: 'EACCES' });
-      if (stage === 'directory creation') io.mkdir.mockRejectedValueOnce(failure);
-      if (stage === 'directory read') io.opendir.mockRejectedValueOnce(failure);
-      if (stage === 'file read') io.read.mockRejectedValueOnce(failure);
-      if (stage === 'ID access') io.access.mockRejectedValueOnce(failure);
-      if (stage === 'save') io.write.mockImplementationOnce(() => { throw failure; });
-      await expect(store.getOrCreateApproval(input)).rejects.toBe(failure);
-      expect(files).toEqual(before);
-      expect(await store.list()).toEqual([previous]);
-    },
-  );
-
-  it.each([true, false])('propagates iteration failure after a matching approval is %s and closes without saving', async (matching) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    await store.create(matching ? input : { body: '既存の相談' });
-    const before = new Map(files);
-    const failure = Object.assign(new Error('iteration failed'), { code: 'EACCES' });
-    io.opendir.mockResolvedValueOnce((async function* () {
-      try {
-        yield { name: `${firstId}.json`, isFile: () => true };
-        throw failure;
-      } finally {
-        io.close();
-      }
-    })());
-
-    await expect(store.getOrCreateApproval(input)).rejects.toBe(failure);
-    expect(files).toEqual(before);
-    expect(io.write).toHaveBeenCalledOnce();
-    expect(io.read).toHaveBeenCalledOnce();
-    expect(io.close).toHaveBeenCalledOnce();
-  });
-
-  it.each(['answered', 'withdrawn'] as const)('creates a fresh approval after a %s approval', async (status) => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const previous = await store.getOrCreateApproval(input);
-    const terminal = status === 'answered' ? await store.answer(previous.id, { decision: 'allow' }) : await store.withdraw(previous.id);
-    const original = files.get(workspaceFile(previous.id));
-    const next = await store.getOrCreateApproval(input);
-    expect(next.id).not.toBe(previous.id);
-    expect(await store.getOrCreateApproval({ ...input, body: '再確認' })).toEqual(next);
-    expect(files.get(workspaceFile(previous.id))).toBe(original);
-    expect(await store.list()).toEqual(expect.arrayContaining([terminal, next]));
-    expect(await store.listPending()).toEqual([next]);
-  });
-
-  it('reuses pending approvals created with random IDs', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const previous = await store.create(input);
-    expect(await store.getOrCreateApproval({ ...input, body: '再確認' })).toEqual(previous);
-    expect(files.size).toBe(1);
-  });
-});
-
 describe('standalone inquiry updates', () => {
   it.each([
     { kind: 'question' as const, answer: 'JSON', expected: { text: 'JSON' } },
@@ -652,44 +519,5 @@ describe('standalone inquiry updates', () => {
     io.write.mockImplementationOnce(() => { throw new Error('publication failed'); });
     await expect(store.create({ body: '新しい相談' })).rejects.toThrow('publication failed');
     expect(await store.list()).toEqual([first]);
-  });
-});
-
-describe('standalone approval consumption', () => {
-  const operation = { toolName: 'Write', args: '{}', cwd: '/project' };
-
-  it('reloads and consumes an approval once across concurrent store instances', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const pending = await store.create({ kind: 'approval', body: '確認', operation });
-    const allowed = await store.answer(pending.id, { decision: 'allow', scope: 'once' });
-    const results = await Promise.allSettled([
-      store.consumeApproval(allowed, now),
-      new StandaloneInquiryStore(config, workspace).consumeApproval(allowed, now),
-    ]);
-    expect(results.map(({ status }) => status).sort()).toEqual(['fulfilled', 'rejected']);
-    expect(await store.list()).toEqual([{ ...allowed, consumedAt: now }]);
-    expect(allowed.consumedAt).toBeUndefined();
-  });
-
-  it('does not consume an approval whose persisted operation changed', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const pending = await store.create({ kind: 'approval', body: '確認', operation });
-    const allowed = await store.answer(pending.id, { decision: 'allow' });
-    const changed = GoalQuestionSchema.parse({ ...allowed, operation: { ...allowed.operation, cwd: '/other' } });
-    files.set(workspaceFile(pending.id), JSON.stringify(changed));
-    io.write.mockClear();
-    await expect(store.consumeApproval(allowed, now)).rejects.toThrow();
-    expect(io.write).not.toHaveBeenCalled();
-    expect(await store.list()).toEqual([changed]);
-  });
-
-  it('leaves persisted approval available when publication fails', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    const pending = await store.create({ kind: 'approval', body: '確認', operation });
-    const allowed = await store.answer(pending.id, { decision: 'allow' });
-    io.write.mockImplementationOnce(() => { throw new Error('publication failed'); });
-    await expect(store.consumeApproval(allowed, now)).rejects.toThrow();
-    expect(await store.list()).toEqual([allowed]);
-    expect(await store.consumeApproval(allowed, now)).toMatchObject({ consumedAt: now });
   });
 });

@@ -1,55 +1,76 @@
-# TAKT の manager
+# TAKT manager
 
-## 会話とイベント
+## ゴール、タスク、成果
 
-TUI は相談、要約の承認、質問への回答、一時停止・再開・中止、表示を担当します。登録・回答・タスク終了・巡回のイベントは daemon 内の manager が順に処理し、作業の記録を残します。TUI の manager はその記録を受け取って会話を続けます。自動実行が無効なら、人が run / watch を起動します。
+一つの manager は workspace で複数リポジトリを担当できます。一つのゴールは一つの担当リポジトリで進みます。担当解除は、所属ゴールがそれぞれ完成済みまたは中止済みのリポジトリで成立します。
 
-入力欄に /make-goal と打って Enter を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも /make-goal は作り直すだけで、登録はしません。案は ↑ 承認 / ↓ 続行 / Enter 決定で操作し、承認を選んで Enter で登録します。材料不足ならその旨を表示して会話を続けられます。入力欄で / を打つと /make-goal が補完候補に出て、Tab で確定できます。/make-goal 以外の / で始まる入力は、普通の発言として manager に送ります。Ctrl+R は未回答の問い合わせ一覧、Ctrl+G は進行中のゴール（実行中・一時停止中）の一覧を開きます。この2つのキーは処理中でも使えます。
+タスクの終了、成果のゴールブランチへの取り込み、PR のマージ、ゴールの完成は、それぞれの操作と状態で記録されます。accepted は受付済み、タスクの成功は実行結果を表します。取り込み状態は takt_list_tasks の goalIntegration（integrated / not_integrated / unknown / direct_push）に返り、unknown の理由は goalIntegrationReason に返ります。direct_push は PR ブランチへ直接 push するタスクを表します。
 
-通常画面に流れる知らせは見出しの行・ゴールの行・本文の先頭数行の要点だけです。起動前に保存された知らせは、manager の起動時に画面へ流れません。人に知らせの全文や過去の知らせを求められたら、ゴールの記録から読んで答えます。
+ゴールは TUI または Slack の登録案を人が承認すると登録されます。/make-goal は会話から登録案を作り直します。
 
-登録は TUI で行います。一時停止・再開・中止は TUI に加え、会話で頼まれたときに人の確認を経て manager からも行えます。会話の状態操作の道具は、判断役が接続される Claude（claude-sdk）と Codex に公開されます。
+## 実行とイベント
 
-1つの manager は workspace で複数のリポジトリを担当できます。担当の追加・削除と名前変更は会話で依頼できます。どの所属リポジトリで起動しても同じ workspace が開きます。1つのゴールは1つの担当リポジトリで進みます。未完成のゴールがあれば担当を外せません。
+一時停止は実行と後続イベントを保留し、中止は終端状態です。再開すると待機中のタスクも実行可能になります。保存されたタスクの指示は、指示変更の操作によって更新されます。
 
-## 道具
+タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-manager の道具は既存の TAKT の機能への口です。タスク一覧、run の詳細、差分、履歴、ブランチの関係を読み、投入、再開、やり直し、削除、ゴール用ブランチへの取り込み、完成の確認を行えます。takt_list_tasks はゴールの各タスクに goalIntegration（integrated / not_integrated / unknown）を返し、unknown のときは goalIntegrationReason に理由を出します。取り込み済みかは goalIntegration で確かめてください。ゴールの操作には対象リポジトリの cwd と goalId を渡します。道具の引数定義を確認して使ってください。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
-- 終了イベントと run の詳細で原因と止まった位置を確認してから道具を選びます。
-- 外の事情（容量・認証・ネットワーク・一時的な障害）や上限で止まり、それまでの作業が使えるなら takt_requeue_goal_task で再開します。
-- 指示の不足や誤りを直し、同じ作業をやり直すなら takt_retry_goal_task を使います。
-- 分け方を変えたり別の作業にしたりするなら takt_enqueue_goal_task で新しく投入します。
-- takt_remove_goal_task で不要な待機中の作業を取り消し、取り込み済みの完了タスクややり直さない失敗・上限超過のタスクを理由付きで片付けます。実行中や未取り込みの完了タスクは削除できません。
-- takt_pause_goal / takt_resume_goal / takt_abort_goal は対象の cwd と goalId を受け取り、中止には理由が必要です。takt_list_goals で特定し、曖昧なら人に質問します。どの操作も判断役を通した人の確認が必要です。一時停止は実行中タスクを止めず、新しい実行とイベント処理を保留します。再開は保留した処理を進めます。中止は未実行タスクを無効にし、実行中タスクを中断します。中止は取り消せず、記録・ブランチは残るため、実行前の確認事項に含めます。
-- takt_list_standalone_inquiries は、現在の担当先に保存された、ゴールに属さない未回答の問い合わせを読み、id・種類・本文・作成時刻などを返します。
-- takt_withdraw_standalone_inquiry は、ゴールに属さない未回答の問い合わせを id と理由で取り下げます。未回答でないものは状態も保存済みの回答も変えません。
-- takt_tell_run は実行中のゴールタスクに追加の指示を送り、同じ内容を作業の記録に保存します。cwd、goalId、taskName、content を渡します。
+manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
-保存された再開位置が使えなければ、返された候補と run の詳細から開始位置を選びます。
+同時実行上限は、プロジェクトの run / watch 全体で共有する数です。manager の自動 run は auto_run に従ってゴールタスクを実行し、自動再試行回数は 0 回です。実行の二重起動はロックで調整され、復旧は保存された状態から manager が判断します。道具使用後に失敗したターンは失敗として保存され、その後の復旧も manager が判断します。
 
-ゴール用ブランチに成果を集め、取り込み先に反映して完成します。manager.main_merge は approve が既定で、PR を公開して director 経由の人の明示指示を待ちます。auto は自動で取り込みますが、取り込み先がチェックアウト中なら PR を公開し、同じ指示を待ちます。
+## 道具と復旧
 
-## 記憶と通知
+ゴール操作は対象の cwd と goalId を使います。各道具の引数と返却値は公開された定義に従います。
 
-ゴールの記憶には目的、範囲外、受け入れ条件、constraints、workLog、質問と回答があります。現在の状態はタスク、run、git で確認します。作業の記録は takt_record_goal_work_log で会話からも保存できます。巡回の点検や通知だけを記録するときは kind: patrol を指定します。投入や取り込みなど実際に作業を進めた記録では省略します。
+- takt_get_workflow は、名前・scope reference・パスを workflow に受け、段階の名前・説明・種類、wait、system_inputs、effects、rules を返します。workflow_call は解決済みの呼び先と getInput を返し、getInput の workflow と callPath で続けて辿れます。応答は 64 KiB 以内で、省略部分は offset / limit で取得できます。
+- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。
+- takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed は startStep も指定でき、exceeded は保存位置からの再開を使います。保存位置の利用可否、理由、開始候補が応答に返ります。
+- takt_retry_goal_task は指示を更新し、同じ failed タスクを pending に戻します。
+- takt_remove_goal_task は理由を受け、pending の取消や停止済み・取り込み済み成果の片付けを行います。一時停止中の pending も取消対象です。未取り込みの完了成果の破棄には discardUnmerged: true を使います。実行中タスクの停止には takt_stop_goal_task を使います。cleanup の失敗は操作結果に現れます。
+- takt_stop_goal_task は goalId、taskName、executionId、生存 PID を照合して停止要求を保存します。保存済み開始時刻も照合に使われます。worker が要求を観測して停止し、それまでは running が残ります。
+- takt_tell_run は cwd、goalId、taskName、content で追加指示を送り、原文を作業記録に保存します。
+- takt_pause_goal / takt_resume_goal / takt_abort_goal は cwd、goalId を使い、中止には理由を受けます。一時停止で止まったタスクは `Goal <id> was paused` の失敗として残り、開始前なら位置や run の情報が空の場合もあります。再開後は保存状態に応じて同じタスクを続けられます。中止は未実行を無効化し、実行中を中断して記録とブランチを保持します。completed は完成済みの記録として参照します。
+- takt_list_standalone_inquiries は現在の担当のゴールなしの未回答を返します。takt_withdraw_standalone_inquiry は id と理由で未回答を取り下げ、回答済みの記録を保持します。
 
-質問は人宛てです。TUI の Ctrl+R で問い合わせ一覧を開き、選択肢や自由記述の回答を保存します。Slack からの回答受信は未実装です。ゴールの完成・中止で残る問い合わせはコードが閉じるため、manager は重ねて閉じません。一時停止では問い合わせを閉じず、イベントを保留します。中止済みのゴールは再開できません。
+## 取り込みと PR
 
-manager は毎ターン、ゴール所属とゴールなしの未回答の問い合わせを点検します。もう動いていない操作の承認など意味がなくなったものは理由付きで取り下げ、その理由を作業の記録に残します。人の判断が今も必要なものは残します。
+通常タスクの成果はゴールブランチへ集め、そこから取り込み先へ反映します。
 
-通知は TUI と Slack に届き、manager.notifications の question / awaiting_merge / completed / progress / blocked / custom で種類ごとに有効・無効を切り替えます。質問の回答画面は通知を無効にしても残ります。manager のイベント処理や TUI の会話が失敗したら blocked を通知します。同じ失敗でも通知し、失敗状態のファイルは作りません。Slack の Webhook が未設定なら送信せず、送信失敗はログに出して作業を続けます。
+takt_complete_goal は expectedSha、証拠付き summary、PR 用の humanChecks を受けます。awaiting_merge ではブランチを push し、保存された取り込み先を base に PR を作成または再利用します。GitHub、origin、PR の head/base を照合し、pullRequest に番号と URL を保存します。取り込み先に内容が未反映なら、PR 保存済みの同じ SHA の再申請で completion の summary と PR 本文を更新できます。PR 未保存で準備を再試行する場合、保存済み humanChecks を優先します。入力した値は未保存欄の補完にだけ使い、その場合は保存済み summary を維持します。humanChecks を省略すれば保存済み値を再利用し、入力 summary を保存できます。保存値も入力値もない場合は、PR 準備前にエラーになります。再申請前にゴールブランチ先端を確認して検証し、保存済み goalSha から進んでいれば新しい先端を確認し直し、その expectedSha、summary、humanChecks で再申請します。既存 PR 本文の読み取りや更新だけが失敗した場合、保存 PR は保持され pullRequestBodyError が返ります。
 
-## 巡回の材料
+保存済みの完成記録を訂正・確認する方法は、申請済み SHA と現在のゴールブランチ先端に応じて選びます。
 
-巡回イベントには観測時刻と、巡回だけの記録を除いた最後の作業の記録の時刻が含まれます。記録がなければゴールの作成時刻を使います。既存の記録に作成時刻がない場合、その時刻は不明です。
+- 再申請前にゴールブランチ先端を確認して検証します。先端が申請済み SHA から進んでいれば、新しい先端を確認し直し、新しい expectedSha、summary、humanChecks で takt_complete_goal に再申請します。申請済み SHA が取り込み先に反映済みの場合も同じです。
+- 先端が申請済み SHA のままで、その SHA が取り込み先に未反映の場合は、保存済みの根拠を訂正するために takt_reopen_goal に理由を渡して created へ戻し、確認済み expectedSha、訂正済み summary、humanChecks で takt_complete_goal に再申請します。
+- 申請済み SHA が取り込み先に反映済みで、現在のゴールブランチ先端も同じ SHA の場合は、同じ expectedSha と訂正済み summary で takt_complete_goal を呼び、根拠を訂正します。反映済み SHA に takt_reopen_goal は使いません。
+- 申請済み SHA が取り込み先に反映済みで、根拠の訂正が不要な場合は、takt_check_goal_completion で完成を確認します。
 
-タスクの startedAt は実行開始、質問とゴールの createdAt は作成時刻です。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount と、終了した段階の timestamp / iteration を返します。開始時刻と回数は保存された開始ログから読み、現在の段階に対応するログがなければ開始時刻は不明です。
+takt_merge_goal_pr は cwd、goalId、保存 PR に一致する prNumber、until を受け、マージ用タスクを pending に積んでタスク名を返します。until: prepare は merge.prepare_workflow（既定は merge-prepare）、until: merge は merge.workflow（既定は merge-review-fix-simple）を使います。保存 PR、awaiting_merge、停止状態が照合されます。
 
-manager.patrol_interval は秒単位で、既定は 900 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。
+マージ用タスクは PR ブランチへ直接 push します。手元のゴールブランチが祖先なら fast-forward し、分岐やチェックアウト中の作業コピーは元の内容を保持して結果に記録します。workflow が COMPLETE で終わり、PR が準備段階にある場合は、成功・prepared として届きます。
 
-## ゴールの PR
+takt_check_goal_completion は保存 PR の head/base とマージ状態を照合し、squash や追加コミットを含む完成確認に対応します。保存 PR が CLOSED の場合は included: false を返します。PR 状態に応じて取り込み先との内容比較も使います。completion とマージ済み PR を保持した created のゴールも確認対象です。完成時は status を completed に更新し、対象の問い合わせを閉じます。
 
-完成申請が awaiting_merge になるとブランチを push し、取り込み先を base とする PR を作成または再利用します。PR 本文は目的、ブランチ差分による変更、summary の確認結果、humanChecks の人の確認手順を含みます。PR の番号と URL は pullRequest に保存され、takt_get_goal / takt_list_goals から読めます。
+## 会話、記録、問い合わせ
 
-takt_merge_goal_pr は cwd、goalId、保存 PR と一致する正整数の prNumber、現在のターンで渡された conversationOperationId で、そのリポジトリの takt merge を動かします。director 経由の人の明示指示がある場合だけ使います。道具の成功だけでは完成せず、takt_check_goal_completion を使います。保存 PR の元のブランチと取り込み先がゴールの保存内容に一致し、マージ済みなら、squash や PR への追加変更で内容や先端 SHA が変わっていても完成できます。巡回で人によるマージを知ったときも、取り込み先をゴールブランチに取り込むタスクは投入せず、この完成確認を使います。PR を確認できない取り込み待ちのゴールは、従来どおり内容の比較で判断します。
+会話ごとの常駐子プロセスがターン準備、AI、MCP、業務操作を担当し、daemon が受付・保存・配送・監視を担当します。人の入力とその他のイベントは別々のキューに入り、次のターンでは人の入力が優先されます。各キューは受付順、同じ会話は直列です。中断時も待機入力は保存されます。
+
+保存される情報は objective、outOfScope、acceptanceCriteria、constraints、specifications、workLog、質問と回答です。takt_record_goal_work_log は会話からも記録でき、kind: patrol は点検の記録を表します。
+
+人は TUI の Ctrl+R や Slack の問い合わせスレッドで回答し、回答の出所と型が保存されます。旧承認記録は過去の記録の参照・取り下げに使われます。完成・中止時は問い合わせが閉じ、一時停止時は保持されます。
+
+TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。summary を持つ応答から登録案が表示されます。
+
+manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。問い合わせの回答画面は保存済みの質問から利用できます。通常画面は起動後の通知の冒頭を表示し、全文や過去の通知はゴール記録から参照できます。通知の配送結果はログに保存されます。
+
+## 見張りと仕様の検証
+
+見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。
+
+取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
+
+specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
+
+形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。

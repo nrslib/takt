@@ -6,51 +6,98 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
-it('resolves the director interval from the already loaded global configuration', () => {
-  expect(resolveDirectorConfig({ language: 'en', autoFetch: true }).patrolInterval).toBe(900);
-  expect(resolveDirectorConfig({ language: 'ja', autoFetch: true, director: { patrolInterval: 600 } }).patrolInterval).toBe(600);
-  expect(doubles.global).not.toHaveBeenCalled();
+it.each([
+  { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
+  { global: ['default'], project: ['simple'], expected: ['simple'] },
+  { global: 'all', project: [], expected: [] },
+  { global: ['default'], project: 'all', expected: 'all' },
+])('replaces the global manager workflow selection with the project value: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { workflows: global } });
+  doubles.project.mockReturnValue({ manager: { workflows: project } });
+  expect(resolveManagerConfig('/project').workflows).toEqual(expected);
 });
-it('defaults to automatic execution without inventing a default workflow', () => {
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+it.each(['all', [], ['default', { simple: 'Small changes' }, 'takt-default']])('accepts manager workflows %j at both scopes', (workflows) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { workflows } }).manager?.workflows).toEqual(workflows);
+  }
 });
-it('defaults patrols to 15 minutes when neither configuration specifies an interval', () => {
-  expect(resolveManagerConfig('/project').patrolInterval).toBe(900);
+it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blank' }], [{ default: 'one', simple: 'two' }], [{ default: 1 }]])(
+  'rejects malformed manager workflows %j at both scopes', (workflows) => {
+    for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+      expect(schema.safeParse({ manager: { workflows } }).success).toBe(false);
+    }
+  },
+);
+it('defaults to automatic execution and requires approval for main merges', () => {
+  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, mainMerge: 'approve' });
 });
-it('prioritizes project patrol intervals and falls back to the explicit global interval', () => {
-  doubles.global.mockReturnValue({ manager: { patrolInterval: 1800 } });
-  doubles.project.mockReturnValue({ manager: { patrolInterval: 600 } });
-  expect(resolveManagerConfig('/project').patrolInterval).toBe(600);
-  doubles.project.mockReturnValue({});
-  expect(resolveManagerConfig('/project').patrolInterval).toBe(1800);
+it.each([
+  { project: {}, global: {}, expected: 'auto' },
+  { project: {}, global: { permission: 'full' }, expected: 'full' },
+  { project: { permission: 'auto' }, global: { permission: 'full' }, expected: 'auto' },
+  { project: { permission: 'full' }, global: { providerPermissions: { codex: 'auto' } }, expected: 'auto' },
+  { project: { providerPermissions: { codex: 'full' } }, global: { providerPermissions: { codex: 'auto' } }, expected: 'full' },
+  { project: { permission: 'full', providerPermissions: { claude: 'auto' } }, global: {}, expected: 'full' },
+])('resolves manager permission from provider overrides before shared defaults: %j', ({ project, global, expected }) => {
+  doubles.project.mockReturnValue({ manager: project });
+  doubles.global.mockReturnValue({ manager: global });
+  expect(resolveManagerConfig('/project', 'codex').permission).toBe(expected);
+  expect(doubles.project).toHaveBeenCalledWith('/project');
 });
-it.each([0, -1, 0.5, '1800', Infinity])('rejects invalid patrol interval %s at the configuration boundary', (patrol_interval) => {
-  const input = { manager: { patrol_interval } };
-  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
-  expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
+it.each(['claude', 'claude-sdk'] as const)('treats both Claude permission keys as aliases for %s', (provider) => {
+  const alias = provider === 'claude' ? 'claude-sdk' : 'claude';
+  doubles.global.mockReturnValue({ manager: { permission: 'full', providerPermissions: { [alias]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [alias]: 'full' } } });
+  doubles.global.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('full');
+  doubles.project.mockReturnValue({ manager: { providerPermissions: { [provider]: 'auto', [alias]: 'full' } } });
+  expect(resolveManagerConfig('/project', provider).permission).toBe('auto');
 });
-it('accepts a director patrol interval only in global configuration', () => {
-  const input = { director: { patrol_interval: 600 }, manager: { patrol_interval: 1800 } };
-  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
-  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+it.each(['auto', 'full'])('accepts manager permission %s at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { permission, provider_permissions: { claude: permission, codex: permission } } }).manager)
+      .toMatchObject({ permission, provider_permissions: { claude: permission, codex: permission } });
+  }
 });
-it.each([0, -1, 0.5, '600', Infinity])('rejects invalid director patrol interval %s', (patrol_interval) => {
-  expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(false);
+it.each(['edit', 'readonly', 'AUTO', '', ' ', null, 1, true, {}])('rejects invalid manager permission %j at both scopes', (permission) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { permission } }).success).toBe(false);
+    expect(schema.safeParse({ manager: { provider_permissions: { codex: permission } } }).success).toBe(false);
+  }
 });
-it('resolves project and global settings separately for each field', () => {
+it.each([null, 'auto', ['auto']])('rejects invalid provider permissions map %j', (provider_permissions) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { provider_permissions } }).success).toBe(false);
+  }
+});
+it.each([1, 60, 900, 1800])('accepts manager patrol interval %s in seconds', (patrol_interval) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
+  expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(true);
+});
+it.each([0, -1, 0.5, '1800', null, Number.POSITIVE_INFINITY])('rejects invalid manager patrol interval %s', (patrol_interval) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
+  expect(GlobalConfigSchema.safeParse({ manager: { patrol_interval } }).success).toBe(false);
+});
+it.each([0, 600, 900, -1, 0.5, '600'])('ignores removed director patrol setting %s', (patrol_interval) => {
+  expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(true);
+});
+it('resolves project auto run before the global setting', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });
-  doubles.global.mockReturnValue({ manager: { autoRun: true, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, defaultWorkflow: 'global-workflow', mainMerge: 'approve' });
-  doubles.project.mockReturnValue({ manager: { defaultWorkflow: 'project-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: 'project-workflow', mainMerge: 'approve' });
+  doubles.global.mockReturnValue({ manager: { autoRun: true } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: false, mainMerge: 'approve' });
+  doubles.project.mockReturnValue({});
+  expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, mainMerge: 'approve' });
 });
 it.each(['auto', 'approve'])('uses repository main merge permission %s', (mainMerge) => {
   doubles.project.mockReturnValue({ manager: { mainMerge } });
   expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge });
 });
 it('does not inherit global permission to merge into main', () => {
-  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false, defaultWorkflow: 'global-workflow' } });
-  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false, defaultWorkflow: 'global-workflow' });
+  doubles.global.mockReturnValue({ manager: { mainMerge: 'auto', autoRun: false } });
+  expect(resolveManagerConfig('/project')).toMatchObject({ mainMerge: 'approve', autoRun: false });
 });
 
 const notificationKinds = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
@@ -84,39 +131,12 @@ it.each(notificationKinds)('prioritizes explicit project false over global true 
   expect(resolveManagerConfig('/project').notifications).toEqual(enabled);
 });
 
-it('provides sensitive file defaults without manager configuration', () => {
-  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
-    '.env', '.env.*', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
-    '*.key', '*.pem', '*.crt', '*.cer', '*.p12', '*.pfx',
-  ]));
-});
-
-it('adds both configuration layers to the sensitive defaults', () => {
-  doubles.global.mockReturnValue({ manager: { sensitivePaths: ['global-private'] } });
-  doubles.project.mockReturnValue({ manager: { sensitivePaths: ['project-private'] } });
-
-  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
-    '.env', '*.pem', 'global-private', 'project-private',
-  ]));
-});
-
-it('keeps sensitive defaults when both configuration layers specify empty lists', () => {
-  doubles.global.mockReturnValue({ manager: { sensitivePaths: [] } });
-  doubles.project.mockReturnValue({ manager: { sensitivePaths: [] } });
-
-  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining(['.env', '.env.*', '*.key', '*.crt']));
-});
-
-it.each([{ sensitive_paths: [] }, { sensitive_paths: ['private', 'config/credentials.json'] }])('accepts additional sensitive paths in both YAML schemas: $sensitive_paths', ({ sensitive_paths }) => {
-  const input = { manager: { sensitive_paths } };
-  expect(ProjectConfigSchema.parse(input)).toMatchObject(input);
-  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
-});
-
-it.each([null, 'private', [42], { path: 'private' }].map((sensitive_paths) => ({ sensitive_paths })))('rejects invalid sensitive path lists at both YAML boundaries: $sensitive_paths', ({ sensitive_paths }) => {
-  const input = { manager: { sensitive_paths } };
-  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
-  expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
+it.each([[], ['private'], null, 'private', [42]])('ignores deprecated sensitive_paths: %j', (sensitive_paths) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { sensitive_paths } }).success).toBe(true);
+  expect(GlobalConfigSchema.safeParse({ manager: { sensitive_paths } }).success).toBe(true);
+  doubles.global.mockReturnValue({ manager: { sensitivePaths: ['global'] } });
+  doubles.project.mockReturnValue({ manager: { sensitivePaths: ['project'] } });
+  expect(resolveManagerConfig('/project')).not.toHaveProperty('sensitivePaths');
 });
 
 it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts repository Slack channel and allowed user IDs $allowedUserIds', ({ allowedUserIds }) => {
@@ -149,7 +169,7 @@ it('keeps Slack channel authorization specific to repository configuration', () 
 
 it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts director Slack settings in global configuration with users $allowedUserIds', ({ allowedUserIds }) => {
   const slack = { channel_id: 'C0DIR', allowed_user_ids: allowedUserIds };
-  const input = { director: { patrol_interval: 600, slack } };
+  const input = { director: { slack } };
   expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
   expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
 });
@@ -174,9 +194,20 @@ it.each(['app_token', 'bot_token', 'unknown'])('rejects the unknown director Sla
 
 it('resolves director Slack from the already loaded global configuration', () => {
   const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
-  const config = { language: 'en' as const, autoFetch: true, director: { patrolInterval: 600, slack } };
-  expect(resolveDirectorConfig(config)).toMatchObject({ patrolInterval: 600, slack });
+  const config = { language: 'en' as const, autoFetch: true, director: { slack } };
+  expect(resolveDirectorConfig(config)).toMatchObject({ slack });
   expect(resolveDirectorConfig({ language: 'en', autoFetch: true })).not.toHaveProperty('slack.channelId');
   expect(doubles.global).not.toHaveBeenCalled();
   expect(doubles.project).not.toHaveBeenCalled();
+});
+
+it('serializes manager patrol configuration while leaving director patrol disabled', async () => {
+  const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
+  const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
+  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, patrolInterval: 1800 } });
+  const parsed = GlobalConfigSchema.parse(serialized);
+  expect(parsed.director).toEqual({ slack: { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] } });
+  expect(parsed.manager).toMatchObject({ auto_run: false });
+  expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
+  expect(parsed.director).not.toHaveProperty('patrol_interval');
 });

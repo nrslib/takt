@@ -21,8 +21,10 @@ import type {
 } from './types.js';
 import { resolveExecCodexSkillInheritance } from './runtimeConfig.js';
 import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
+import type { ConfirmManagedProvider } from '../../infra/managed-providers/preflight.js';
 
 interface AskExecAssistantOptions {
+  readonly confirmManagedProvider?: ConfirmManagedProvider;
   readonly permissionMode?: PermissionMode;
   readonly imageAttachments?: ImageAttachmentReference[];
   /** Lets the caller stop a turn that is still running. */

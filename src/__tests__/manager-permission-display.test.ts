@@ -30,7 +30,7 @@ it.each(['ja', 'en'] as const)('shows a saved custom permission notice in %s for
   }] };
   doubles.goals = [goal];
 
-  const events = await collectItems(iterateTestDisplayEvents({ kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, language, new Map(), -Infinity));
+  const events = await collectItems(iterateTestDisplayEvents({ kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, language, -Infinity));
 
   expect(events).toEqual([expect.objectContaining({ message: expect.stringContaining(body) })]);
   expect(events[0]!.message).toContain(goal.id.slice(0, 8));

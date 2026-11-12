@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupOrphanedClone, saveCloneMeta } from '../infra/task/clone.js';
 import { getCloneMetaPath, saveGeneratedCloneMeta } from '../infra/task/clone-meta.js';
 
@@ -13,6 +13,13 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 const temporaryDirectories = new Set<string>();
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  vi.mocked(fs.linkSync).mockImplementation(actual.linkSync);
+  vi.mocked(fs.writeFileSync).mockImplementation(actual.writeFileSync);
+});
 
 async function createTemporaryDirectory(prefix: string): Promise<string> {
   const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));

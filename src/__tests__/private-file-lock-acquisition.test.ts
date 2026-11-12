@@ -1,215 +1,111 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { PrivateArtifactCreationFailedError } from '../shared/utils/private-artifact-backend.js';
-
 const write = vi.hoisted(() => vi.fn());
-const failures = vi.hoisted(() => ({
-  contentStage: undefined as 'open' | 'fchmod' | 'ftruncate' | 'write' | undefined,
-  contentError: undefined as Error | undefined,
-  closeError: undefined as Error | undefined,
-  publicationError: undefined as Error | undefined,
+const beforeOpen = vi.hoisted(() => vi.fn<(path: unknown) => void>());
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>();
+  return { ...actual, openSync: (...args: Parameters<typeof actual.openSync>) => {
+    beforeOpen(args[0]);
+    return actual.openSync(...args);
+  } };
+});
+vi.mock('../shared/utils/private-file.js', async (original) => ({
+  ...await original<typeof import('../shared/utils/private-file.js')>(),
+  writeNewPrivateFileWithMode: write,
 }));
-
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>();
-  const failContentStage = (stage: typeof failures.contentStage, descriptor: number): void => {
-    if (failures.contentStage === stage && actual.fstatSync(descriptor).isFile()) {
-      failures.contentStage = undefined;
-      throw failures.contentError;
-    }
-  };
-  return {
-    ...actual,
-    openSync(...args: Parameters<typeof actual.openSync>) {
-      if (failures.contentStage === 'open' && String(args[0]).endsWith('.tmp')) {
-        failures.contentStage = undefined;
-        throw failures.contentError;
-      }
-      return actual.openSync(...args);
-    },
-    fchmodSync(...args: Parameters<typeof actual.fchmodSync>) {
-      failContentStage('fchmod', args[0]);
-      return actual.fchmodSync(...args);
-    },
-    ftruncateSync(...args: Parameters<typeof actual.ftruncateSync>) {
-      failContentStage('ftruncate', args[0]);
-      return actual.ftruncateSync(...args);
-    },
-    writeFileSync(...args: Parameters<typeof actual.writeFileSync>) {
-      if (typeof args[0] === 'number') failContentStage('write', args[0]);
-      return actual.writeFileSync(...args);
-    },
-    closeSync(...args: Parameters<typeof actual.closeSync>) {
-      const closeError = actual.fstatSync(args[0]).isFile() ? failures.closeError : undefined;
-      const result = actual.closeSync(...args);
-      if (closeError !== undefined) {
-        failures.closeError = undefined;
-        throw closeError;
-      }
-      return result;
-    },
-  };
-});
-
-vi.mock('../shared/utils/private-artifact-backend.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../shared/utils/private-artifact-backend.js')>();
-  return {
-    ...actual,
-    publishPrivateArtifact(...args: Parameters<typeof actual.publishPrivateArtifact>) {
-      const error = failures.publicationError;
-      if (error !== undefined) {
-        failures.publicationError = undefined;
-        throw error;
-      }
-      return actual.publishPrivateArtifact(...args);
-    },
-  };
-});
-
-vi.mock('../shared/utils/private-file.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../shared/utils/private-file.js')>();
-  return {
-    ...original,
-    writeNewPrivateFileWithMode: (...args: Parameters<typeof original.writeNewPrivateFileWithMode>) =>
-      write(...args),
-  };
-});
-
-import { PrivateFileLockAcquisitionError, runPrivateFileExclusive } from '../shared/utils/private-file-lock.js';
+import { PrivateFileLockAcquisitionError, runPrivateFileExclusive, runPrivateFileExclusiveAsync } from '../shared/utils/private-file-lock.js';
 import { PrivateArtifactContentWriteFailedError } from '../shared/utils/private-file.js';
-
-async function useActualPrivateFileWrite(): Promise<void> {
-  const original = await vi.importActual<typeof import('../shared/utils/private-file.js')>(
-    '../shared/utils/private-file.js',
-  );
-  write.mockImplementationOnce(original.writeNewPrivateFileWithMode);
-}
-
-describe('private file lock acquisition', () => {
-  beforeEach(() => {
-    write.mockReset();
-    failures.contentStage = undefined;
-    failures.contentError = undefined;
-    failures.closeError = undefined;
-    failures.publicationError = undefined;
-  });
-
-  it('marks ENOSPC during lock file creation before running the action', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'takt-lock-test-'));
-    const source = new PrivateArtifactCreationFailedError('disk full', 'ENOSPC', -28, {});
-    write.mockImplementationOnce(() => { throw source; });
+const directories: string[] = [];
+afterEach(() => {
+  write.mockReset();
+  beforeOpen.mockReset();
+  vi.restoreAllMocks();
+  for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+describe('private lock acquisition failures', () => {
+  it.each(['creation', 'content'] as const)('classifies unpublished ENOSPC at %s and does not run the action', (stage) => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
+    directories.push(directory);
+    const source = stage === 'content' ? new PrivateArtifactContentWriteFailedError('disk full', -28, {})
+      : Object.assign(new Error('disk full'), { code: 'ENOSPC', errno: -28 });
+    write.mockImplementation(() => { throw source; });
     const action = vi.fn();
-
-    let caught: unknown;
-    try {
-      runPrivateFileExclusive(join(directory, 'lock'), action);
-    } catch (error) {
-      caught = error;
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-
-    expect(caught).toBeInstanceOf(PrivateFileLockAcquisitionError);
-    expect(caught).toMatchObject({ message: 'disk full', code: 'ENOSPC', errno: -28, cause: source });
+    expect(() => runPrivateFileExclusive(join(directory, 'lock'), action)).toThrow(PrivateFileLockAcquisitionError);
     expect(action).not.toHaveBeenCalled();
+    expect(readdirSync(directory)).toEqual([]);
+  });
+  it('preserves unrelated acquisition failures', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
+    directories.push(directory);
+    const source = Object.assign(new Error('denied'), { code: 'EACCES' });
+    write.mockImplementation(() => { throw source; });
+    expect(() => runPrivateFileExclusive(join(directory, 'lock'), () => 42)).toThrow(source);
   });
 
-  it.each(['open', 'fchmod', 'ftruncate', 'write'] as const)(
-    'marks ENOSPC during unpublished %s and removes the temporary lock file', async (stage) => {
-      const directory = mkdtempSync(join(tmpdir(), 'takt-lock-test-'));
-      await useActualPrivateFileWrite();
-      const source = Object.assign(new Error(`disk full during ${stage}`), { code: 'ENOSPC', errno: -28 });
-      failures.contentStage = stage;
-      failures.contentError = source;
-      const action = vi.fn();
-
-      let caught: unknown;
-      try {
-        runPrivateFileExclusive(join(directory, 'lock'), action);
-      } catch (error) {
-        caught = error;
-      } finally {
-        const remaining = readdirSync(directory);
-        rmSync(directory, { recursive: true, force: true });
-        expect(remaining).toEqual([]);
-      }
-
-      expect(failures.contentStage).toBeUndefined();
-      expect(caught).toBeInstanceOf(PrivateFileLockAcquisitionError);
-      expect(caught).toMatchObject({ code: 'ENOSPC', errno: -28 });
-      expect((caught as Error).cause).toMatchObject({
-        code: 'ENOSPC', errno: -28, cause: source,
+  it.each((['sync', 'async'] as const).flatMap((mode) => [1, 2, 3].map((read) => ({ mode, read }))))(
+    'acquires the $mode lock when it disappears between stat and open on recovery read $read', async ({ mode, read }) => {
+      const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
+      write.mockImplementation(actual.writeNewPrivateFileWithMode);
+      const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
+      directories.push(directory);
+      const lock = join(directory, 'lock');
+      const previous = JSON.stringify({ pid: process.pid, token: 'previous-holder' });
+      writeFileSync(lock, previous);
+      if (read > 1) vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('dead holder'), { code: 'ESRCH' });
       });
-      expect((caught as Error).cause).toBeInstanceOf(PrivateArtifactContentWriteFailedError);
-      expect(action).not.toHaveBeenCalled();
+      let released = false;
+      let reads = 0;
+      beforeOpen.mockImplementation((path) => {
+        if (path === lock && ++reads === read) {
+          released = true;
+          unlinkSync(lock);
+        }
+      });
+      const action = vi.fn(() => {
+        expect(released).toBe(true);
+        expect(readFileSync(lock, 'utf8')).not.toBe(previous);
+        return 42;
+      });
+      const result = mode === 'sync' ? runPrivateFileExclusive(lock, action) : await runPrivateFileExclusiveAsync(lock, action);
+      expect(result).toBe(42);
+      expect(action).toHaveBeenCalledOnce();
+      expect(readdirSync(directory)).toEqual([]);
     },
   );
 
-  it('does not classify publication ENOSPC as an acquisition error', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'takt-lock-test-'));
-    await useActualPrivateFileWrite();
-    const source = Object.assign(new Error('publication failed'), { code: 'ENOSPC' });
-    failures.publicationError = source;
+  it('keeps a replacement lock and does not enter the action during dead-holder recovery', async () => {
+    const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
+    write.mockImplementation(actual.writeNewPrivateFileWithMode);
+    const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
+    directories.push(directory);
+    const lock = join(directory, 'lock');
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'dead-holder' }));
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement-holder' });
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      unlinkSync(lock);
+      writeFileSync(lock, replacement);
+      throw Object.assign(new Error('dead holder'), { code: 'ESRCH' });
+    });
     const action = vi.fn();
-
-    let caught: unknown;
-    try {
-      runPrivateFileExclusive(join(directory, 'lock'), action);
-    } catch (error) {
-      caught = error;
-    } finally {
-      const remaining = readdirSync(directory);
-      rmSync(directory, { recursive: true, force: true });
-      expect(remaining).toEqual([]);
-    }
-
-    expect(failures.publicationError).toBeUndefined();
-    expect(caught).toBe(source);
+    await expect(runPrivateFileExclusiveAsync(lock, action, { timeoutMs: 0 })).rejects.toThrow('Timed out');
+    expect(readFileSync(lock, 'utf8')).toBe(replacement);
     expect(action).not.toHaveBeenCalled();
   });
 
-  it('does not classify a combined content-write and descriptor-close failure', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'takt-lock-test-'));
-    await useActualPrivateFileWrite();
-    failures.contentStage = 'write';
-    failures.contentError = Object.assign(new Error('write failed'), { code: 'ENOSPC' });
-    failures.closeError = new Error('close failed');
+  it('propagates permission failures while inspecting a contended lock', async () => {
+    const actual = await vi.importActual<typeof import('../shared/utils/private-file.js')>('../shared/utils/private-file.js');
+    write.mockImplementation(actual.writeNewPrivateFileWithMode);
+    const directory = mkdtempSync(join(tmpdir(), 'takt-private-lock-'));
+    directories.push(directory);
+    const lock = join(directory, 'lock');
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'holder' }));
+    const source = Object.assign(new Error('denied'), { code: 'EACCES' });
+    beforeOpen.mockImplementation((path) => { if (path === lock) throw source; });
     const action = vi.fn();
-
-    let caught: unknown;
-    try {
-      runPrivateFileExclusive(join(directory, 'lock'), action);
-    } catch (error) {
-      caught = error;
-    } finally {
-      const remaining = readdirSync(directory);
-      rmSync(directory, { recursive: true, force: true });
-      expect(remaining).toEqual([]);
-    }
-
-    expect(caught).toBeInstanceOf(AggregateError);
-    expect(caught).not.toBeInstanceOf(PrivateFileLockAcquisitionError);
+    await expect(runPrivateFileExclusiveAsync(lock, action, { timeoutMs: 0 })).rejects.toBe(source);
     expect(action).not.toHaveBeenCalled();
-  });
-
-  it('does not mark an ENOSPC thrown after the lock is acquired', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'takt-lock-test-'));
-    const original = await vi.importActual<typeof import('../shared/utils/private-file.js')>(
-      '../shared/utils/private-file.js',
-    );
-    write.mockImplementationOnce(original.writeNewPrivateFileWithMode);
-    const actionError = Object.assign(new Error('action failed'), { code: 'ENOSPC' });
-
-    let caught: unknown;
-    try {
-      runPrivateFileExclusive(join(directory, 'lock'), () => { throw actionError; });
-    } catch (error) {
-      caught = error;
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-    expect(caught).toBe(actionError);
   });
 });

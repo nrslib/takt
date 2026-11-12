@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from '../infra/codex/mcp-isolation.js';
@@ -11,6 +11,15 @@ import { interpolateMcpEnv } from '../infra/config/runtime-provider/mcp-schema.j
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
 import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
 import { probeMcpHeaders } from './helpers/mcp-env-probe.js';
+
+const beforeArtifactRead = vi.hoisted(() => vi.fn<(path: unknown) => void>());
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: (...args: Parameters<typeof actual.readFile>) => {
+    beforeArtifactRead(args[0]);
+    return actual.readFile(...args);
+  } };
+});
 
 describe('Codex CLI effective MCP configuration without API calls', () => {
   let cwd: string;
@@ -28,7 +37,25 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     writeFileSync(join(cwd, 'config.toml'), config);
   });
 
-  afterEach(() => { vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
+  afterEach(() => { beforeArtifactRead.mockReset(); vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
+
+  it('scans remaining artifacts for secrets when a listed temporary file disappears before reading', async () => {
+    const readArtifacts: string[] = [];
+    const result = await probeMcpHeaders('codex', resolveCodexSdkCli(undefined).executablePath, async (_url, _environment, probeCwd) => {
+      const temporary = join(probeCwd, 'disappearing-artifact');
+      const persistent = join(probeCwd, 'persistent-artifact');
+      writeFileSync(temporary, 'temporary content');
+      writeFileSync(persistent, 'synthetic-key-fragment');
+      beforeArtifactRead.mockImplementation((path) => {
+        if (path === temporary || path === persistent) readArtifacts.push(String(path));
+        if (path === temporary) rmSync(temporary);
+      });
+      return { config: { shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude', MCP_HEADER_KEY: 'exclude' } } } };
+    });
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.secretInArtifacts).toBe(true);
+    expect(readArtifacts.map((path) => basename(path)).sort()).toEqual(['disappearing-artifact', 'persistent-artifact']);
+  }, 30_000);
 
   it.each(['user', 'project'] as const)('disables only excluded ambient servers in normal %s configuration without persisting the decision', async (source) => {
     const workspace = join(cwd, 'workspace');
@@ -66,7 +93,8 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
 
   it.each([undefined, 'review'])('uses the selected profile for exclusions and real execution (profile=%s)', async (configProfile) => {
     const result = await probeMcpHeaders('codex', resolveCodexSdkCli(undefined).executablePath, async (url, environment, probeCwd) => {
-      const profileConfig = `[mcp_servers.datadog]\nurl=${JSON.stringify(`${url}/excluded`)}\n[mcp_servers.github]\nurl=${JSON.stringify(url)}\n`;
+      const profileConfig = `[features]\nplugins=true\n[mcp_servers.datadog]\nurl=${JSON.stringify(`${url}/excluded`)}\n[mcp_servers.github]\nurl=${JSON.stringify(url)}\n`;
+      writeFileSync(join(probeCwd, 'config.toml'), '[features]\nplugins=true\n');
       const profilePath = join(probeCwd, 'review.config.toml');
       writeFileSync(profilePath, profileConfig);
       const server = interpolateMcpEnv({ type: 'http', url: `${url}/excluded`, headers: {
@@ -85,6 +113,8 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     expect(result.excludedRequests).toBe(0);
     expect(result.mcpRequests === 0).toBe(configProfile === undefined);
     expect(result.argv.includes('--profile')).toBe(configProfile !== undefined);
+    expect(beforeArtifactRead.mock.calls.map(([path]) => basename(String(path)))).not.toContain('plugins.sync.lock');
+    expect(result.argv).toContain('features.plugins=false');
     expect(result.shellOutput).toContain('header-secret=unset key-secret=unset');
     expect(result.secretInArtifacts).toBe(false);
   }, 30_000);
@@ -205,10 +235,12 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
       { name: 'name.with.dots', enabled: true }, { name: 'unrelated', enabled: true },
     ]);
     const managerConfig = { mcp_servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['never-started.js'] } } };
-    const isolated = await prepareCodexMcpIsolation({
+    const options = {
       cwd, mcpOnlySideEffects: true,
       preparedMcp: { dispose: async () => {}, config: managerConfig },
-    }, managerConfig, env);
+    };
+    const session = buildCodexSessionConfig(options);
+    const isolated = await prepareCodexMcpIsolation(options, session.config, env);
     expect(isolated.codexPathOverride).toBe(runtime.executablePath);
     const after = JSON.parse(await runCodexMcpList({
       executablePath: isolated.codexPathOverride, cwd, env: isolated.env, configOverrides: isolated.configOverrides,
@@ -229,9 +261,11 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     const managerConfig = { mcp_servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node' } } };
     const listed = JSON.parse(await runCodexMcpList({ executablePath: resolveCodexSdkCli(undefined).executablePath, cwd, env, configOverrides: [] })) as { name: string; enabled: boolean }[];
     expect(listed).toContainEqual(expect.objectContaining({ name: TAKT_MANAGER_MCP_SERVER_NAME, enabled: false }));
-    await expect(prepareCodexMcpIsolation({
+    const options = {
       cwd, mcpOnlySideEffects: true, preparedMcp: { dispose: async () => {}, config: managerConfig },
-    }, managerConfig, env)).rejects.toThrow(/conflicts/);
+    };
+    const session = buildCodexSessionConfig(options);
+    await expect(prepareCodexMcpIsolation(options, session.config, env)).rejects.toThrow(/conflicts/);
     expect(readFileSync(join(cwd, 'config.toml'), 'utf8')).toBe(config);
   }, 30_000);
 

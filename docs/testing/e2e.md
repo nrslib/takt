@@ -2,6 +2,8 @@
 このドキュメントは、E2Eテストの目的・前提条件・実行方法を短くまとめた索引です。
 E2Eテストを追加・変更した場合は、このドキュメントも更新してください。
 
+daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起動、manager・director のターン子、manager の HTTP MCP 呼出し、会話の保存と再起動後の復元、停止を確認する。実 provider や GitHub は使わない。
+
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
@@ -46,7 +48,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定、または`opencode`がPATH上に見つからない場合はスペック全体がスキップされる。`TAKT_OPENCODE_PATH`の設定だけではこの条件を満たさない）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。OpenCode v2で直接実行する場合は `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 npx vitest run --config vitest.config.e2e.structured-output.ts` を使用する。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`devin`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`devin`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は `managed/deepseek-harness` にインストールした固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します（対象テストの前に managed 依存と実 SDK 型契約も検証されます）。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
@@ -247,8 +249,9 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - E2E用 `config.yaml` に `runtime.prepare: [gradle, node]` を設定する。
     - mock providerの呼び出しログで、`TMPDIR`、`TAKT_RUNTIME_TMP`、`GRADLE_USER_HOME`、`npm_config_cache` がprovider呼び出し前に注入されたことを確認する。未設定時は注入されないことを確認する。
-    - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。
+    - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。各コマンドの実行回数と初回の環境変数を記録し、fixture 未変更・1回実行・初回から必要な環境変数があったことを検証する。
     - 正例では、作業リポジトリに `.takt/.runtime/env.sh` と `.takt/.runtime/{cache,config,state,gradle,npm}` が作成されていることを確認する。`TMPDIR` はworktree固有の短い外部パスであり、NodeとGradleに同じ値が伝播することを確認する。
+    - OpenCode では `edit: false` の workflow でも同じ初回環境伝播を検証する。
     - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外し、Gradle の欠落環境変数および npm のruntimeキャッシュ未注入を示す専用証跡ファイルと両コマンドの実行markerを確認する。`.takt/.runtime/env.sh` は生成されないことを確認する。
 - Runtime.yaml provider section（runtime-v1）（`e2e/specs/runtime-provider.e2e.ts`）
   - 目的: 有効な `~/.takt/runtime.yaml` の `provider` セクションから provider/model が解決され（runtime-v1）、`--provider` を渡さずに workflow が完了することをmockで確認する（issue #1136）。
@@ -327,7 +330,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Model override（`e2e/specs/model-override.e2e.ts`）
   - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
 - Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
-  - 目的: 不正引数・存在しない workflow・不正 YAML など代表エラーケースを確認。
+  - 目的: workflow パスの欠落、不正 YAML、`--pipeline` の入力不足を確認。廃止済み `--create-worktree` の拒否は `e2e/specs/worktree.e2e.ts` で確認する。
 - Quiet mode（`e2e/specs/quiet-mode.e2e.ts`）
   - 目的: `--quiet` でAIストリーム出力が抑制されることを確認。
 - Catalog command（`e2e/specs/cli-catalog.e2e.ts`）
@@ -338,8 +341,8 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 削除済みの `takt switch` が unknown command になることを確認。
 - Clear sessions command（`e2e/specs/cli-clear.e2e.ts`）
   - 目的: `takt clear` でセッション情報が削除されることを確認。
-- Help command（`e2e/specs/cli-help.e2e.ts`）
-  - 目的: `takt --help` と `takt run --help` / `takt watch --help` の表示内容に加え、`--ignore-exceed` が `run` と `watch` の両方に表示されることを確認。
+- CLI バージョンと端末要件（`e2e/specs/cli-help.e2e.ts`）
+  - 目的: `--version` がパッケージのバージョンと一致すること、および端末のない `make` が成果物を作成せず拒否されることを確認。
 - Eject builtin workflows（`e2e/specs/eject.e2e.ts`）
   - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別eject、不正なfacet type（prototype由来名・改行/C1制御文字）の安全なstderr出力を確認。
 - Workflow authoring CLI（`e2e/specs/cli-workflow-authoring.e2e.ts`）

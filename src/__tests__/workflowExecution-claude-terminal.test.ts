@@ -25,22 +25,26 @@ vi.mock('../infra/claude/cli-capability.js', () => ({
 }));
 
 vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
-  TmuxTerminalBackend: vi.fn().mockImplementation(() => ({
-    start: terminalMocks.start,
-    pasteText: terminalMocks.pasteText,
-    stop: terminalMocks.stop,
-  })),
+  TmuxTerminalBackend: vi.fn().mockImplementation(function () {
+    return {
+      start: terminalMocks.start,
+      pasteText: terminalMocks.pasteText,
+      stop: terminalMocks.stop,
+    };
+  }),
 }));
 
 vi.mock('../infra/claude-terminal/transcript-reader.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/claude-terminal/transcript-reader.js')>();
   return {
     ...actual,
-    ProjectClaudeTranscriptReader: vi.fn().mockImplementation(() => ({
-      readBaseline: terminalMocks.readBaseline,
-      findSession: terminalMocks.findSession,
-      waitForAssistantResponse: terminalMocks.waitForAssistantResponse,
-    })),
+    ProjectClaudeTranscriptReader: vi.fn().mockImplementation(function () {
+      return {
+        readBaseline: terminalMocks.readBaseline,
+        findSession: terminalMocks.findSession,
+        waitForAssistantResponse: terminalMocks.waitForAssistantResponse,
+      };
+    }),
   };
 });
 

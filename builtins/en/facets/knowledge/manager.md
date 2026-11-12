@@ -1,55 +1,76 @@
 # TAKT manager
 
-## Conversation and events
+## Goals, tasks, and results
 
-The TUI handles discussion, summary approval, answers, pause, resume, abort and display. The manager inside the daemon handles registration, answer, task-completion and patrol events in order and saves work records. The TUI manager receives those records and continues the conversation. If automatic execution is disabled, a person starts run / watch.
+One manager can be responsible for multiple repositories in a workspace. Each goal progresses in one assigned repository. A repository can be removed from the assignment once each of its goals is completed or aborted.
 
-Typing /make-goal in the input box and pressing Enter creates a goal proposal from the current conversation. Even when a proposal is already displayed, /make-goal only regenerates it; it does not register the goal. Use ↑ Approve / ↓ Continue / Enter Confirm to operate the proposal, then select Approve and press Enter to register it. If material is insufficient, the TUI explains this and the conversation can continue. Typing / in the input box shows /make-goal as a completion candidate; Tab accepts it. Input starting with / other than /make-goal is sent to manager as a regular message. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals (active and paused). Both keys work while manager is processing.
+Task termination, integration of results into the goal branch, PR merging, and goal completion each have their own operations and recorded states. accepted denotes receipt; task success describes the execution result. takt_list_tasks returns integration state in goalIntegration (integrated / not_integrated / unknown / direct_push), with the reason for unknown in goalIntegrationReason. direct_push identifies tasks that push directly to the PR branch.
 
-Notifications flowing onto the normal screen show only the heading line, goal line, and first few lines of the body. Notifications saved before startup are not replayed on screen when manager starts. When the person asks for the full text of a notification or for past notifications, read them from the goal records and answer.
+A goal is registered when a person approves its proposal in the TUI or Slack. /make-goal regenerates a proposal from the conversation.
 
-Registration stays in the TUI. Pause, resume and abort are also available through the manager when requested in conversation, after human confirmation. Conversation state tools are exposed for Claude (claude-sdk) and Codex, where the permission judge is connected.
+## Execution and events
 
-One manager can cover several repositories through a workspace. People can request assignment additions/removals and renaming in conversation. Starting from any member repository opens the same workspace. Each goal proceeds in one assigned repository. A repository with unfinished goals cannot be removed.
+Pausing holds execution and subsequent events; aborting is terminal. Resuming also makes pending tasks eligible to run. Saved task instructions are updated through the instruction-change operation.
 
-## Tools
+Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together, including awaiting_merge goals with a linked merge task that is pending or running. Goals only waiting for a human merge are excluded from patrols and handled by the PR watcher.
 
-Manager tools expose existing TAKT features. Read tasks, run details, diffs, history and branch relations; submit, requeue, retry, remove, integrate into the goal branch and check completion. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown) for each goal task, with a reason in goalIntegrationReason when unknown. Use goalIntegration to check whether a task is integrated. Pass the target repository's cwd and goalId for goal actions. Consult tool argument definitions before using them.
+The default PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. In a custom merge.prepare_workflow or merge.workflow, processing including review and CI waiting follows its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
 
-- Review the completion event and run details for the cause and stopped position before choosing a tool.
-- Use takt_requeue_goal_task after external conditions (capacity, authentication, network or temporary failures) or limits stop work whose existing results are reusable.
-- Use takt_retry_goal_task to correct missing or incorrect instructions and retry the same work.
-- Use takt_enqueue_goal_task when changing the work split or choosing different work.
-- Use takt_remove_goal_task with a reason to cancel unwanted pending work or clean up integrated results and failed or exceeded-limit tasks that will not be retried. Do not remove running tasks or completed tasks not yet integrated.
-- takt_pause_goal / takt_resume_goal / takt_abort_goal take the target cwd and goalId; abort also requires a reason. Identify the goal with takt_list_goals and ask the person if it is ambiguous. Every operation requires human confirmation through the permission judge. Pause defers new execution and event handling while running tasks continue. Resume advances deferred work. Abort invalidates unstarted tasks and interrupts running tasks. It cannot be undone; records and branches remain, and these facts must be confirmed before execution.
-- takt_list_standalone_inquiries reads unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time.
-- takt_withdraw_standalone_inquiry withdraws an unanswered inquiry without a goal using its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged.
-- takt_tell_run sends an additional instruction to a running goal task and saves the same text in the work log. Pass cwd, goalId, taskName and content.
+manager.main_merge is resolved from project configuration. Both approve and auto create PRs. approve finishes preparation with until: prepare and waits for a person to merge. auto treats the person's setting as a continuing instruction to integrate and uses until: merge to finish preparation and merge.
 
-If the saved resume position is unavailable, choose a start position from returned candidates and run details.
+The concurrency limit is shared across the project's run / watch processes. The manager's automatic run follows auto_run to execute goal tasks, with zero automatic retries. A lock coordinates execution to prevent duplicate starts; the manager decides recovery from saved state. A turn that fails after using tools is saved as failed, and the manager also decides its recovery.
 
-Collect results on the goal branch, then integrate into the target to finish. manager.main_merge defaults to approve, publishing a PR and waiting for an explicit human merge instruction through the director. auto integrates automatically, but publishes a PR and waits for the same instruction when the target is checked out.
+## Tools and recovery
 
-## Memory and notifications
+Goal operations use the target cwd and goalId. Each tool's arguments and return values follow its published definition.
 
-Goal memory contains objective, scope exclusions, acceptance criteria, constraints, workLog, questions and answers. Check current state in tasks, runs and git. Use takt_record_goal_work_log to save work records during conversation too. Specify kind: patrol for records of inspection or notices alone. Omit it for actions that actually advance work, such as submissions or integrations.
+- takt_get_workflow accepts a name, scope reference, or path in workflow and returns step names, descriptions, types, wait, system_inputs, effects, and rules. workflow_call returns the resolved callee and getInput; the workflow and callPath in getInput allow further traversal. Responses are limited to 64 KiB, and omitted steps can be retrieved with offset / limit.
+- takt_enqueue_goal_task queues a task that runs in a worktree based on the goal branch. autoPr and shouldPublishBranchToOrigin default to false. workflow accepts a name, scope reference, or path, including workflows containing merge_pr / close_pr.
+- takt_requeue_goal_task continues failed / exceeded tasks from a saved position. failed also accepts startStep; exceeded uses the saved position. Responses describe whether a saved position is available, the reason, and candidate starting steps.
+- takt_retry_goal_task updates instructions and returns the same failed task to pending.
+- takt_remove_goal_task takes a reason and handles cancellation of pending tasks and cleanup of stopped or integrated results. Pending tasks in paused goals can also be cancelled. discardUnmerged: true discards completed results awaiting integration. takt_stop_goal_task requests a stop for running tasks. Cleanup failures appear in the operation result.
+- takt_stop_goal_task checks goalId, taskName, executionId, and the live PID before saving a stop request. The saved start time is also used in the check. The worker observes the request and stops; running remains until then.
+- takt_tell_run sends additional instructions using cwd, goalId, taskName, and content and saves the original text in the work log.
+- takt_pause_goal / takt_resume_goal / takt_abort_goal use cwd and goalId; aborting takes a reason. Tasks stopped by a pause remain as failures with `Goal <id> was paused`; interruptions before startup may have empty position or run information. After resuming, the same task can continue according to its saved state. Aborting invalidates unstarted work, interrupts running work, and retains records and branches. completed identifies a completed record available for reference.
+- takt_list_standalone_inquiries returns unanswered inquiries without a goal for the current assignment. takt_withdraw_standalone_inquiry withdraws unanswered inquiries by id and reason and preserves answered records.
 
-Questions go to people. Open the TUI inquiry list with Ctrl+R to save a selected or free-text answer. Receiving answers from Slack is not implemented. Code closes any inquiries left when a goal is completed or aborted; the manager must not close them again. Pausing leaves inquiries open and defers events. Aborted goals cannot resume.
+## Integration and PRs
 
-Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
+Results from ordinary tasks are gathered in the goal branch and integrated from there into the target branch.
 
-Notifications appear in the TUI and Slack. manager.notifications switches question / awaiting_merge / completed / progress / blocked / custom on or off by kind. Question answering remains available when notifications are disabled. Failed event processing or TUI conversation sends blocked. Repeated failures still notify; no failure-state file is created. Without a Slack webhook nothing is sent; delivery failures are logged and work continues.
+takt_complete_goal accepts expectedSha, an evidence-backed summary, and humanChecks for the PR. In awaiting_merge, it pushes the branch and creates or reuses a PR with the saved integration target as base. It checks GitHub, origin, and the PR head/base, and saves the number and URL in pullRequest. While the goal content is not yet included in the target, a same-SHA request with an existing PR can refresh the completion summary and PR body. When retrying PR preparation without a saved PR, saved humanChecks take precedence; a supplied value only fills the field if none was saved, and the saved summary remains. If humanChecks is omitted, the saved value is reused and the supplied summary can be saved. If neither a saved nor supplied humanChecks value exists, the retry is rejected before PR preparation. Before resubmitting, inspect and verify the current goal tip; if it has advanced beyond the saved goalSha, review the new tip and resubmit with its expectedSha, summary, and humanChecks. If only reading or updating an existing PR body fails, the saved PR is retained and pullRequestBodyError is returned.
 
-## Patrol evidence
+Choose how to correct or check a saved completion record according to the approved SHA and the current goal branch tip:
 
-A patrol event includes the observation time and the last work-record time excluding patrol-only records. Without work records, the goal creation time is used. Creation times absent from older records are unknown.
+- Before resubmitting, inspect and verify the current goal branch tip. If it has advanced beyond the approved SHA, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. This also applies when the approved SHA is already included in the target.
+- If the tip is still the approved SHA and that SHA is not yet included in the target, use takt_reopen_goal with a reason to return to created, then resubmit takt_complete_goal with the reviewed expectedSha, corrected summary, and humanChecks to correct the saved evidence.
+- If the approved SHA is already included in the target and is still the current goal branch tip, correct the evidence with takt_complete_goal using the same expectedSha and corrected summary. Do not use takt_reopen_goal for an included SHA.
+- If the approved SHA is already included in the target and no evidence correction is needed, use takt_check_goal_completion.
 
-Task startedAt is the execution start; question and goal createdAt are their creation times. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount and timestamp / iteration for completed steps. Start times and counts come from saved start records; the current step start time is unknown when no corresponding record exists.
+takt_merge_goal_pr accepts cwd, goalId, prNumber matching the saved PR, and until. It queues a merge task as pending and returns its name. until: prepare uses merge.prepare_workflow (default: merge-prepare); until: merge uses merge.workflow (default: merge-review-fix-simple). It checks the saved PR, awaiting_merge, and pause/abort state.
 
-manager.patrol_interval is in seconds and defaults to 900. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
+Merge tasks push directly to the PR branch. The local goal branch is fast-forwarded when it is an ancestor; diverged branches and checked-out working copies retain their contents, and this is recorded in the result. When a workflow ends with COMPLETE and the PR is still at the preparation stage, the result arrives as successful with prepared.
 
-## Goal PRs
+takt_check_goal_completion checks the saved PR's head/base and merge state, supporting completion checks after squash merges or additional commits. A saved PR in CLOSED returns included: false. Content comparison with the integration target is also used according to the PR state. Goals in created that retain completion evidence and a merged PR can also be checked. Completion updates status to completed and closes the goal's inquiries.
 
-A completion request that enters awaiting_merge pushes the branch and creates or reuses a PR to the integration target. Its body contains the objective, changes from the branch diff, verification evidence from summary, and human verification steps from humanChecks. The PR number and URL are saved in pullRequest and returned by takt_get_goal / takt_list_goals.
+## Conversation, records, and inquiries
 
-takt_merge_goal_pr takes cwd, goalId, a positive integer prNumber matching the saved PR, and the conversationOperationId supplied with the current turn, and runs takt merge in that repository. Use it only on an explicit human instruction delivered through the director. Tool success does not complete the goal; use takt_check_goal_completion afterwards. If the saved PR has been merged and its source and target branches match the saved goal branches, squash merging or additional PR changes to the contents or head SHA do not prevent completion. When a patrol discovers a human merge, use this completion check without submitting a task to bring the integration branch into the goal branch. Awaiting-merge goals whose PR cannot be verified still use the existing content comparison.
+A persistent child process for each conversation handles turn preparation, AI, MCP, and business operations; the daemon handles receipt, persistence, delivery, and monitoring. Human input and other events use separate queues, with human input prioritized for the next turn. Each queue preserves arrival order, and a conversation runs serially. Pending input is preserved through interruptions.
+
+Saved information includes objective, outOfScope, acceptanceCriteria, constraints, specifications, workLog, questions, and answers. takt_record_goal_work_log can also be used from the conversation; kind: patrol denotes an inspection record.
+
+People answer through Ctrl+R in the TUI or the inquiry thread in Slack, and the answer's source and type are saved. Historical approval records are available for reference and withdrawal. Completion and abortion close inquiries; pausing retains them.
+
+The TUI handles consultation, proposal approval, answers, state operations, and display. Proposals are navigated with the arrow keys and Enter; returning to the conversation or entering revisions withdraws the proposal. Ctrl+R opens inquiries and Ctrl+G opens active goals. Both remain available during processing. Tab confirms / completions. /make-goal and /verify are conversation commands; other / input is treated as a message. Responses containing summary display a registration proposal.
+
+manager.notifications toggles question / awaiting_merge / completed / progress / blocked / custom by kind. Answer screens are available from saved questions. The normal screen shows the beginning of notifications received since startup; full text and past notifications are available from goal records. Notification delivery results are saved in logs.
+
+## Watching and specification verification
+
+Watchers deliver process disappearance and PR state changes. Process liveness and start time are checked to determine state. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount, and timestamp / iteration for finished steps. Start time is a value or unknown according to the availability of corresponding logs.
+
+Conflicts with the integration target arrive as pr_conflicting. Notifications follow changes in the conflict state, including recurrence after resolution. A mergeable value of UNKNOWN denotes a pending determination.
+
+specifications is an optional saved field. Each body can be retrieved by passing specifications.gherkin, specifications.quint, or specifications.alloy as path to takt_get_goal. Saved specifications are automatically supplied to the final PR review task.
+
+When formal specifications are enabled, a person sending /verify in the TUI or Slack conversation triggers specification generation from the current agreement, verification, and a result returned to the same conversation. Saved goals and specifications retain their pre-verification contents. Responses indicate whether verification is available according to formal specification configuration.

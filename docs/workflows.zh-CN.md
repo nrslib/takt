@@ -793,7 +793,7 @@ steps:
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
 | `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
-| `edit` | - | 是否可以编辑项目文件。Codex 对显式设置 `false` 的 step，在 Phase 1 中使用 `read-only` sandbox |
+| `edit` | - | 是否可以编辑项目文件。由 TAKT 管理 Codex 权限时，显式 `false` 禁止 Phase 1 写入，网络权限由 `network_access` 独立控制 |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
@@ -806,7 +806,9 @@ steps:
 
 `completion_retry` 是只接受对象的显式 opt-in，要求 `retry_instruction`，可选 `min_retry` 与 `max_retry`。`max_retry` 未设置时内部上限为 4；`review_completion` 仍是已弃用别名，不能与 `completion_retry` 同时使用。Provider 和 model 不是 workflow 字段，必须由 runtime profile/routing 提供；workflow 中写入已移除字段会在加载边界失败。
 
-Codex 对显式设置 `edit: false` 的 step，在 Phase 1 中使用 `read-only` sandbox，无论解析出的 permission mode 是什么，包括 `permission_control: codex`。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。通用权限解析、其他 provider、省略 `edit` 和 `edit: true` 的行为保持不变。
+由 TAKT 管理 Codex 权限时，显式 `edit: false` 会禁止 Phase 1 写入，不受解析出的 permission mode 影响。设置 `network_access: true` 时，TAKT 传递允许网络访问的只读权限 profile；否则使用 `read-only` sandbox。使用 `permission_control: codex` 时，即使设置 `edit: false`，写入与网络权限也由 Codex 自身配置决定。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终使用 `read-only` sandbox 并禁用网络访问，即使委托权限也不例外。通用权限解析与其他 provider 的行为保持不变。详见 [Codex 权限控制](./configuration.zh-CN.md#codex-权限控制permission_control)。
+
+TAKT 管理权限的 Codex 调用也会为可写 step、新 session 和恢复的 session 传递 `--ignore-rules`，防止用户或项目 execpolicy `.rules` 绕过 sandbox。委托给 Codex 的调用保留这些规则，但 Phase 2 和以 `strict-readonly` 运行的 TAKT 内部调用（例如隔离的结构化调用）始终禁用规则并禁止写入和网络访问。Phase 2 和这些内部调用选择的 `config_profile` 可与 `--ignore-rules` 同时生效。
 
 ## Workflow 级配置
 
@@ -1068,7 +1070,7 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 ## 最佳实践
 
 1. **控制迭代数** — 开发 workflow 通常使用 10-30 次
-2. **审查 step 使用 `edit: false`** — 防止 reviewer 修改代码
+2. **审查 step 使用 `edit: false`** — 防止 reviewer 修改代码。将权限控制委托给 Codex 时，还需在 Codex 侧禁止写入
 3. **使用描述性 step 名称** — 便于阅读日志
 4. **逐步测试 workflow** — 从简单版本开始再增加复杂度
 5. **使用 `takt eject` 定制** — 先复制 builtin workflow，而不是从零编写
@@ -1108,6 +1110,6 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 GitLab 也提供 MR 详情和 CI 状态，原因是 `github_unavailable` 的 `skipped` 会继续等待返回 head 的 CI。合并方式和 head 限制仍不受支持，传入这些参数的 `merge_pr` 会失败。
 
-合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
-`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功和 CI timeout 行为不变，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功的行为不变，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。

@@ -4,18 +4,21 @@ import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { GoalStore } from './store.js';
-import { GoalAnswerSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.js';
+import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.js';
 
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1), result: GoalTaskResultSchema }).strict(),
-  z.object({ ...common, kind: z.literal('answer'), questionId: z.uuid(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(),
+    questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
+  z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('registered') }).strict(),
-  z.object({ ...common, kind: z.literal('resumed') }).strict(),
+  z.object({ ...common, kind: z.literal('resumed'), origin: GoalExecutionOriginSchema.optional() }).strict(),
+  // 旧受け箱の読取専用。新しい見回りは daemon の TurnEvent として受け付ける。
   z.object({ ...common, kind: z.literal('patrol') }).strict(),
 ]);
 export type ManagerEvent = z.infer<typeof ManagerEventSchema>;
-export type ManagerEventInput = ManagerEvent extends infer Event
+export type ManagerEventInput = Exclude<ManagerEvent, { kind: 'patrol' }> extends infer Event
   ? Event extends ManagerEvent ? Omit<Event, 'createdAt'> : never : never;
 export interface SavedManagerEvent { filePath: string; event: ManagerEvent }
 
@@ -25,7 +28,7 @@ function inboxDirectory(cwd: string): string {
 }
 
 export function saveManagerEvent(cwd: string, input: ManagerEventInput): void {
-  if (new GoalStore(cwd).getSync(input.goalId).executionStatus === 'aborted') return;
+  if (input.goalId !== null && new GoalStore(cwd).getSync(input.goalId).executionStatus === 'aborted') return;
   const event = ManagerEventSchema.parse({ ...input, createdAt: new Date().toISOString() });
   const directory = inboxDirectory(cwd);
   mkdirSync(directory, { recursive: true, mode: 0o700 });

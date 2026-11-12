@@ -32,15 +32,17 @@ const selectedKeys = {
   'archive-test-coverage': [],
   'quoted-csv-fields': [],
   'inventory-retry-idempotency': [],
+  'existing-invoice-format': [],
   'conflicting-calendar-visibility': [],
   'unchanged-adjudication': [],
 };
 const patrolTellCases = new Set([
-  'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+  'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
 ]);
 const patrolRequiredCases = new Set([
   'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
   'inventory-retry-idempotency',
+  'existing-invoice-format', 'mail-dispatch-state',
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
@@ -48,6 +50,21 @@ const suite = parse(readFileSync(new URL('../scenarios/manager-work-split/manage
 function assertSemanticGrader(caseId, lang) {
   const row = suite.tests.find(({ vars }) => vars.case === caseId && vars.lang === lang);
   assert.ok(row.assert.some(({ type }) => type === 'llm-rubric'));
+}
+
+function scopeQuestion(fixture, lang) {
+  return { tool: 'takt_ask_goal_question', arguments: {
+    cwd: fixture.cwd, goalId: fixture.goal.id,
+    body: lang === 'ja'
+      ? '独自の予約形式を作業範囲に含めますか？ 回答まで個別停止した作業は再開しません。'
+      : 'Should a custom booking format be included in scope? The individually stopped work will wait for your answer.',
+    options: lang === 'ja'
+      ? ['既存の予約形式を使い、時間帯だけを検証する', '独自の予約形式も追加する']
+      : ['Use the existing booking format and validate time ranges only', 'Also add a custom booking format'],
+    recommendation: lang === 'ja'
+      ? '既存の予約形式を推奨します。受け入れ条件は時間帯の検証だけを求めているためです。'
+      : 'Use the existing booking format because the acceptance criterion only requires time-range validation.',
+  } };
 }
 function enqueue(fixture, key) {
   return { tool: 'takt_enqueue_goal_task', arguments: {
@@ -81,10 +98,12 @@ function goodOutput(caseId, lang) {
       : 'Clarify help text in src/admin/help.ts and check that text only. Exclude payment or order-storage implementation and checks and checkout-guide updates.';
   }
   if (caseId === 'escalate-not-on-first-failure') {
-    output.calls[0].arguments.purpose = fixture.readResults[0].result.work[0].purpose;
-    output.calls[0].arguments.task = lang === 'ja'
+    const task = lang === 'ja'
       ? 'docs/sales-csv.md と data/sales_sample.csv を読んでから sales/loader.py を実装する。sale_date、amount、channel と既存の日付形式を使い、見本データで読み込みと入力検証を確認する。'
       : 'Read docs/sales-csv.md and data/sales_sample.csv before implementing sales/loader.py. Use sale_date, amount, channel and the existing date format; verify loading and validation with the sample data.';
+    output.calls = [{ tool: 'takt_retry_goal_task', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import', task,
+    } }];
   }
   if (caseId === 'integration-check') {
     output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
@@ -98,13 +117,21 @@ function goodOutput(caseId, lang) {
       cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Recorded the repair item and the source supporting the instruction.',
     } });
   }
+  if (caseId === 'existing-invoice-format') {
+    output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id,
+      summary: lang === 'ja'
+        ? 'INV-1 は残す。目的が参照する exportAccountInvoices の入力契約は json を許可しているが、invoice-export は csv に制限しており、目的を満たしていない。'
+        : 'Retain INV-1. The exportAccountInvoices input contract referenced by the objective permits json, but invoice-export restricts it to csv and fails to fulfill the objective.',
+    } });
+  }
   if (patrolQuestionCases.has(caseId)) {
     output.calls.push({ tool: 'takt_ask_goal_question', arguments: {
       cwd: fixture.cwd,
       goalId: fixture.goal.id,
       body: 'The two acceptance criteria conflict under the external service constraint. Which behavior should take priority?',
       options: ['Wait for external confirmation before showing the item.', 'Show the item locally while marking it unconfirmed.'],
-      recommendation: 'Clarify which acceptance criterion takes priority before changing either one.',
+      recommendation: 'Wait for external confirmation because it avoids presenting unverified bookings as available.',
     } });
   }
   if (caseId === 'constraint-carryover-data') {
@@ -152,6 +179,66 @@ function goodOutput(caseId, lang) {
   return output;
 }
 const score = (output, caseId, lang = 'ja') => evaluate(typeof output === 'string' ? output : JSON.stringify(output), { vars: { case: caseId, lang } });
+
+for (const lang of ['ja', 'en']) {
+  test(`permission denials require a human question on event turns and disallow delegated work (${lang})`, () => {
+    for (const caseId of ['permission-denied-push', 'permission-denied-deploy', 'permission-denial-instruction']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const question = { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, recipient: 'human',
+        body: lang === 'ja' ? '拒否された操作の許可をお願いします。' : 'May I retry the denied operation?',
+      } };
+      const output = { response: { message: question.arguments.body, summary: null }, calls: [question] };
+      assert.equal(score(output, caseId, lang).pass, true);
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, fixture.turn === 'conversation');
+      const wrongRecipient = structuredClone(output);
+      wrongRecipient.calls[0].arguments.recipient = 'director';
+      assert.equal(score(wrongRecipient, caseId, lang).pass, false);
+      assert.equal(score({ ...output, calls: [question, question] }, caseId, lang).pass, false);
+      assert.equal(score({ ...output, calls: [question, enqueue(fixture, 'publish-instead')] }, caseId, lang).pass, false);
+      const denied = fixture.readResults.find(({ tool }) => tool === 'Bash');
+      assert.equal(score({ ...output, calls: [question, { tool: 'Bash', arguments: denied.arguments }] }, caseId, lang).pass, false);
+      const falseCompletion = { tool: 'takt_complete_goal', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Published.',
+      } };
+      assert.equal(score({ ...output, calls: [question, falseCompletion] }, caseId, lang).pass, false);
+      // Operation, purpose, reason and instruction-like denial text are judged semantically.
+      const vague = { ...output, response: { message: 'Continue.', summary: null } };
+      assert.equal(score(vague, caseId, lang).pass, true);
+    }
+  });
+
+  test(`an optional denial requires continued independent work rather than only asking (${lang})`, () => {
+    const caseId = 'permission-denied-optional-check';
+    const fixture = loadManagerCase(caseId, lang);
+    const task = enqueue(fixture, 'usage-guide');
+    task.arguments.purpose = fixture.goal.acceptanceCriteria[1];
+    task.arguments.task = lang === 'ja'
+      ? '既存仕様と確認済みの実装から利用案内を作成してレビューする。'
+      : 'Write and review the usage guide from the existing contract and verified implementation.';
+    const output = { response: { message: lang === 'ja'
+      ? '補助確認は権限審査で拒否されました。既存仕様と確認結果から利用案内を進めます。'
+      : 'The supplementary check was denied by permission review. Proceeding with the guide from existing evidence.', summary: null }, calls: [task] };
+    assert.equal(score(output, caseId, lang).pass, true);
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+    const question = { tool: 'takt_ask_goal_question', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, body: 'May I continue?', recipient: 'human',
+    } };
+    assert.equal(score({ ...output, calls: [question] }, caseId, lang).pass, false);
+    assert.equal(score({ ...output, calls: [task, task] }, caseId, lang).pass, false);
+    const wrongWorkflow = structuredClone(output);
+    wrongWorkflow.calls[0].arguments.workflow = 'unknown';
+    assert.equal(score(wrongWorkflow, caseId, lang).pass, false);
+    // Task purpose, bypass attempts in instructions and denial reporting belong to the rubric.
+    const wrongContent = structuredClone(output);
+    wrongContent.response.message = 'Continuing.';
+    wrongContent.calls[0].arguments.task = 'Fetch the denied website through a run instead.';
+    assert.equal(score(wrongContent, caseId, lang).pass, true);
+  });
+}
+
 function verificationOutput(fixture, summary) {
   return {
     response: { message: fixture.lang === 'ja' ? '確認方法を記録します。' : 'Recording the verification decision.', summary: null },
@@ -167,7 +254,7 @@ function writingCalls(fixture, _keys) {
     takt_requeue_goal_task: { ...base, taskName: task.name },
     takt_retry_goal_task: { ...base, taskName: task.name, task: 'Corrected instructions.' },
     takt_remove_goal_task: { ...base, taskName: task.name, reason: 'No longer needed.' },
-    takt_merge_goal_task: { ...base, taskName: completedTask.name, expectedSha: completedTask.completion.sha },
+    takt_merge_goal_task: { ...base, taskName: completedTask.name, expectedSha: 'c'.repeat(40) },
     takt_complete_goal: { ...base, expectedSha: 'c'.repeat(40), summary: 'Reviewed acceptance evidence.' },
     takt_check_goal_completion: base,
     takt_ask_goal_question: { ...base, body: 'Approve these work units?' },
@@ -251,10 +338,11 @@ for (const lang of ['ja', 'en']) {
       const allowed = caseId === 'escalate-repeated-failure'
         ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_work_log']
         : caseId === 'escalate-not-on-first-failure'
-          ? ['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
+          ? ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
         : patrolTellCases.has(caseId) ? ['takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
-          : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
-            : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal']
+          : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_stop_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
+            : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal',
+              ...(caseId === 'existing-invoice-format' ? ['takt_stop_goal_task'] : [])]
             : patrolNoTellCases.has(caseId) ? ['takt_record_goal_work_log', 'takt_notify_goal']
               : caseId.startsWith('summary-') ? [] : caseId === 'integration-check'
                 ? ['takt_record_goal_work_log', 'takt_notify_goal'] : [
@@ -288,6 +376,90 @@ for (const lang of ['ja', 'en']) {
   }
 }
 for (const lang of ['ja', 'en']) {
+  for (const caseId of ['existing-invoice-format', 'conflicting-calendar-visibility']) {
+    test(`${lang}/${caseId}: accepts a scoped stop request for the current running execution`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const task = fixture.tasks.find((task) => task.goalId === fixture.goal.id && task.status === 'running');
+      const output = goodOutput(caseId, lang);
+      const stop = { tool: 'takt_stop_goal_task', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name, executionId: task.executionId,
+      } };
+      output.calls.unshift(stop);
+      assert.equal(score(output, caseId, lang).pass, true);
+      assertSemanticGrader(caseId, lang);
+      for (const invalid of [
+        { ...stop.arguments, goalId: '650e8400-e29b-41d4-a716-446655440099' },
+        { ...stop.arguments, taskName: 'not-running-task' },
+        { ...stop.arguments, executionId: 'stale-execution' },
+        { ...stop.arguments, executionId: undefined },
+      ]) {
+        const wrong = structuredClone(output);
+        wrong.calls[0].arguments = invalid;
+        assert.equal(score(wrong, caseId, lang).pass, false);
+      }
+    });
+  }
+
+  test(`${lang}: existing invoice format uses structural checks and delegates dismissal meaning to the rubric`, () => {
+    const caseId = 'existing-invoice-format';
+    const fixture = loadManagerCase(caseId, lang);
+    const retained = goodOutput(caseId, lang);
+    retained.response.message = lang === 'ja'
+      ? '既存の JSON 出力を使うことは目的に含まれるため、指摘を残します。'
+      : 'Retain the finding: using the existing JSON exporter is part of the objective.';
+    assert.equal(score(retained, caseId, lang).pass, true);
+    assertSemanticGrader(caseId, lang);
+    for (const content of [
+      'Accept the existing JSON format as required by the objective.',
+      'Drop the JSON finding as outside the requested scope.',
+      'Purpose and exclusions conflict; retain the finding pending the human answer.',
+    ]) {
+      const output = structuredClone(retained);
+      output.calls.push(tellRun(fixture, content));
+      // The rubric must judge meaning even when all production arguments are valid.
+      assert.equal(score(output, caseId, lang).pass, true);
+    }
+    const output = structuredClone(retained);
+    output.calls.push(tellRun(fixture));
+    for (const [key, value] of [
+      ['cwd', '/workspace/other'], ['goalId', '650e8400-e29b-41d4-a716-446655440001'],
+      ['taskName', 'another-task'], ['content', 42],
+    ]) {
+      const invalid = structuredClone(output);
+      invalid.calls.find(({ tool }) => tool === 'takt_tell_run').arguments[key] = value;
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+    const secondGoal = fixture.additionalGoals[0];
+    const withPatrolLog = structuredClone(retained);
+    withPatrolLog.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: secondGoal.id, kind: 'patrol', summary: 'invoice-search implementation has no new issue.',
+    } });
+    assert.equal(score(withPatrolLog, caseId, lang).pass, true);
+    withPatrolLog.calls[1].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099';
+    assert.equal(score(withPatrolLog, caseId, lang).pass, false);
+    const wrongTask = structuredClone(output);
+    wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = fixture.tasks[1].name;
+    assert.equal(score(wrongTask, caseId, lang).pass, false);
+  });
+
+  test(`${lang}: existing invoice format requires the finding decision log under invoice-export`, () => {
+    const caseId = 'existing-invoice-format';
+    const fixture = loadManagerCase(caseId, lang);
+    const output = goodOutput(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+
+    const wrongGoal = structuredClone(output);
+    wrongGoal.calls[0].arguments.goalId = fixture.additionalGoals[0].id;
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+    wrongGoal.calls.push(tellRun(fixture));
+    assert.equal(score(wrongGoal, caseId, lang).pass, false);
+
+    const bothGoals = structuredClone(output);
+    bothGoals.calls.push(...wrongGoal.calls);
+    assert.equal(score(bothGoals, caseId, lang).pass, true);
+  });
+
   test(`${lang}: sends one instruction only for unsupported or unnecessarily complex repair items`, () => {
     for (const caseId of patrolTellCases) {
       const output = goodOutput(caseId, lang);
@@ -318,14 +490,22 @@ for (const lang of ['ja', 'en']) {
       } });
       assert.equal(score(output, caseId, lang).pass, true);
       const duplicate = structuredClone(output);
-      duplicate.calls.push(structuredClone(duplicate.calls[0]));
-      duplicate.calls[2].arguments.content = 'Continue the required repair.';
-      assert.equal(score(duplicate, caseId, lang).pass, false);
-      output.calls[1].arguments.recipient = 'director';
-      assert.equal(score(output, caseId, lang).pass, false);
-      delete output.calls[1].arguments.recipient;
-      output.calls[0].arguments.taskName = 'another-task';
-      assert.equal(score(output, caseId, lang).pass, false);
+      const repeatedTell = structuredClone(duplicate.calls.find(({ tool }) => tool === 'takt_tell_run'));
+      repeatedTell.arguments.content = 'Continue the required repair.';
+      duplicate.calls.push(repeatedTell);
+      assert.deepEqual(score(duplicate, caseId, lang), {
+        pass: false, score: 0, reason: 'Do not send repeated instructions to the same task',
+      });
+      const wrongRecipient = structuredClone(output);
+      wrongRecipient.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments.recipient = 'director';
+      assert.deepEqual(score(wrongRecipient, caseId, lang), {
+        pass: false, score: 0, reason: 'Invalid production arguments: takt_ask_goal_question',
+      });
+      const wrongTask = structuredClone(output);
+      wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = 'another-task';
+      assert.deepEqual(score(wrongTask, caseId, lang), {
+        pass: false, score: 0, reason: 'Choose the running goal task',
+      });
     }
   });
 
@@ -537,12 +717,34 @@ for (const lang of ['ja', 'en']) {
 }
 test('rejects extra check tasks for unrelated results and stale completion SHAs', () => {
   for (const caseId of ['no-check-docs', 'no-check-same-module', 'integration-already-checked']) {
-    const output = goodOutput(caseId, 'ja');
-    output.calls[0].arguments.expectedSha = 'b'.repeat(40);
-    assert.equal(score(output, caseId).pass, false);
-    output.calls[0].arguments.expectedSha = 'c'.repeat(40);
-    output.calls.unshift(enqueue(loadManagerCase(caseId, 'ja'), 'check-results'));
-    assert.equal(score(output, caseId).pass, false);
+    for (const lang of ['ja', 'en']) {
+      const output = goodOutput(caseId, lang);
+      output.calls[0].arguments.expectedSha = 'b'.repeat(40);
+      assert.equal(score(output, caseId, lang).pass, false);
+      output.calls[0].arguments.expectedSha = 'c'.repeat(40);
+      output.calls.unshift(enqueue(loadManagerCase(caseId, lang), 'check-results'));
+      assert.equal(score(output, caseId, lang).pass, false);
+    }
+  }
+});
+test('same-module completion reasons are delegated to semantic grading in both languages', () => {
+  for (const lang of ['ja', 'en']) {
+    const reasons = lang === 'ja' ? [
+      'ping のログと users のページングは独立しており、同じファイルというだけで追加の結合確認は求めません。統合済み先端の対象テストと build の成功証拠から完成申請します。',
+      '同じファイルを変更したため統合後の結合確認は必須でしたが、確認済みなので完成申請します。',
+      '変更は独立しているため最終確認は不要で、個別 run の成功だけで完成申請します。',
+    ] : [
+      'Ping logging and users pagination are independent; sharing a file alone does not require extra integration checks. Request completion using passing targeted tests and build at the integrated goal tip.',
+      'Because both tasks changed the same file, integration checks were mandatory, but they have passed, so request completion.',
+      'The changes are independent, so final verification is unnecessary and individual run successes suffice for completion.',
+    ];
+    for (const reason of reasons) {
+      const output = goodOutput('no-check-same-module', lang);
+      output.response.message = reason;
+      output.calls[0].arguments.summary = reason;
+      assert.equal(score(output, 'no-check-same-module', lang).pass, true);
+    }
+    assertSemanticGrader('no-check-same-module', lang);
   }
 });
 test('validates production tool names, arguments, goal identity, workflow and required fields', () => {
@@ -564,7 +766,7 @@ test('validates production tool names, arguments, goal identity, workflow and re
     assert.equal(score(output, 'parallel-cli').pass, false);
   }
 });
-test('validates integration taskName, reviewed SHA and ordering before new submissions', () => {
+test('rejects integration of an already integrated result, even with the matching task and SHA', () => {
   const fixture = loadManagerCase('parallel-cli', 'ja');
   const task = fixture.tasks[0];
   const retry = { tool: 'takt_merge_goal_task', arguments: {
@@ -572,7 +774,7 @@ test('validates integration taskName, reviewed SHA and ordering before new submi
   } };
   const output = goodOutput('parallel-cli', 'ja');
   output.calls.unshift(structuredClone(retry));
-  assert.equal(score(output, 'parallel-cli').pass, true);
+  assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls[0].arguments.taskName = 'unknown-task';
   assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls[0] = structuredClone(retry);
@@ -596,6 +798,69 @@ for (const lang of ['ja', 'en']) {
   });
 
 }
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['spec-formal-on-code', 'spec-review-investigation']) {
+    test(`${lang}/${caseId}: formal code proposals require all three nonempty specification bodies in summary`, () => {
+      assertSemanticGrader(caseId, lang);
+      const output = { response: { message: 'Review the proposal.', summary: {
+        objective: 'Fix notification retries', outOfScope: [], constraints: [],
+        acceptanceCriteria: ['AC-1: Verify the saved specifications.'],
+        specifications: { gherkin: 'Feature: Notification retries', quint: 'module retries {}', alloy: 'module retries' },
+      } }, calls: [] };
+      assert.equal(score(output, caseId, lang).pass, true);
+      for (const key of ['gherkin', 'quint', 'alloy']) {
+        for (const body of [undefined, '', ' ']) {
+          const invalid = structuredClone(output);
+          invalid.response.summary.specifications[key] = body;
+          assert.equal(score(invalid, caseId, lang).pass, false, `${key}: ${JSON.stringify(body)}`);
+        }
+      }
+      const messageOnly = structuredClone(output);
+      messageOnly.response.message = JSON.stringify(messageOnly.response.summary.specifications);
+      delete messageOnly.response.summary.specifications;
+      assert.equal(score(messageOnly, caseId, lang).pass, false);
+      const missingSummary = structuredClone(output);
+      missingSummary.response.summary = null;
+      assert.equal(score(missingSummary, caseId, lang).pass, false);
+    });
+  }
+
+  test(`${lang}: formal mode off requires Gherkin and rejects either formal specification key`, () => {
+    const caseId = 'spec-formal-off-code';
+    assertSemanticGrader(caseId, lang);
+    const output = { response: { message: 'Review the proposal.', summary: {
+      objective: 'Fix notification retries', outOfScope: [], constraints: [],
+      acceptanceCriteria: ['AC-1: Verify the saved specifications.'],
+      specifications: { gherkin: 'Feature: Notification retries' },
+    } }, calls: [] };
+    assert.equal(score(output, caseId, lang).pass, true);
+    const missing = structuredClone(output);
+    delete missing.response.summary.specifications;
+    assert.equal(score(missing, caseId, lang).pass, false);
+    for (const key of ['quint', 'alloy']) {
+      const invalid = structuredClone(output);
+      invalid.response.summary.specifications[key] = 'Formal specification body';
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: documentation proposals use the objective and acceptance criteria and reject Gherkin`, () => {
+    const caseId = 'spec-docs-goal';
+    assertSemanticGrader(caseId, lang);
+    const output = { response: { message: 'Review the proposal.', summary: {
+      objective: 'Create a guide navigation document', outOfScope: [], constraints: [],
+      acceptanceCriteria: ['AC-1: Include feature references, examined sources and missing explanations.'],
+    } }, calls: [] };
+    assert.equal(score(output, caseId, lang).pass, true);
+    output.response.summary.specifications = {};
+    assert.equal(score(output, caseId, lang).pass, true);
+    output.response.summary.specifications.gherkin = 'Feature: Guide navigation';
+    assert.equal(score(output, caseId, lang).pass, false);
+    output.response.summary = null;
+    assert.equal(score(output, caseId, lang).pass, false);
+  });
+}
+
 test('summary turns cannot create a goal or submit work before human approval', () => {
   const output = goodOutput('summary-keeps-constraint', 'ja');
   output.calls.push(enqueue(loadManagerCase('parallel-cli', 'ja'), 'users-command'));
@@ -616,6 +881,51 @@ test('validates summaries with explicit constraints and optional branches withou
   const invalid = structuredClone(output);
   invalid.response.summary.id = '650e8400-e29b-41d4-a716-446655440000';
   assert.equal(score(invalid, caseId).pass, false);
+});
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: summary cases accept the production repository field and retain strict validation`, () => {
+    const specifications = { gherkin: 'Feature: Retry', quint: 'module retry {}', alloy: 'module retry' };
+    for (const [caseId, bodies] of [
+      ['summary-keeps-constraint', undefined],
+      ['spec-formal-on-code', specifications],
+      ['spec-review-investigation', specifications],
+      ['spec-formal-off-code', { gherkin: specifications.gherkin }],
+      ['spec-docs-goal', undefined],
+    ]) {
+      const output = goodOutput('summary-keeps-constraint', lang);
+      output.response.summary.repositoryDirectory = loadManagerCase(caseId, lang).cwd;
+      if (bodies !== undefined) output.response.summary.specifications = bodies;
+      assert.equal(score(output, caseId, lang).pass, true, caseId);
+      for (const [key, value] of [
+        ['repositoryDirectory', ''], ['repositoryDirectory', 42],
+        ['repositoryDirectory', '/workspace/other'], ['objective', 'unsafe\u001b[31m'],
+        ['workflow', 'default'], ['id', '650e8400-e29b-41d4-a716-446655440000'],
+      ]) {
+        const invalid = structuredClone(output);
+        invalid.response.summary[key] = value;
+        assert.equal(score(invalid, caseId, lang).pass, false, `${caseId}: ${key}`);
+      }
+    }
+  });
+}
+test('distinguishes invalid JSON from unsupported fields and invalid specification values', () => {
+  const caseId = 'spec-docs-goal';
+  const output = goodOutput('summary-keeps-constraint', 'ja');
+  for (const malformed of [
+    `${JSON.stringify(output)}}`,
+    JSON.stringify(output).replace('Delivery destinations', 'Delivery\ndestinations'),
+  ]) {
+    const graded = score(malformed, caseId);
+    assert.equal(graded.pass, false);
+    assert.match(graded.reason, /^Invalid JSON:/);
+  }
+  for (const [key, value] of [['workflow', 'default'], ['specifications', null]]) {
+    const invalid = structuredClone(output);
+    invalid.response.summary[key] = value;
+    const graded = score(invalid, caseId);
+    assert.equal(graded.pass, false);
+    assert.ok(graded.reason.includes(key));
+  }
 });
 test('validates standalone work log summaries and rejects unrelated fields', () => {
   const fixture = loadManagerCase('parallel-cli', 'ja');
@@ -698,6 +1008,8 @@ for (const lang of ['ja', 'en']) {
     const output = goodOutput(caseId, lang);
     output.calls[0] = { tool: 'takt_ask_goal_question', arguments: {
       cwd: fixture.cwd, goalId: fixture.goal.id,
+      options: lang === 'ja' ? ['鍵を用意して継続する', '受け入れ条件を変更する'] : ['Provide the key and continue', 'Change acceptance criteria'],
+      recommendation: lang === 'ja' ? '元の決済確認条件を維持できるため、鍵を用意して継続することを推奨します。' : 'Provide the key and continue because it preserves the payment verification criteria.',
       body: lang === 'ja'
         ? '検証用の鍵を用意して続けるか、受け入れ条件を変更するか選んでください。決済の検証という元の受け入れ条件を維持できるため、鍵を用意して続けることを推奨します。'
         : 'Provide the test key and continue, or change the acceptance criteria? I recommend providing the key and continuing because it preserves the original payment verification acceptance criteria.',
@@ -746,6 +1058,8 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, caseId, lang).pass, false);
     output.calls[0] = { tool: 'takt_ask_goal_question', arguments: {
       cwd: fixture.cwd, goalId: fixture.goal.id,
+      options: lang === 'ja' ? ['鍵を用意して継続する', '受け入れ条件を変更する'] : ['Provide the key and continue', 'Change acceptance criteria'],
+      recommendation: lang === 'ja' ? '元の決済確認条件を維持できるため、鍵を用意して継続することを推奨します。' : 'Provide the key and continue because it preserves the payment verification criteria.',
       body: lang === 'ja'
         ? '検証用の鍵がなく、設定の読み込み順と接続先を確認してやり直しても2回失敗しました。管理者による鍵の発行と設定が必要です。鍵を用意して継続するか、受け入れ条件を変更するか選んでください。決済の検証という元の受け入れ条件を維持できるため、鍵を用意して継続することを推奨します。'
         : 'The test key is missing and both attempts failed after checking configuration loading order and endpoint. An administrator must issue and configure the key. Choose whether to provide the key and continue or change the acceptance criteria. I recommend providing the key and continuing because it preserves the original payment verification acceptance criteria.',
@@ -756,7 +1070,8 @@ for (const lang of ['ja', 'en']) {
       output.calls.push(enqueue(fixture, key));
       const blocked = score(output, caseId, lang);
       assert.equal(blocked.pass, false);
-      assert.equal(blocked.reason, 'Unexpected or repeated work key');
+      assert.equal(blocked.reason, key === 'payment-check'
+        ? 'Do not enqueue existing work without changing its state' : 'Unexpected work key');
       output.calls.pop();
     }
     delete output.calls[0].arguments.body;
@@ -793,6 +1108,7 @@ for (const lang of ['ja', 'en']) {
     const caseId = 'escalate-not-on-first-failure';
     const fixture = loadManagerCase(caseId, lang);
     const task = fixture.tasks.find(({ name }) => name === 'csv-import');
+    assert.equal(score({ ...goodOutput(caseId, lang), calls: [enqueue(fixture, 'csv-import')] }, caseId, lang).pass, false);
     for (const tool of ['takt_retry_goal_task', 'takt_requeue_goal_task']) {
       const output = goodOutput(caseId, lang);
       output.calls = [{ tool, arguments: {
@@ -802,11 +1118,23 @@ for (const lang of ['ja', 'en']) {
           : { retryNote: 'Read docs/sales-csv.md before continuing.' }),
       } }];
       assert.equal(score(output, caseId, lang).pass, true);
+      for (const step of ['plan', 'implement', 'review']) {
+        for (const startStep of [step, ` \t${step}\n `]) {
+          output.calls[0].arguments.startStep = startStep;
+          assert.equal(score(output, caseId, lang).pass, true, `${tool}: ${JSON.stringify(startStep)}`);
+        }
+      }
+      delete output.calls[0].arguments.startStep;
       output.calls[0].arguments.taskName = 'foundation';
       assert.equal(score(output, caseId, lang).pass, false);
       output.calls[0].arguments.taskName = task.name;
       output.calls.push(enqueue(fixture, 'csv-import'));
       assert.equal(score(output, caseId, lang).pass, false);
+      output.calls.pop();
+      for (const startStep of ['unknown-step', ' unknown-step ', ' \t\n ']) {
+        output.calls[0].arguments.startStep = startStep;
+        assert.equal(score(output, caseId, lang).pass, false, `${tool}: ${JSON.stringify(startStep)}`);
+      }
     }
   });
 }
@@ -887,12 +1215,32 @@ for (const lang of ['ja', 'en']) {
       }
     });
 
-    test(`${lang}/${caseId}: rejects unnecessary tasks, approval questions and premature completion`, () => {
+    test(`${lang}/${caseId}: accepts delegated checks and human operation requests with a saved target and method`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const target = caseId === 'verification-before-integration' ? fixture.tasks[0].completion.sha
+        : fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalSha;
+      const summary = lang === 'ja'
+        ? `対象 SHA ${target} を隔離した一時 worktree で対象テストにより確認する。利用者の作業コピーは保持する。manager が SHA と実行結果の証拠を確認するまで未確認。`
+        : `Check target SHA ${target} with targeted tests in an isolated temporary worktree. Preserve the user's checkout. Results remain unconfirmed until the manager reviews the SHA and execution evidence.`;
+      const task = enqueue(fixture, 'verify-import-result');
+      task.arguments.purpose = 'Verify the import result';
+      task.arguments.task = summary;
+      const person = { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, recipient: 'human', kind: 'operation_request', body: summary,
+      } };
+      for (const call of [task, person]) {
+        const output = verificationOutput(fixture, summary);
+        output.calls.unshift(call);
+        assert.equal(score(output, caseId, lang).pass, true, call.tool);
+      }
+    });
+
+    test(`${lang}/${caseId}: rejects premature completion and redundant integration`, () => {
       const fixture = loadManagerCase(caseId, lang);
       const output = verificationOutput(fixture, 'Concrete verification decision; results remain unconfirmed.');
       assert.equal(score(output, caseId, lang).pass, true);
       const calls = writingCalls(fixture, []);
-      const forbidden = ['takt_enqueue_goal_task', 'takt_ask_goal_question', 'takt_complete_goal', 'takt_check_goal_completion'];
+      const forbidden = ['takt_complete_goal', 'takt_check_goal_completion'];
       if (caseId !== 'verification-before-integration') forbidden.push('takt_merge_goal_task');
       for (const tool of forbidden) {
         assert.ok(managerWriteSchemas[tool].safeParse(calls[tool]).success, tool);
@@ -927,7 +1275,7 @@ for (const lang of ['ja', 'en']) {
       const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
       const record = { tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Decision and reason.' } };
       const output = { response: { message: 'Decision recorded.', summary: null }, calls: [record] };
-      if (['verification-repeated', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
+      if (['verification-once', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
       if (caseId === 'plan-missing') output.calls.unshift(enqueue(fixture, 'usage-docs'));
       assertSemanticGrader(caseId, lang);
       assert.equal(score(output, caseId, lang).pass, true, caseId);
@@ -942,11 +1290,11 @@ for (const lang of ['ja', 'en']) {
       const extraWork = structuredClone(output);
       extraWork.calls.push(enqueue(fixture, 'check-only'));
       assert.equal(score(extraWork, caseId, lang).pass, false, caseId);
-      if (['verification-once', 'verification-told'].includes(caseId)) {
+      if (['verification-repeated', 'verification-told'].includes(caseId)) {
         output.calls.push(tellRun(fixture));
         assert.equal(score(output, caseId, lang).pass, false);
       }
-      if (['verification-repeated', 'verification-mixed', 'plan-missing'].includes(caseId)) {
+      if (['verification-once', 'verification-mixed', 'plan-missing'].includes(caseId)) {
         const missingAction = structuredClone(output);
         missingAction.calls.shift();
         assert.equal(score(missingAction, caseId, lang).pass, false);
@@ -972,3 +1320,601 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, 'plan-missing', lang).pass, false);
   });
 }
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+    const resuming = caseId.startsWith('paused-requeue');
+    test(`${lang}/${caseId}: permits only its allowed writes`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+      const requeue = { tool: 'takt_requeue_goal_task', arguments: { ...base, taskName: fixture.event.taskName } };
+      const output = { response: { message: 'Current state checked.', summary: null }, calls: resuming ? [requeue] : caseId === 'task-stopped-not-resumed' ? [scopeQuestion(fixture, lang)] : [] };
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      output.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Recorded the current task state and decision.' } });
+      assert.equal(score(output, caseId, lang).pass, true);
+      const otherCalls = writingCalls(loadManagerCase('escalate-not-on-first-failure', lang), []);
+      for (const [tool, args] of Object.entries(otherCalls)) {
+        if (tool === 'takt_record_goal_work_log' || resuming && tool === 'takt_requeue_goal_task') continue;
+        if (caseId === 'task-stopped-not-resumed' && ['takt_ask_goal_question', 'takt_notify_goal'].includes(tool)) continue;
+        const invalid = structuredClone(output);
+        const target = Object.hasOwn(args, 'taskName') ? { taskName: fixture.event.taskName } : {};
+        invalid.calls.push({ tool, arguments: { ...args, ...base, ...target } });
+        assert.equal(score(invalid, caseId, lang).pass, false, tool);
+      }
+      if (resuming) {
+        assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+        assert.equal(score({ ...output, calls: [requeue, requeue] }, caseId, lang).pass, false);
+        assert.equal(score({ ...output, calls: [{ ...requeue, arguments: { ...requeue.arguments, taskName: 'other-task' } }] }, caseId, lang).pass, false);
+        for (const step of ['plan', 'implement', 'review', 'unknown-step', '']) {
+          for (const startStep of [step, ` \t${step}\n `]) {
+            const explicit = { ...requeue, arguments: { ...requeue.arguments, startStep } };
+            assert.equal(score({ ...output, calls: [explicit] }, caseId, lang).pass,
+              caseId === 'paused-requeue-before-start' && step === 'plan', JSON.stringify(startStep));
+          }
+        }
+      }
+    });
+    if (resuming) test(`${lang}/${caseId}: note meaning is graded semantically rather than with a wording whitelist`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      for (const retryNote of [undefined, 'Interrupted by a goal pause.', 'Change the task to add a new export format.']) {
+        const output = { response: { message: 'Resuming.', summary: null }, calls: [{ tool: 'takt_requeue_goal_task', arguments: {
+          cwd: fixture.cwd, goalId: fixture.goal.id, taskName: fixture.event.taskName, ...(retryNote === undefined ? {} : { retryNote }),
+        } }] };
+        assert.equal(score(output, caseId, lang).pass, true);
+      }
+      assertSemanticGrader(caseId, lang);
+    });
+  }
+
+  test(`${lang}/task-stopped-not-resumed: permits a human scope question with optional recording`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const fixture = loadManagerCase(caseId, lang);
+    const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+    const question = scopeQuestion(fixture, lang);
+    const output = { response: { message: question.arguments.body, summary: null }, calls: [question] };
+    for (const recipient of [undefined, 'human']) {
+      const addressed = structuredClone(output);
+      if (recipient !== undefined) addressed.calls[0].arguments.recipient = recipient;
+      assert.equal(score(addressed, caseId, lang).pass, true);
+      addressed.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: question.arguments.body } });
+      assert.equal(score(addressed, caseId, lang).pass, true);
+    }
+    const director = structuredClone(output);
+    director.calls[0].arguments.recipient = 'director';
+    assert.equal(score(director, caseId, lang).pass, false);
+    const invalid = structuredClone(output);
+    invalid.calls[0].arguments.options = [123];
+    assert.equal(score(invalid, caseId, lang).pass, false);
+    const sameWork = structuredClone(output);
+    sameWork.calls.push(enqueue(fixture, fixture.tasks[0].goalWorkKey));
+    assert.equal(score(sameWork, caseId, lang).pass, false);
+  });
+
+  test(`${lang}/task-stopped-not-resumed: requires a saved choice alongside notifications and rejects work submission and invalid envelopes`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const fixture = loadManagerCase(caseId, lang);
+    const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+    const body = lang === 'ja'
+      ? '独自の予約形式を追加する方針を見直すため個別停止しました。独自形式を含めるかは未決定です。人の範囲の判断が届くまで停止を維持します。'
+      : 'The task was individually stopped to reconsider adding a custom booking format. Its inclusion remains undecided. Work stays stopped until the human decides the scope.';
+    const notification = { tool: 'takt_notify_goal', arguments: { ...base, kind: 'blocked', body } };
+    const output = { response: { message: body, summary: null }, calls: [notification] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, false);
+    const recorded = structuredClone(output);
+    recorded.calls.push({ tool: 'takt_record_goal_work_log', arguments: { ...base, summary: body } });
+    assert.equal(score(recorded, caseId, lang).pass, false);
+    output.calls.push(scopeQuestion(fixture, lang));
+    assert.equal(score(output, caseId, lang).pass, true);
+    const questioned = structuredClone(output);
+    questioned.calls.push({ tool: 'takt_ask_goal_question', arguments: { ...base, body } });
+    assert.equal(score(questioned, caseId, lang).pass, false);
+    const calls = writingCalls(fixture, []);
+    for (const forbidden of [
+      { tool: 'takt_requeue_goal_task', arguments: calls.takt_requeue_goal_task },
+      { tool: 'takt_retry_goal_task', arguments: calls.takt_retry_goal_task },
+      enqueue(fixture, fixture.tasks[0].goalWorkKey),
+      enqueue(fixture, 'other-work'),
+      { tool: 'takt_merge_goal_task', arguments: calls.takt_merge_goal_task },
+      { tool: 'takt_complete_goal', arguments: calls.takt_complete_goal },
+    ]) {
+      assert.equal(score({ ...output, calls: [...output.calls, forbidden] }, caseId, lang).pass, false, forbidden.tool);
+    }
+    const invalidNotification = structuredClone(output);
+    invalidNotification.calls[0].arguments.body = 123;
+    assert.equal(score(invalidNotification, caseId, lang).pass, false);
+    assert.equal(score({ ...output, response: body }, caseId, lang).pass, false);
+    assert.equal(score(JSON.stringify(output).slice(0, -1), caseId, lang).pass, false);
+  });
+
+  test(`${lang}/task-stopped-not-resumed: rejects message-only scope questions and waiting without saving a question`, () => {
+    const caseId = 'task-stopped-not-resumed';
+    const messages = lang === 'ja' ? [
+      '独自形式を検討するため個別停止した作業は、範囲の判断待ちです。停止を維持します。',
+      '受け入れ条件に沿う元の範囲での retry を推奨します。独自形式を含めずその範囲で再開しますか、それとも独自形式を含めるよう範囲を見直しますか？ 回答まで停止を維持します。',
+    ] : [
+      'Work individually stopped to reconsider the custom format awaits a scope decision and remains stopped.',
+      'I recommend retry under the original scope based on the acceptance criterion. Resume without the custom format, or revise scope to include it? Work stays stopped until your answer.',
+    ];
+    for (const message of messages) {
+      assert.equal(score({ response: { message, summary: null }, calls: [] }, caseId, lang).pass, false);
+    }
+    assertSemanticGrader(caseId, lang);
+  });
+}
+
+for (const lang of ['ja', 'en']) {
+  const tr = (ja, en) => lang === 'ja' ? ja : en;
+  const migrationQuestion = (fixture) => ({ tool: 'takt_ask_goal_question', arguments: {
+    cwd: fixture.cwd, goalId: fixture.goal.id,
+    body: tr('停止して一括で移すか、稼働したまま段階的に移すか、どちらにしますか？', 'Pause writes for a bulk transfer, or migrate in stages while writes stay active?'),
+    options: tr(['停止して一括で移す', '稼働したまま段階的に移す'], ['Pause writes and transfer in bulk', 'Migrate in stages while writes remain active']),
+    recommendation: tr('稼働したまま段階的に移す方式を推奨します。利用者の業務を中断せずに済むためです。', 'I recommend staged migration while writes stay active because it avoids interrupting users.'),
+  } });
+
+  test(`${lang}: JS accepts contextual scope choices and immediate pending display inside code fences`, () => {
+    const stopped = scopeQuestion(loadManagerCase('task-stopped-not-resumed', lang), lang);
+    stopped.arguments.body = tr(
+      '独自形式を追加する方針を見直すため個別に停止しました。登録済み範囲は既存形式での時間帯検証です。調査しましたが範囲は未決定です。現行範囲を維持しますか、独自形式を含めますか？',
+      'This task was individually stopped to reconsider the custom format. The registered scope validates time ranges using the existing format. Investigation found no scope decision. Retain that scope or include the custom format?');
+    stopped.arguments.options = tr(['登録済み範囲を維持する', '独自形式を含める'], ['Retain the registered scope', 'Include the custom format']);
+    stopped.arguments.recommendation = tr('登録済み範囲の維持を推奨します。時間帯検証という受け入れ条件を満たすためです。',
+      'Retain the registered scope because it meets the time-range validation criterion.');
+    const calendar = goodOutput('conflicting-calendar-visibility', lang).calls[0];
+    calendar.arguments.options = tr(
+      ['確認前に pending と明示してすぐ表示する', '外部確認まで表示しない'],
+      ['Show immediately before confirmation, marked pending', 'Do not display until external confirmation']);
+    calendar.arguments.recommendation = tr('pending と明示してすぐ表示する案を推奨します。保存済み予定を確認できるためです。',
+      'Show immediately marked pending because users can see their saved events.');
+    for (const [caseId, question] of [['task-stopped-not-resumed', stopped], ['conflicting-calendar-visibility', calendar]]) {
+      const output = { response: { message: 'Awaiting the scope decision.', summary: null }, calls: [question] };
+      for (const fence of ['json', 'JSON', '']) {
+        assert.equal(score(`\`\`\`${fence}\n${JSON.stringify(output)}\n\`\`\``, caseId, lang).pass, true);
+        const invalid = structuredClone(output);
+        delete invalid.calls[0].arguments.recommendation;
+        assert.equal(score(`\`\`\`${fence}\n${JSON.stringify(invalid)}\n\`\`\``, caseId, lang).pass, false);
+      }
+      assert.equal(score(`\`\`\`json\n${JSON.stringify(output)}}\n\`\`\``, caseId, lang).pass, false);
+      assertSemanticGrader(caseId, lang);
+    }
+  });
+
+  for (const caseId of ['task-stopped-not-resumed', 'migration-method-event', 'migration-method-conversation', 'conflicting-calendar-visibility', 'escalate-repeated-failure']) {
+    test(`${lang}/${caseId}: choice fields belong in the saved question, including default kind and recipient`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = caseId === 'escalate-repeated-failure' ? goodOutput(caseId, lang)
+        : { response: { message: 'Decision is pending.', summary: null }, calls: [] };
+      const question = caseId === 'task-stopped-not-resumed' ? scopeQuestion(fixture, lang) : migrationQuestion(fixture);
+      if (caseId === 'escalate-repeated-failure') output.calls[0] = question;
+      else output.calls.push(question);
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      for (const explicit of [false, true]) {
+        const addressed = structuredClone(output);
+        const args = addressed.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments;
+        if (explicit) Object.assign(args, { kind: 'question', recipient: 'human' });
+        assert.equal(score(addressed, caseId, lang).pass, true);
+        for (const mutate of [
+          (value) => { delete value.options; },
+          (value) => { value.options = []; },
+          (value) => { value.options = ['Only one method']; },
+          (value) => { value.options = ['same', ' same ']; },
+          (value) => { delete value.recommendation; },
+          (value) => { value.recommendation = ' '; },
+          (value) => { value.recipient = 'director'; },
+        ]) {
+          const invalid = structuredClone(addressed);
+          mutate(invalid.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments);
+          assert.equal(score(invalid, caseId, lang).pass, false);
+        }
+        if (caseId !== 'escalate-repeated-failure') {
+          const invalid = structuredClone(addressed);
+          invalid.calls.find(({ tool }) => tool === 'takt_ask_goal_question').arguments.kind = 'operation_request';
+          assert.equal(score(invalid, caseId, lang).pass, false);
+        }
+      }
+      const duplicated = structuredClone(output);
+      duplicated.calls.push(structuredClone(question));
+      assert.equal(score(duplicated, caseId, lang).pass, false);
+      output.response.message = `${question.arguments.recommendation} ${question.arguments.body}`;
+      assert.equal(score(output, caseId, lang).pass, true, 'Accompanying recommendation in message is allowed');
+      output.calls = output.calls.filter(({ tool }) => tool !== 'takt_ask_goal_question');
+      assert.equal(score(output, caseId, lang).pass, caseId === 'migration-method-conversation');
+    });
+  }
+
+  const migrationDescriptions = lang === 'ja'
+    ? '一括移行は書き込みを約40分停止して移します。段階移行は稼働したまま移し、検証期間が必要です。\n推奨: 段階移行です。利用者の業務を中断せずに済むためです。'
+    : 'Bulk migration pauses writes for roughly 40 minutes. Staged migration keeps writes active and requires a validation period.\nRecommended: staged migration because it avoids interrupting users.';
+
+  for (const [caseId, messages] of [
+    ['csv-export-scope-conversation', lang === 'ja' ? [
+      '画面CSVだけにするか、夜間CSVにも含めるかを選べます。推奨: 夜間CSVにも含めます。画面を使わない構成でも取得できるためです。どちらの範囲にしますか？',
+      '最初に決めたいのはCSVの範囲です。推奨: 夜間CSVにも含めます。画面を使わない構成でも取得できるためです。夜間CSVも足す形でよいですか？',
+      '作成API、画面CSVと夜間CSV、取り込み後の集計再開を登録案にまとめました。「登録する」を選んでください。',
+    ] : [
+      'Choose screen CSV only or also nightly CSV. Recommended: also nightly CSV, so headless installations can retrieve logs. Which scope do you choose?',
+      'First we need to decide CSV scope. Recommended: also nightly CSV, so headless installations can retrieve logs. Is adding nightly CSV okay?',
+      'The proposal covers the creation API, screen and nightly CSV, and aggregation resumption after import. Choose Register goal.',
+    ]],
+    ['search-index-scope-conversation', lang === 'ja' ? [
+      'タイトル検索に限るか、全文検索にも含めるかを選べます。推奨: 全文検索にも含めます。通常検索欄と端末クライアントから探せるためです。どちらの範囲にしますか？',
+      '最初に決めたいのは検索の範囲です。推奨: 全文検索にも含めます。通常検索欄と端末クライアントから探せるためです。全文検索にも含める形でよいですか？',
+      '共有メモの登録APIと、タイトル検索と本文の全文検索への接続を登録案にまとめました。「登録する」を選んでください。',
+    ] : [
+      'Choose title search only or also full-text search. Recommended: also full-text search, so the main search box and terminal client can find memos. Which scope do you choose?',
+      'First we need to decide search scope. Recommended: also full-text search, so the main search box and terminal client can find memos. Is including full-text search okay?',
+      'The proposal covers the registration API, title search and body full-text search. Choose Register goal.',
+    ]],
+  ]) {
+    test(`${lang}/${caseId}: JS validates the conversation envelope and delegates choice versus confirmation to semantic grading`, () => {
+      assertSemanticGrader(caseId, lang);
+      for (const message of messages.slice(0, 2)) {
+        const output = { response: { message, summary: null }, calls: [] };
+        assert.equal(score(output, caseId, lang).pass, true,
+          'JS success is not a semantic verdict; the rubric must reject the recommendation-only confirmation');
+      }
+    });
+
+    test(`${lang}/${caseId}: unregistered consultation rejects goal writes and a premature registration summary`, () => {
+      const output = { response: { message: messages[0], summary: null }, calls: [] };
+      const registered = loadManagerCase('migration-method-conversation', lang);
+      const log = { tool: 'takt_record_goal_work_log', arguments: {
+        cwd: registered.cwd, goalId: registered.goal.id, summary: 'Record investigation findings.',
+      } };
+      const notify = { tool: 'takt_notify_goal', arguments: {
+        cwd: registered.cwd, goalId: registered.goal.id, kind: 'blocked', body: 'Awaiting a scope choice.',
+      } };
+      for (const call of [migrationQuestion(registered), enqueue(registered, 'scope-work'), log, notify]) {
+        assert.equal(score({ ...output, calls: [call] }, caseId, lang).pass, false);
+      }
+      assert.equal(score({ ...output, response: { message: messages[2], summary: {
+        objective: 'Implement the broad scope', outOfScope: [], acceptanceCriteria: ['Support both paths'], constraints: [],
+      } } }, caseId, lang).pass, false);
+    });
+  }
+
+  test(`${lang}: conversation JS accepts paraphrased choice questions including confirmation-like endings`, () => {
+    const choices = lang === 'ja'
+      ? ['一括移行と段階移行では、どの方式がよいですか？', '一括移行と段階移行のどちらにしますか？',
+        '一括移行と段階移行ならどっちがいいですか？',
+        'はいなら段階移行、いいえなら一括移行を選びます。段階移行でよいですか？']
+      : ['Between bulk and staged migration, which method would be acceptable?', 'Which method would you choose: bulk or staged migration?',
+        'Should we proceed with bulk or staged migration?',
+        'Yes selects staged migration; no selects bulk migration. Is that okay?'];
+    const caseId = 'migration-method-conversation';
+    for (const choice of choices) {
+      assert.equal(score({ response: { message: `${migrationDescriptions}\n\n${choice}`, summary: null }, calls: [] }, caseId, lang).pass, true, choice);
+    }
+    assertSemanticGrader(caseId, lang);
+  });
+
+  test(`${lang}: conversation defers rejection of recommendation-only confirmation to llm-rubric`, () => {
+    const confirmations = lang === 'ja'
+      ? ['段階移行を使う形でよいですか？', 'この案で進めてもいいですか？', 'それでよろしいでしょうか？']
+      : ['Shall we proceed with staged migration?', 'Is that okay?', 'Can we go ahead with this approach?'];
+    const caseId = 'migration-method-conversation';
+    for (const confirmation of confirmations) {
+      for (const prefix of ['', `${migrationDescriptions}\n\n`]) {
+        const output = { response: { message: `${prefix}${confirmation}`, summary: null }, calls: [] };
+        assert.equal(score(output, caseId, lang).pass, true, 'JS checks structure; llm-rubric must reject the recommendation-only question');
+      }
+    }
+    const fixture = loadManagerCase(caseId, lang);
+    assert.equal(score({ response: { message: confirmations[0], summary: null }, calls: [migrationQuestion(fixture)] }, caseId, lang).pass, true,
+      'A correct saved choice remains an alternative to a message question');
+    assertSemanticGrader(caseId, lang);
+  });
+
+  test(`${lang}: event choice requires a saved question while conversation permits message with summary null`, () => {
+    const event = loadManagerCase('migration-method-event', lang);
+    const q = migrationQuestion(event);
+    const message = `${q.arguments.recommendation} ${q.arguments.options.join(' / ')} ${q.arguments.body}`;
+    const output = { response: { message, summary: null }, calls: [] };
+    assert.equal(score(output, 'migration-method-conversation', lang).pass, true);
+    assert.equal(score(output, 'migration-method-event', lang).pass, false);
+    output.calls = [{ tool: 'takt_notify_goal', arguments: { cwd: event.cwd, goalId: event.goal.id, kind: 'blocked', body: message } }];
+    assert.equal(score(output, 'migration-method-event', lang).pass, false);
+    output.calls = [q];
+    assert.equal(score(output, 'migration-method-conversation', lang).pass, true);
+    const independent = enqueue(event, 'ledger-reconciliation');
+    independent.arguments.purpose = 'Implement reconciliation usable with either migration method.';
+    independent.arguments.task = 'Implement a read-only count and reference comparison. Do not implement transfer or synchronization, stop writes, or access live data.';
+    output.calls.push(independent);
+    for (const caseId of ['migration-method-event', 'migration-method-conversation']) {
+      assert.equal(score(output, caseId, lang).pass, true, 'Submission dependency is graded semantically');
+      const invalid = structuredClone(output);
+      delete invalid.calls[0].arguments.options;
+      assert.equal(score(invalid, caseId, lang).pass, false, 'Independent work does not replace a valid saved choice question');
+      const unknownWorkflow = structuredClone(output);
+      unknownWorkflow.calls[1].arguments.workflow = 'missing-workflow';
+      assert.equal(score(unknownWorkflow, caseId, lang).pass, false);
+      const duplicate = structuredClone(output);
+      duplicate.calls.push(structuredClone(independent));
+      assert.equal(score(duplicate, caseId, lang).pass, false, 'Do not submit the same independent work twice');
+      const distinct = structuredClone(duplicate);
+      distinct.calls[2].arguments.workKey = 'ledger-report';
+      assert.equal(score(distinct, caseId, lang).pass, true);
+      for (const call of distinct.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task')) delete call.arguments.workKey;
+      assert.equal(score(distinct, caseId, lang).pass, true, 'Omitting optional work keys does not establish duplication');
+    }
+  });
+
+  for (const caseId of ['single-operation-request', 'escalate-repeated-failure']) {
+    test(`${lang}/${caseId}: single settled action accepts an operation request without choice fields`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+      const body = tr('鍵が未設定です。読み込み順と接続先を確認し再実行しても未解消でした。管理者がテスト用の鍵を実行環境に設定し、結果を報告してください。', 'The key is unset despite checking loading order and endpoint and rerunning. Please configure the test key in the execution environment and report the result.');
+      const request = { tool: 'takt_ask_goal_question', arguments: { ...base, kind: 'operation_request', body } };
+      const output = caseId === 'escalate-repeated-failure' ? goodOutput(caseId, lang)
+        : { response: { message: body, summary: null }, calls: [] };
+      const independent = output.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task');
+      output.calls = [request, ...independent];
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      for (const kind of [undefined, 'question']) {
+        const invalid = structuredClone(output);
+        if (kind === undefined) delete invalid.calls[0].arguments.kind;
+        else invalid.calls[0].arguments.kind = kind;
+        assert.equal(score(invalid, caseId, lang).pass, false);
+      }
+      const director = structuredClone(output);
+      director.calls[0].arguments.recipient = 'director';
+      assert.equal(score(director, caseId, lang).pass, false);
+      output.calls = [{ tool: 'takt_notify_goal', arguments: { ...base, kind: 'blocked', body } }, ...independent];
+      assert.equal(score(output, caseId, lang).pass, true);
+    });
+  }
+
+  test(`${lang}: information question requires event persistence and forbids options and recommendation`, () => {
+    const caseId = 'external-contract-limit';
+    const fixture = loadManagerCase(caseId, lang);
+    const q = { tool: 'takt_ask_goal_question', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id,
+      body: tr('転送制御に必要なため、契約上の1日あたり転送上限を教えてください。アプリの設定、リポジトリ内の契約資料、サービスの参照APIを確認しましたが、値は分かりませんでした。', 'What is the contractual daily transfer limit? It is needed to implement transfer control. I checked app configuration, repository contract materials and the service read API without finding the value.'),
+    } };
+    const output = { response: { message: q.arguments.body, summary: null }, calls: [q] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    const explicit = structuredClone(output);
+    Object.assign(explicit.calls[0].arguments, { kind: 'question', recipient: 'human' });
+    assert.equal(score(explicit, caseId, lang).pass, true);
+    for (const mutate of [
+      (value) => { value.calls = []; },
+      (value) => { value.calls.push(structuredClone(q)); },
+      (value) => { value.calls[0].arguments.options = ['Provide the contractual limit']; },
+      (value) => { value.calls[0].arguments.recommendation = 'Consult the original contract to find the limit.'; },
+      (value) => { Object.assign(value.calls[0].arguments, {
+        options: ['Required configuration', 'Provide the value now'], recommendation: 'Use required configuration.',
+      }); },
+      (value) => { value.calls[0].arguments.options = []; },
+      (value) => { value.calls[0].arguments.recommendation = null; },
+      (value) => { value.calls[0].arguments.kind = 'operation_request'; },
+      (value) => { value.calls[0].arguments.recipient = 'director'; },
+      (value) => { value.calls[0].arguments.recipient = null; },
+      (value) => { value.calls[0].arguments.kind = null; },
+      (value) => { value.calls[0].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+      (value) => { value.calls.push(enqueue(fixture, 'export')); },
+    ]) {
+      const invalid = structuredClone(output);
+      mutate(invalid);
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: settled operation integrates the reviewed task result once without asking`, () => {
+    const caseId = 'settled-operation-merge';
+    const fixture = loadManagerCase(caseId, lang);
+    const output = { response: { message: 'Integration requested.', summary: null },
+      calls: [{ tool: 'takt_merge_goal_task', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, taskName: fixture.event.taskName,
+        expectedSha: fixture.event.result.sha,
+      } }] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    for (const mutate of [
+      (value) => { value.calls = []; },
+      (value) => { value.calls.push(structuredClone(value.calls[0])); },
+      (value) => { value.calls[0].arguments.expectedSha = 'f'.repeat(40); },
+      (value) => { value.calls[0].arguments.expectedSha = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalSha; },
+      (value) => { value.calls[0].arguments.taskName = 'other-task'; },
+      (value) => { value.calls[0].arguments.cwd = '/workspace/other'; },
+      (value) => { value.calls[0].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+      (value) => { value.calls = [migrationQuestion(fixture)]; },
+      (value) => { value.calls.push(migrationQuestion(fixture)); },
+    ]) {
+      const invalid = structuredClone(output);
+      mutate(invalid);
+      assert.equal(score(invalid, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: no-downtime constraint proceeds without asking about migration method`, () => {
+    const caseId = 'migration-no-downtime';
+    const fixture = loadManagerCase(caseId, lang);
+    const call = enqueue(fixture, 'ledger-migration');
+    call.arguments.task = tr('無停止の段階移行を実装し、件数と参照関係を維持する。', 'Implement staged migration without stopping writes, preserving counts and references.');
+    const output = { response: { message: 'Implementing the constrained migration.', summary: null }, calls: [call] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    assert.equal(score({ ...output, calls: [] }, caseId, lang).pass, false);
+    output.calls.push(migrationQuestion(fixture));
+    assert.equal(score(output, caseId, lang).pass, false);
+  });
+
+  test(`${lang}: unidentified target permits clarification but no saved question under a guessed goal`, () => {
+    const caseId = 'unidentified-goal';
+    const fixture = loadManagerCase(caseId, lang);
+    const output = { response: { message: tr('顧客台帳と注文履歴のどちらの移行を指していますか？', 'Do you mean customer ledger or order history migration?'), summary: null }, calls: [] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    for (const goal of fixture.goals) {
+      const targeted = { ...fixture, goal };
+      for (const call of [migrationQuestion(targeted), enqueue(targeted, 'migration'),
+        { tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId: goal.id, summary: 'Guessed goal.' } }]) {
+        assert.equal(score({ ...output, calls: [call] }, caseId, lang).pass, false);
+      }
+    }
+  });
+}
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['approve-unprepared-pr', 'conflicting-goal-pr', 'explicit-goal-pr-merge']) {
+    test(`${lang}: ${caseId} grades tool and required argument structure`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const args = { cwd: fixture.cwd, goalId: fixture.goal.id, prNumber: fixture.goal.pullRequest.number,
+        until: caseId === 'explicit-goal-pr-merge' ? 'merge' : 'prepare' };
+      const grade = (calls) => evaluate(JSON.stringify({ response: { message: '処理します', summary: null }, calls }), { vars: { case: caseId, lang } });
+      const call = { tool: 'takt_merge_goal_pr', arguments: args };
+      assert.equal(grade([call]).pass, true);
+      assert.equal(grade([]).pass, false);
+      assert.equal(grade([call, call]).pass, false);
+      for (const field of ['cwd', 'goalId', 'prNumber', 'until']) {
+        const missing = { ...args }; delete missing[field];
+        assert.equal(grade([{ ...call, arguments: missing }]).pass, false);
+      }
+      assert.equal(grade([{ ...call, arguments: { ...args, until: args.until === 'prepare' ? 'merge' : 'prepare' } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, prNumber: 1951 } }]).pass, false);
+      assert.equal(grade([{ ...call, arguments: { ...args, workflow: 'default' } }]).pass, false);
+      assert.equal(grade([{ tool: 'takt_enqueue_goal_task', arguments: { cwd: args.cwd, goalId: args.goalId,
+        workflow: 'default', task: 'Resolve main conflicts', purpose: 'Resolve main conflicts' } }]).pass, false);
+    });
+  }
+}
+
+for (const lang of ['ja', 'en']) {
+  for (const caseId of ['local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is']) {
+    test(`${lang}/${caseId}: validates repair operations and target work log, leaving reasons to the semantic grader`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const control = caseId === 'unrelated-history-repair';
+      const leaveAsIs = caseId === 'local-env-failure-left-as-is';
+      const summary = control
+        ? 'All prescribed checks passed. Remove the unrelated history screen change from the booking export plan.'
+        : leaveAsIs
+          ? lang === 'ja'
+            ? '異常なし。作業前でも再現し CI では通る環境依存の失敗を、直さずに条件と結果を報告して進める計画は妥当。'
+            : 'No anomalies. Reporting conditions and results without repairing an environment-dependent failure that also reproduces before the task and passes in CI is reasonable.'
+          : lang === 'ja'
+            ? '異常なし。計画はこの環境で再現した失敗への妥当な対処。'
+            : 'No anomalies. The plan is a reasonable response to failures reproduced in this environment.';
+      const output = verificationOutput(fixture, summary);
+      if (control) output.calls.unshift(tellRun(fixture, summary));
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+
+      for (const mutate of [
+        (value) => { value.calls = value.calls.filter(({ tool }) => tool !== 'takt_record_goal_work_log'); },
+        (value) => { value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+        (value) => { value.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.cwd = '/workspace/other'; },
+        (value) => { value.calls.push({ tool: 'takt_complete_goal', arguments: {
+          cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Done.',
+        } }); },
+      ]) {
+        const invalid = structuredClone(output);
+        mutate(invalid);
+        assert.equal(score(invalid, caseId, lang).pass, false);
+      }
+      const badTarget = structuredClone(output);
+      badTarget.calls.unshift(tellRun(fixture, summary));
+      badTarget.calls[0].arguments.taskName = 'other-task';
+      assert.equal(score(badTarget, caseId, lang).pass, false);
+      const repeatedTell = structuredClone(output);
+      repeatedTell.calls = [tellRun(fixture, summary), tellRun(fixture, summary), ...output.calls.filter(({ tool }) => tool !== 'takt_tell_run')];
+      assert.equal(score(repeatedTell, caseId, lang).pass, false);
+
+      if (control) {
+        const noTell = structuredClone(output);
+        noTell.calls = noTell.calls.filter(({ tool }) => tool !== 'takt_tell_run');
+        assert.equal(score(noTell, caseId, lang).pass, false);
+        const extraTask = structuredClone(output);
+        extraTask.calls.push(enqueue(fixture, 'history-repair'));
+        assert.equal(score(extraTask, caseId, lang).pass, false);
+      } else if (leaveAsIs) {
+        const reporting = structuredClone(output);
+        reporting.calls.unshift(tellRun(fixture, 'Include the reproduction environment, commands and failed check results in the final report.'));
+        assert.equal(score(reporting, caseId, lang).pass, true);
+        const imposedRepair = structuredClone(output);
+        imposedRepair.calls.unshift(enqueue(fixture, 'history-test-repair'));
+        assert.equal(score(imposedRepair, caseId, lang).pass, false);
+      } else {
+        const continueRun = structuredClone(output);
+        continueRun.calls.unshift(tellRun(fixture, summary));
+        assert.equal(score(continueRun, caseId, lang).pass, true);
+        const prerequisite = structuredClone(continueRun);
+        const repair = enqueue(fixture, 'verification-environment-repair');
+        repair.arguments.purpose = 'Restore the prescribed checks on this PC';
+        repair.arguments.task = 'Apply the environment repair in the latest plan and rerun the prescribed checks. The original run will use this result before completing verification.';
+        prerequisite.calls.unshift(repair);
+        assert.equal(score(prerequisite, caseId, lang).pass, true);
+        const unknownWorkflow = structuredClone(prerequisite);
+        unknownWorkflow.calls[0].arguments.workflow = 'absent';
+        assert.equal(score(unknownWorkflow, caseId, lang).pass, false);
+        const duplicate = structuredClone(prerequisite);
+        duplicate.calls.unshift(structuredClone(repair));
+        assert.equal(score(duplicate, caseId, lang).pass, false);
+        const secondRepair = structuredClone(prerequisite);
+        secondRepair.calls.unshift(enqueue(fixture, 'second-repair'));
+        assert.equal(score(secondRepair, caseId, lang).pass, false);
+        const sameWork = structuredClone(prerequisite);
+        sameWork.calls[0].arguments.workKey = fixture.tasks[0].goalWorkKey;
+        assert.equal(score(sameWork, caseId, lang).pass, false);
+      }
+      const semanticFailure = structuredClone(output);
+      const wrongDecision = control ? 'Also fix the history screen.'
+        : leaveAsIs ? 'Fix the existing history date test before completing this task.'
+          : 'Drop the environment repair as out of scope.';
+      semanticFailure.calls = [tellRun(fixture, wrongDecision), ...output.calls.filter(({ tool }) => tool !== 'takt_tell_run')];
+      assert.equal(score(semanticFailure, caseId, lang).pass, true, 'JS checks structure; llm-rubric must reject the wrong decision');
+      const noReason = structuredClone(output);
+      noReason.calls.find(({ tool }) => tool === 'takt_record_goal_work_log').arguments.summary = 'No anomaly.';
+      assert.equal(score(noReason, caseId, lang).pass, true, 'The semantic grader owns the decision and evidence');
+    });
+  }
+}
+
+test('input-source cases require independent Y recovery and preserve a scoped X wait', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['tool-cancel-not-human-stop', 'self-record-not-human-stop', 'human-wait-x-only',
+      'run-report-stop-text', 'inquiry-answer-wait', 'human-quotes-review-stop',
+  'resume-origin-human', 'resume-origin-manager', 'resume-origin-unknown', 'director-origin-human', 'director-origin-director', 'director-origin-unknown']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const context = { vars: { case: caseId, lang } };
+      const encode = (calls) => JSON.stringify({ response: { message: 'Recovery decision', summary: null }, calls });
+      const recovery = { tool: 'takt_requeue_goal_task', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, taskName: 'csv-import',
+        retryNote: 'Use the saved CSV specification and sample data to correct the columns and date format, then rerun the failed tests.' } };
+      const log = (goalId) => ({ tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId, summary: 'Decision and grounds' } });
+      const calls = [recovery, log(fixture.goal.id), log(fixture.additionalGoals[0].id)];
+      assert.equal(evaluate(encode(calls), context).pass, true, `${caseId}/${lang}`);
+      assert.equal(evaluate(encode([recovery]), context).pass, true, 'The semantic grader checks the decision and its grounds in the response and any records');
+      for (const retryNote of [undefined, '', '   ']) {
+        assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, retryNote } }]), context).pass, false,
+          'A recovery call without instructions must not pass');
+      }
+      const { retryNote: _retryNote, ...retryArgs } = recovery.arguments;
+      assert.equal(evaluate(encode([{ tool: 'takt_retry_goal_task', arguments: { ...retryArgs,
+        task: 'Align the loader with the documented schema and representative CSV, then verify the failed import checks.' } }]), context).pass, true);
+      assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, retryNote: 'Repeat the previous instructions.' } }]), context).pass, true,
+        'JS checks instruction presence; llm-rubric must reject instructions that leave the failure cause unchanged');
+      assert.equal(evaluate(encode(calls.slice(1)), context).pass, false);
+      assert.equal(evaluate(encode([{ ...recovery, arguments: { ...recovery.arguments, goalId: fixture.additionalGoals[0].id } }, ...calls.slice(1)]), context).pass, false);
+      const enqueue = { tool: 'takt_enqueue_goal_task', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, workKey: 'new-work', purpose: 'Independent work', task: 'Independent work', workflow: fixture.defaultWorkflow,
+      } };
+      if (!['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human'].includes(caseId)) {
+        assert.equal(evaluate(encode([...calls, enqueue]), context).pass, true, 'The configured default is an available workflow');
+      }
+      assert.equal(evaluate(encode([...calls, { ...enqueue, arguments: { ...enqueue.arguments, workflow: 'missing-workflow' } }]), context).pass, false);
+      assert.equal(evaluate(encode([...calls, { tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, body: 'May I continue?',
+      } }]), context).pass, false);
+      if (['human-wait-x-only', 'inquiry-answer-wait', 'director-origin-human'].includes(caseId)) {
+        assert.equal(evaluate(encode(calls.slice(0, 2)), context).pass, true);
+        assert.equal(evaluate(encode([...calls, { tool: 'takt_enqueue_goal_task', arguments: {
+          cwd: fixture.cwd, goalId: fixture.additionalGoals[0].id, purpose: 'Continue X', task: 'Continue X', workflow: fixture.defaultWorkflow,
+        } }]), context).pass, false);
+      }
+      assertSemanticGrader(caseId, lang);
+    }
+  }
+});

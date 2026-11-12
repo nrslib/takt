@@ -293,7 +293,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
-| `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑` 承認 / `↓` 続行 / `Enter` 決定で操作し、承認を選んで `Enter` で登録します。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が会話の実行、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
+| `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が受付・保存・配送・見張りを行い、会話のターンは会話ごとの子プロセスで動かします。`takt daemon stop` で daemon を停止できます |
 | `takt director` | 全 manager を見渡す実験的な会話 TUI を開きます。[director](#director実験的)を参照してください |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、停止依頼、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
@@ -306,17 +306,17 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt workflow inspect` | workflow の設定と解決ソースを検査します |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
-manager との会話は daemon で実行され、TUI は要求を送り、結果を表示します。受け付けたターンは、TUI を閉じても daemon で処理が続きます。同じリポジトリや workspace を担当先として開き直すと、同じ会話に戻ります。同じ担当先で2つ目の TUI を開いても同じ会話につながり、承認待ちの登録案があれば再表示され、承認を選んで `Enter` を押すと登録できます。
+manager との会話は daemon で実行され、TUI は要求を送り、結果を表示します。受け付けたターンは、TUI を閉じても daemon で処理が続きます。同じリポジトリや workspace を担当先として開き直すと、同じ会話に戻ります。同じ担当先で2つ目の TUI を開いても同じ会話につながり、承認待ちの登録案があれば再表示され、「登録する」を選んで `Enter` を押すと登録できます。
 
-開き直した画面には、前の画面の発言や返事は再表示されません。会話履歴は provider のセッションに任せます。処理待ちの発言本文は実行開始まで TAKT に保存します。承認待ちのゴール要約やゴールの記録は別に保存します。
+開き直した画面には、前の画面の発言や返事は再表示されません。会話履歴は provider のセッションに任せます。TAKT は発言本文と結果全文を `daemon-events` に保存し、完了後も保持します。自動削除は行いません。承認待ちのゴール要約やゴールの記録は別に保存します。
 
-巡回・イベント・会話の処理中でも、人の発言を保存して受け付け、受付と待機件数を表示します。現在の処理が終わると保存順に処理します。中断は実行中の会話ターンだけに効き、待機発言は残ります。daemon 再起動後も待機発言は処理されますが、実行中だったターンは中断として扱われます。要約承認など発言以外の操作は処理中には従来どおり拒否されます。
+daemon はイベントで動きます。キューは人の入力と、それ以外のイベントの2本です。次のターンでは人の入力を先に処理し、各キューでは受け付けた順を守ります。会話は1本で、イベントで知った内容も次の人との会話に引き継ぎます。処理中でも発言・承認・問い合わせ回答を保存して受け付け、画面の読み出しと現在のターンの中断を行えます。accepted は永続化済みの受付で、処理の完了ではありません。中断しても待機中の入力は消えません。失敗や中断のあとは、manager が現在の状態と副作用を確かめ、再開・修正してのやり直し・新しい作業を判断します。
 
 TUI が接続している間や、受け付けた会話の操作を実行している間は、daemon は自動終了しません。明示的に止めるには `takt daemon stop` を使います。
 
 **Slack での会話:** 設定した Slack チャンネルからも、同じ manager の会話につながります。返事は発言したスレッドにだけ届き、TUI の返事は Slack に転送しません。Socket Mode の App マニフェスト、トークン用環境変数、リポジトリ設定、問い合わせへの回答方法は、[Slack で manager と会話する](./configuration.ja.md#slack-で-manager-と会話する)を参照してください。完成などの通知は、別の経路である `TAKT_NOTIFY_WEBHOOK` の Incoming Webhook を引き続き使います。
 
-会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
+会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録する」または「登録せずに会話に戻る」で操作でき、古い版のボタンは使えません。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
@@ -347,26 +347,13 @@ daemon は各プロジェクトのイベント処理前に、中断タスクを 
 
 通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。失敗したタスクは `/requeue` または `/retry` で、確認のうえキューに戻せます。
 
-### manager の道具の実行前審査
+### manager の判断と作業
 
-グローバルの `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` で、秘密として扱うファイルやディレクトリを追加できます。
+manager は、担当のゴールを完成まで進める TAKT に詳しいエンジニアとして、自分で調査・実装・確認・Git 操作を行い、必要に応じて委任します。provider の通常の道具と割り当てた MCP を使い、利用者の provider options は維持します。権限は既定で `auto` です。Claude（`claude` / `claude-sdk`）と Codex で制限なく実行するには、`manager.permission` または provider ごとの `manager.provider_permissions` を `full` に設定します。それ以外の provider では `auto` も `full` と同じ動作です。provider ごとの `manager.provider_permissions` は `manager.permission` より優先されるため、provider ごとの設定が `auto` なら `manager.permission: full` を設定しても `auto` が適用されます。別個の manager 固有の権限判断役、読取範囲の審査、保存許可による実行制御はありません。新しい開発タスクに使えるワークフローは `manager.workflows` と `manager.default_workflow` で選べます。詳しくは[設定ガイド](./configuration.ja.md#manager-がタスクに使う-workflow)を参照してください。
 
-```yaml
-manager:
-  sensitive_paths: [private, config/credentials.json]
-```
+取り込み先への反映、force push、リモートブランチや未保存成果の削除、ゴール中止、依頼範囲外の新しい投稿は、対象と作用が分かる人の明示指示に従うファセットの方針です。直接の発言、director の伝言、保存された継続指示を扱い、PR 作成・通常 push・設定済み通知は依頼作業に含めます。PR マージの指示にはそのブランチの削除も含み、指示済みのことを再確認しません。秘密値を読むにはその必要を含む人の指示が必要で、応答・記録・成果物に秘密値を残しません。
 
-どちらの一覧も既定に追加され、片方が空でも既定は変わりません。各項目にはファイル名またはディレクトリ名を指定します。詳しくは [manager の秘密ファイル設定](./configuration.ja.md#manager-の秘密ファイル設定)を参照してください。
-
-`takt manager` の provider が claude（claude-sdk）または codex の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
-
-claude（claude-sdk）の `Read` は、解決後の対象が manager の担当リポジトリ内にある、秘密ではない読み取り可能な通常のファイルの場合に限り、審査を通らずに実行できます。`Glob` はディレクトリを検索ルートとし、探索対象のファイルと、走査するディレクトリ・シンボリックリンクが担当内にあり、秘密対象を含まず安全に探索できると確認できた場合に審査を通らずに実行できます。`Grep` は `Read` と同じ条件の通常ファイルへの検索と、`Glob` と同じ安全性を確認できたディレクトリ検索で審査を通らずに実行できます。担当範囲は workspace の所属リポジトリで、workspace がなければ現在のリポジトリです。相対パスは道具の実際の作業ディレクトリを基準にし、`~`、`..`、シンボリックリンクは比較前に解決します。担当外の対象、秘密ファイル、対象や探索範囲を確定できない操作は判断役へ渡します。既定の秘密ファイルは `.env`、`.env.*`、SSH の秘密鍵の名前（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`）、および `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx` です。グローバルとプロジェクトの `manager.sensitive_paths` はこれらの既定に追加するだけで、既定を削除できません。`ToolSearch` と manager 自身の TAKT MCP の道具は、引き続き審査を通らずに実行できます。Codex では、manager 自身の TAKT MCP の道具だけが審査を通らずに実行でき、組み込みの道具はすべて審査します。どちらの provider でも、それ以外は未知の道具や外部 MCP の道具も含め、保存済み承認が適用されない操作を審査します。`Bash` などのシェルの実行も、保存済み承認が適用されなければ、内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。Codex の `spawn_agent` も、判断役を通さず常に拒否します。
-
-拒否理由は manager に返り、manager は次の発言でその理由を踏まえて動きます。人への確認と判定した場合も操作はいったん拒否し、人の確認待ちであることと理由を TUI と Slack に通知します。操作を保持したまま確認を待つことはありません。通知には既存の種類を使い、新しい種類は追加しません。
-
-判断役の provider と model は、`runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で指定できます。他の内部 agent の seat と同じく `profile` または `ladder` を指定でき、`pool` は指定できません。未指定なら manager と同じ provider・model・provider options を使います。
-
-判断には30秒の期限があります。期限切れは人への確認と同じ扱いになり、承認問い合わせを保存し、操作を確認待ちとして止めて通知します。例外や判定形式の不一致は引き続き操作の拒否になります。判断を自動でやり直すことはありません。
+旧設定 `manager.sensitive_paths` と runtime の `provider.targets.internal_agents.manager-permission-judge` は非推奨です。既存ファイルに残っていても読み飛ばし、効果はありません。古い許可 Markdown や承認回答も実行可否には使いません。過去の問い合わせ記録は読み取り・取り下げのために残します。
 
 ### インスタント exec モード
 
@@ -385,15 +372,15 @@ takt director
 takt director --help
 ```
 
-会話は daemon が保持するため、TUI を閉じて開き直すと続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示されません。director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りは、どちらも provider を呼び出すため費用がかかります。
+会話は daemon が保持するため、TUI を閉じて開き直すと続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示されません。director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。人の発言とイベントによるターンは provider を呼び出すため費用がかかります。時計だけのモデル呼び出しは行いません。
 
 manager は担当するリポジトリまたは workspace のゴールを進め、タスクの投入、成果の取り込み、完成の申請を行います。director は全 manager のゴールと未回答の問い合わせを確認し、人に対応が必要な事項を知らせ、manager の会話を通じて連絡します。判断は人に残し、マージも人の明示指示を担当 manager に転送するだけで、director 自身は実行しません。
 
-`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧は、読めない project を理由付きで示し、読める manager の処理を続けます。
 
-グローバルの `~/.takt/config.yaml` に、`director.patrol_interval`（秒、既定 `900`）と `director.slack.channel_id` / `director.slack.allowed_user_ids` を設定します。[グローバル設定フィールドリファレンス](./configuration.ja.md#グローバル設定フィールドリファレンス)を参照してください。
+グローバルの `~/.takt/config.yaml` に `director.slack.channel_id` と `director.slack.allowed_user_ids` を設定します。詳しくは[グローバル設定フィールドリファレンス](./configuration.ja.md#グローバル設定フィールドリファレンス)を参照してください。
 
-**director の Slack:** manager と同じ Slack App と `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使い、ボットを director のチャンネルへ招待します。Slack 設定を変更したら daemon を起動し直してください。`director.slack` を設定すると、まとめた通知が届き、許可された人が会話できます。返事は元のスレッドに届きます。接続手順は[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)、詳しい役割と制限は[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+**director の Slack:** manager と同じ Slack App と `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使い、ボットを director のチャンネルへ招待します。Slack 設定を変更したら daemon を起動し直してください。`director.slack` を設定すると、まとめた通知が届き、許可された人が会話できます。返事は元のスレッドに届きます。接続手順は[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)、詳しい役割と制限は[director の役割](./goal-management.ja.md#director-の役割)を参照してください。
 
 ## 設定
 

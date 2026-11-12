@@ -1,5 +1,15 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import { daemonEntries, daemonReachability } from './scripts/daemon-reachability.mjs';
+import { daemonRules } from './scripts/daemon-lint-rules.mjs';
+
+const root = import.meta.dirname;
+const graph = await daemonReachability({ root, entries: await daemonEntries(root) });
+if (graph.issues.length > 0) throw new Error(JSON.stringify(graph.issues));
+const daemonOverrides = [{ files: graph.files, rules: {
+  ...daemonRules,
+  '@typescript-eslint/no-floating-promises': 'error',
+} }];
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -11,6 +21,7 @@ export default tseslint.config(
           allowDefaultProject: [
             'eval/*.mjs',
             'eval/asserts/*.mjs',
+            'eval/providers/cli-review.test.mjs',
             'eval/scripts/*.mjs',
             'scripts/test-classification.mjs',
             'scripts/verify-deepseek-sdk-lock.mjs',
@@ -37,6 +48,7 @@ export default tseslint.config(
         console: 'readonly',
         process: 'readonly',
         AbortController: 'readonly',
+        structuredClone: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
       },
@@ -77,6 +89,7 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  ...daemonOverrides,
   {
     ignores: ['dist/', 'node_modules/', '*.config.js', 'src/__tests__/'],
   }

@@ -255,24 +255,88 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.deepEqual(promptEvalPrepareTargets([suite]), []);
   assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
   const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
-  assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
-    ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
-    ['gpt-6.1-terra', 'medium'],
-    ['claude-opus-5', undefined],
-  ]);
-  assert.equal(config.tests.length, 86);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 43);
+  assert.equal(new Set(config.providers.map(({ label }) => label)).size, config.providers.length);
+  assert.deepEqual(Object.fromEntries(config.providers.map(({ label, id, config: { model, reasoning_effort } }) => [
+    label, { id, model, reasoning_effort },
+  ])), {
+    'codex-sol-low': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-sol',
+      reasoning_effort: 'low',
+    },
+    'claude-opus-5': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+    'codex-luna-max': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6-luna',
+      reasoning_effort: 'max',
+    },
+    'codex-terra-medium': {
+      id: 'file://../../providers/manager-work-split.mjs',
+      model: 'gpt-6.1-terra',
+      reasoning_effort: 'medium',
+    },
+    'claude-sdk-opus-5': {
+      id: 'file://../../providers/manager-work-split-execution.mjs',
+      model: 'claude-opus-5',
+      reasoning_effort: undefined,
+    },
+  });
+  assert.equal(config.tests.length, 172);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 86);
+  const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
+  assert.equal(executionTests.length, 8);
+  assert.equal(new Set(executionTests.map(({ vars }) => vars.case)).size, 4);
+  const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
+  assert.equal(replayTests.length, 164);
+  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 82);
   for (const caseId of [
+    'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
+    'spec-formal-on-code', 'spec-formal-off-code', 'spec-docs-goal',
+    'spec-review-investigation',
     'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
     'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
-    'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication',
+    'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication', 'existing-invoice-format',
+    'local-terminal-test-repair', 'local-pytest-config-repair', 'unrelated-history-repair', 'local-env-failure-left-as-is',
+    'permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
     'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
     'stopped-background-execution', 'integrated-task-execution',
+    'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
+    'csv-export-scope-conversation', 'search-index-scope-conversation',
+    'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit',
   ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
+    if (['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued'].includes(caseId)) {
+      for (const entry of config.tests.filter(({ vars }) => vars.case === caseId)) {
+        assert.deepEqual(entry.providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      }
+    }
+  }
+});
+
+
+test('repair strategy history targets accompany both existing stage suites', () => {
+  for (const name of ['review-adjudication', 'fix-plan-bounded-proof']) {
+    const [suite] = selectPromptEvalSuites({ names: [name] });
+    assert.deepEqual(promptEvalPrepareTargets([suite]), [name, 'repair-strategy']);
+    assert.equal(suite.execution.defaultEligible, false);
+    assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
+    const config = parse(readFileSync(new URL(suite.config, import.meta.url), 'utf8'));
+    assert.equal(config.tests.length, name === 'review-adjudication' ? 27 : 25);
+    assert.equal(config.providers.length, 3);
+    for (const caseId of ['k1', 'r1', 'i1', 'f1', 'p1', 'm1']) {
+      for (const label of [caseId, `${caseId}-en`]) {
+        assert.equal(config.prompts.filter(prompt => prompt.label === label).length, 1);
+        assert.deepEqual(config.tests.filter(test => test.prompts.includes(label)).map(test => test.vars.output_phase), ['phase1', 'phase2']);
+      }
+    }
+    assert.equal(config.evaluateOptions.repeat ?? 1, name === 'review-adjudication' ? 1 : 3);
   }
 });

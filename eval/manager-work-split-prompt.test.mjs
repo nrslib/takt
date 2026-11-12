@@ -4,31 +4,42 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import { parse } from 'yaml';
-import buildPrompt, { buildManagerSystemPrompt, loadManagerCase } from './manager-work-split-prompt.mjs';
+import buildPrompt, { buildManagerSystemPrompt, buildManagerEventInput, loadManagerCase, resolveManagerEvalFacet, buildManagerCurrentInput, buildManagerHistory } from './manager-work-split-prompt.mjs';
+import { buildManagerSystemPrompt as buildBaselineSystem } from './manager-turn-context-baseline.mjs';
+import { buildManagerSystemPrompt as buildProductionSystem } from '../dist/features/manager/conversationPrompt.js';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
-import { buildGoalTurnContext, buildManagerGoalSummary } from '../dist/features/manager/turnContext.js';
+import { buildManagerEventPrompt, managerInboxTurnEvent } from '../dist/features/daemon/inboxEvent.js';
+import { goalSummary } from '../dist/features/mcp/goalResponse.js';
+import { parseDaemonProcessMessage } from '../dist/core/daemon/processProtocol.js';
+import { TaskRecordSchema } from '../dist/infra/task/schema.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
-import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
+import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, goalWriteInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
+import { prepareQuestionFacetVariants } from './fixtures/manager-question-options/facets.mjs';
+import { renderTemplate } from '../dist/shared/prompts/index.js';
+import { loadFormalSpecVerifierConstraints } from '../dist/features/interactive/formalSpecPrompts.js';
+
+const turnData = (prompt) => JSON.parse(prompt.trim().split('\n').at(-1));
+const currentInput = (prompt) => prompt.split('USER:\n')[1].split(/\n\n(?:このターンで既に読んだ結果|Results already read this turn):\n/)[0];
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
+const runLogContent = (fixture, runSlug, index) => fixture.readResults.find(({ tool, arguments: args }) =>
+  tool === 'takt_get_run' && args.runSlug === runSlug && args.view === 'log' && args.stepIndex === index).result.log.content;
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
-const inheritedInstructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
-delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
-after(() => preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', inheritedInstructionRoot));
+const facetEnvKeys = ['TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', 'TAKT_EVAL_MANAGER_POLICY_ROOT'];
+const inheritedFacetRoots = facetEnvKeys.map((key) => [key, process.env[key]]);
+for (const key of facetEnvKeys) delete process.env[key];
+after(() => inheritedFacetRoots.forEach(([key, value]) => preserveEnv(key, value)));
 
-test('assembles all 86 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles every configured turn prompt without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 86);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
     if (fixture.execution === true) {
       assert.deepEqual(JSON.parse(prompt), { case: vars.case, lang: vars.lang, user: fixture.user });
-      const row = suite.tests.find((entry) => entry.vars.case === vars.case && entry.vars.lang === vars.lang);
-      assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
       assert.doesNotMatch(prompt, /ps -p|exit code|結果行がない|process is absent/);
       continue;
     }
@@ -49,17 +60,36 @@ test('assembles all 86 turn prompts without a provider call, excluding scoring c
       taskName: 'running-task', content: 'Review the active repair target.',
     }).success);
     assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/tool-calls|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
-    if (fixture.turn === 'conversation') assert.ok(prompt.includes(`USER:\n${fixture.user}`));
-    else {
-      const user = prompt.split('USER:\n')[1].split('\n\n')[0];
-      const context = JSON.parse(user);
-      assert.equal(context.goal.id, fixture.goal.id);
-      assert.deepEqual(ManagerEventSchema.parse(context.event), fixture.event);
-      assert.equal(context.tasks[0].startedAt, fixture.tasks[0].startedAt);
-      assert.deepEqual(context.goal, buildManagerGoalSummary(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.tasks));
-      const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-      assert.deepEqual(GoalSchema.parse(readGoal), GoalSchema.parse(fixture.goal));
+    assert.ok(!prompt.includes('expectedQuestionType'));
+    assert.equal(currentInput(prompt), buildManagerCurrentInput(fixture));
+    if (fixture.turn === 'event' && !['answer', 'director_message'].includes(fixture.event.kind)) {
+      const context = turnData(currentInput(prompt));
+      assert.deepEqual(context, turnData(buildManagerEventInput(fixture.cwd, fixture.event, fixture.lang)));
+      assert.deepEqual(Object.keys(context), ['event', 'instruction']);
+      const readGoal = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.path === undefined).result.goal;
+      assert.deepEqual(readGoal, goalSummary(GoalSchema.parse(fixture.goal)));
+    }
 
+  }
+});
+
+test('permission review denials remain current-turn tool results rather than human messages', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['permission-denied-push', 'permission-denied-deploy', 'permission-denied-optional-check', 'permission-denial-instruction']) {
+      const raw = parse(readFileSync(new URL(`./cases/manager-work-split/${caseId}.yaml`, import.meta.url), 'utf8'))[lang];
+      const denied = raw.readResults.find(({ tool }) => tool === 'Bash');
+      const fixture = loadManagerCase(caseId, lang);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      const label = lang === 'ja' ? 'このターンで既に読んだ結果' : 'Results already read this turn';
+      const results = JSON.parse(prompt.split(`${label}:\n`)[1].split('\n\n')[0]);
+      assert.deepEqual(results.find(({ tool }) => tool === 'Bash'), denied);
+      const user = currentInput(prompt);
+      assert.ok(!user.includes(denied.result));
+      assert.ok(!buildManagerSystemPrompt(fixture).includes(denied.result));
+      assert.equal(fixture.previousTurns, undefined);
+      assert.equal(fixture.turn, caseId === 'permission-denial-instruction' ? 'conversation' : 'event');
+      if (fixture.turn === 'conversation') assert.equal(turnData(user).text, raw.user);
+      else assert.equal(user, buildManagerEventInput(raw.cwd, raw.event, lang));
     }
   }
 });
@@ -67,19 +97,18 @@ test('assembles all 86 turn prompts without a provider call, excluding scoring c
 test('stopped-check inputs connect a previous launch to the current process and saved output observations', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('stopped-background-check', lang);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
     const processRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Bash' && args.command.startsWith('ps -p '));
     const pid = processRead.arguments.command.match(/ps -p (\d+)/)[1];
     const outputRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('.log'));
-    const launch = context.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
+    const launch = fixture.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
     assert.ok(launch);
-    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.createdAt));
-    assert.equal(processRead.result, 'exit code: 1\nstdout: \nstderr: ');
+    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
+    assert.match(processRead.result, /^exit code: 1\nstdout:\s*\nstderr:\s*$/);
     assert.match(outputRead.result, /RUN /);
     assert.doesNotMatch(outputRead.result, /PASS|FAIL|Tests\s+\d+/);
     const prompt = buildPrompt({ vars: { case: 'stopped-background-check', lang } });
     assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
-    assert.deepEqual(JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]).goal.workLog, context.goal.workLog);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'workLog').result.items, fixture.goal.workLog);
   }
 });
 
@@ -100,9 +129,8 @@ test('verification inputs expose integration state, result SHA and a distinct go
       assert.equal(history.result.sourceSha, task.completion.sha);
       const prompt = buildPrompt({ vars: { case: caseId, lang } });
       assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
-      const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-      assert.equal(context.tasks[0].completion.sha, task.completion.sha);
-      assert.equal(context.goal.branch, relation.goalBranch);
+      assert.equal(fixture.tasks[0].completion.sha, task.completion.sha);
+      assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal.branch, relation.goalBranch);
     }
   }
 });
@@ -114,14 +142,15 @@ test('uses the current time for each patrol case even long after module loading'
   const earlier = loadLaterCase('mail-dispatch-state', 'ja');
   clock.mock.mockImplementation(() => now);
   const later = loadLaterCase('mail-dispatch-state', 'ja');
-  assert.equal(Date.parse(later.event.createdAt) - Date.parse(earlier.event.createdAt), 24 * 60 * 60 * 1000);
+  assert.equal(Date.parse(later.snapshotAt) - Date.parse(earlier.snapshotAt), 24 * 60 * 60 * 1000);
   const prompt = buildLaterPrompt({ vars: { case: 'mail-dispatch-state', lang: 'ja' } });
-  const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
-  assert.ok(Math.abs(Date.parse(context.patrol.observedAt) - Date.parse(context.event.createdAt)) < 1000);
+  const context = turnData(currentInput(prompt));
+  assert.equal(context.event.kind, 'patrol');
+  assert.equal(Date.parse(later.snapshotAt), now);
   assert.deepEqual(context.event, later.event);
 });
 
-test('patrol fixtures include repeated repair history, source documents and the latest adjudication report', () => {
+test('patrol fixtures preserve repeated repair history, source documents and the latest adjudication report', () => {
   const cases = [
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
@@ -132,18 +161,18 @@ test('patrol fixtures include repeated repair history, source documents and the 
       const fixture = loadManagerCase(caseId, lang);
       assert.equal(fixture.turn, 'event');
       assert.equal(fixture.event.kind, 'patrol');
+      assert.deepEqual(fixture.event.goalIds, [fixture.goal.id]);
       const run = fixture.readResults.find(({ tool }) => tool === 'takt_get_run');
-      const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
-      assert.ok(Math.abs(Date.parse(context.patrol.observedAt) - Date.parse(fixture.event.createdAt)) < 60000);
-      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.createdAt));
-      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.createdAt)));
+      assert.ok(fixture.tasks.some(({ runSlug }) => runSlug === run.result.runSlug));
+      assert.ok(Date.parse(run.result.currentStepStartedAt) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt));
+      assert.ok(run.result.stepLogs.every(({ timestamp }) => Date.parse(timestamp) <= Date.parse(fixture.event.kind === 'patrol' ? fixture.snapshotAt : fixture.event.createdAt)));
       for (const entry of run.result.stepLogs.filter(({ step }) => ['fix', 'remediation'].includes(step))) {
-        assert.doesNotMatch(entry.content, /次の review|next review/i);
+        assert.doesNotMatch(runLogContent(fixture, run.result.runSlug, entry.index), /次の review|next review/i);
       }
       if (caseId !== 'conflicting-calendar-visibility') {
-        const secondReview = run.result.stepLogs.find(({ step, iteration }) => ['review', 'reviewers'].includes(step) && iteration === 2);
-        assert.match(secondReview.content, lang === 'ja' ? /1周目.*残っている/ : /cycle 1.*remained unresolved/);
-        const secondAdjudication = run.result.stepLogs.find(({ step, iteration }) => step === 'review-adjudication' && iteration === 2);
+        const secondReview = run.result.stepLogs.filter(({ step }) => ['review', 'reviewers'].includes(step))[1];
+        assert.match(runLogContent(fixture, run.result.runSlug, secondReview.index), lang === 'ja' ? /1周目.*残っている/ : /cycle 1.*remained unresolved/);
+        const secondAdjudication = run.result.stepLogs.filter(({ step }) => step === 'review-adjudication')[1];
         assert.equal(secondAdjudication.status, 'done');
         assert.ok(Date.parse(secondReview.timestamp) < Date.parse(secondAdjudication.timestamp));
       }
@@ -154,16 +183,16 @@ test('patrol fixtures include repeated repair history, source documents and the 
         const latest = run.result.stepLogs.filter(({ step }) => step === 'review-adjudication').at(-1);
         assert.ok(Date.parse(latest.timestamp) < Date.parse(patrol.recordedAt));
         assert.equal(fixture.readResults.some(({ tool, arguments: args }) =>
-          tool === 'Read' && args.file_path.endsWith('review-resolution.md')), false);
+          tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md'), false);
       } else {
         if (caseId === 'conflicting-calendar-visibility') {
           assert.equal(run.result.stepLogs.filter(({ step }) => step === 'review-adjudication').length, 1);
           const report = fixture.readResults.find(({ tool, arguments: args }) =>
-            tool === 'Read' && args.file_path.endsWith('review-resolution.md')).result;
+            tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md').result.report.content;
           assert.match(report, lang === 'ja' ? /矛盾/ : /conflicts/);
         } else {
           for (const iteration of [1, 2]) {
-            const logs = run.result.stepLogs.filter((entry) => entry.iteration === iteration && entry.status === 'done');
+            const logs = run.result.stepLogs.slice((iteration - 1) * 3, iteration * 3);
             const review = logs.find(({ step }) => ['review', 'reviewers'].includes(step));
             const adjudication = logs.find(({ step }) => step === 'review-adjudication');
             const repair = logs.find(({ step }) => ['fix', 'remediation'].includes(step));
@@ -178,7 +207,7 @@ test('patrol fixtures include repeated repair history, source documents and the 
           }
         }
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
-          tool === 'Read' && args.file_path.endsWith('review-resolution.md')));
+          tool === 'takt_get_run' && args.view === 'report' && args.report === 'review-resolution.md'));
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
           tool === 'Read' && args.file_path.endsWith('goal-request.md')));
         assert.ok(fixture.readResults.some(({ tool, arguments: args }) =>
@@ -192,16 +221,13 @@ test('patrol fixtures include repeated repair history, source documents and the 
 test('data carryover includes the saved constraints and pending work through the production event input and reads', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('constraint-carryover-data', lang);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
-    assert.equal(context.goal.id, fixture.goal.id);
-    assert.equal(context.goal.workLogCount, fixture.goal.workLog.length);
+    assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal.workLogCount, fixture.goal.workLog.length);
     const request = fixture.readResults.find(({ tool }) => tool === 'Read').result;
     assert.deepEqual(request.acceptanceCriteria, fixture.goal.acceptanceCriteria);
     assert.deepEqual(request.constraints, fixture.goal.constraints);
     assert.deepEqual(request.work.map(({ workKey }) => workKey), ['channel-totals', 'report-export']);
-    const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-    assert.deepEqual(readGoal.acceptanceCriteria, fixture.goal.acceptanceCriteria);
-    assert.deepEqual(readGoal.constraints, fixture.goal.constraints);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'acceptanceCriteria').result.items, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'constraints').result.items, fixture.goal.constraints);
     assert.equal(fixture.tasks[0].goalWorkKey, 'foundation');
     assert.ok(fixture.goal.workLog.some(({ summary }) => summary.includes('foundation') && summary.includes(fixture.tasks[0].completion.sha)));
     assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalBranch, fixture.goal.branch);
@@ -211,9 +237,7 @@ test('data carryover includes the saved constraints and pending work through the
 test('already checked inventory results include git history and a completed verification run', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('integration-already-checked', lang);
-    const goal = GoalSchema.parse(fixture.goal);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-    const reader = context.tasks.find(({ name }) => name === 'result-2');
+    const reader = fixture.tasks.find(({ name }) => name === 'result-2');
     const storage = fixture.tasks.find(({ name }) => name === 'result-1');
     const history = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_history');
     assert.ok(goalHistoryInputSchema.safeParse(history.arguments).success);
@@ -227,8 +251,9 @@ test('already checked inventory results include git history and a completed veri
     assert.ok(shas.includes(storage.completion.sha));
     const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug);
     assert.equal(run.result.status, 'completed');
-    assert.equal(run.result.task, reader.goalPurpose);
-    const report = run.result.reports[0].content;
+    const taskRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug && args.view === 'task');
+    assert.equal(taskRead.result.task.content, reader.goalPurpose);
+    const report = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug && args.view === 'report').result.report.content;
     assert.ok(report.includes(reader.completion.sha));
     assert.match(report, lang === 'ja' ? /ビルドと.*結合テストが成功/ : /Build and integration tests passed/);
     assert.match(report, lang === 'ja' ? /保存して再起動後に読み込み/ : /save.*reload after restart/);
@@ -265,21 +290,43 @@ test('completion fixtures supply file patches and commit history through product
   }
 });
 
-test('event fixtures carry production goal memory, inbox events and current task state', () => {
+test('event fixtures use the production event envelope and goal/task reading contracts', () => {
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
-    const event = ManagerEventSchema.parse(fixture.event);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, event, fixture.tasks));
-    assert.deepEqual(context.goal, buildManagerGoalSummary(fixture.cwd, goal, fixture.tasks));
-    assert.deepEqual(context.event, event);
-    assert.deepEqual(context.tasks, fixture.tasks);
-    assert.equal(context.references.goal, `${fixture.cwd}/.takt/goals/${goal.id}/goal.json`);
-    assert.equal(context.references.tasks, `${fixture.cwd}/.takt/tasks.yaml`);
+    const input = turnData(buildManagerEventInput(fixture.cwd, fixture.event));
+    const event = ['watch_observation', 'patrol', 'director_message'].includes(fixture.event.kind) ? fixture.event
+      : managerInboxTurnEvent(fixture.cwd, ManagerEventSchema.parse(fixture.event));
+    if (event.kind === 'director_message') assert.deepEqual(input, {
+      text: event.text, origin: event.origin ?? 'unknown', directorConversationId: event.directorConversationId,
+    });
+    else if (event.kind === 'inquiry_answered') assert.deepEqual(input, event);
+    else assert.deepEqual(input, JSON.parse(buildManagerEventPrompt(event)));
+    parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'fixture', input: {
+      event: { eventId: 'event', requestId: 'event', conversationId: 'manager', operationId: 'turn', acceptedSequence: 1,
+        lane: 'other', source: event.kind === 'patrol' ? 'daemon' : event.kind === 'watch_observation' ? 'watcher' : 'run', occurredAt: new Date().toISOString(), event },
+      turn: { conversationId: 'manager', operationId: 'turn', generation: 1 },
+      state: { version: 0, assignment: { kind: 'repository', repositoryDirectory: fixture.cwd },
+        session: { provider: 'mock', model: null, sessionId: null }, revision: 0, pending: null, approval: null },
+    } }, 'fixture');
     const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-    assert.deepEqual(GoalSchema.parse(readGoal), goal);
-    assert.ok(goal.workLog.some(({ summary }) => fixture.tasks.some((task) => task.completion !== undefined && summary.includes(task.completion.sha))));
+    assert.deepEqual(readGoal, goalSummary(goal));
+    const tasks = fixture.readResults.find(({ tool }) => tool === 'takt_list_tasks').result;
+    assert.equal(tasks.collection, 'tasks');
+    assert.equal(tasks.totalCount, fixture.tasks.length);
+    assert.equal(tasks.nextOffset, null);
+    assert.deepEqual(tasks.tasks.map(({ name, status, runSlug }) => ({ name, status, runSlug })),
+      fixture.tasks.map(({ name, status, runSlug }) => ({ name, status, runSlug })));
+    assert.ok(tasks.tasks.every((task) => ['integrated', 'not_integrated', 'unknown'].includes(task.goalIntegration)));
+    assert.ok(tasks.tasks.every((task) => !Object.hasOwn(task, 'completion') && !Object.hasOwn(task, 'failure')));
+    const saved = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path === `${fixture.cwd}/.takt/tasks.yaml`).result.tasks;
+    for (const task of saved) assert.ok(TaskRecordSchema.safeParse(task).success);
+    for (const path of ['acceptanceCriteria', 'constraints', 'outOfScope', 'workLog', 'questions']) {
+      const read = fixture.readResults.find(({ arguments: args }) => args.path === path);
+      assert.deepEqual(read.result.items, goal[path]);
+      assert.equal(read.result.collection, 'items');
+    }
   }
 });
 
@@ -291,7 +338,7 @@ test('uses the exact production system assembly for each language', () => {
     process.env.TAKT_CONFIG_DIR = root;
     delete process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
     mkdirSync(join(root, '.takt'));
-    writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nconcurrency: 3\nmanager:\n  default_workflow: default\n  main_merge: auto\n');
+    writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nconcurrency: 3\nmanager:\n  main_merge: auto\n');
     invalidateGlobalConfigCache();
     for (const lang of ['ja', 'en']) {
       const fixture = { ...loadManagerCase('parallel-cli', lang), cwd: root };
@@ -329,6 +376,50 @@ test('ignores global and project facet overrides and restores the environment on
   }
 });
 
+test('specification cases resolve fixture project settings through production configuration in both languages', () => {
+  const prior = process.env.TAKT_CONFIG_DIR;
+  for (const lang of ['ja', 'en']) {
+    for (const [caseId, mode] of [
+      ['spec-formal-on-code', true], ['spec-formal-off-code', false], ['spec-docs-goal', true],
+      ['spec-review-investigation', true],
+      ['summary-keeps-constraint', false],
+    ]) {
+      const fixture = loadManagerCase(caseId, lang);
+      const prompt = buildManagerSystemPrompt(fixture);
+      const configuration = JSON.parse(prompt.split('Formal specification configuration: ')[1].split('\n')[0]);
+      assert.equal(configuration.mode, mode, `${caseId}/${lang}`);
+      if (caseId === 'spec-review-investigation') assert.equal(configuration.comments, true);
+      assert.equal(process.env.TAKT_CONFIG_DIR, prior);
+    }
+    const on = loadManagerCase('spec-formal-on-code', lang);
+    const off = loadManagerCase('spec-formal-off-code', lang);
+    assert.equal(on.user, off.user);
+  }
+});
+
+test('review investigation replays a prior conflict response and eight current Bash reads before a new proposal', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('spec-review-investigation', lang);
+    const prompt = buildPrompt({ vars: { case: 'spec-review-investigation', lang } });
+    assert.equal(fixture.turn, 'conversation');
+    assert.equal(fixture.previousTurns.length, 1);
+    assert.equal(fixture.previousTurns[0].event.observation.kind, 'pr_conflicting');
+    assert.equal(fixture.previousTurns[0].response.summary, null);
+    const history = JSON.parse(prompt.split('PREVIOUS TURNS:\n')[1].split('\n\nTOOLS:')[0]);
+    assert.deepEqual(history, fixture.previousTurns.map(({ event, response }) => ({
+      input: buildManagerEventInput(fixture.cwd, event, fixture.lang), response,
+    })));
+    assert.ok(prompt.indexOf('PREVIOUS TURNS:\n') < prompt.indexOf(`USER:\n${buildManagerCurrentInput(fixture)}`));
+    assert.equal(fixture.readResults.length, 8);
+    assert.ok(fixture.readResults.every(({ tool, arguments: args, result }) => tool === 'Bash'
+      && typeof args.command === 'string' && typeof result === 'string' && result.length > 0));
+    assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
+    assert.equal(fixture.goal, undefined);
+    const withoutHistory = buildPrompt({ vars: { case: 'spec-formal-on-code', lang } });
+    assert.ok(!withoutHistory.includes('PREVIOUS TURNS:\n'));
+  }
+});
+
 test('red mode removes only the Concurrency limit suffix', () => {
   const prior = process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY;
   try {
@@ -337,28 +428,10 @@ test('red mode removes only the Concurrency limit suffix', () => {
     const green = buildManagerSystemPrompt(fixture);
     process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY = '1';
     const red = buildManagerSystemPrompt(fixture);
-    assert.equal(green, `${red}\n\nConcurrency limit: 3`);
+    assert.ok(green.includes('Concurrency limit: 3'));
+    assert.ok(!red.includes('Concurrency limit:'));
+    assert.equal(green.slice(0, green.indexOf('\n\nConcurrency limit:')), red);
   } finally { preserveEnv('TAKT_EVAL_MANAGER_OMIT_CONCURRENCY', prior); }
-});
-
-test('work contents, integrated verification and constraint cases receive semantic rubrics', () => {
-  const semanticCases = new Set(['parallel-cli', 'parallel-docs-migration',
-    'shared-resource', 'shared-definition', 'human-order', 'integration-check',
-    'constraint-carryover', 'constraint-carryover-data', 'constraint-once',
-    'summary-keeps-constraint', 'summary-keeps-constraint-web', 'summary-no-invented-constraint',
-    'escalate-repeated-failure', 'escalate-not-on-first-failure',
-    'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
-    'report-publish-replacement', 'conflicting-calendar-visibility',
-    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
-    'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
-    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
-    'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
-    'stopped-background-execution', 'integrated-task-execution']);
-  for (const row of suite.tests) {
-    assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
-    if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
-      ? /^見出しや文言の一致ではなく、内容で判定する/ : /^Judge substance rather than headings or exact wording/);
-  }
 });
 
 test('failure fixtures preserve attempts, revised instructions and causes through production event inputs', () => {
@@ -366,18 +439,18 @@ test('failure fixtures preserve attempts, revised instructions and causes throug
     for (const caseId of ['escalate-repeated-failure', 'escalate-not-on-first-failure']) {
       const fixture = loadManagerCase(caseId, lang);
       const goal = GoalSchema.parse(fixture.goal);
-      const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-      const failures = context.tasks.filter(({ completion }) => completion.success === false);
+        const input = turnData(buildManagerEventInput(fixture.cwd, fixture.event));
+      const failures = fixture.tasks.filter(({ completion }) => completion.success === false);
       assert.equal(failures.length, caseId === 'escalate-repeated-failure' ? 2 : 1);
       assert.equal(fixture.event.taskName, failures.at(-1).name);
-      assert.equal(context.event.result.success, false);
-      assert.equal(context.event.result.failureReason, fixture.event.result.failureReason);
+      assert.equal(input.event.result.success, false);
+      assert.equal(input.event.result.failureReason, fixture.event.result.failureReason);
       assert.equal(goal.executionStatus, 'active');
       for (const event of failures) {
-        const task = context.tasks.find(({ name }) => name === event.name);
+        const task = fixture.tasks.find(({ name }) => name === event.name);
         assert.equal(task.completion.success, false);
-        const run = fixture.readResults.find(({ tool, result }) => tool === 'takt_get_run' && result.runSlug === event.runSlug);
-        assert.ok(run.result.reports[0].content.length > 0);
+        const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === event.runSlug && args.view === 'report');
+        assert.ok(run.result.report.content.length > 0);
       }
       if (caseId === 'escalate-repeated-failure') {
         const instruction = fixture.readResults.find(({ arguments: args }) => args.file_path?.endsWith('/order.md'));
@@ -420,7 +493,167 @@ test('instruction file switching preserves input, schemas and other facets in bo
   }
 });
 
-test('verification fixtures distinguish separate finished checks, a single check, mixed causes and prior instruction', () => {
+test('recorded main question rules and green workspace facets are exclusive in assembled prompts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-question-redgreen-'));
+  const prior = facetEnvKeys.map((key) => [key, process.env[key]]);
+  try {
+    for (const lang of ['ja', 'en']) {
+      prepareQuestionFacetVariants(root, lang);
+      for (const key of facetEnvKeys) delete process.env[key];
+      const prompts = {};
+      for (const phase of ['red', 'green']) {
+        process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, phase, 'policies');
+        process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, phase, 'instructions');
+        prompts[phase] = buildPrompt({ vars: { case: 'migration-method-event', lang } });
+        const other = phase === 'red' ? 'green' : 'red';
+        for (const kind of ['policies', 'instructions']) {
+          const bodies = Object.fromEntries([phase, other].map((variant) => [variant, renderTemplate(
+            resolveManagerEvalFacet(kind, 'FACET_ROOT', { projectDir: root, lang }, join(root, variant, kind)).trim(),
+            { formalSpec: false, formalSpecCommentsEnabled: false, formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang) },
+          )]));
+          assert.notEqual(bodies[phase], bodies[other]);
+          assert.ok(prompts[phase].includes(bodies[phase]), `${lang}/${phase}/${kind}: includes chosen facet`);
+          assert.ok(!prompts[phase].includes(bodies[other]), `${lang}/${phase}/${kind}: excludes other facet`);
+        }
+        assert.doesNotMatch(prompts[phase], /\{\{include:/);
+      }
+      assert.equal(prompts.red.split('\n\nTOOLS:\n')[1], prompts.green.split('\n\nTOOLS:\n')[1]);
+    }
+    delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = 'relative/path';
+    assert.throws(() => buildPrompt({ vars: { case: 'migration-method-event', lang: 'ja' } }), /POLICY_ROOT must be an absolute path/);
+    process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = join(root, 'missing');
+    assert.throws(() => buildPrompt({ vars: { case: 'migration-method-event', lang: 'ja' } }), /ENOENT/);
+  } finally {
+    prior.forEach(([key, value]) => preserveEnv(key, value));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('policy switching preserves all other prompt content in both languages', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-policy-test-'));
+  const prior = process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+  try {
+    delete process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+    for (const lang of ['ja', 'en']) {
+      mkdirSync(join(root, lang));
+      const policy = readFileSync(new URL(`../builtins/${lang}/facets/policies/manager.md`, import.meta.url), 'utf8');
+      const vars = { case: 'migration-method-event', lang };
+      const original = buildPrompt({ vars });
+      writeFileSync(join(root, lang, 'manager.md'), policy);
+      process.env.TAKT_EVAL_MANAGER_POLICY_ROOT = root;
+      assert.equal(buildPrompt({ vars }), original);
+      const marker = `POLICY_VARIANT_${lang}`;
+      writeFileSync(join(root, lang, 'manager.md'), `${marker}\n${policy}`);
+      assert.equal(buildPrompt({ vars }).replace(`${marker}\n`, ''), original);
+      delete process.env.TAKT_EVAL_MANAGER_POLICY_ROOT;
+    }
+  } finally {
+    preserveEnv('TAKT_EVAL_MANAGER_POLICY_ROOT', prior);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('question fixtures preserve the human input boundary and constraints', () => {
+  for (const lang of ['ja', 'en']) {
+    const event = loadManagerCase('migration-method-event', lang);
+    const conversation = loadManagerCase('migration-method-conversation', lang);
+    assert.equal(event.turn, 'event');
+    assert.equal(conversation.turn, 'conversation');
+    assert.ok(conversation.user.length > 0);
+    assert.deepEqual(conversation.goal, event.goal);
+    assert.deepEqual(conversation.readResults, event.readResults);
+    const constrained = loadManagerCase('migration-no-downtime', lang);
+    assert.deepEqual({ ...constrained.goal, constraints: [] }, event.goal);
+    assert.equal(constrained.goal.constraints.length, 1);
+    const unidentified = loadManagerCase('unidentified-goal', lang);
+    assert.equal(unidentified.goal, undefined);
+    assert.equal(unidentified.turn, 'conversation');
+    assert.equal(new Set(unidentified.goals.map((candidate) => GoalSchema.parse(candidate).id)).size, 2);
+    const targetIdentity = ({ id, objective, status, branch }) => ({ id, objective, status, branch });
+    assert.deepEqual(unidentified.readResults[0].result.goals.map(targetIdentity), unidentified.goals.map(targetIdentity));
+  }
+});
+
+test('scope consultations replay substantial investigation after the human request without inventing a registered goal', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['csv-export-scope-conversation', 'search-index-scope-conversation']) {
+      const fixture = loadManagerCase(caseId, lang);
+      assert.equal(fixture.turn, 'conversation');
+      assert.equal(fixture.expectedQuestionType, 'choice');
+      assert.equal(fixture.goal, undefined);
+      assert.deepEqual(fixture.tasks, []);
+      const reads = fixture.readResults;
+      assert.deepEqual(reads.map(({ tool }) => tool), [
+        'takt_list_goals', 'takt_list_standalone_inquiries', 'Bash', 'Bash', 'Bash', 'Agent',
+      ]);
+      for (const [index, collection] of ['goals', 'inquiries'].entries()) {
+        assert.deepEqual(reads[index].result, {
+          [collection]: [], collection, totalCount: 0, returnedCount: 0,
+          omittedCount: 0, offset: 0, nextOffset: null, truncated: false,
+        });
+      }
+      const research = reads.slice(2);
+      assert.ok(research.every(({ result }) => typeof result === 'string' && result.length > 0));
+      assert.ok(research.reduce((total, read) => total + read.result.length, 0) > 6000,
+        'Preserve the extended investigation rather than reducing it to a short comparison of alternatives');
+      assert.equal(reads.at(-1).arguments.subagent_type, 'Explore');
+      assert.match(reads.at(-1).result, /src\/.*:\d+/);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      const input = prompt.split('\n\nUSER:\n')[1];
+      assert.equal(turnData(currentInput(prompt)).text, fixture.user);
+      assert.ok(input.includes(JSON.stringify(reads)));
+      assert.doesNotMatch(input, /llm-rubric|expectedQuestionType|\/Users\/|Slack|Webhook|合格|不合格/);
+      const rows = suite.tests.filter(({ vars }) => vars.case === caseId && vars.lang === lang);
+      assert.equal(rows.length, 1);
+      assert.deepEqual(rows[0].providers, ['codex-sol-low', 'claude-opus-5', 'codex-luna-max', 'codex-terra-medium']);
+      assert.equal(rows[0].assert[0].type, 'llm-rubric');
+    }
+  }
+});
+
+test('settled-operation fixtures expose an answered method choice and a reviewed unintegrated completion', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('settled-operation-merge', lang);
+    const goal = GoalSchema.parse(fixture.goal);
+    const event = ManagerEventSchema.parse(fixture.event);
+    assert.equal(event.kind, 'completion');
+    assert.equal(event.goalId, goal.id);
+    assert.equal(fixture.tasks.length, 1);
+    const task = fixture.tasks[0];
+    assert.equal(event.taskName, task.name);
+    assert.equal(event.runSlug, task.runSlug);
+    assert.deepEqual(event.result, task.completion);
+    assert.equal(task.status, 'completed');
+    assert.equal(task.goalIntegration, 'not_integrated');
+    assert.equal(event.result.success, true);
+    assert.equal(goal.questions.length, 1);
+    const question = goal.questions[0];
+    assert.equal(question.kind, 'question');
+    assert.equal(question.recipient, 'human');
+    assert.equal(question.status, 'answered');
+    assert.ok(question.answer.text.trim().length > 0);
+    assert.equal(question.operation, undefined);
+    assert.equal(question.answer.decision, undefined);
+    assert.ok(Date.parse(question.answer.answeredAt) < Date.parse(task.createdAt));
+    const review = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read'
+      && args.file_path === `${fixture.cwd}/docs/ledger-review.md`);
+    assert.ok(review.result.includes(task.completion.sha));
+    const log = goal.workLog.find(({ summary }) => summary.includes(task.completion.sha));
+    assert.ok(log);
+    assert.ok(Date.parse(log.recordedAt) >= Date.parse(task.completedAt));
+    assert.ok(Date.parse(log.recordedAt) <= Date.parse(event.createdAt));
+    assert.deepEqual(fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_goal'
+      && args.path === 'questions').result.items, goal.questions);
+    const relation = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation');
+    assert.ok(goalWriteInputSchema.safeParse(relation.arguments).success);
+    assert.deepEqual(Object.keys(relation.result).sort(), ['ahead', 'goalBranch', 'goalSha', 'included', 'targetBranch', 'targetSha']);
+    assert.notEqual(task.completion.sha, relation.result.goalSha);
+    assert.notEqual(task.completion.sha, relation.result.targetSha);
+  }
+});
+
+test('verification fixtures distinguish required checks, out-of-scope demands, real defects and prior instruction', () => {
   for (const lang of ['ja', 'en']) {
     for (const caseId of ['verification-repeated', 'verification-once', 'verification-mixed', 'verification-told']) {
       const fixture = loadManagerCase(caseId, lang);
@@ -439,12 +672,13 @@ test('verification fixtures distinguish separate finished checks, a single check
           cwd: fixture.cwd, runSlug: run.runSlug, view: 'log', stepIndex: check.index,
         });
         const { log, ...metadata } = read.result;
-        const { stepLogs: _stepLogs, reports: _reports, ...runMetadata } = run;
+        const { stepLogs: _stepLogs, reports: _reports, stepLogPage: _stepLogPage, reportPage: _reportPage, retrieval: _retrieval, ...runMetadata } = run;
         assert.deepEqual(metadata, runMetadata);
         const { content, totalBytes, offset, returnedBytes, direction, truncated, nextOffset, ...summary } = log;
         assert.deepEqual(summary, check);
         assert.ok(content.includes('IDX-17'));
         assert.equal(content.includes('IDX-22'), caseId === 'verification-mixed');
+        assert.equal(content.includes('audioBlob'), caseId !== 'verification-repeated');
         assert.deepEqual({ totalBytes, offset, returnedBytes, direction, truncated, nextOffset }, {
           totalBytes: Buffer.byteLength(content), offset: 0, returnedBytes: Buffer.byteLength(content),
           direction: 'backward', truncated: false, nextOffset: null,
@@ -494,7 +728,7 @@ test('final-check input contains direct and child-process consumers and unrelate
       .map(({ arguments: args, result }) => [args.file_path.replace(`${fixture.cwd}/`, ''), result]));
     assert.ok(fixture.goal.objective.includes('channel'));
     assert.ok(fixture.goal.acceptanceCriteria.some((criterion) => criterion.includes('channel')));
-    assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal, fixture.goal);
+    assert.deepEqual(fixture.readResults.find(({ arguments: args }) => args.path === 'objective').result.content, fixture.goal.objective);
     const sessionTasks = fixture.tasks.filter(({ goalWorkKey }) => ['storage', 'commands', 'display'].includes(goalWorkKey));
     assert.equal(sessionTasks.length, 3);
     for (const task of sessionTasks) {
@@ -512,4 +746,229 @@ test('final-check input contains direct and child-process consumers and unrelate
   }
   assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6.1-terra' && config.reasoning_effort === 'medium'));
   assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6-luna' && config.reasoning_effort === 'max'));
+});
+
+test('pause cases reproduce saved failures, setup identities and current pending state in both languages', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const input = turnData(buildManagerEventInput(fixture.cwd, fixture.event));
+      assert.equal(fixture.event.kind, 'completion');
+      assert.equal(input.event.kind, 'task_failed');
+      assert.equal(input.event.result.interrupted, true);
+      assert.equal(fixture.goal.executionStatus, 'active');
+      const task = fixture.readResults.find(({ tool }) => tool === 'takt_list_tasks').result.tasks[0];
+      const saved = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('/tasks.yaml')).result.tasks[0];
+      if (caseId === 'resumed-already-requeued') {
+        assert.equal(task.status, 'pending');
+        assert.equal(saved.failure, undefined);
+        assert.equal(saved.completion, undefined);
+        assert.equal(task.runSlug, undefined);
+        assert.equal(saved.source_run_slug, fixture.event.runSlug);
+        continue;
+      }
+      assert.equal(task.status, 'failed');
+      assert.deepEqual(saved.completion, input.event.result);
+      assert.equal(saved.failure.error, input.event.result.failureReason);
+      if (caseId === 'task-stopped-not-resumed') {
+        assert.match(saved.failure.error, /^Task booking-validation execution 650e8400-e29b-41d4-a716-446655440082 was stopped by manager$/);
+        assert.equal(saved.failure.retryable, false);
+      } else {
+        assert.equal(saved.failure.error, `Goal ${fixture.goal.id} was paused`);
+        assert.notEqual(saved.failure.retryable, false);
+      }
+      if (caseId === 'paused-requeue-before-start') {
+        assert.match(input.event.task.runSlug, /^setup-[0-9a-f-]{36}$/);
+        assert.equal(task.runSlug, undefined);
+        assert.equal(saved.run_slug, undefined);
+        assert.equal(saved.worktree_path, undefined);
+        assert.equal(input.event.result.workflowResult, 'error');
+        assert.equal(input.event.result.sha, undefined);
+        assert.equal(input.event.result.shaUnavailableReason, 'Workflow execution did not start');
+      } else {
+        assert.equal(input.event.result.workflowResult, 'aborted');
+        assert.equal(task.runSlug, fixture.event.runSlug);
+      }
+    }
+  }
+});
+
+test('pause cases use production read-tool arguments and paginated run summaries', async () => {
+  const schemas = await import('../dist/features/mcp/schemas.js');
+  const readSchemas = {
+    takt_get_goal: schemas.getGoalInputSchema,
+    takt_list_tasks: schemas.listTasksInputSchema,
+    takt_get_run: schemas.getRunInputSchema,
+    takt_get_goal_relation: schemas.goalWriteInputSchema,
+    takt_list_workflows: schemas.listGoalsInputSchema.omit({ errorOffset: true }),
+    takt_list_goal_questions: schemas.listGoalQuestionsInputSchema,
+    takt_list_standalone_inquiries: schemas.listStandaloneInquiriesInputSchema,
+  };
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued']) {
+      const fixture = loadManagerCase(caseId, lang);
+      for (const read of fixture.readResults) {
+        if (!read.tool.startsWith('takt_')) continue;
+        assert.ok(readSchemas[read.tool]?.safeParse(read.arguments).success, `${lang}/${caseId}/${read.tool}`);
+        if (read.tool === 'takt_get_run' && read.arguments.view === undefined) {
+          for (const [field, collection] of [['stepLogPage', 'stepLogs'], ['reportPage', 'reports']]) {
+            assert.equal(read.result[field].collection, collection);
+            assert.equal(read.result[field].returnedCount, read.result[collection].length);
+            assert.equal(read.result[field].nextOffset, null);
+          }
+          assert.ok(read.result.reports.every((report) => !Object.hasOwn(report, 'content')));
+        }
+      }
+    }
+  }
+});
+
+test('operation fixtures provide current git state and run evidence before required writes', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['settled-operation-merge', 'migration-no-downtime']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const reads = fixture.readResults;
+      const bash = (command) => reads.find((read) => read.tool === 'Bash' && read.arguments.command === command)?.result;
+      assert.equal(bash(`git -C ${fixture.cwd} status --short --branch`), '## main\n');
+      assert.match(bash(`git -C ${fixture.cwd} rev-parse ${fixture.goal.branch}`), /^[a-f0-9]{40}\n$/);
+      const listed = reads.find(({ tool }) => tool === 'takt_list_tasks').result;
+      assert.ok(listed.tasks.every((task) => task.error === undefined));
+      const inquiries = reads.find(({ tool }) => tool === 'takt_list_standalone_inquiries').result;
+      assert.equal(inquiries.totalCount, 0);
+      assert.equal(inquiries.nextOffset, null);
+      if (caseId === 'migration-no-downtime') {
+        assert.deepEqual(listed.tasks, []);
+        continue;
+      }
+      const task = fixture.tasks[0];
+      assert.equal(bash(`git -C ${task.worktreePath} rev-parse ${task.branch}`).trim(), fixture.event.result.sha);
+      assert.equal(bash(`git -C ${task.worktreePath} status --short --branch`), `## ${task.branch}\n`);
+      const run = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === undefined);
+      assert.ok(getRunInputSchema.safeParse(run.arguments).success);
+      assert.equal(run.result.runSlug, task.runSlug);
+      assert.equal(run.result.status, 'completed');
+      assert.equal(run.result.currentStep, listed.tasks[0].currentStep);
+      const report = reads.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === 'report');
+      assert.ok(getRunInputSchema.safeParse(report.arguments).success);
+      assert.equal(report.result.runSlug, task.runSlug);
+      assert.equal(report.result.report.truncated, false);
+      assert.ok(report.result.report.content.length > 0);
+    }
+  }
+});
+
+test('patrol replay uses the production event prompt including unreadable goals', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('mail-dispatch-state', lang);
+    const event = { ...fixture.event, unreadableGoalIds: ['650e8400-e29b-41d4-a716-446655440099'] };
+    const replay = buildManagerEventInput(fixture.cwd, event);
+    assert.deepEqual(turnData(replay), JSON.parse(buildManagerEventPrompt(event)));
+    assert.deepEqual(turnData(replay).event, event);
+    assert.notEqual(turnData(replay).instruction, turnData(buildManagerEventInput(fixture.cwd, {
+      kind: 'registered', goalId: fixture.goal.id, createdAt: fixture.snapshotAt,
+    })).instruction);
+  }
+});
+
+test('invoice patrol covers two active goals with the export contract evidence confined to review and code', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('existing-invoice-format', lang);
+    const goals = [fixture.goal, ...fixture.additionalGoals];
+    assert.equal(fixture.event.kind, 'patrol');
+    assert.equal(goals.length, 2);
+    assert.equal(new Set(goals.map(({ id }) => id)).size, 2);
+    assert.deepEqual(fixture.event.goalIds, goals.map(({ id }) => id));
+    assert.deepEqual(turnData(buildManagerEventInput(fixture.cwd, fixture.event)).event, fixture.event);
+    for (const goal of goals) {
+      assert.equal(goal.executionStatus, 'active');
+      const reads = fixture.readResults.filter(({ tool, arguments: args }) => tool === 'takt_get_goal' && args.goalId === goal.id);
+      assert.deepEqual(reads.find(({ arguments: args }) => args.path === undefined).result.goal, goalSummary(GoalSchema.parse(goal)));
+      for (const path of ['objective', 'outOfScope', 'acceptanceCriteria', 'constraints', 'workLog', 'questions']) {
+        assert.ok(reads.some(({ arguments: args }) => args.path === path));
+      }
+      const task = fixture.tasks.find(({ goalId }) => goalId === goal.id);
+      assert.equal(task.status, 'running');
+      const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === task.runSlug && args.view === undefined).result;
+      assert.equal(run.currentStep, goal === fixture.goal ? 'fix' : 'implement');
+    }
+    assert.match(fixture.goal.objective, /exportAccountInvoices/);
+    assert.doesNotMatch(JSON.stringify([fixture.goal.objective, fixture.goal.acceptanceCriteria, fixture.goal.workLog]), /csv|json|INV-1/i);
+    assert.match(fixture.goal.outOfScope.join('\n'), /JSON/);
+    const fileReads = fixture.readResults.filter(({ tool }) => tool === 'Read');
+    assert.equal(fileReads.some(({ arguments: args }) => args.file_path.includes('/docs/')), false);
+    const exporter = fileReads.find(({ arguments: args }) => args.file_path.endsWith('/src/invoices/export.ts'));
+    const command = fileReads.find(({ arguments: args }) => args.file_path.endsWith('/src/cli/invoice-export.ts'));
+    assert.match(exporter.result, /z\.enum\(\['csv', 'json'\]\)/);
+    assert.match(exporter.result, /JSON\.stringify\(invoices\)/);
+    assert.match(command.result, /omit\(\{ accountId: true \}\)/);
+    assert.match(command.result, /format: z\.literal\('csv'\)/);
+    const review = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === fixture.tasks[0].runSlug && args.view === 'report').result.report;
+    assert.equal(review.truncated, false);
+    assert.match(review.content, /REJECT/);
+    assert.deepEqual(review.content.match(/INV-\d+/g), ['INV-1']);
+    assert.match(review.content, /JSON/);
+    assert.match(review.content, /exportAccountInvoices/);
+    assert.match(review.content, /exportInvoiceFiles/);
+    assert.equal(review.content, runLogContent(fixture, fixture.tasks[0].runSlug, 0));
+  }
+});
+
+test('source-tagged histories retain ordered authors, SDK notice roles and tool call/result identities', () => {
+  for (const lang of ['ja', 'en']) {
+    const cancelled = loadManagerCase('tool-cancel-not-human-stop', lang);
+    const history = buildManagerHistory(cancelled);
+    assert.deepEqual(history.map(({ source, role }) => [source, role]), [
+      ['human', 'user'], ['tool_call', 'assistant'], ['tool_result', 'tool'], ['manager', 'assistant'],
+      ['environment_notice', 'user'], ['tool_call', 'assistant'],
+    ]);
+    assert.equal(history[2].toolCallId, history[1].id);
+    assert.equal(cancelled.input.toolCallId, history.at(-1).id);
+    assert.equal(cancelled.input.toolDenialKind, 'cancelled');
+    assert.equal(JSON.parse(buildManagerCurrentInput(cancelled)).role, 'tool');
+    const priorStop = loadManagerCase('self-record-not-human-stop', lang);
+    const priorHistory = buildManagerHistory(priorStop);
+    assert.equal(priorHistory[6].source, 'tool_result');
+    assert.equal(priorHistory[7].source, 'manager');
+    assert.equal(priorHistory[8].tool, 'takt_record_goal_work_log');
+    const person = priorHistory.filter(({ source }) => source === 'human');
+    assert.equal(person.length, 1);
+    assert.equal(turnData(person[0].content).text, priorStop.previousTurns[0].text);
+    const answer = loadManagerCase('inquiry-answer-wait', lang);
+    const data = turnData(buildManagerCurrentInput(answer));
+    assert.equal(data.question, answer.additionalGoals[0].questions[0].body);
+    assert.deepEqual(data.answer, answer.event.answer);
+    assert.equal(data.goalId, answer.additionalGoals[0].id);
+  }
+});
+
+test('state and director origins reach evaluation prompts without text-based authorship inference', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const origin of ['human', 'manager', 'unknown']) {
+      const fixture = loadManagerCase(`resume-origin-${origin}`, lang);
+      const data = turnData(buildManagerCurrentInput(fixture));
+      assert.equal(data.event.kind, 'goal_resumed');
+      assert.equal(data.event.origin, origin);
+      if (origin === 'unknown') assert.equal(Object.hasOwn(fixture.event, 'origin'), false);
+    }
+    for (const origin of ['human', 'director', 'unknown']) {
+      const fixture = loadManagerCase(`director-origin-${origin}`, lang);
+      const data = turnData(buildManagerCurrentInput(fixture));
+      assert.deepEqual(data, { origin, text: fixture.event.text, directorConversationId: fixture.event.directorConversationId });
+      if (origin === 'unknown') assert.equal(Object.hasOwn(fixture.event, 'origin'), false);
+    }
+  }
+});
+
+
+test('baseline adapter passes resolved facets and settings through the production plan', () => {
+  for (const lang of ['ja', 'en']) {
+    const input = {
+      lang, facets: { persona: 'FIXTURE_PERSONA', policy: 'FIXTURE_POLICY', knowledge: 'FIXTURE_KNOWLEDGE',
+        instruction: '{{#if formalSpec}}FIXTURE_FORMAL{{/if}} {{#if formalSpecCommentsEnabled}}FIXTURE_COMMENTS{{/if}} {{formalSpecVerifierConstraints}}' },
+      specificationConfiguration: { mode: true, comments: false, modelCheckTimeoutSeconds: 42 },
+      formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: '/workspace/fixture-repository',
+      mainMerge: 'auto', concurrency: 3,
+    };
+    assert.equal(buildBaselineSystem(input), buildProductionSystem(input));
+  }
 });

@@ -4,34 +4,133 @@
 description: 'TAKT ファセット評価: レビュー指摘の裁定精度と網羅性'
 
 prompts:
-  - file://../../prompts/review-adjudication.phase1.md
+  - label: existing
+    raw: file://../../prompts/review-adjudication.phase1.md
+    config:
+      working_dir: fixtures/review-adjudication
+  - label: k1
+    raw: file://../../prompts/repair-strategy-adjudication-k1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-01
+      report_prompt: prompts/repair-strategy-adjudication-k1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: r1
+    raw: file://../../prompts/repair-strategy-adjudication-r1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-03
+      report_prompt: prompts/repair-strategy-adjudication-r1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: i1
+    raw: file://../../prompts/repair-strategy-adjudication-i1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-05
+      report_prompt: prompts/repair-strategy-adjudication-i1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: f1
+    raw: file://../../prompts/repair-strategy-adjudication-f1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-07
+      report_prompt: prompts/repair-strategy-adjudication-f1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: p1
+    raw: file://../../prompts/repair-strategy-adjudication-p1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-09
+      report_prompt: prompts/repair-strategy-adjudication-p1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: m1
+    raw: file://../../prompts/repair-strategy-adjudication-m1.phase1.md
+    config:
+      working_dir: .work/repair-workspace-11
+      report_prompt: prompts/repair-strategy-adjudication-m1.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+
+  - label: k1-en
+    raw: file://../../prompts/repair-strategy-adjudication-k1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-13
+      report_prompt: prompts/repair-strategy-adjudication-k1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: r1-en
+    raw: file://../../prompts/repair-strategy-adjudication-r1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-15
+      report_prompt: prompts/repair-strategy-adjudication-r1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: i1-en
+    raw: file://../../prompts/repair-strategy-adjudication-i1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-17
+      report_prompt: prompts/repair-strategy-adjudication-i1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: f1-en
+    raw: file://../../prompts/repair-strategy-adjudication-f1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-19
+      report_prompt: prompts/repair-strategy-adjudication-f1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: p1-en
+    raw: file://../../prompts/repair-strategy-adjudication-p1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-21
+      report_prompt: prompts/repair-strategy-adjudication-p1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
+  - label: m1-en
+    raw: file://../../prompts/repair-strategy-adjudication-m1-en.phase1.md
+    config:
+      working_dir: .work/repair-workspace-23
+      report_prompt: prompts/repair-strategy-adjudication-m1-en.phase2.md
+      required_snapshots:
+        - .takt/eval-snapshots/policies.md
+        - .takt/eval-snapshots/knowledge.md
 
 providers:
-  - id: file://../../providers/cli-review.mjs
+  - id: file://../../providers/cli-plan-report.mjs
     label: claude-opus-5
     config:
       cli: claude
       model: claude-opus-5
-      working_dir: fixtures/review-adjudication
       isolate_working_dir: true
-  - id: file://../../providers/cli-review.mjs
+  - id: file://../../providers/cli-plan-report.mjs
     label: codex-luna-max
     config:
       cli: codex
-      model: gpt-5.6-luna
+      model: gpt-6-luna
       reasoning_effort: max
-      working_dir: fixtures/review-adjudication
       isolate_working_dir: true
-  - id: file://../../providers/cli-review.mjs
+  - id: file://../../providers/cli-plan-report.mjs
     label: codex-sol-high
     config:
       cli: codex
-      model: gpt-5.6-sol
+      model: gpt-6.1-sol
       reasoning_effort: high
-      working_dir: fixtures/review-adjudication
       isolate_working_dir: true
 
 defaultTest:
+  vars:
+    output_phase: phase1
   options:
     provider:
       id: openai:codex-sdk
@@ -40,6 +139,7 @@ defaultTest:
         sandbox_mode: read-only
         approval_policy: never
         skip_git_repo_check: true
+        model: gpt-6-luna
         model_reasoning_effort: low
 
 evaluateOptions:
@@ -47,6 +147,8 @@ evaluateOptions:
 
 tests:
   - description: '裁定: 妥当な観察と今回の修正対象を分離する'
+    prompts:
+      - existing
     vars:
       task: file://../../cases/review-adjudication-task.md
       previous_response: ''
@@ -64,6 +166,8 @@ tests:
           - 修正対象には、要求または修正履歴から導ける理由と修正境界を記録する。未解消の問題は現在の修正対象として明確に残し、記録済み、新旧、重大度を理由に免除しない。修正対象が明示されていれば、別の停止判定やゲート用の文言までは要求しない。
 
   - description: '裁定: 同じ原因を持つ別経路の重複指摘を統合する'
+    prompts:
+      - existing
     vars:
       task: file://../../cases/review-adjudication-problem-merge-task.md
       previous_response: ''
@@ -74,6 +178,8 @@ tests:
           ARCH-NEW-channel-normalization-L2 と CODE-NEW-channel-normalization-L2 が、同じ原因と受入条件を持つ重複指摘として1つの修正対象へ統合されている場合だけ合格とする。ARCH-NEW-channel-type-error-L2 は漏れなく検討するが、タスクは不正な文字列の即時失敗だけを要求し、文字列以外の値に安定したエラークラスやメッセージを要求しないため修正対象にしない。
 
   - description: '裁定: 同じ担当箇所にある別の条件を分離する'
+    prompts:
+      - existing
     vars:
       task: file://../../cases/review-adjudication-problem-separation-task.md
       previous_response: ''
@@ -82,3 +188,447 @@ tests:
         metric: review/different-condition-separation
         value: |
           ARCH-NEW-channel-type-error-L2 を修正対象として漏れなく扱い、受理値の正規化とは異なるエラー形式の要件として別の修正単位に分けた場合だけ合格とする。normalizeChannel という担当箇所が共通することだけを統合根拠にしてはならない。
+
+  - description: '複合キーの経過 / phase1'
+    prompts:
+      - k1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-k1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          再発と共通前提を認め、それを根拠に方式見直しを発火させる肯定判断を合格条件とする。再発と共通前提を特定していても、「方式見直しは発火しない」と判定する応答は不合格。裁定で具体的な修正方式の確定までは必須条件にしない。
+          A は v0 の区切り連結の衝突、B は v1 の置換文字と入力文字の衝突であり、各修正後に対象検証は成功している。v2 でも C の a~b と a_b が同じ値になる。任意文字列という仕様と結び、内容の文字置換で要素の識別を保てるという共通前提が残ることを具体的に示す。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: '複合キーの経過 / phase2'
+    prompts:
+      - k1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-k1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          再発と共通前提を認め、それを根拠に方式見直しを発火させる肯定判断を合格条件とする。再発と共通前提を特定していても、「方式見直しは発火しない」と判定する応答は不合格。裁定で具体的な修正方式の確定までは必須条件にしない。
+          A は v0 の区切り連結の衝突、B は v1 の置換文字と入力文字の衝突であり、各修正後に対象検証は成功している。v2 でも C の a~b と a_b が同じ値になる。任意文字列という仕様と結び、内容の文字置換で要素の識別を保てるという共通前提が残ることを具体的に示す。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: '資源寿命の経過 / phase1'
+    prompts:
+      - r1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-r1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          再発と共通前提を認め、それを根拠に方式見直しを発火させる肯定判断を合格条件とする。再発と共通前提を特定していても、「方式見直しは発火しない」と判定する応答は不合格。裁定で具体的な修正方式の確定までは必須条件にしない。
+          v0 の正常終了の解放漏れを v1 が直し、v1 の例外時の解放漏れを v2 が直した。各対象検証は成功しているが、C の取得後中断は release を通らない。同じ lease 所有範囲なのに出口ごとの解放へ依存している前提をコード・記録で示す。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+
+  - description: '資源寿命の経過 / phase2'
+    prompts:
+      - r1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-r1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          再発と共通前提を認め、それを根拠に方式見直しを発火させる肯定判断を合格条件とする。再発と共通前提を特定していても、「方式見直しは発火しない」と判定する応答は不合格。裁定で具体的な修正方式の確定までは必須条件にしない。
+          v0 の正常終了の解放漏れを v1 が直し、v1 の例外時の解放漏れを v2 が直した。各対象検証は成功しているが、C の取得後中断は release を通らない。同じ lease 所有範囲なのに出口ごとの解放へ依存している前提をコード・記録で示す。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+
+  - description: '独立した条件の経過 / phase1'
+    prompts:
+      - i1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-i1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          過去の cents の丸め誤りと allowed の権限判定はそれぞれ正しく直り検証も成功している。現在の name の空白除去不足 CODE-C / P-NAME を採用し、原因・受入条件が異なる問題として扱う。共有ファイルを理由に統合したり、過去の解消済み問題を再開したりしない。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          現在の指摘の採用とは別に、原因・受入条件が異なることを根拠として方式見直しを発火させないことを採点する。方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+
+  - description: '独立した条件の経過 / phase2'
+    prompts:
+      - i1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-i1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          過去の cents の丸め誤りと allowed の権限判定はそれぞれ正しく直り検証も成功している。現在の name の空白除去不足 CODE-C / P-NAME を採用し、原因・受入条件が異なる問題として扱う。共有ファイルを理由に統合したり、過去の解消済み問題を再開したりしない。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+          現在の指摘の採用とは別に、原因・受入条件が異なることを根拠として方式見直しを発火させないことを採点する。方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+
+  - description: '修正履歴のない現在の条件 / phase1'
+    prompts:
+      - f1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-f1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          C のキー衝突は有効で、仕様の任意文字列入力に含まれる。過去の裁定・修正・成功記録は与えられていない。現在のコードから原因分析を行い、再発した、前回の仮説が失敗した等の経過を捏造しない。
+          現在の指摘の採用とは別に、過去の修正履歴がないため通常の原因分析を行い、方式見直しを発火させないことを採点する。過去の再発を主張せず現在の問題だけを根拠にする場合も、方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: '修正履歴のない現在の条件 / phase2'
+    prompts:
+      - f1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-f1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          C のキー衝突は有効で、仕様の任意文字列入力に含まれる。過去の裁定・修正・成功記録は与えられていない。現在のコードから原因分析を行い、再発した、前回の仮説が失敗した等の経過を捏造しない。
+          現在の指摘の採用とは別に、過去の修正履歴がないため通常の原因分析を行い、方式見直しを発火させないことを採点する。過去の再発を主張せず現在の問題だけを根拠にする場合も、方式変更・再計画・停止を伴わなくても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: '計画適用中の経路 / phase1'
+    prompts:
+      - p1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-p1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          長さ付き encodeKey を readKey と writeKey に適用する計画があり、readKey は移行・検証済みで writeKey が key を呼ぶ。CODE-C を有効な未配線の不足として扱う。共通原因を解消する既存計画の実装進行と、以前の文字別修正を区別する。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+          移行計画は適用と検証が進行中で、未配線の不足であるため、現在の指摘の採用とは別に方式見直しを発火させないことを採点する。計画を維持していても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+
+  - description: '計画適用中の経路 / phase2'
+    prompts:
+      - p1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-p1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          長さ付き encodeKey を readKey と writeKey に適用する計画があり、readKey は移行・検証済みで writeKey が key を呼ぶ。CODE-C を有効な未配線の不足として扱う。共通原因を解消する既存計画の実装進行と、以前の文字別修正を区別する。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+          移行計画は適用と検証が進行中で、未配線の不足であるため、現在の指摘の採用とは別に方式見直しを発火させないことを採点する。計画を維持していても、方式見直しを発火したと明示すれば不合格。不要な方式変更・再計画・停止も引き続き不合格。
+
+  - description: '方式と識別条件の併存 / phase1'
+    prompts:
+      - m1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-m1-phase1
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          A の区切り衝突、B の置換衝突、それぞれの修正後の対象検証成功、適用範囲内の C の新しい衝突を記録とコードで結ぶ。文字ごとの置換が要素境界を保持しないという再発と共通前提を認め、方式見直しを発火させる肯定判断を合格条件にする。「方式見直しは発火しない」という判断は、指摘を採用していても不合格。具体的な修正方式の確定は裁定の必須条件にしない。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。合意された方式条件を独断で変更しない。衝突を解消するために必要な判断を明らかにする。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: '方式と識別条件の併存 / phase2'
+    prompts:
+      - m1
+    vars:
+      task: 'spec.md と .takt/runs/eval/reports/coding-review.md を参照し、現在のコードと記録から判断してください。'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-m1-phase2
+        value: |
+          見出しや語の一致ではなく、根拠・変更・観測の対応を意味で評価する。次をすべて満たす場合だけ合格とする。
+          A の区切り衝突、B の置換衝突、それぞれの修正後の対象検証成功、適用範囲内の C の新しい衝突を記録とコードで結ぶ。文字ごとの置換が要素境界を保持しないという再発と共通前提を認め、方式見直しを発火させる肯定判断を合格条件にする。「方式見直しは発火しない」という判断は、指摘を採用していても不合格。具体的な修正方式の確定は裁定の必須条件にしない。同時に spec.md の追加条件が全入力の現行置換結果との一致を要求することを保持する。C の2入力はその条件のままでは同じキーなので、識別条件との具体的な衝突を示す。合意された方式条件を独断で変更しない。衝突を解消するために必要な判断を明らかにする。
+          指摘の採否と方式を見直す材料を分け、現在の指摘を正しく採用し、過去の成功を今回の反例の否定に使わない。実装方針の確定は裁定の必須条件にしない。
+          対象範囲、正常時・失敗時の結果、方式指定を保持する。事実の捏造、不要な問題の統合、非発火例での不要な方式変更・再計画・停止は不合格。
+          採点対象は Phase 1 の実応答を引き継いだレポートのみ。判断根拠と履歴の固定版参照（履歴がない場合はその事実）を残す。
+          前回の方式・前提、解消した条件、今回の反例、共通原因、検出できなかった理由を記録する。非発火例は該当しない内容と理由を示せばよい。
+          同じ入力のキーは、同じ組を繰り返し観測しても一致する安定性を維持し、異なる組の一意性も保つ。非決定的なキー方式は不合格。方式指定との衝突がある場合も、安定性を必要な判断と検証の維持条件に残す。
+
+  - description: 'Composite key history / en / phase1'
+    prompts:
+      - k1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-k1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. An answer deciding that reconsideration does not trigger fails, even if it identifies the recurrence and shared assumption. Adjudication need not finalize a concrete repair method.
+          A is the delimiter-concatenation collision in v0; B is the collision between replacement and input characters in v1. Each targeted verification succeeded after its repair. C still maps a~b and a_b to the same value in v2. Connect this to arbitrary-string inputs and identify the remaining shared assumption that replacing content characters preserves element identity.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+
+  - description: 'Composite key history / en / phase2'
+    prompts:
+      - k1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-k1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. An answer deciding that reconsideration does not trigger fails, even if it identifies the recurrence and shared assumption. Adjudication need not finalize a concrete repair method.
+          A is the delimiter-concatenation collision in v0; B is the collision between replacement and input characters in v1. Each targeted verification succeeded after its repair. C still maps a~b and a_b to the same value in v2. Connect this to arbitrary-string inputs and identify the remaining shared assumption that replacing content characters preserves element identity.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+
+  - description: 'Resource lifetime history / en / phase1'
+    prompts:
+      - r1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-r1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. An answer deciding that reconsideration does not trigger fails, even if it identifies the recurrence and shared assumption. Adjudication need not finalize a concrete repair method.
+          v1 repaired the normal-exit release leak in v0; v2 repaired the exception-path release leak in v1. Those targeted checks succeeded, but C cancels after acquisition without reaching release. Use code and records to identify the assumption of per-exit release within the same lease ownership scope.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+
+  - description: 'Resource lifetime history / en / phase2'
+    prompts:
+      - r1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-r1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Recognize the recurrence and shared assumption, and explicitly trigger reconsideration of the repair method on that basis as a condition for passing. An answer deciding that reconsideration does not trigger fails, even if it identifies the recurrence and shared assumption. Adjudication need not finalize a concrete repair method.
+          v1 repaired the normal-exit release leak in v0; v2 repaired the exception-path release leak in v1. Those targeted checks succeeded, but C cancels after acquisition without reaching release. Use code and records to identify the assumption of per-exit release within the same lease ownership scope.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+
+  - description: 'Independent conditions / en / phase1'
+    prompts:
+      - i1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-i1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          The earlier cents rounding and allowed authorization defects were each correctly repaired and verified. Accept the current missing whitespace trim, CODE-C / P-NAME in name, as a separate problem with different causes and acceptance conditions. Do not merge merely because the file is shared or reopen resolved problems.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score the trigger decision separately from accepting the current finding. Because the causes and acceptance conditions differ, do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
+
+  - description: 'Independent conditions / en / phase2'
+    prompts:
+      - i1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-i1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          The earlier cents rounding and allowed authorization defects were each correctly repaired and verified. Accept the current missing whitespace trim, CODE-C / P-NAME in name, as a separate problem with different causes and acceptance conditions. Do not merge merely because the file is shared or reopen resolved problems.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+          Score the trigger decision separately from accepting the current finding. Because the causes and acceptance conditions differ, do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
+
+  - description: 'Current condition without repair history / en / phase1'
+    prompts:
+      - f1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-f1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          The C key collision is valid within the arbitrary-string input specification. No earlier adjudication, repairs, or successful checks are supplied. Analyze the current code without fabricating recurrence or a failed earlier hypothesis.
+          Score the trigger decision separately from accepting the current finding. Because no repair history is supplied, perform ordinary cause analysis and do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even when based only on the current problem without claiming past recurrence and even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+
+  - description: 'Current condition without repair history / en / phase2'
+    prompts:
+      - f1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-f1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          The C key collision is valid within the arbitrary-string input specification. No earlier adjudication, repairs, or successful checks are supplied. Analyze the current code without fabricating recurrence or a failed earlier hypothesis.
+          Score the trigger decision separately from accepting the current finding. Because no repair history is supplied, perform ordinary cause analysis and do not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even when based only on the current problem without claiming past recurrence and even if no method change, replanning, or stopping follows. Unnecessary method changes, replanning, or stopping also fail.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+
+  - description: 'Migration in progress / en / phase1'
+    prompts:
+      - p1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-p1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          A plan applies length-prefixed encodeKey to both readKey and writeKey; readKey has migrated and passed verification, while writeKey still calls key. Treat CODE-C as valid missing wiring. Distinguish progress on the existing common-cause repair plan from the earlier character-specific repairs.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+          Score the trigger decision separately from accepting the current finding. The migration plan is still being applied and verified; the missing wiring does not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even if the plan is retained. Unnecessary method changes, replanning, or stopping also fail.
+
+  - description: 'Migration in progress / en / phase2'
+    prompts:
+      - p1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-p1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          A plan applies length-prefixed encodeKey to both readKey and writeKey; readKey has migrated and passed verification, while writeKey still calls key. Treat CODE-C as valid missing wiring. Distinguish progress on the existing common-cause repair plan from the earlier character-specific repairs.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+          Score the trigger decision separately from accepting the current finding. The migration plan is still being applied and verified; the missing wiring does not trigger reconsideration of the repair method. Explicitly declaring that reconsideration has triggered fails, even if the plan is retained. Unnecessary method changes, replanning, or stopping also fail.
+
+  - description: 'Mandated method and identification / en / phase1'
+    prompts:
+      - m1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase1
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-m1-en-phase1
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Link delimiter collision A, replacement collision B, successful targeted verification after each repair, and the new in-scope collision C to records and code. Recognize the recurrence and shared assumption that per-character replacement fails to preserve component boundaries, and positively trigger reconsideration of the repair method as a condition for passing. A decision that reconsideration does not trigger fails even if the finding is accepted. Adjudication need not finalize a concrete repair method. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification. Do not unilaterally change the agreed method conditions. State the decision needed to resolve the conflict.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.
+
+  - description: 'Mandated method and identification / en / phase2'
+    prompts:
+      - m1-en
+    vars:
+      task: 'Consult spec.md and .takt/runs/eval/reports/coding-review.md; decide from the current code and records.'
+      previous_response: ''
+      output_phase: phase2
+    assert:
+      - type: llm-rubric
+        metric: repair-strategy/adjudication-m1-en-phase2
+        value: |
+          Evaluate the semantic correspondence between evidence, changes, and observations, not matching headings or words. Pass only if all conditions hold.
+          Link delimiter collision A, replacement collision B, successful targeted verification after each repair, and the new in-scope collision C to records and code. Recognize the recurrence and shared assumption that per-character replacement fails to preserve component boundaries, and positively trigger reconsideration of the repair method as a condition for passing. A decision that reconsideration does not trigger fails even if the finding is accepted. Adjudication need not finalize a concrete repair method. Preserve the additional spec.md requirement to match the current replacement output for every input. The two C inputs necessarily have the same key under that requirement; demonstrate the concrete conflict with distinct-pair identification. Do not unilaterally change the agreed method conditions. State the decision needed to resolve the conflict.
+          Separate accepting the finding from evidence for reconsidering the repair method. Correctly accept the current finding; do not use earlier successes to deny the current counterexample. Adjudication need not finalize an implementation method.
+          Preserve scope, normal and failure outcomes, and mandated methods. Fail fabricated facts, unnecessary merging of problems, or unnecessary method changes, replanning, or stopping in non-trigger cases.
+          Score only the report carrying forward the actual Phase 1 response. Retain decision evidence and immutable history references, or state that history is absent.
+          Record the previous method and assumptions, resolved conditions, current counterexample, common cause, and why it was not detected. For non-trigger cases, explain which items do not apply and why.
+          Preserve key stability: repeated observations of the same pair must yield the same key, while different pairs remain distinct. A nondeterministic key method fails. For mandated-method conflicts, retain stability as a required condition in the decision and verification.

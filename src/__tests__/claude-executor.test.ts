@@ -12,12 +12,13 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
-import type { HookInput, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { HookInput, Options, SDKUserMessage, SDKSystemMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const {
   queryMock,
   interruptMock,
   AbortErrorMock,
+  warnMock,
 } = vi.hoisted(() => {
   class AbortErrorMock extends Error {
     constructor(message?: string) {
@@ -29,6 +30,7 @@ const {
   return {
     queryMock: vi.fn(),
     interruptMock: vi.fn(async () => {}),
+    warnMock: vi.fn(),
     AbortErrorMock,
   };
 });
@@ -46,6 +48,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     createLogger: vi.fn().mockReturnValue({
       debug: vi.fn(),
       info: vi.fn(),
+      warn: warnMock,
       error: vi.fn(),
     }),
   };
@@ -57,10 +60,176 @@ import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 import { ClaudeProvider } from '../infra/providers/claude.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+describe('SDK permission mode negotiation', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const init = (permissionMode: SDKSystemMessage['permissionMode']): SDKSystemMessage => ({
+    type: 'system', subtype: 'init', permissionMode,
+    session_id: 'test-session', uuid: '00000000-0000-4000-8000-000000000001',
+    apiKeySource: 'none', claude_code_version: 'test', cwd: '/tmp/project',
+    tools: ['Bash'], mcp_servers: [], model: 'test', slash_commands: [],
+    output_style: 'default', skills: [], plugins: [],
+  });
+  const result = { type: 'result', subtype: 'success', result: 'done' };
+
+  function requestTool(options: Options, toolName: string) {
+    const barrier = options.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+    expect(barrier).toBeTypeOf('function');
+    expect(options.hooks?.PreToolUse?.some(({ matcher }) => matcher === 'AskUserQuestion')).toBe(true);
+    return Promise.resolve(barrier!({
+      hook_event_name: 'PreToolUse', session_id: 'test-session', transcript_path: '/tmp/transcript',
+      cwd: '/tmp/project', tool_name: toolName, tool_input: {}, tool_use_id: 'tool',
+    }, 'tool', { signal: new AbortController().signal }));
+  }
+
+  it.each([undefined, 'saved-session'].flatMap((sessionId) => [false, true].map((rejects) => ({ sessionId, rejects }))))(
+    'blocks an independent CLI tool request until negotiation settles (resume: $sessionId, rejects: $rejects)', async ({ sessionId, rejects }) => {
+    const q = createMockQuery([init('default'), result]);
+    let startSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { startSwitch = resolve; });
+    let finishSwitch!: () => void;
+    const switched = new Promise<void>((resolve) => { finishSwitch = resolve; });
+    const order: string[] = [];
+    q.setPermissionMode.mockImplementationOnce(async () => {
+      startSwitch(); await switched;
+      order.push('switch settled');
+      if (rejects) throw new Error('auto disabled by policy');
+    });
+    const executeTool = vi.fn();
+    let toolRequest!: Promise<void>;
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      // SDK control callbacks run independently of the SDK message iterator.
+      toolRequest = Promise.all(['Bash', 'Read', 'mcp__takt__get_goal'].map((name) => requestTool(options, name)))
+        .then((outputs) => { order.push('tool released'); executeTool(outputs); });
+      return q;
+    });
+    const running = new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full', sessionId });
+    try {
+      await switching;
+      expect(q.setPermissionMode).toHaveBeenCalledExactlyOnceWith('auto');
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(warnMock).toHaveBeenCalledWith(expect.any(String), {
+        requestedMode: 'bypassPermissions', actualMode: 'default', targetMode: 'auto',
+      });
+      expect(queryMock.mock.calls[0]![0].options.resume).toBe(sessionId);
+    } finally { finishSwitch(); }
+    expect(await running).toMatchObject({ success: true, content: 'done' });
+    await toolRequest;
+    expect(executeTool).toHaveBeenCalledExactlyOnceWith([{ continue: true }, { continue: true }, { continue: true }]);
+    expect(order).toEqual(['switch settled', 'tool released']);
+  });
+
+  it('releases the CLI hook at a bypass init without waiting for query completion', async () => {
+    let toolRequest!: Promise<unknown>;
+    const q = {
+      setPermissionMode: vi.fn(), interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator]() {
+        yield init('bypassPermissions');
+        expect(await toolRequest).toEqual({ continue: true });
+        yield result;
+      },
+    };
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      toolRequest = requestTool(options, 'Bash');
+      return q;
+    });
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full' })).toMatchObject({ success: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['result', 'eof', 'stream-error', 'startup-error', 'abort'] as const)('releases pending CLI hooks when %s ends a query without init', async (outcome) => {
+    let toolRequest!: Promise<unknown>;
+    let queryStarted!: () => void;
+    const started = new Promise<void>((resolve) => { queryStarted = resolve; });
+    const controller = new AbortController();
+    const q = {
+      setPermissionMode: vi.fn(), interrupt: vi.fn(async () => {}),
+      async *[Symbol.asyncIterator]() {
+        if (outcome === 'eof') return;
+        if (outcome === 'stream-error') throw new Error('stream failed');
+        if (outcome === 'abort') await toolRequest;
+        yield result;
+      },
+    };
+    queryMock.mockImplementationOnce(({ options }: { options: Options }) => {
+      toolRequest = requestTool(options, 'Bash');
+      queryStarted();
+      if (outcome === 'startup-error') throw new Error('startup failed');
+      return q;
+    });
+    const running = new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full', abortSignal: controller.signal });
+    await started;
+    if (outcome === 'abort') controller.abort();
+    const response = await running;
+    expect(response.success).toBe(outcome === 'result');
+    expect(await toolRequest).toEqual({ continue: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { options: { permissionMode: 'full' as const }, actual: 'bypassPermissions' as const },
+    { options: { permissionMode: 'readonly' as const }, actual: 'default' as const },
+    { options: { permissionMode: 'edit' as const }, actual: 'acceptEdits' as const },
+    { options: {}, actual: 'default' as const },
+  ])('leaves the permission mode unchanged when no bypass downgrade occurred: %j', async ({ options, actual }) => {
+    const q = createMockQuery([init(actual), result]);
+    queryMock.mockReturnValue(q);
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', ...options })).toMatchObject({ success: true });
+    expect(q.setPermissionMode).not.toHaveBeenCalled();
+    expect(warnMock).not.toHaveBeenCalled();
+    if (options.permissionMode !== 'full') {
+      expect(queryMock.mock.calls[0]![0].options.hooks.PreToolUse.every(({ matcher }: { matcher?: string }) => matcher !== undefined)).toBe(true);
+    }
+  });
+
+  it('uses the resolved SDK mode for an explicit bypass request', async () => {
+    const q = createMockQuery([init('acceptEdits'), result]);
+    queryMock.mockReturnValue(q);
+    await new QueryExecutor().execute('run', { cwd: '/tmp/project', bypassPermissions: true });
+    expect(q.setPermissionMode).toHaveBeenCalledExactlyOnceWith('auto');
+  });
+
+  it('logs an auto mode rejection and continues consuming the original session', async () => {
+    const q = createMockQuery([init('default'), result]);
+    q.setPermissionMode.mockRejectedValueOnce(new Error('auto disabled by policy'));
+    queryMock.mockReturnValue(q);
+    expect(await new QueryExecutor().execute('run', { cwd: '/tmp/project', permissionMode: 'full' })).toMatchObject({
+      success: true, content: 'done', sessionId: 'test-session',
+    });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(warnMock).toHaveBeenCalledTimes(2);
+    expect(warnMock).toHaveBeenLastCalledWith(expect.any(String), {
+      requestedMode: 'bypassPermissions', actualMode: 'default', targetMode: 'auto', error: 'auto disabled by policy',
+    });
+  });
+});
+
+it.each(['claude', 'claude-sdk'] as const)('auto-approves manager MCP tools without restricting other tools through %s', async (providerType) => {
+  const structured = { message: 'reply', summary: null };
+  queryMock.mockReset().mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success', structured_output: structured }]));
+  const executor = createManagerTurnExecutor('/tmp/project', {
+    ctx: { providerType, provider: new ClaudeProvider(), lang: 'en', model: undefined,
+      mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http', url: 'http://127.0.0.1:12345/mcp' },
+        external: { command: 'external-server' } } },
+    strategy: { systemPrompt: 'manager' },
+  });
+  expect(await executor.execute({ prompt: 'run', sessionId: undefined, abortSignal: new AbortController().signal,
+    assignment: undefined })).toMatchObject(structured);
+  const sdk = queryMock.mock.calls[0]![0].options;
+  expect(sdk.allowedTools).toEqual([
+    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+  ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
+  expect(sdk.tools).toBeUndefined();
+  expect(sdk.mcpServers).toHaveProperty('external');
+  expect(sdk.permissionMode).toBe('bypassPermissions');
 });
 
 describe('strict manager tool restrictions', () => {
@@ -176,11 +345,10 @@ it.each([false, true])('recovers through the real Claude adapter only before too
   });
   const executor = createManagerTurnExecutor('/tmp/project', {
     ctx: { providerType: 'claude', provider: new ClaudeProvider(), lang: 'en', model: undefined },
-    permissionJudge: { resolution: { provider: 'claude', model: undefined, providerOptions: {} }, language: 'en', systemPrompt: 'judge', managerPersona: 'manager', managerPolicy: 'policy' },
     strategy: { systemPrompt: 'manager' },
   });
-  const result = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: new AbortController().signal,
-    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' }, configDirectory: '/tmp/config',
+  const result = executor.execute({ prompt: 'continue', sessionId, abortSignal: new AbortController().signal,
+    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' },
     recovery: { context: 'pending revision 4; current goals', invalidateSession } });
   if (tools) await expect(result).rejects.toMatchObject({ failureCategory: 'session_continuation_unsupported' });
   else expect(await result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
@@ -217,6 +385,7 @@ function createMockQuery(
 ) {
   return {
     interrupt: vi.fn(async () => {}),
+    setPermissionMode: vi.fn(async (_mode: SDKSystemMessage['permissionMode']) => {}),
     async *[Symbol.asyncIterator](): AsyncGenerator<Record<string, unknown>, void, unknown> {
       for (const message of messages) {
         yield message;

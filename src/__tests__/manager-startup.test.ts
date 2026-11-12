@@ -129,16 +129,14 @@ describe('manager IPC startup and teardown', () => {
 });
 
 describe('daemon manager runtime preparation', () => {
-  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock', 'claude-headless', 'claude-terminal', 'cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)('exposes goal execution only with a %s permission judge', async (providerType) => {
-    const usesJudge = providerType === 'claude' || providerType === 'claude-sdk' || providerType === 'codex';
+  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock', 'claude-headless', 'claude-terminal', 'cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)('prepares the same goal execution connection for provider %s', async (providerType) => {
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', providerType, provider: makeProvider({ preflight: doubles.preflight }) },
       strategy: { systemPrompt: 'manager fixture' },
-      ...(usesJudge ? { permissionJudge: { language: 'ja', systemPrompt: 'judge fixture', managerPersona: 'manager fixture',
-        managerPolicy: 'policy fixture', resolution: { provider: providerType, model: undefined, providerOptions: {} } } } : {}),
     });
     await prepare();
-    expect(doubles.mcp.mock.calls[0]?.[3]?.enableGoalExecutionTools === true).toBe(usesJudge);
+    expect(doubles.mcp.mock.calls[0]?.[3]).toHaveProperty('turnScope');
+    expect(doubles.mcp.mock.calls[0]?.[3]).not.toHaveProperty('enableGoalExecutionTools');
   });
   it('preflights Codex with a strict conversation schema', async () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'codex', provider: makeProvider({ preflight: doubles.preflight }) }, strategy: { systemPrompt: 'fixture' } });
@@ -146,7 +144,7 @@ describe('daemon manager runtime preparation', () => {
       assertStrictStructuredOutputSchema(outputSchema);
       validateStructuredOutputAgainstSchema({ message: '確認', summary: {
         objective: 'CSV出力', outOfScope: [], acceptanceCriteria: ['CSV取得'], repositoryDirectory: null,
-        startBranch: null, integrationBranch: null, constraints: [],
+        startBranch: null, integrationBranch: null, constraints: [], specifications: null,
       } }, outputSchema);
     });
     await prepare();
@@ -202,7 +200,7 @@ describe('daemon manager runtime preparation', () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'claude', provider: new ClaudeProvider() }, strategy: { systemPrompt: 'fixture' } });
     if (outcome === 'success') await prepare();
     else await expect(prepare()).rejects.toThrow();
-    expect(doubles.execFile).toHaveBeenCalledWith('/test/claude', ['--help'], expect.objectContaining({ cwd: assignment.repositoryDirectory, timeout: 5_000 }), expect.any(Function));
+    expect(doubles.execFile).toHaveBeenCalledWith(expect.any(String), ['--help'], expect.objectContaining({ cwd: assignment.repositoryDirectory, timeout: 5_000 }), expect.any(Function));
     expect(doubles.claude).not.toHaveBeenCalled();
   });
   it.each([CodexProvider, OpenCodeProvider, ClaudeProvider])('cancels a pending runtime probe through %s', async (ProviderClass) => {

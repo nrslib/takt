@@ -8,6 +8,7 @@ import { TaskRunner } from '../../infra/task/index.js';
 import { loadRunSessionPage } from '../interactive/runSessionReader.js';
 import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
 import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
+import type { ManagerWorkflow } from '../manager/workflowSelection.js';
 import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
 import {
@@ -34,13 +35,13 @@ import type {
   ListTasksInput,
   TellRunInput,
 } from './schemas.js';
-import type { ManagerAssignmentIdentity } from '../manager/assignment.js';
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
-  managerConversation?: { configDirectory: string; assignment: ManagerAssignmentIdentity };
+  managerWorkflows?: readonly ManagerWorkflow[];
+  turnOperationId?: string;
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
@@ -105,7 +106,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
   const task = new TaskRunner(cwd)
     .listTaskStateItems()
     .find((candidate) => candidate.runSlug === runSlug);
-  if (task?.worktreePath === undefined) {
+  if (task?.worktreePath === undefined || task.mergeTask === true) {
     return cwd;
   }
   assertTaskStateWorktreeOwnership(cwd, task);
@@ -119,6 +120,8 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,
+    ...(task.mergeTask === undefined ? {} : { mergeTask: task.mergeTask, prNumber: task.prNumber }),
+    ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
     ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
   };
@@ -126,7 +129,7 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     summary.runSlug = task.runSlug;
     try {
       let runCwd = cwd;
-      if (task.worktreePath !== undefined) {
+      if (task.worktreePath !== undefined && task.mergeTask !== true) {
         assertTaskStateWorktreeOwnership(cwd, task);
         runCwd = task.worktreePath;
       }
@@ -219,7 +222,7 @@ export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: strin
   const root = fs.realpathSync(allowedProjectRoot);
   const target = fs.realpathSync(cwd);
   const relative = path.relative(root, target);
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+  if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
     return;
   }
 

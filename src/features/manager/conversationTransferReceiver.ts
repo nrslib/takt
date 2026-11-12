@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { ConversationActivitySchema, ConversationTextSchema } from '../../shared/types/conversation-activity.js';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssignmentSchema, ConversationIdSchema, PendingSummarySchema,
@@ -16,11 +17,10 @@ export const ConversationReadMetadataSchema = z.object({ ...version, transferId:
 export type ConversationReadMetadata = z.infer<typeof ConversationReadMetadataSchema>;
 const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment: ConversationAssignmentSchema,
   revision: sequence, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
-  running: RunningOperationSchema.omit({ owner: true }).nullable(), interrupted: z.boolean(),
+  running: RunningOperationSchema.omit({ owner: true }).extend({ kind: z.string().min(1), generation: sequence.optional(), startedAt: sequence.optional() }).nullable(), interrupted: z.boolean(),
   queuedMessageCount: sequence.optional() }).strict()
   .superRefine((state, ctx) => {
-    if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null
-      || state.running !== null && state.running.kind !== 'message')) {
+    if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null)) {
       ctx.addIssue({ code: 'custom', message: 'Director state contains manager operations' });
     }
     if (conversationId(state.assignment) !== state.conversationId || state.pending !== null && state.pending.revision !== state.revision) {
@@ -50,19 +50,22 @@ const snapshotItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('state'), state: stateSchema }).strict(),
   z.object({ kind: z.literal('assignment'), assignment: displayAssignmentSchema }).strict(),
   z.object({ kind: z.literal('goal'), goal: GoalRecordObjectSchema.pick({ id: true, objective: true, status: true, executionStatus: true })
-    .extend({ repositoryDirectory: repository }).strict() }).strict(),
+    .extend({ repositoryDirectory: repository, awaitingHumanMerge: z.boolean() }).strict() }).strict(),
   z.object({ kind: z.literal('inquiry'), inquiry: inquirySchema }).strict(),
   z.object({ kind: z.literal('display_event'), event: z.object({ id: z.string(), message: z.string() }).strict() }).strict(),
   z.object({ kind: z.literal('remove'), key: z.string().min(1) }).strict(),
 ]);
 const operationResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
+  z.object({ kind: z.literal('notice'), message: z.string() }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
-  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional(),
-    permissionAppended: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
+  ConversationTextSchema.extend({ operationId: z.uuid(), generation: sequence }).strict(),
+  z.object({ kind: z.literal('activity'), operationId: z.uuid(), generation: sequence,
+    activity: ConversationActivitySchema }).strict(),
   z.object({ kind: z.literal('user_message'), operationId: z.uuid(), message: z.string() }).strict(),
   z.object({ kind: z.literal('notice'), ...noticeSchema.shape }).strict(),
   ...(['reply', 'progress'] as const).map((kind) => z.object({ kind: z.literal(kind), operationId: z.uuid(), message: z.string() }).strict()),

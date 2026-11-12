@@ -1,14 +1,14 @@
+import { TurnToolScope } from '../daemonTurn/toolScope.js';
 import { createHash } from 'node:crypto';
+import { invalidateGlobalConfigCache } from '../../infra/config/global/globalConfig.js';
 import { createWorkspaceManagerContext } from './startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { connectManagerMcp } from './managerMcp.js';
-import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 import { getManagerOutputSchema } from './turnResponse.js';
-import { createManagerTurnExecutor } from './turnExecutor.js';
+import { createManagerTurnExecutor, type ManagerTurnInput } from './turnExecutor.js';
 import type { ProviderType } from '../../infra/providers/types.js';
-import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
 
@@ -35,26 +35,44 @@ export function createConversationRuntime(configDirectory: string): Conversation
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
       const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
         : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, configDirectory).cwd;
-      const plan = createManagerConversationPlan(cwd, agentOverrides ?? {});
+      invalidateGlobalConfigCache();
+      const plan = createManagerConversationPlan(cwd, { ...agentOverrides,
+        ...(assignment.kind === 'workspace' ? { repositoryDirectories: assignment.repositoryDirectories } : {}),
+      });
       const contextKey = createHash('sha256').update(JSON.stringify({
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions,
         mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,
-        language: plan.ctx.lang, permissionJudge: plan.permissionJudge, sensitivePaths: resolveManagerConfig(cwd).sensitivePaths,
+        language: plan.ctx.lang,
+        aiReviewPermissions: plan.ctx.aiReviewPermissions,
       })).digest('hex');
       const id = conversationId(identity);
       const existing = entries.get(id);
       if (existing?.contextKey === contextKey) return existing;
       if (existing !== undefined) { await existing.dispose(); entries.delete(id); }
+      const turnScope = new TurnToolScope();
+      let activeTurn: { patrol: boolean; signal: AbortSignal; requestDaemon: ManagerTurnInput['requestDaemon'] } | undefined;
       const mcp = await connectManagerMcp(cwd, identity, plan.ctx.mcpServers, {
-        enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
+        turnScope,
+        requestDaemon: (request) => {
+          if (activeTurn?.requestDaemon === undefined || activeTurn.signal.aborted) throw new Error('Active daemon turn required');
+          return activeTurn.requestDaemon(request);
+        },
+        conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined : { patrol: activeTurn.patrol },
       });
       try {
         await plan.ctx.provider.preflight?.({
           cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
           permissionMode: 'full', mcpServers: mcp.servers, outputSchema: getManagerOutputSchema(plan.ctx.providerType),
+          aiReviewPermissions: plan.ctx.aiReviewPermissions,
         });
+        const executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
-          contextKey, executor: createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } }), dispose: mcp.dispose };
+          contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
+            turnScope.begin(turn.abortSignal, turn.operationId);
+            activeTurn = { patrol: turn.patrol === true, signal: turn.abortSignal, requestDaemon: turn.requestDaemon };
+            try { return await executor.execute(turn); }
+            finally { await turnScope.end(); activeTurn = undefined; }
+          } }, dispose: mcp.dispose };
         entries.set(id, entry);
         return entry;
       } catch (error) { await mcp.dispose(); throw error; }

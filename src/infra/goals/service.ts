@@ -6,6 +6,7 @@ import { runGoalGit } from './git-command.js';
 import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
+import { FileEventStore } from '../daemon/eventStore.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
@@ -19,6 +20,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   const goal = GoalSchema.parse({
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
+    ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
@@ -44,6 +46,7 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     if (existing.objective !== input.objective
       || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
       || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
+      || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)
       || JSON.stringify(existing.constraints) !== JSON.stringify(input.constraints)
       || (input.startBranch !== undefined && existing.startBranch !== input.startBranch)
       || (input.integrationBranch !== undefined && existing.integrationBranch !== input.integrationBranch)) {
@@ -51,7 +54,8 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     }
     if (!readManagerEvents(input.cwd).some(({ event }) => event.goalId === input.id && event.kind === 'registered')
       && existing.workLog.length === 0 && existing.status === 'created'
-      && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)) {
+      && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)
+      && !await new FileEventStore(getGlobalConfigDir()).hasGoalRegistration(input.cwd, input.id)) {
       throw new GoalRegistrationRecoveryError('Goal exists, but registration event delivery cannot be confirmed');
     }
     return existing;

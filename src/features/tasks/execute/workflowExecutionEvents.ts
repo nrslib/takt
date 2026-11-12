@@ -64,6 +64,7 @@ export interface WorkflowExecutionEventState {
 }
 
 interface WorkflowExecutionEventBridgeDeps {
+  getCacciaFailureReason?: () => string | undefined;
   runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   engine: WorkflowEngine;
   workflowConfig: {
@@ -563,6 +564,7 @@ export function bindWorkflowExecutionEvents(
   });
 
   deps.engine.on('workflow_call:start', (lifecycle) => {
+    deps.runMetaManager.recordWorkflowCall(lifecycle.stack);
     deps.sessionLogger.onWorkflowCallStart(lifecycle);
   });
 
@@ -586,6 +588,7 @@ export function bindWorkflowExecutionEvents(
     state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(resumeStepName, iteration, state.lastResumePoint);
+    deps.runMetaManager.recordStep(step.name, workflowStack);
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
@@ -969,20 +972,22 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('workflow:abort', (workflowState, reason, kind, failure) => {
     if (terminalIntent === undefined) {
+      const cacciaReason = kind === 'step_transition' ? deps.getCacciaFailureReason?.() : undefined;
+      const abortReason = cacciaReason ?? reason;
       const runFailure: RunFailure = {
         step: failure.step,
-        error: failure.error,
+        error: cacciaReason ?? failure.error,
         ...(failure.failureCategory === undefined
           ? {}
           : { failureCategory: failure.failureCategory }),
       };
-      state.abortReason = reason;
+      state.abortReason = abortReason;
       state.abortKind = kind;
       state.failure = runFailure;
       terminalIntent = {
         kind: 'aborted',
         workflowState,
-        reason,
+        reason: abortReason,
         abortKind: kind,
         failure: runFailure,
         status: resolveWorkflowAbortPublicationStatus(kind),

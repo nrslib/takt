@@ -45,6 +45,20 @@ ja:
         workflowResult: completed
       goalWorkKey: import
       goalPurpose: 在庫のインポート処理を実装する
+      goalIntegration: not_integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/import-task
+      summary: 在庫のインポート処理を実装する
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/inventory
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/import-task
+      ownerStartTime: null
+      ownerPid: null
+      slug: import-task
+      executionId: 650e8400-e29b-41d4-a716-446655440259
   readResults:
     - tool: Read
       arguments:
@@ -161,6 +175,20 @@ en:
         workflowResult: completed
       goalWorkKey: import
       goalPurpose: Implement inventory import
+      goalIntegration: not_integrated
+      completedAt: 2026-10-11T00:09:00.000Z
+      taskDir: .takt/tasks/import-task
+      summary: Implement inventory import
+      workflow: default
+      worktree: true
+      baseBranch: takt/goal/inventory
+      autoPr: false
+      shouldPublishBranchToOrigin: false
+      branch: takt/task/import-task
+      ownerStartTime: null
+      ownerPid: null
+      slug: import-task
+      executionId: 650e8400-e29b-41d4-a716-446655440259
   readResults:
     - tool: Read
       arguments:
