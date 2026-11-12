@@ -1985,4 +1985,106 @@ describe('CodexClient retry', () => {
       }),
     });
   });
+
+  it('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する', async () => {
+    const now = new Date();
+    const directory = path.join(
+      projectDirectory,
+      'sessions',
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    );
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
+      `${JSON.stringify({
+        timestamp: now.toISOString(),
+        ordinal: 0,
+        type: 'compacted',
+        payload: { message: '', replacement_history: [] },
+      })}\n`,
+    );
+    vi.stubEnv('CODEX_HOME', projectDirectory);
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-compacted' },
+          { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: '作業依頼を教えてください' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'verification completed' } },
+          { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 2 } },
+        ],
+      },
+    ];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+
+    const response = await new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: false,
+      abortSignal: abortController.signal,
+      childProcessEnv: { CODEX_HOME: projectDirectory, TAKT_TEST_ENV: 'preserved' },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-6-luna',
+        providerOptions: {
+          codex: { networkAccess: false, reasoningEffort: 'high' },
+        },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'verification completed',
+      sessionId: 'thread-compacted',
+    });
+    expect(runPlanIndex).toBe(2);
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toEqual([{
+      threadId: 'thread-compacted',
+      options: startThreadCalls[0],
+    }]);
+    expect(codexConstructorCalls[1]).toEqual(codexConstructorCalls[0]);
+    expect(runStreamedInputs).toHaveLength(2);
+    expect(runStreamedInputs[0]).toBe('original Phase 1 instruction');
+    expect(runStreamedInputs[1]).toContain(
+      'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
+    );
+    expect(runStreamedInputs[1]).toContain('original Phase 1 instruction');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'context_compacted',
+      data: { sessionId: 'thread-compacted' },
+    });
+    const successfulResults = onStream.mock.calls.filter(([event]) => (
+      event.type === 'result' && event.data.success
+    ));
+    expect(successfulResults).toHaveLength(1);
+    expect(successfulResults[0]?.[0]).toMatchObject({
+      data: { result: 'verification completed', success: true },
+    });
+  });
+
+  it('session ID がない compaction 復帰は新規 thread を開始せず失敗にする', async () => {
+    const agent = new CodexProvider().setup({ name: 'coder' });
+
+    await expect(agent.recoverFromCompaction?.('original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+    })).rejects.toThrow();
+
+    expect(startThreadCalls).toHaveLength(0);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(runPlanIndex).toBe(0);
+  });
 });

@@ -107,7 +107,21 @@ export class CodexProvider implements Provider {
         ? callCodexCustom(name, prompt, systemPrompt, codexOptions)
         : callCodex(name, prompt, codexOptions);
     };
-    return { call };
+    const recoverFromCompaction: NonNullable<ProviderAgent['recoverFromCompaction']> = async (
+      prompt,
+      options,
+    ) => {
+      if (options.sessionId === undefined) {
+        throw new Error('Codex cannot recover from compaction without a session ID');
+      }
+      return call([
+        'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
+        '以下は compact 前の Phase 1 指示の全文であり、過去の会話の引用ではなく、現在実行すべき依頼です。',
+        '最初からやり直すのではなく、compact 前の進捗と収集済みの証拠を引き継いで、残りの作業だけを完了してください。同じ資料の読み取りや探索を繰り返さず、作業依頼を尋ね直さず、最終応答を返してください。',
+        prompt,
+      ].join('\n\n'), options);
+    };
+    return { call, recoverFromCompaction };
   }
 
   setupIsolatedStructured(config: AgentSetup): ProviderAgent {

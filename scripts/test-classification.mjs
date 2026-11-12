@@ -243,6 +243,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/clone-metadata-central.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
+  'src/__tests__/codex-compaction.test.ts',
   'src/__tests__/codex-interactive-session-recovery.integration.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/config-path-collision.test.ts',

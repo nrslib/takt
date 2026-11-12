@@ -92,6 +92,10 @@ export interface StreamThinkingEventData {
   thinking: string;
 }
 
+export interface StreamContextCompactedEventData {
+  sessionId?: string;
+}
+
 export interface StreamResultEventData {
   result: string;
   sessionId: string;
@@ -130,6 +134,7 @@ export type StreamEvent =
   | { type: 'permission_summary'; data: StreamPermissionSummaryEventData }
   | { type: 'text'; data: StreamTextEventData }
   | { type: 'thinking'; data: StreamThinkingEventData }
+  | { type: 'context_compacted'; data: StreamContextCompactedEventData }
   | { type: 'result'; data: StreamResultEventData }
   | { type: 'assistant_error'; data: StreamAssistantErrorEventData }
   | { type: 'rate_limit'; data: StreamRateLimitEventData }
