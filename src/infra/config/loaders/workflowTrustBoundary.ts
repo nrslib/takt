@@ -4,6 +4,7 @@ import {
   type WorkflowStep,
 } from '../../../core/models/index.js';
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
+import { isBuiltinWorkflowPath } from '../paths.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 
 type PrivilegedCapability =
@@ -61,6 +62,14 @@ export function validateWorkflowCallTrustBoundary(
   }
 
   if (parentTrustInfo.isProjectWorkflowRoot && childTrustInfo.isProjectWorkflowRoot) {
+    return;
+  }
+
+  if ([parentTrustInfo, childTrustInfo].every((trustInfo) =>
+    trustInfo.source === 'builtin'
+    && trustInfo.sourcePath !== undefined
+    && isBuiltinWorkflowPath(trustInfo.sourcePath),
+  )) {
     return;
   }
 
