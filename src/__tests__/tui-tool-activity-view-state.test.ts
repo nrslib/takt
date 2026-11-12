@@ -6,6 +6,7 @@ import {
   type ToolActivityViewLabels,
 } from '../features/tui/toolActivityViewState.js';
 import type { ToolActivityGroup, ToolActivityProjection } from '../shared/tool-activity/types.js';
+import { ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 
 const labels: ToolActivityViewLabels = { compact: 'compact', expanded: 'expanded', more: 'more', end: 'end', completion: 'completion' };
 
@@ -30,6 +31,48 @@ function fixture(content: string) {
 }
 
 describe('tool activity view state', () => {
+  it.each([
+    { tool: 'Bash', title: 'Bash Ran', input: { command: 'printf ready' }, summary: 'printf ready' },
+    { tool: 'Grep', title: 'Grep Used Grep', input: { pattern: 'needle.*' }, summary: 'needle.*' },
+    { tool: 'Read', title: 'Read', input: { file_path: 'source.ts' }, summary: 'source.ts' },
+    { tool: 'Edit', title: 'Edit', input: { file_path: 'target.ts' }, summary: 'target.ts' },
+  ].flatMap((example) => [false, true].map((isError) => ({ ...example, isError }))))(
+    'shows the shared action and tool in compact and expanded $tool headers with failure=$isError',
+    ({ tool, title, input, summary, isError }) => {
+      const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+      display.handle({ type: 'tool_use', data: { id: 'tool', tool, input } });
+      display.handle({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError } });
+      const initial = createToolActivityViewState();
+      const groups = display.groups();
+      const compact = toolActivityViewPage(display, groups, initial, 80, 10, labels);
+      const header = `${isError ? '✗' : '✓'} ${title}`;
+      expect(compact.rows[0]).toBe(`${header} ${summary}`);
+      expect(compact.rows).toContain('ready');
+      const expanded = toolActivityViewPage(display, groups, toggleToolActivityView(initial), 80, 10, labels);
+      expect(expanded.rows[0]).toBe(header);
+      expect(expanded.rows).toContain(summary);
+      expect(expanded.rows).toContain('ready');
+    },
+  );
+
+  it('shows the shared action for each Bash when expanding a group', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    for (const id of ['first', 'second']) {
+      display.handle({ type: 'tool_use', data: { id, tool: 'Bash', input: { command: `printf ${id}` } } });
+      display.handle({ type: 'tool_result', data: { id, content: `${id}-result`, isError: false } });
+    }
+    const initial = createToolActivityViewState();
+    const groups = display.groups();
+    const compact = toolActivityViewPage(display, groups, initial, 80, 20, labels);
+    expect(compact.rows[0]).toContain('Ran 2 operations');
+    const expanded = toolActivityViewPage(display, groups, toggleToolActivityView(initial), 80, 20, labels);
+    expect(expanded.rows.filter((row) => row === '✓ Bash Ran')).toHaveLength(2);
+    for (const id of ['first', 'second']) {
+      expect(expanded.rows).toContain(`printf ${id}`);
+      expect(expanded.rows).toContain(`${id}-result`);
+    }
+  });
+
   it.each([false, true])('retains the complete input after narrow, wide and expanded headers with expanded first=%s', (expandedFirst) => {
     const { reader, groups } = fixture('ready');
     const command = 'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -45,7 +88,7 @@ describe('tool activity view state', () => {
     ];
     expect(pages[expandedFirst ? 1 : 0]!.rows[0]).toMatch(/…$/u);
     const retained = pages.reduce((ranges, page) => mergeToolActivityTranscript(ranges, page.transcript ?? []), [] as NonNullable<typeof pages[0]['transcript']>[number][]);
-    expect(retained.map((range) => range.text)).toEqual([`✓ Bash ${command}`]);
+    expect(retained.map((range) => range.text)).toEqual([`✓ Bash Ran ${command}`]);
     expect(reader.detail).not.toHaveBeenCalled();
   });
   it('preserves an ellipsis from the original input across narrow and wide display', () => {
@@ -55,7 +98,7 @@ describe('tool activity view state', () => {
     const narrow = toolActivityViewPage(reader, groups, state, 19, 1, labels);
     const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
     expect(mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []).map((range) => range.text))
-      .toEqual(["✓ Bash printf '途中…完了'"]);
+      .toEqual(["✓ Bash Ran printf '途中…完了'"]);
   });
   it('retains full timestamps after a compact row and all finite expanded pages', () => {
     const { reader, groups } = fixture('ready');
@@ -96,8 +139,8 @@ describe('tool activity view state', () => {
     const { reader, groups } = fixture('ready');
     const initial = createToolActivityViewState();
     const page = toolActivityViewPage(reader, groups, initial, 10, 1, labels);
-    expect(page.rows).toEqual(['✓ Bash pr…']);
-    expect(page.transcript).toEqual([{ key: JSON.stringify(['a', 'header']), offset: 0, text: '✓ Bash pr', omitted: true }]);
+    expect(page.rows).toEqual(['✓ Bash Ra…']);
+    expect(page.transcript).toEqual([{ key: JSON.stringify(['a', 'header']), offset: 0, text: '✓ Bash Ra', omitted: true }]);
     const input = { ...initial, expanded: true, position: { ...initial.position, section: 'input' as const } };
     groups[0]!.entries[0]!.input = '日本語';
     const tiny = toolActivityViewPage(reader, groups, input, 1, 1, labels);
@@ -118,13 +161,13 @@ describe('tool activity view state', () => {
     const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
     const retained = mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []);
     expect(retained.map((range) => range.text)).toEqual(wide.rows);
-    expect(wide.rows).toEqual(['✓ Bash printf ready']);
+    expect(wide.rows).toEqual(['✓ Bash Ran printf ready']);
     expect(narrow.transcript![0]!.text + '…').toBe(narrow.rows[0]);
   });
   it('retains overlapping visible result ranges once across modes, reflow and preceding entry removal', () => {
     const { reader, groups } = fixture('one\ntwo\nthree\nfour\nunseen');
     const initial = createToolActivityViewState();
-    const prefix = { summary: 'Grep', entries: [{ ...groups[0]!.entries[0]!, key: 'unfinished', status: 'running' as const }] };
+    const prefix = { summary: 'Used Grep', entries: [{ ...groups[0]!.entries[0]!, key: 'unfinished', tool: 'Grep', action: 'Used Grep', status: 'running' as const }] };
     const first = toolActivityViewPage(reader, [prefix, ...groups], initial, 80, 10, labels);
     const compact = toolActivityViewPage(reader, groups, initial, 80, 5, labels);
     const expanded = toolActivityViewPage(reader, groups, toggleToolActivityView(initial), 80, 7, labels);
@@ -193,7 +236,7 @@ describe('tool activity view state', () => {
     const first = groups[0]!.entries[0]!;
     first.result = { text: content, nextOffset: content.length, hasMore: false, truncated: false };
     groups[0]!.entries.push({ ...first, key: 'b', input: 'second.ts' });
-    groups.push({ summary: 'Edit', entries: [{ ...first, key: 'c', tool: 'Edit', input: 'next.ts', result: { ...first.result, text: 'next-result' } }] });
+    groups.push({ summary: 'Edit', entries: [{ ...first, key: 'c', tool: 'Edit', action: 'Edit', input: 'next.ts', result: { ...first.result, text: 'next-result' } }] });
     let state = createToolActivityViewState();
     const rows: string[] = [];
     for (let index = 0; index < 30; index += 1) {
@@ -234,7 +277,7 @@ describe('tool activity view state', () => {
   it('should collapse to the shared compact summary and mark omitted results', () => {
     const { reader, groups } = fixture('one\ntwo\nthree\nfour');
     const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
-    expect(page.rows).toContain('✓ Bash printf ready');
+    expect(page.rows).toContain('✓ Bash Ran printf ready');
     expect(page.rows).toContain('success @1000 → @1250 (250 ms) completion #2');
     expect(page.rows.slice(-4)).toEqual(['one', 'two', 'three', 'more']);
     expect(reader.detail).not.toHaveBeenCalled();

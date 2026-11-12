@@ -211,10 +211,12 @@ export function toolActivityViewPage(
         addSingleRow(labels.more);
         position = { group: position.group + 1, entry: 0, section: 'group', offset: 0 };
         break;
-      case 'header':
-        addSingleRow(`${symbol(entry)} ${entry.tool}${state.expanded || entry.input === '' ? '' : ` ${entry.input}`}`);
+      case 'header': {
+        const title = entry.tool === entry.action ? entry.tool : `${entry.tool} ${entry.action}`;
+        addSingleRow(`${symbol(entry)} ${title}${state.expanded || entry.input === '' ? '' : ` ${entry.input}`}`);
         position = advance('time');
         break;
+      }
       case 'time': {
         const timing = [entry.status,
           ...(entry.startedAt === undefined ? [] : [`@${entry.startedAt}`]),

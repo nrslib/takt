@@ -264,12 +264,12 @@ it.each([
       if (command.length > 40) expect(header).toMatch(/…$/u);
     });
     columns.mockReturnValue(80); app.stdout.emit('resize');
-    await waitFor(() => expect(toolRows()).toContain(`✓ Bash ${command}`));
+    await waitFor(() => expect(toolRows()).toContain(`✓ Bash Ran ${command}`));
     finish.resolve(); await fixture.settled();
     await client.submit({ kind: 'message', text: 'Advance to another turn' }); await fixture.settled();
     await waitFor(() => {
       const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
-      expect(text.split('\n').filter((line) => line === `✓ Bash ${command}`)).toHaveLength(1);
+      expect(text.split('\n').filter((line) => line === `✓ Bash Ran ${command}`)).toHaveLength(1);
     });
   } finally { finish.resolve(); await fixture.settled(); }
 });
@@ -635,6 +635,8 @@ it('keeps start order and matches a delayed background failure after a later too
     const first = rows.indexOf('✗ Bash'); const second = rows.indexOf('✓ Grep');
     expect(first).toBeGreaterThanOrEqual(0); expect(second).toBeGreaterThan(first);
     const background = rows.slice(first, second); const later = rows.slice(second);
+    expect(background).toContain('✗ Bash Ran background-command');
+    expect(later).toContain('✓ Grep Used Grep later-search');
     expect(background).toContain('background-command'); expect(background).toContain('failure');
     expect(background).toContain('background-failure'); expect(background).not.toContain('later-success');
     expect(later).toContain('later-search'); expect(later).toContain('success');
@@ -642,6 +644,15 @@ it('keeps start order and matches a delayed background failure after a later too
     expect(Number(background.match(/completion #(\d+)/u)![1])).toBeGreaterThan(Number(later.match(/completion #(\d+)/u)![1]));
     expect(app.lastFrame()).toContain('background-failure');
     expect(app.lastFrame()).toContain('later-success');
+    expect(app.lastFrame()).toContain('✗ Bash Ran');
+    expect(app.lastFrame()).toContain('✓ Grep Used Grep');
+    const expanded = await browseToolPage(app, '\x0f');
+    expect(expanded.split('\n')).toContain('✗ Bash Ran');
+    expect(expanded.split('\n')).toContain('✓ Grep Used Grep');
+    expect(expanded).toContain('background-command');
+    expect(expanded).toContain('background-failure');
+    expect(expanded).toContain('later-search');
+    expect(expanded).toContain('later-success');
   } finally { finish.resolve(); await fixture.settled(); }
 });
 

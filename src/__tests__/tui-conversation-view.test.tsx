@@ -2742,17 +2742,23 @@ describe('ConversationView tool history', () => {
       await flushFrames();
       expect(app.lastFrame()).toContain('printf ready');
       expect(app.lastFrame()).toContain('@1000');
+      expect(app.lastFrame()).toContain('… Bash Ran printf ready');
       now = 1250;
       stream!({ type: 'tool_result', data: { id: 'provider-tool', content: 'provider-result-ready', isError: false } });
       await flushFrames();
       const frame = stripAnsi(app.lastFrame() ?? '');
       expect(frame).toContain('Bash');
+      expect(frame).toContain('✓ Bash Ran printf ready');
       expect(frame).toContain('printf ready');
       expect(frame).toContain('provider-result-ready');
       expect(frame).toMatch(/250\s*ms/u);
       expect(frame).toContain('@1000');
       expect(frame).toContain('@1250');
       expect(frame).toMatch(/✓|success/u);
+      const expanded = await press(app, CTRL_O);
+      expect(expanded.split('\n').map((row) => row.trim())).toContain('✓ Bash Ran');
+      expect(expanded).toContain('printf ready');
+      expect(expanded).toContain('provider-result-ready');
     } finally {
       clock.mockRestore();
       app.unmount();
