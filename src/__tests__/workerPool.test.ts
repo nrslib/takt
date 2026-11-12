@@ -227,18 +227,6 @@ describe('runWithWorkerPool', () => {
     expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
   });
 
-  it('goal限定poolは通常タスクのpendingだけではENOSPCの復旧待ちを始めない', async () => {
-    const runner = createRunner();
-    runner.listTaskStateItems.mockReturnValue([{ name: 'ordinary', status: 'pending' }] as never);
-    const failure = new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
-    runner.claimNextTasks.mockImplementation(() => { throw failure; });
-
-    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run', undefined, true))
-      .rejects.toBe(failure);
-    expect(runner.claimNextTasks).toHaveBeenCalledOnce();
-    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
-    expect(checkPendingTaskProviders).toHaveBeenCalledWith(runner, '/cwd', {}, undefined, [], expect.any(AbortSignal), true);
-  });
 
   it('provider preflightのENOSPCは取得処理として再試行しない', async () => {
     const runner = createRunner();

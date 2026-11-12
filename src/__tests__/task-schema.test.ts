@@ -1,5 +1,6 @@
 import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import { describe, it, expect } from 'vitest';
+import { toTaskState } from '../infra/task/mapper.js';
 import {
   TaskRecordSchema,
   TaskFileSchema,
@@ -65,6 +66,36 @@ function makePrFailedRecord() {
 }
 
 const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+
+describe('worker pool task metadata', () => {
+  it('round-trips the execution worker with the running task identity', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'execution-a', worker_name: 'builtin' };
+    expect(TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)))).toEqual(task);
+  });
+
+  it('round-trips a waiting reason while preserving pending status and absent ownership', () => {
+    const task = { ...makePendingRecord(), waiting_reason: 'No executable worker is available' };
+    const restored = TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)));
+    expect(restored).toEqual(task);
+    expect(restored).not.toHaveProperty('owner_pid');
+    expect(restored).not.toHaveProperty('execution_id');
+  });
+
+  it('maps the saved worker name to the running task state', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'execution-a', worker_name: 'builtin' };
+    expect(toTaskState('/repo/.takt/tasks.yaml', task)).toMatchObject({
+      status: 'running', executionId: 'execution-a', workerName: 'builtin',
+    });
+  });
+
+  it('maps the saved waiting reason without marking the pending task as running', () => {
+    const task = { ...makePendingRecord(), waiting_reason: 'No executable worker is available' };
+    expect(toTaskState('/repo/.takt/tasks.yaml', task)).toMatchObject({
+      status: 'pending', waitingReason: task.waiting_reason,
+    });
+  });
+});
+
 describe('task stop request persistence', () => {
   it('round-trips execution identity and the saved request', () => {
     const task = { ...makeRunningRecord(), execution_id: 'run-a',

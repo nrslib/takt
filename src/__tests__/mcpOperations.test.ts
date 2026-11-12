@@ -64,6 +64,24 @@ describe('MCP task goal integration', () => {
 
   afterEach(() => { vi.restoreAllMocks(); });
 
+  it('returns the execution worker name from the running task', async () => {
+    const running = { ...task({ kind: 'running', status: 'running', completion: undefined }),
+      executionId: 'execution-a', workerName: 'builtin' };
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([running]);
+    expect((await list()).tasks).toEqual([expect.objectContaining({
+      name: running.name, status: 'running', executionId: 'execution-a', workerName: 'builtin',
+    })]);
+  });
+
+  it.each([false, true])('returns the waiting reason without changing pending status for mergeTask=%s', async (mergeTask) => {
+    const pending = { ...task({ kind: 'pending', status: 'pending', completion: undefined, mergeTask }),
+      waitingReason: 'No executable worker is available' };
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([pending]);
+    expect((await list()).tasks).toEqual([expect.objectContaining({
+      name: pending.name, status: 'pending', waitingReason: pending.waitingReason,
+    })]);
+  });
+
   it('returns integrated for a completion commit reachable from the goal branch', async () => {
     const output = await list();
     expect(output.tasks[0]).toMatchObject({ status: 'completed', goalIntegration: 'integrated' });

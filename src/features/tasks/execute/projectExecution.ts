@@ -1,5 +1,5 @@
 import {
-  acquireProjectExecutionLock, ProjectExecutionAlreadyRunningError, type ProjectExecutionKind, type ProjectExecutionLock,
+  acquireProjectExecutionLock, type ProjectExecutionKind,
 } from '../../../infra/task/project-execution-lock.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { ShutdownManager } from './shutdownManager.js';
@@ -14,14 +14,8 @@ export async function withProjectExecution<Result>(
   cwd: string,
   kind: ProjectExecutionKind,
   execute: (signals: WorkerPoolShutdownSignals) => Promise<Result>,
-  automaticRun?: boolean,
-): Promise<Result | undefined> {
-  let lock: ProjectExecutionLock;
-  try { lock = acquireProjectExecutionLock(cwd, kind); }
-  catch (error) {
-    if (automaticRun === true && kind === 'run' && error instanceof ProjectExecutionAlreadyRunningError) return undefined;
-    throw error;
-  }
+): Promise<Result> {
+  const lock = acquireProjectExecutionLock(cwd, kind);
   const scheduling = new AbortController();
   const task = new AbortController();
   let shutdownManager: ShutdownManager | undefined;

@@ -33,7 +33,7 @@ export async function runAllTasks(
           ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
         }
       : undefined;
-    const taskRunner = new TaskRunner(cwd, { onWarning: warn, goalTasksOnly: options?.goalTasksOnly });
+    const taskRunner = new TaskRunner(cwd, { onWarning: warn });
     const globalConfig = resolveWorkflowConfigValues(
       cwd,
       [
@@ -49,7 +49,7 @@ export async function runAllTasks(
       ...(options?.ignoreExceed === true || globalConfig.ignoreExceed === true
         ? { ignoreIterationLimit: true }
         : {}),
-      autoRequeueMaxAttempts: options?.goalTasksOnly === true ? 0 : globalConfig.autoRequeueMaxAttempts,
+      autoRequeueMaxAttempts: globalConfig.autoRequeueMaxAttempts,
     };
     const shouldNotifyRunComplete = globalConfig.notificationSound !== false
       && globalConfig.notificationSoundEvents?.runComplete !== false;
@@ -63,7 +63,7 @@ export async function runAllTasks(
     }
     const confirmation = terminalProviderConfirmation();
     const pendingTasks = shutdownSignals.schedulingSignal.aborted
-      ? [] : taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true);
+      ? [] : taskRunner.listTasksForProviderPreflight();
     const failedTasks = runOptions.autoRequeueMaxAttempts > 0 && !shutdownSignals.schedulingSignal.aborted
       ? taskRunner.listFailedTasks() : [];
     for (const task of pendingTasks) {
@@ -83,7 +83,7 @@ export async function runAllTasks(
     }
     if (!shutdownSignals.schedulingSignal.aborted) {
       await checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
-        pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
+        pendingTasks, shutdownSignals.schedulingSignal);
     }
 
     const runId = generateRunId();
@@ -132,7 +132,6 @@ export async function runAllTasks(
         globalConfig.taskPollIntervalMs,
         'run',
         poolSignals,
-        options?.goalTasksOnly === true,
       );
 
       const totalCount = result.success + result.fail;
@@ -167,5 +166,5 @@ export async function runAllTasks(
     } finally {
       statusLine.stop();
     }
-  }, options?.goalTasksOnly);
+  });
 }

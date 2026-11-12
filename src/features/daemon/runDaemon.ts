@@ -35,6 +35,10 @@ import { receiveInboxChange, restoreLegacyConversations, retireLegacyPatrols } f
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import { startManagerPatrols } from './patrols.js';
 import { inquiryAnswerEvent } from './inquiryAnswerEvent.js';
+import { TaskDispatcher } from './taskDispatcher.js';
+import { BuiltinWorkerAdapter } from '../../infra/worker-pool/builtinWorkerAdapter.js';
+import { BuiltinProjectHost } from '../../infra/worker-pool/projectHost.js';
+import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
 
 class DaemonCleanupError extends AggregateError {}
 
@@ -59,6 +63,9 @@ export async function startDaemon(options: {
   let idleCheck: WatchLoop | undefined;
   let waitCommandCheck: WatchLoop | undefined;
   let patrols: WatchLoop | undefined;
+  let taskPool: DaemonResources | undefined;
+  let taskLoop: WatchLoop | undefined;
+  let tasks: TaskDispatcher | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
@@ -92,7 +99,7 @@ export async function startDaemon(options: {
   const resources = { async close() {
     await startupFinished;
     const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
-      closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
+      closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc), closeResource(taskPool)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -154,6 +161,18 @@ export async function startDaemon(options: {
     options.signal.throwIfAborted();
     await dispatcher.restore(restored.lastAcceptedSequence, restored.pending);
     const global = await globalDaemonConfiguration(directory);
+    tasks = new TaskDispatcher({ workers: [new BuiltinWorkerAdapter({ name: 'builtin', kind: 'builtin',
+      concurrency: global.daemon?.builtin_worker?.concurrency })],
+      async projects() {
+        const registry = await readProjectRegistry(directory);
+        return registry.projects.filter((project) => project.available && project.managerUsed === true).map((project) => project.canonicalDirectory);
+      },
+      factory: { create: (cwd, finished) => new BuiltinProjectHost(cwd, directory, finished) },
+      wake: () => taskLoop?.wake(), onError: reportDaemonError,
+    });
+    const pool = tasks;
+    taskPool = { async close() { try { await pool.close(); } finally { await taskLoop?.close(); } } };
+    taskLoop = startWatchLoop(1_000, async () => { await pool.dispatch(); }, reportDaemonError);
     const repositories: SlackRepositoryConfig[] = [];
     for (const route of await routing.routes()) {
       const assignment = routeAssignment(route);
@@ -190,6 +209,7 @@ export async function startDaemon(options: {
     watchers = startDaemonWatchers({ source: watchSource,
       processes: new AsyncProcess(), commands: new AsyncCommand(), records, ingress: dispatcher,
       async filesChanged(change) {
+        taskLoop?.wake();
         if (change.target.kind === 'inbox') await receiveInboxChange(change, files, conversations, dispatcher);
         else {
           for (const assignment of await routing.assignments()) await conversations.ensure(assignment);
@@ -206,7 +226,7 @@ export async function startDaemon(options: {
     resolveSlack(slack);
     options.signal.throwIfAborted();
     waitCommandCheck = startWatchLoop(5000, () => waitCommands.check(), reportDaemonError);
-    const idle = (): boolean => !stopping && !slack?.listening && input.attachmentCount === 0
+    const idle = (): boolean => !stopping && !slack?.listening && input.attachmentCount === 0 && tasks?.activeTaskCount === 0
       && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents && !waitCommands.hasWork;
     // 起動元が接続する猶予は旧 daemon と同じ500msにする。
     const idleAfter = Date.now() + 500;
