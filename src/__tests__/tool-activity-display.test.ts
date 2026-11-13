@@ -3,6 +3,75 @@ import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/u
 import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
 
 describe('tool activity display', () => {
+  it.each(['compact', 'expanded', 'silent'] as const)('should protect normalized secrets through split input, reads and flush in %s mode', (mode) => {
+    for (const token of ['secret123', 'sec\x1b[31mret123']) {
+      for (const chunks of [
+        ['ready secret123\n'],
+        ['ready sec\x1b[31mret123\x1b[0m\n'],
+        ['ready sec\x1b[3', '1mret', '123\x1b[0m\n'],
+      ]) {
+        const output: string[] = [];
+        const display = new ToolActivityDisplay(mode, false, (line) => output.push(line), false);
+        display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf ready', token } } });
+        const key = display.history.entries()[0]!.key;
+        for (const chunk of chunks) {
+          display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: chunk } });
+          display.flush();
+          for (const text of [output.join('\n'), display.groups()[0]!.entries[0]!.result.text, display.detail(key, 0).result.text]) {
+            expect(text).not.toMatch(/sec(?:ret123)?|ret123|\x1b/u);
+          }
+        }
+        expect(display.detail(key, 0).result.text).toBe('ready [REDACTED]');
+        display.handle({ type: 'tool_result', data: { id: 'a', content: chunks.join(''), isError: false } });
+        expect(display.detail(key, 0).result.text).toBe('ready [REDACTED]');
+        expect(display.history.entries()[0]!.output).toBe(chunks.join(''));
+        if (mode !== 'silent') expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ ready [REDACTED]']);
+      }
+    }
+  });
+
+  it.each([false, true])('should preserve normalized consumption and pending secrets with restore=%s', (restore) => {
+    let display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'secret123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready\nsec\x1b[3' } });
+    const key = display.history.entries()[0]!.key;
+    expect(display.detail(key, 0).result.text).toBe('ready');
+    if (restore) {
+      const state = display.history.snapshot();
+      display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+      display.restore(state);
+    }
+    expect(display.detail(key, 0).result.text).toBe('ready');
+    for (const output of ['1mret', '123\x1b[0m\n', 'after\t日本語\n']) {
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output } });
+      expect(display.detail(key, 0).result.text).not.toMatch(/secret|ret123|\x1b/u);
+    }
+    expect(display.detail(key, 0).result.text).toBe('ready\n[REDACTED]\nafter\t日本語');
+  });
+
+  it.each([false, true])('should preserve already masked completed results with isError=%s', (isError) => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: {} } });
+    display.handle({ type: 'tool_result', data: { id: 'a', content: '[REDACTED] ready', isError } });
+    const value = display.groups()[0]!.entries[0]!;
+    expect(value).toMatchObject({ status: isError ? 'failure' : 'success', result: { text: '[REDACTED] ready' } });
+    expect(display.detail(value.key, 0).result.text).toBe('[REDACTED] ready');
+  });
+
+  it('should hold a split redaction marker until the text prefix is complete', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: {} } });
+    for (const chunk of ['[RED', 'ACTED']) {
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: chunk } });
+      display.flush();
+      expect(output).toEqual([]);
+    }
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '] ready\n' } });
+    display.handle({ type: 'tool_result', data: { id: 'a', content: '[REDACTED] ready\n', isError: false } });
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ [REDACTED] ready']);
+  });
+
   it('should restore completed results without output and keep partial running secrets private', () => {
     const writer = vi.fn();
     const source = new ToolActivityDisplay('silent', false, writer, false);

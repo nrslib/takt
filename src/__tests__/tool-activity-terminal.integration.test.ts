@@ -4,7 +4,7 @@ import { StreamDisplay } from '../shared/ui/StreamDisplay.js';
 import { TaskPrefixWriter } from '../shared/ui/TaskPrefixWriter.js';
 import { createPrefixedStreamHandler } from '../features/tasks/execute/outputFns.js';
 import { ParallelLogger } from '../core/workflow/engine/parallel-logger.js';
-import { emitToolUse } from '../infra/opencode/OpenCodeStreamHandler.js';
+import { emitToolResult, emitToolUse } from '../infra/opencode/OpenCodeStreamHandler.js';
 
 interface TerminalAdapter {
   handler: StreamCallback;
@@ -85,6 +85,30 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
 
     expect(visible()).toContain('printf 日本語');
     expect(visible()).toMatch(/Bash|Ran/);
+  });
+
+  it.each([false, true])('should retain masked OpenCode completion text with isError=%s', (isError) => {
+    const input = { command: 'printf ready', token: 'secret123' };
+    for (const content of ['ready', 'secret123 ready']) {
+      const id = content === 'ready' ? 'plain' : 'masked';
+      emitToolUse(adapter.handler, 'bash', input, id);
+      emitToolResult(adapter.handler, content, isError, input, id, 'bash', input);
+    }
+    adapter.flush();
+    const results = lines().filter((line) => line.includes('│'));
+    expect(results.some((line) => line.includes('[REDACTED] ready'))).toBe(true);
+    expect(results.some((line) => /│ ready/u.test(line))).toBe(true);
+    for (const line of results) expect(line).not.toMatch(/secret123|structured output omitted/u);
+    expect(visible()).toContain(isError ? '✗' : '✓');
+  });
+
+  it.each(['ready secret123\n', 'ready sec\x1b[31mret123\x1b[0m\n'])('should sanitize normalized secrets in CI results %j', (content) => {
+    adapter.handler(start('shell', 'Bash', { command: 'printf ready', token: 'secret123' }));
+    adapter.handler(finish('shell', content));
+    adapter.flush();
+    const results = lines().filter((line) => line.includes('│'));
+    expect(results.some((line) => line.includes('ready [REDACTED]'))).toBe(true);
+    for (const line of results) expect(line).not.toMatch(/secret123|\x1b/u);
   });
 
   it.each([

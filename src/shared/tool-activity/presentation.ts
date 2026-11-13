@@ -5,6 +5,7 @@ import {
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 import type { ToolActivityEntry, ToolActivityGroup, ToolActivityPage, ToolActivityProjection } from './types.js';
 import { classifyToolResult } from './result.js';
+import { sanitizeToolResultText } from './sanitize.js';
 
 export const COMPACT_RESULT_LINES = 3;
 export const COMPACT_RESULT_BYTES = 1024;
@@ -66,7 +67,7 @@ function displayResult(entry: ToolActivityEntry, resultText?: string): { text: s
   known.collect(entry.output);
   known.collect(parsed);
   const displayText = truncated ? OUTPUT_TRUNCATION_MARKER + (resultText ?? text) : resultText ?? text;
-  return { text: sanitizeTerminalStreamText(sanitizeSensitiveTextWithKnownValues(displayText, known)), source: known };
+  return { text: sanitizeToolResultText(displayText, known), source: known };
 }
 
 export function toolActivityDetail(

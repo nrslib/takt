@@ -3,6 +3,7 @@ import { groupToolActivities, projectToolActivity, toolActivityDetail } from '..
 import type { ToolActivityEntry } from '../shared/tool-activity/index.js';
 import { stableToolResultPrefix } from '../shared/tool-activity/result.js';
 import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_INPUT_BYTES, COMPACT_RESULT_BYTES, DETAIL_RESULT_BYTES } from '../shared/tool-activity/presentation.js';
+import { MAX_TRACKED_SENSITIVE_VALUES } from '../shared/utils/sensitiveText.js';
 
 function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
   return {
@@ -13,6 +14,41 @@ function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
 }
 
 describe('tool activity presentation', () => {
+  it('should fail closed when display secret collection exceeds its candidate budget', () => {
+    const token = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => `private-${index}`);
+    const value = entry({ input: { token }, result: 'ready private-0' });
+    expect(projectToolActivity(value).result.text).toBe('[REDACTED]');
+  });
+
+  it.each(['secret123', 'sec\x1b[31mret123', 'sec\rret123'])('should protect terminal-normalized secrets from input %j in every result page', (token) => {
+    for (const text of ['ready secret123', 'ready sec\x1b[31mret123\x1b[0m', 'ready sec\rret123']) {
+      for (const result of [text, JSON.stringify({ stdout: text })]) {
+        const value = entry({ input: { command: 'printf ready', token }, result });
+        const original = structuredClone(value);
+        for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
+          expect(page.text).toBe('ready [REDACTED]');
+          expect(page.text).not.toMatch(/secret123|\x1b|\r/u);
+        }
+        expect(value).toEqual(original);
+      }
+    }
+  });
+
+  it.each([
+    ['ready', 'ready'],
+    ['[REDACTED] ready', '[REDACTED] ready'],
+    ['["[REDACTED] ready"]', '[structured output omitted]'],
+    ['{"stdout":"[REDACTED] ready"}', '[REDACTED] ready'],
+    ['{"private_blob":"[REDACTED] ready"}', '[structured output omitted]'],
+    ['{"stdout":"[REDACTED] ready"', '[structured output omitted]'],
+  ])('should classify completed masked text while preserving structured selection: %s', (result, expected) => {
+    for (const value of [entry({ result }), entry({ result: '', output: result })]) {
+      for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
+        expect(page.text).toBe(expected);
+      }
+    }
+  });
+
   it('should defer an incomplete terminal control prefix until its terminator arrives', () => {
     expect(stableToolResultPrefix('ready\x1b]52;c;private')).toBe('ready');
     expect(stableToolResultPrefix('ready\x1b[32')).toBe('ready');

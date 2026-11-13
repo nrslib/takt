@@ -573,6 +573,9 @@ it('discards an unfinished old tool when the same conversation advances and reco
 });
 
 it.each([
+  ['plain text', 'ready', 'ready'],
+  ['stored masked text', 'secret123 ready', '[REDACTED] ready'],
+  ['ANSI split secret', 'ready sec\x1b[31mret123\x1b[0m', 'ready [REDACTED]'],
   ['allowed JSON', '{"stdout":"ready secret123","api\\u005fkey":"secret123"}', 'ready [REDACTED]'],
   ['unknown JSON field', '{"private_blob":{"text":"非公開本文"}}', '[structured output omitted]'],
   ['JSON array', '[{"text":"非公開本文"}]', '[structured output omitted]'],
@@ -582,7 +585,7 @@ it.each([
   let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     if (invocation++ > 0) return toolReply('Next turn');
-    options.onStream!({ type: 'tool_use', data: { id: 'safe-json', tool: 'Bash', input: { command: 'printf ready\x1b[2J' } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'safe-json', tool: 'Bash', input: { command: 'printf ready\x1b[2J', token: 'secret123' } } });
     options.onStream!({ type: 'tool_result', data: { id: 'safe-json', content, isError: false } });
     await finish.promise;
     return toolReply();
@@ -591,7 +594,7 @@ it.each([
   await client.connect(); await complete(); const app = await snapshotView();
   const check = () => {
     const rows = currentToolPage().page.rows;
-    expect(rows.join('\n')).toContain(expected);
+    expect(rows).toContain(expected);
     for (const row of rows) for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b', '{', '}']) {
       expect(row).not.toContain(forbidden);
     }
@@ -599,6 +602,8 @@ it.each([
   try {
     await client.submit({ kind: 'message', text: 'Show a safe result' });
     await waitFor(check);
+    const saved = await fixture.store.readToolHistory(client.getSnapshot().state!.conversationId);
+    expect(saved?.history.entries[0]?.result).toBe(content.replaceAll('secret123', '[REDACTED]'));
     await browseToolPage(app, '\x0f'); check();
     expect(currentToolPage().state.expanded).toBe(true);
     connections[0]!.socket.destroy();

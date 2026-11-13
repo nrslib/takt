@@ -1,11 +1,11 @@
 import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
-import { classifyToolResult, stableToolResultPrefix } from '../tool-activity/result.js';
+import { classifyToolResult } from '../tool-activity/result.js';
+import { normalizeToolResultText, toolResultSensitiveValues } from '../tool-activity/sanitize.js';
 import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, groupToolActivities, projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
 import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection } from '../tool-activity/types.js';
 import { truncateUtf8 } from '../utils/utf8.js';
 import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
-import { sanitizeTerminalStreamText } from '../utils/text.js';
 import { truncate } from './LogManager.js';
 
 interface StreamOutputState {
@@ -52,8 +52,9 @@ export class ToolActivityDisplay {
           stream = { redactor: createSensitiveTextStreamRedactor(), consumed: 0, text: '' };
           this.readableStreams.set(entry.key, stream);
         }
-        stream.text += stream.redactor.write(result.text.slice(stream.consumed), entry.input);
-        stream.consumed = result.text.length;
+        const text = normalizeToolResultText(result.text);
+        stream.text += stream.redactor.write(text.slice(stream.consumed), toolResultSensitiveValues(entry.input));
+        stream.consumed = text.length;
       }
     }
     if (event.type === 'tool_result') {
@@ -89,8 +90,9 @@ export class ToolActivityDisplay {
       const result = classifyToolResult(entry.output);
       if (result.kind !== 'text') continue;
       const redactor = createSensitiveTextStreamRedactor();
-      const text = redactor.write(result.text, entry.input);
-      this.readableStreams.set(entry.key, { redactor, consumed: result.text.length, text });
+      const normalized = normalizeToolResultText(result.text);
+      const text = redactor.write(normalized, toolResultSensitiveValues(entry.input));
+      this.readableStreams.set(entry.key, { redactor, consumed: normalized.length, text });
     }
   }
 
@@ -112,7 +114,7 @@ export class ToolActivityDisplay {
       if (entry.status !== 'running') continue;
       // 構造化出力は、最終結果だけが持つ秘密値の情報が揃うまで公開しない。
       const text = classifyToolResult(entry.output).kind === 'structured' ? ''
-        : sanitizeTerminalStreamText(stableToolResultPrefix(this.readableStreams.get(entry.key)?.text ?? ''));
+        : this.readableStreams.get(entry.key)?.text ?? '';
       results.set(entry.key, text);
     }
     return results;
@@ -123,7 +125,10 @@ export class ToolActivityDisplay {
     for (const entry of this.history.entries()) {
       if (entry.status !== 'running') continue;
       if (this.mode === 'expanded' && entry.output !== '') {
-        const value = projectToolActivity(entry, 'expanded');
+        const source = toolResultSensitiveValues(entry.input);
+        const text = classifyToolResult(entry.output).kind === 'text' && (source.exhausted || source.values.size > 0)
+          ? this.readableResults([entry]).get(entry.key) : undefined;
+        const value = projectToolActivity(entry, 'expanded', text);
         if (!this.displayedResults.has(entry.key)) this.writeLine(`  ${value.tool} output: [running]`);
         this.writeExpandedResult(value);
       } else if (this.mode === 'compact' && !this.quiet) {
@@ -149,8 +154,9 @@ export class ToolActivityDisplay {
     }
     const result = classifyToolResult(entry.output);
     if (result.kind !== 'text' || state.omitted) return;
-    state.pending += sanitizeTerminalStreamText(state.redactor.write(result.text.slice(state.consumed), entry.input));
-    state.consumed = result.text.length;
+    const text = normalizeToolResultText(result.text);
+    state.pending += state.redactor.write(text.slice(state.consumed), toolResultSensitiveValues(entry.input));
+    state.consumed = text.length;
     this.drain(state, false);
   }
 
@@ -197,10 +203,10 @@ export class ToolActivityDisplay {
       } else state.printed = value.result.text;
       return;
     }
-    const redacted = entry.status === 'running'
-      ? state.redactor.write('', entry.input)
-      : state.redactor.flush(entry.input);
-    state.pending += sanitizeTerminalStreamText(redacted);
+    const source = toolResultSensitiveValues(entry.input);
+    state.pending += entry.status === 'running'
+      ? state.redactor.write('', source)
+      : state.redactor.flush(source);
     this.drain(state, true);
   }
 

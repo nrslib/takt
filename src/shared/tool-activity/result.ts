@@ -1,7 +1,8 @@
 import { stripAnsi } from '../utils/text.js';
+import { REDACTED_VALUE } from '../utils/sensitive-text.js';
 
 const RESULT_FIELDS = ['stdout', 'stderr', 'output', 'content', 'text', 'message', 'result'] as const;
-const LOG_PREFIXES = ['[DEBUG]', '[INFO]', '[WARN]', '[ERROR]'];
+const TEXT_PREFIXES = ['[DEBUG]', '[INFO]', '[WARN]', '[ERROR]', REDACTED_VALUE];
 const OMITTED = '[structured output omitted]';
 
 interface ToolResult {
@@ -21,11 +22,11 @@ export function classifyToolResult(raw: string): ToolResult {
   const stable = stableToolResultPrefix(raw);
   const normalized = stripAnsi(stable);
   const leading = normalized.trimStart();
-  if (leading === '' || LOG_PREFIXES.some((prefix) => prefix.startsWith(leading) && prefix !== leading)) {
+  if (leading === '' || TEXT_PREFIXES.some((prefix) => prefix.startsWith(leading) && prefix !== leading)) {
     return { kind: 'pending', text: raw.trim() === '' ? '' : OMITTED };
   }
   const structured = leading.startsWith('{') || leading.startsWith('[');
-  if (LOG_PREFIXES.some((prefix) => leading.startsWith(prefix)) || !structured) {
+  if (TEXT_PREFIXES.some((prefix) => leading.startsWith(prefix)) || !structured) {
     return { kind: 'text', text: stable };
   }
   let parsed: unknown;
