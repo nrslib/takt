@@ -635,7 +635,18 @@ takt manager
 
 `TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. `takt manager` and `takt director` start the dedicated daemon when needed. After changing tokens or Slack settings, stop it with `takt daemon stop` and start it again.
 
-The daemon stays running regardless of pending work or Slack connectivity, until `takt daemon stop` or a signal stops it. TUI admission and observation continue without Slack configuration or tokens. If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
+The daemon does not exit automatically while Slack reception is active or when started with `takt daemon --resident`. Stop it with `takt daemon stop` or a signal such as SIGTERM. Slack configuration or tokens alone do not keep it running; reception must actually be active.
+
+With an ordinary startup and no active Slack reception, the daemon exits automatically once all of the following are absent:
+
+- TUI connections and conversation connections being initialized
+- Pending or running events, unfinished wait requests, and delivery of their results
+- Unfinished goals in the monitored projects: goals whose `status` is not `completed` and whose `executionStatus` is not `aborted`
+- Inbox JSON events, `pending` or `running` tasks, and undelivered inquiry answers
+
+The daemon waits for project inspection to finish and checks the conditions again. It also stays running when a goal cannot be read and its completion cannot be confirmed. TUI admission and observation are available while the daemon is running, even without Slack configuration or tokens. See the [CLI reference](./cli-reference.md#manager-experimental) for resident startup.
+
+If two repositories configure the same channel, Slack is disabled for both. Startup, shutdown, and diagnostics are saved asynchronously under `~/.takt/daemon-logs/*.json`.
 
 ### Conversations and inquiries
 

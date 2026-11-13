@@ -616,9 +616,20 @@ export TAKT_SLACK_BOT_TOKEN='xoxb-...'
 takt manager
 ```
 
-`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。没有自动启动机制，需要使用上述命令之一启动 daemon。
+`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。`takt manager` 和 `takt director` 会按需启动专用 daemon。
 
-只要有仓库配置了 Slack，且两个令牌均已设置，即使没有任务，daemon 也会继续监听。未配置 Slack 或缺少任一令牌时，daemon 仍按原有规则在空闲时退出。如果两个仓库配置了同一频道，两者的 Slack 都会被禁用，原因会写入 `~/.takt/logs/daemon.log`。
+Slack 接收正在运行时，或使用 `takt daemon --resident` 启动时，daemon 不会自动退出。使用 `takt daemon stop` 或 SIGTERM 等信号停止。仅有 Slack 配置或令牌不足以保持运行，接收必须实际运行。
+
+普通启动且 Slack 接收未运行时，只有以下项目全部消失后 daemon 才会自动退出。
+
+- TUI 连接和正在初始化的会话连接
+- 待处理或执行中的事件、未完成的等待请求及其结果投递
+- 受监测项目中未完成的目标，即 `status` 不是 `completed` 且 `executionStatus` 不是 `aborted` 的目标
+- inbox 中的 JSON 事件、`pending` 或 `running` 的任务、尚未投递的询问回答
+
+daemon 会等待项目检查完成，再次确认上述条件。无法读取目标、不能确认其完成状态时，也会继续运行。即使没有 Slack 配置或令牌，daemon 运行期间仍可使用 TUI 和监测功能。常驻启动方法请参阅 [CLI 参考](./cli-reference.zh-CN.md#daemon-的常驻启动与自动退出)。
+
+如果两个仓库配置了同一频道，两者的 Slack 都会被禁用，原因会写入 `~/.takt/logs/daemon.log`。
 
 ### 对话和回答询问
 

@@ -87,7 +87,24 @@ In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. B
 
 Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for message acceptance and waiting, storage, and interruption after a daemon restart.
 
-Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
+The daemon does not exit automatically while Slack reception is active or when started with `--resident`. To keep it running without Slack, use:
+
+```bash
+takt daemon --resident
+```
+
+If a daemon is already running, this command keeps the existing daemon running, explains why resident startup could not proceed, and exits with a nonzero status. To start in resident mode, run `takt daemon stop` to stop the existing daemon, then run `takt daemon --resident`.
+
+This command stays in the foreground. Stop it with `takt daemon stop` from another terminal, or send a signal such as SIGTERM. Plain `takt daemon` and daemons automatically started by manager retain their existing behavior. Without active Slack reception, they exit automatically once all of the following are absent:
+
+- TUI connections and conversation connections being initialized
+- Pending or running events, unfinished wait requests, and delivery of their results
+- Unfinished goals in the monitored projects: goals whose `status` is not `completed` and whose `executionStatus` is not `aborted`
+- Inbox JSON events, `pending` or `running` tasks, and undelivered inquiry answers
+
+The daemon waits for project inspection to finish and checks the conditions again. It also stays running when a goal cannot be read and its completion cannot be confirmed. Slack configuration or tokens alone do not keep it running; reception must actually be active. A saved pending summary alone does not keep the daemon running.
+
+If `takt manager` has a different version or CLI path from a resident daemon, it leaves the daemon running, displays the mismatch and update instructions, and exits. To update, run `takt daemon stop`, restart with `takt daemon --resident` from the new version you intend to use, then open manager. A manager with the same version and CLI path reuses the running daemon.
 
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
 
