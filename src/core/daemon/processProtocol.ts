@@ -1,6 +1,7 @@
 import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitCommand.js';
 import { z } from 'zod/v4';
-import { ConversationActivitySchema, ConversationTextSchema, ConversationToolEventSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
+import { ConversationActivitySchema, ConversationToolEventSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
+import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
@@ -8,17 +9,15 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
-// 旧形式の中断文と次のイベントを同じ start_turn で転送できるようにする。
-export const MAX_PROCESS_MESSAGE_BYTES = 12 * 1024 * 1024;
-export const MAX_PROCESS_PENDING_REQUESTS = 32;
-export const MAX_PROCESS_PENDING_BYTES = 1024 * 1024;
-export const MAX_PROCESS_SEND_BYTES = MAX_PROCESS_MESSAGE_BYTES;
+/** 配送を待つ途中表示の件数。超えた分は表示だけを間引き、ターンは続ける。 */
+export const MAX_PROCESS_PENDING_PROGRESS = 32;
 export { MAX_PROCESS_PROGRESS_BYTES };
-export const MAX_PROCESS_DELIVERY_PORTS = 32;
 
 const id = z.string().min(1).max(128);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
+// 途中表示の大きさはターンの成否に関係しないため、受信側でも拒否せず表示用に切り詰める。
+const progressText = z.string().transform((value) => truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value);
 const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, generation: version.refine((v) => v > 0) }).strict() satisfies z.ZodType<TurnIdentity>;
 const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
@@ -104,7 +103,7 @@ const stateReply = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('event_accepted'), admission }).strict(),
   z.object({ kind: z.literal('notification_saved'), notificationId: id }).strict(),
   z.object({ kind: z.literal('delivery'), conversationId: id, assignment: ConversationAssignmentSchema,
-    connectedPorts: z.array(id).max(MAX_PROCESS_DELIVERY_PORTS) }).strict(),
+    connectedPorts: z.array(id) }).strict(),
   z.object({ kind: z.literal('error'), code: z.enum(['stale_turn', 'version_conflict', 'forbidden', 'capacity', 'storage', 'stopping']), message: text }).strict(),
 ]);
 export type DaemonStateRequest = z.infer<typeof stateRequest>;
@@ -121,7 +120,8 @@ const daemonMessage = z.discriminatedUnion('kind', [
 const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('ready') }).strict(),
   z.object({ ...common, kind: z.literal('turn_progress'), turn: TurnIdentitySchema,
-    message: z.union([z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES), ConversationActivitySchema, ConversationTextSchema, ConversationToolEventSchema]) }).strict(),
+    message: z.union([progressText, ConversationActivitySchema, z.object({ kind: z.literal('turn_text'), message: progressText }).strict(),
+      ConversationToolEventSchema]) }).strict(),
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
   z.object({ ...common, kind: z.literal('daemon_request'), turn: TurnIdentitySchema, requestId: id, request: stateRequest }).strict(),
@@ -129,52 +129,29 @@ const childMessage = z.discriminatedUnion('kind', [
 export type DaemonProcessMessage = z.infer<typeof daemonMessage>;
 export type TurnProcessMessage = z.infer<typeof childMessage>;
 
-/** Node IPC の送受信双方で使う。JSON で失われる関数・signal・循環参照も拒否する。 */
-function messageBytes(value: unknown): number {
-  const pending = [{ value, depth: 0 }];
-  let nodes = 0;
-  let bytes = 0;
-  while (pending.length > 0) {
-    const item = pending.pop()!;
-    if (++nodes > 65536 || item.depth > 32) throw new Error('Process message structure exceeds capacity');
-    const entry = item.value;
-    if (typeof entry === 'string') bytes += Buffer.byteLength(entry);
-    else if (entry !== null && typeof entry === 'object') {
-      if (!Array.isArray(entry) && Object.getPrototypeOf(entry) !== Object.prototype) throw new Error('Process message must contain JSON data');
-      for (const [key, child] of Object.entries(entry)) {
-        bytes += Buffer.byteLength(key);
-        pending.push({ value: child, depth: item.depth + 1 });
-      }
-    } else if (entry !== null && typeof entry !== 'boolean' && !(typeof entry === 'number' && Number.isFinite(entry))) {
-      throw new Error('Process message must contain JSON data');
-    }
-    if (bytes > MAX_PROCESS_MESSAGE_BYTES) throw new Error('Process message exceeds byte capacity');
+/** Node IPC の送受信双方で使う。JSON で失われる関数・signal などの値と、走査が終わらない循環参照を拒否する。 */
+function assertJsonData(value: unknown, ancestors: Set<object>): void {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (typeof value !== 'object' || !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new Error('Process message must contain JSON data');
   }
-  const serialized = JSON.stringify(value);
-  const size = Buffer.byteLength(serialized);
-  if (size > MAX_PROCESS_MESSAGE_BYTES) throw new Error('Process message exceeds byte capacity');
-  return size;
+  if (ancestors.has(value)) throw new Error('Process message must not contain cycles');
+  ancestors.add(value);
+  for (const child of Object.values(value)) assertJsonData(child, ancestors);
+  ancestors.delete(value);
 }
 
 export function parseDaemonProcessMessage(value: unknown, launchId: string): DaemonProcessMessage {
-  messageBytes(value);
+  assertJsonData(value, new Set());
   const message = daemonMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;
 }
 
 export function parseTurnProcessMessage(value: unknown, launchId: string): TurnProcessMessage {
-  messageBytes(value);
+  assertJsonData(value, new Set());
   const message = childMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;
-}
-
-/** 送信前に予約する。返信・切断・取消で件数とバイト数を必ず解放する。 */
-export function processRequestBytes(pendingCount: number, pendingBytes: number, message: DaemonProcessMessage | TurnProcessMessage): number {
-  if (message.kind !== 'daemon_request' && message.kind !== 'daemon_reply') throw new Error('Expected a process request or reply');
-  const size = messageBytes(message);
-  if (!Number.isSafeInteger(pendingCount) || pendingCount < 0 || !Number.isSafeInteger(pendingBytes) || pendingBytes < 0
-    || pendingCount >= MAX_PROCESS_PENDING_REQUESTS || pendingBytes + size > MAX_PROCESS_PENDING_BYTES) throw new Error('Process requests exceed capacity');
-  return size;
 }

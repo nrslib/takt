@@ -634,7 +634,7 @@ describe('StreamDisplay', () => {
       }
     });
 
-    it('preserves the quiet error fallback without storing suppressed tool names', () => {
+    it('names the sanitized failed tool in quiet mode without printing suppressed output', () => {
       const display = new StreamDisplay('test-agent', true);
       const handler = display.createHandler();
       handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'Custom\x1b[2J', input: {} } });
@@ -644,7 +644,7 @@ describe('StreamDisplay', () => {
       expect(consoleLogSpy).toHaveBeenCalledOnce();
       const result = consoleLogSpy.mock.calls[0]!.join(' ');
       expect(result).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x1a\x1c-\x1f\x7f-\x9f]/u);
-      expect(result.replace(/\x1b\[[0-9;]*m/g, '')).toBe('  ✗ Tool: failed');
+      expect(result.replace(/\x1b\[[0-9;]*m/g, '')).toBe('  ✗ Custom: failed');
     });
   });
 

@@ -5,7 +5,7 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
-import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import type { ToolActivityTurnState, ToolActivityTurnUpdate } from '../../shared/tool-activity/types.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -57,6 +57,7 @@ export type OperationResult =
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
   | { kind: 'tool_history'; history: ToolActivityTurnState }
+  | { kind: 'tool_history_update'; update: ToolActivityTurnUpdate }
   | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
   | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }
@@ -79,7 +80,8 @@ export interface ConversationOpen {
 export interface ConversationInput {
   open(input: ConversationOpen, delivery: ConversationDelivery): Promise<{ attachmentId: string; read: SnapshotRead }>;
   submit(input: { attachmentId: string; requestId: string; speaker: ConversationActor; command: ConversationCommand }): Promise<Submission>;
-  snapshot(attachmentId: string): Promise<SnapshotRead>;
+  /** 差分で追いつけないときだけ toolHistory を指定し、ツール履歴の全体を受け取り直す。 */
+  snapshot(attachmentId: string, options?: { toolHistory: boolean }): Promise<SnapshotRead>;
   detach(attachmentId: string): void;
 }
 export interface ConversationPort<Endpoint> {

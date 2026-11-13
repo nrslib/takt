@@ -5,7 +5,7 @@ import {
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 import type { ToolActivityEntry, ToolActivityGroup, ToolActivityPage, ToolActivityProjection } from './types.js';
 import { classifyToolResult } from './result.js';
-import { sanitizeToolResultText } from './sanitize.js';
+import { sanitizeToolResultText, toolResultSensitiveValues } from './sanitize.js';
 
 export const COMPACT_RESULT_LINES = 3;
 export const COMPACT_RESULT_BYTES = 1024;
@@ -15,8 +15,12 @@ export const DETAIL_RESULT_BYTES = 16 * 1024;
 export const CI_RESULT_LINES = 80;
 export const CI_RESULT_BYTES = 16 * 1024;
 const INPUT_TRUNCATION_MARKER = ' [input truncated]';
-const OUTPUT_TRUNCATION_MARKER = '[output truncated]\n';
 const NAME_TRUNCATION_MARKER = ' [name truncated]';
+
+export function formatToolActivityTime(epochMs: number): string {
+  const time = new Date(epochMs);
+  return [time.getHours(), time.getMinutes(), time.getSeconds()].map((value) => String(value).padStart(2, '0')).join(':');
+}
 
 function canonicalToolName(tool: string): string {
   switch (tool.toLowerCase()) {
@@ -30,18 +34,27 @@ function canonicalToolName(tool: string): string {
   }
 }
 
-function selectedInput(tool: string, input: Record<string, unknown>): string {
-  let keys: readonly string[];
-  switch (canonicalToolName(tool)) {
-    case 'Bash': keys = ['command']; break;
-    case 'Read': case 'Write': case 'Edit': keys = ['file_path', 'filePath', 'path']; break;
-    case 'Grep': case 'Glob': keys = ['pattern']; break;
-    default: keys = ['query', 'input', 'command', 'file_path', 'filePath', 'pattern', 'path']; break;
-  }
+function stringInput(input: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
-    if (Object.hasOwn(input, key) && typeof input[key] === 'string') return input[key];
+    const value = input[key];
+    if (Object.hasOwn(input, key) && typeof value === 'string') return value;
   }
-  return '';
+  return undefined;
+}
+
+function selectedInput(tool: string, input: Record<string, unknown>): string {
+  switch (canonicalToolName(tool)) {
+    case 'Bash': return stringInput(input, ['command']) ?? '';
+    case 'Read': case 'Write': case 'Edit': return stringInput(input, ['file_path', 'filePath', 'path']) ?? '';
+    case 'Grep': case 'Glob': return stringInput(input, ['pattern']) ?? '';
+    default: {
+      const selected = stringInput(input, ['query', 'input', 'command', 'file_path', 'filePath', 'pattern', 'path']);
+      if (selected !== undefined) return selected;
+      // 未知のツールは、入力の最初の値を要約として見せる。
+      const firstKey = Object.keys(input)[0];
+      return firstKey === undefined ? '' : String(input[firstKey] || '');
+    }
+  }
 }
 
 export function projectToolInput(tool: string, input: Record<string, unknown>, source: unknown = input): string {
@@ -59,15 +72,16 @@ function action(tool: string): string {
 
 function displayResult(entry: ToolActivityEntry, resultText?: string): { text: string; source: unknown } {
   const raw = entry.result === undefined || entry.result === '' ? entry.output : entry.result;
-  const { text, parsed } = classifyToolResult(raw);
-  const truncated = entry.result === undefined || entry.result === '' ? entry.outputTruncated : entry.resultTruncated;
+  const { text, parsed } = classifyToolResult(raw, entry.status !== 'running');
   const known = createBoundedSensitiveValues();
   known.collect(entry.input);
   known.collect(raw);
   known.collect(entry.output);
   known.collect(parsed);
-  const displayText = truncated ? OUTPUT_TRUNCATION_MARKER + (resultText ?? text) : resultText ?? text;
-  return { text: sanitizeToolResultText(displayText, known), source: known };
+  // resultText は ToolActivityDisplay が追記分ごとに正規化済みなので、描画のたびに全体を正規化し直さない。
+  const sanitized = resultText === undefined ? sanitizeToolResultText(text, known)
+    : sanitizeSensitiveTextWithKnownValues(resultText, toolResultSensitiveValues(known));
+  return { text: sanitized, source: known };
 }
 
 export function toolActivityDetail(

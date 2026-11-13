@@ -27,7 +27,7 @@ import { receiveInboxChange } from '../features/daemon/inbox.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import * as privateFiles from '../infra/daemon/privateFile.js';
-import type { ToolActivityTurnState } from '../shared/tool-activity/types.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -69,6 +69,13 @@ async function open() {
   return { ...attachment, outputs, completed, submit: (text: string) => fixture.input.submit({ attachmentId: attachment.attachmentId, requestId: randomUUID(), speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text } }) };
 }
 
+type WrittenToolHistoryRecord = { kind: 'turn' } | { kind: 'change'; entries: ToolActivityEntry[] } | { kind: 'finished' };
+function writtenToolHistory(path: string, content: string | Uint8Array): WrittenToolHistoryRecord[] {
+  if (!path.endsWith(join('conversation-tool-history', `${id}.jsonl`))) return [];
+  const text = typeof content === 'string' ? content : Buffer.from(content).toString('utf8');
+  return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as WrittenToolHistoryRecord);
+}
+
 it('persists the session and applies the human response to the current proposal', async () => {
   const port = await open();
   expect(await port.submit('continue the existing goal')).toMatchObject({ kind: 'accepted', acceptedSequence: 1 });
@@ -89,23 +96,19 @@ it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change
   const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
     provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
   resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
-  const write = privateFiles.writePrivateFile; let failed = false;
-  vi.spyOn(privateFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
-    if (failure !== 'delivery' && path.endsWith(`/conversations/${id}.json`) && !failed) {
-      const value = JSON.parse(typeof content === 'string' ? content : Buffer.from(content).toString('utf8')) as { daemonState?: { toolHistory?: ToolActivityTurnState } };
-      const history = value.daemonState?.toolHistory;
-      if (history !== undefined && !history.finished
-        && history.history.entries.some((entry) => failure === 'start' ? entry.status === 'running' : entry.status === 'success')) {
-        failed = true; throw new Error('Injected publication failure');
-      }
+  const append = privateFiles.appendPrivateFile; let failed = false;
+  vi.spyOn(privateFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
+    if (failure !== 'delivery' && !failed && writtenToolHistory(path, content).some((record) => record.kind === 'change'
+      && record.entries.some((entry) => failure === 'start' ? entry.status === 'running' : entry.status === 'success'))) {
+      failed = true; throw new Error('Injected publication failure');
     }
-    await write(path, content, signal);
+    await append(path, content);
   });
   const completed = deferred<Extract<PortOutput, { kind: 'result' }>>();
   const attachment = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
     speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
     async deliver(_id, output) {
-      if (failure === 'delivery' && output.kind === 'tool_history' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
+      if (failure === 'delivery' && output.kind === 'tool_history_update' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
       if (output.kind === 'result') completed.resolve(output);
       return { kind: 'delivered' };
     },
@@ -131,6 +134,34 @@ it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change
     expect(items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { finished: true,
       history: { entries: [{ status: 'success', result: 'ready' }] } } });
   }
+});
+
+it('releases the running state and delivers the result when finishing the tool history fails', async () => {
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } });
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'acquired-session',
+      structuredOutput: { message: 'done', summary: null } };
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const write = privateFiles.writePrivateFile;
+  vi.spyOn(privateFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
+    if (writtenToolHistory(path, content).some((record) => record.kind === 'finished')) throw new Error('Injected finish failure');
+    await write(path, content, signal);
+  });
+  const port = await open();
+  expect(await port.submit('Read once')).toMatchObject({ kind: 'accepted' });
+  await expect(fixture.settled()).rejects.toThrow();
+  expect(fixture.failures).toContainEqual(expect.objectContaining({ message: 'Injected finish failure' }));
+  expect(port.outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: expect.objectContaining({ kind: 'reply', message: 'done' }) }));
+  expect(port.outputs).toContainEqual(expect.objectContaining({ kind: 'pending', state: expect.objectContaining({ running: null }) }));
+  const snapshot = await fixture.conversations.snapshot(id);
+  const items = []; for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  expect(items.find((item) => item.kind === 'state')).toMatchObject({ state: { running: null } });
+  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('acquired-session');
 });
 
 it.each([1, 2])('replaces persisted history after the daemon restarts its generation counter following %s completed turns', async (previousTurns) => {

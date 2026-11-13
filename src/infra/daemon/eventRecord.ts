@@ -3,7 +3,6 @@ import { z } from 'zod/v4';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
-import { MAX_PROCESS_MESSAGE_BYTES } from '../../core/daemon/processProtocol.js';
 import type { AcceptedEvent, EventInput } from '../../core/daemon/events.js';
 import type { ConversationChange, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import { conversationId } from '../conversations/identity.js';
@@ -113,7 +112,7 @@ const storedEvent = z.preprocess((input) => {
 }, storedAcceptedEvent).transform(normalizeStoredWorkspaceAnswer);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
   session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),

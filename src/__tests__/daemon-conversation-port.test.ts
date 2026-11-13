@@ -56,8 +56,7 @@ it.each(['tui', 'slack'] as const)('exposes tool history through live output and
   const source = new ToolActivityHistory();
   source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'private-tool-input' } },
     toolActivity: { callId: 'call', operationId: snapshot.operationId!, generation: snapshot.generation! } });
-  const history = { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false,
-    eventIds: ['start'], history: source.snapshot() };
+  const history = { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false, history: source.snapshot() };
   vi.mocked(f.ingress.snapshot).mockImplementation(async () => ({ ...snapshot, items: (async function* () {
     yield { kind: 'tool_history' as const, history };
   })() }));
@@ -70,8 +69,47 @@ it.each(['tui', 'slack'] as const)('exposes tool history through live output and
   const output = { kind: 'tool_history' as const, history };
   const version = { revision: 3, stateSequence: 6, operationId: history.operationId };
   await f.port.deliver(f.selected.conversationId, output, version);
-  if (port === 'tui') expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
-  else expect(delivery.deliver).not.toHaveBeenCalled();
+  const update = { kind: 'tool_history_update' as const, update: { operationId: history.operationId, generation: history.generation,
+    previousSequence: 0, sequence: history.history.sequence, entries: history.history.entries } };
+  await f.port.deliver(f.selected.conversationId, update, { ...version, stateSequence: 7 });
+  if (port === 'tui') {
+    expect(delivery.deliver.mock.calls).toEqual([[f.selected.conversationId, output, version],
+      [f.selected.conversationId, update, { ...version, stateSequence: 7 }]]);
+  } else expect(delivery.deliver).not.toHaveBeenCalled();
+  f.port.close();
+});
+
+it('sends tool history on open and on a requested read but not on periodic refreshes, without removing it from the client', async () => {
+  const f = await fixture(); f.opened.read.cancel();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  const source = new ToolActivityHistory();
+  const toolActivity = { callId: 'call', operationId: snapshot.operationId!, generation: snapshot.generation! };
+  const states = Array.from({ length: 6 }, (_, index) => {
+    source.apply({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: `${index}\n` }, toolActivity });
+    return { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false, history: source.snapshot() };
+  });
+  let current = 0;
+  vi.mocked(f.ingress.snapshot).mockImplementation(async () => {
+    const history = states[current]!;
+    return { ...snapshot, items: (async function* () { yield { kind: 'tool_history' as const, history }; })() };
+  });
+  const delivery = { deliver: vi.fn(async () => ({ kind: 'delivered' as const })) };
+  const read = async (value: Awaited<ReturnType<typeof f.port.snapshot>>) => {
+    const items = [];
+    for await (const item of value.items) items.push(item);
+    value.complete();
+    return items.filter((item) => item.kind === 'tool_history' || item.kind === 'remove' && item.key === 'tool_history');
+  };
+  const opened = await f.port.open(f.selected, delivery);
+  expect(await read(opened.read)).toEqual([{ kind: 'tool_history', history: states[0] }]);
+  for (const index of [1, 2, 3]) {
+    current = index;
+    expect(await read(await f.port.snapshot(opened.attachmentId))).toEqual([]);
+  }
+  current = 4;
+  expect(await read(await f.port.snapshot(opened.attachmentId, { toolHistory: true }))).toEqual([{ kind: 'tool_history', history: states[4] }]);
+  current = 5;
+  expect(await read(await f.port.snapshot(opened.attachmentId))).toEqual([]);
   f.port.close();
 });
 

@@ -3,7 +3,7 @@ import { accepted, deferred, harness, input, MemoryEventStore, ControlledTurnRun
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
 import type { TurnIdentity, TurnResult, TurnOutcome } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
-import { MAX_PROCESS_PENDING_REQUESTS, parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
+import { MAX_PROCESS_PENDING_PROGRESS, parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import type { AcceptedEvent, TurnEvent } from '../core/daemon/events.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
@@ -96,29 +96,102 @@ describe('event driven daemon dispatcher', () => {
       expect(h.failures).not.toHaveBeenCalled();
     } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
   });
-  it('bounds ordered progress while delivery is blocked and releases capacity after delivery', async () => {
+  it('thins out ordered text while delivery is blocked without failing the turn and resumes after delivery', async () => {
     const h = await harness();
     await h.dispatcher.accept(input('bounded-text'));
     const running = await h.runner.started(1);
     const entered = deferred<void>();
     const release = deferred<void>();
-    h.owner.progress = vi.fn(async () => { entered.resolve(); await release.promise; });
-    const post = (message: string) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn,
-      message: { kind: 'turn_text', message } });
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      entered.resolve(); await release.promise; observed.push(message);
+    });
+    const text = (message: string): ConversationProgress => ({ kind: 'turn_text', message });
+    const post = (message: string) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn, message: text(message) });
     const first = post('first');
     await entered.promise;
-    const pending = [first, ...Array.from({ length: MAX_PROCESS_PENDING_REQUESTS - 1 }, (_, i) => post(String(i)))];
+    const kept = Array.from({ length: MAX_PROCESS_PENDING_PROGRESS - 1 }, (_, i) => String(i));
+    const pending = [first, ...kept.map(post)];
     try {
-      await expect(post('overflow')).rejects.toThrow('Turn progress capacity exceeded');
+      await expect(post('overflow')).resolves.toBeUndefined();
       expect(h.owner.progress).toHaveBeenCalledTimes(1);
       release.resolve();
       await Promise.all(pending);
-      expect(h.owner.progress).toHaveBeenCalledTimes(MAX_PROCESS_PENDING_REQUESTS);
       await post('after drain');
-      expect(h.owner.progress).toHaveBeenCalledTimes(MAX_PROCESS_PENDING_REQUESTS + 1);
+      expect(observed).toEqual(['first', ...kept, 'after drain'].map(text));
       await h.runner.finish(running);
+      expect(h.applied.get(running.turn.operationId)?.outcome.kind).toBe('completed');
       expect(h.failures).not.toHaveBeenCalled();
     } finally { release.resolve(); await Promise.all(pending); await h.dispatcher.control({ kind: 'stop' }); }
+  });
+  it('thins out overflowing tool output and text but accepts every tool start and result while delivery is blocked', async () => {
+    const h = await harness();
+    await h.dispatcher.accept(input('bounded-tools'));
+    const running = await h.runner.started(1);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      observed.push(message);
+    });
+    const toolActivity = { callId: 'call', operationId: running.turn.operationId, generation: running.turn.generation };
+    const post = (message: ConversationProgress) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn, message });
+    const start: ConversationProgress = { kind: 'tool_event', eventId: 'start', event: {
+      type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: {} }, toolActivity } };
+    const first = post(start);
+    await entered.promise;
+    const outputs: ConversationProgress[] = Array.from({ length: MAX_PROCESS_PENDING_PROGRESS + 1 }, (_, index) => ({ kind: 'tool_event', eventId: `output-${index}`,
+      event: { type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: String(index) }, toolActivity } }));
+    const result: ConversationProgress = { kind: 'tool_event', eventId: 'result', event: {
+      type: 'tool_result', data: { id: 'tool', content: 'done', isError: false }, toolActivity } };
+    const posted = [first, ...outputs.map(post), post(result), post({ kind: 'turn_text', message: 'overflow' })];
+    try {
+      release.resolve();
+      await Promise.all(posted);
+      const after: ConversationProgress = { kind: 'turn_text', message: 'after drain' };
+      await post(after);
+      expect(observed).toEqual([start, ...outputs.slice(0, MAX_PROCESS_PENDING_PROGRESS), result, after]);
+      await h.runner.finish(running);
+      expect(h.applied.get(running.turn.operationId)?.outcome.kind).toBe('completed');
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
+  });
+
+  it('drops every later output chunk of a tool call after one of its chunks was dropped, until the tool result', async () => {
+    const h = await harness();
+    await h.dispatcher.accept(input('dropped-tool-output'));
+    const running = await h.runner.started(1);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      observed.push(message);
+    });
+    const toolActivity = { callId: 'call', operationId: running.turn.operationId, generation: running.turn.generation };
+    const post = (message: ConversationProgress) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn, message });
+    const output = (eventId: string, id: string, text: string): ConversationProgress => ({ kind: 'tool_event', eventId,
+      event: { type: 'tool_output', data: { id, tool: 'Bash', output: text }, toolActivity } });
+    const start: ConversationProgress = { kind: 'tool_event', eventId: 'start', event: {
+      type: 'tool_use', data: { id: 'deploy', tool: 'Bash', input: { api_key: 'live-secret-0123456789abcdef' } }, toolActivity } };
+    const first = post(start);
+    await entered.promise;
+    const filler = Array.from({ length: MAX_PROCESS_PENDING_PROGRESS }, (_, index) => output(`filler-${index}`, 'other', `${index}\n`));
+    const posted = [first, ...filler.map(post), post(output('head', 'deploy', 'using live-secr'))];
+    try {
+      release.resolve();
+      await Promise.all(posted);
+      const other = output('other-after', 'other', 'still streaming\n');
+      const result: ConversationProgress = { kind: 'tool_event', eventId: 'result', event: {
+        type: 'tool_result', data: { id: 'deploy', content: 'using live-secret-0123456789abcdef now\n', isError: false }, toolActivity } };
+      const next = output('next', 'deploy', 'next run\n');
+      for (const message of [output('tail', 'deploy', 'et-0123456789abcdef now\n'), other, result, next]) await post(message);
+      expect(observed).toEqual([start, ...filler, other, result, next]);
+      await h.runner.finish(running);
+      expect(h.applied.get(running.turn.operationId)?.outcome.kind).toBe('completed');
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
   });
 
   it.each([false, true])('orders pending text deliveries and cancels them when interrupted=%s', async (interrupted) => {

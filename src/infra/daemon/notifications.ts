@@ -3,7 +3,7 @@ import { opendir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { FileAsyncLock } from './lock.js';
-import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { ensurePrivateDirectory, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
 
 const notification = z.object({ id: z.string().min(1).max(128), message: z.string().min(1), turnOperationId: z.string().min(1).optional(),
   subject: z.object({ key: z.string().min(1), state: z.string().min(1) }).strict().optional() }).strict();
@@ -21,8 +21,8 @@ export class DaemonNotifications {
     return this.lock.exclusive(join(this.directory, '.lock'), async () => {
       signal.throwIfAborted();
       const path = join(this.directory, `${key(value.id)}.json`);
-      const prior = await readPrivateFile(path, 1024 * 1024)
-        ?? (z.uuid().safeParse(value.id).success ? await readPrivateFile(join(this.directory, `${value.id}.json`), 1024 * 1024) : undefined);
+      const prior = await readEntirePrivateFile(path)
+        ?? (z.uuid().safeParse(value.id).success ? await readEntirePrivateFile(join(this.directory, `${value.id}.json`)) : undefined);
       if (prior !== undefined) {
         if (prior.toString('utf8') !== JSON.stringify(value)) throw new Error('Notification ID reused with different content');
         return false;
@@ -41,7 +41,7 @@ export class DaemonNotifications {
     await ensurePrivateDirectory(this.directory);
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const content = await readPrivateFile(join(this.directory, entry.name), 1024 * 1024);
+      const content = await readEntirePrivateFile(join(this.directory, entry.name));
       if (content === undefined) throw new Error('Notification disappeared during read');
       const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
       if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');

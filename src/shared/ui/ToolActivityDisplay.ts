@@ -1,11 +1,13 @@
 import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
-import { classifyToolResult } from '../tool-activity/result.js';
+import { classifyToolResult, StreamingToolOutput } from '../tool-activity/result.js';
 import { normalizeToolResultText, toolResultSensitiveValues } from '../tool-activity/sanitize.js';
-import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, groupToolActivities, projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
-import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection } from '../tool-activity/types.js';
+import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, formatToolActivityTime, groupToolActivities,
+  projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
+import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection,
+  ToolActivityTurnUpdate } from '../tool-activity/types.js';
 import { truncateUtf8 } from '../utils/utf8.js';
-import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import { createSensitiveTextStreamRedactor, writeSensitiveTextInChunks, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
 import { truncate } from './LogManager.js';
 
 interface StreamOutputState {
@@ -17,7 +19,19 @@ interface StreamOutputState {
   omitted: boolean;
   omissionPrinted: boolean;
   headerTool: string;
-  consumed: number;
+  output: StreamingToolOutput;
+}
+
+/** 実行中の entry の表示用テキスト。追記分だけを整形とマスクにかけて足していく。 */
+interface ReadableOutput {
+  output: StreamingToolOutput;
+  redactor: SensitiveTextStreamRedactor;
+  text: string;
+}
+
+/** 追記分を端末表現に正規化し、同じ表現にした秘密値で照合して redactor へ分けて渡す。 */
+function writeToolOutput(redactor: SensitiveTextStreamRedactor, appended: string, entry: ToolActivityEntry): string {
+  return writeSensitiveTextInChunks(redactor, normalizeToolResultText(appended), toolResultSensitiveValues(entry.input));
 }
 
 export function resolveToolActivityDisplayMode(
@@ -32,7 +46,7 @@ export class ToolActivityDisplay {
   private readonly streams = new Map<string, StreamOutputState>();
   private readonly completed = new Map<string, ToolActivityEntry['status']>();
   private readonly displayedResults = new Map<string, { text: string; bytes: number; lines: number; truncated: boolean }>();
-  private readonly readableStreams = new Map<string, { redactor: SensitiveTextStreamRedactor; consumed: number; text: string }>();
+  private readonly readableStreams = new Map<string, ReadableOutput>();
 
   constructor(
     readonly mode: ToolActivityDisplayMode,
@@ -44,18 +58,7 @@ export class ToolActivityDisplay {
   handle(event: StreamEvent): ToolActivityEntry[] {
     const entries = this.history.apply(event);
     if (event.type === 'tool_output') {
-      for (const entry of entries) {
-        const result = classifyToolResult(entry.output);
-        if (result.kind !== 'text') continue;
-        let stream = this.readableStreams.get(entry.key);
-        if (stream === undefined) {
-          stream = { redactor: createSensitiveTextStreamRedactor(), consumed: 0, text: '' };
-          this.readableStreams.set(entry.key, stream);
-        }
-        const text = normalizeToolResultText(result.text);
-        stream.text += stream.redactor.write(text.slice(stream.consumed), toolResultSensitiveValues(entry.input));
-        stream.consumed = text.length;
-      }
+      for (const entry of entries) this.readOutput(entry);
     }
     if (event.type === 'tool_result') {
       for (const entry of entries) this.readableStreams.delete(entry.key);
@@ -65,7 +68,7 @@ export class ToolActivityDisplay {
       if (event.type === 'tool_use') {
         if (this.mode === 'expanded' || (this.showCompactStarts && !this.quiet)) {
           const value = projectToolActivity(entry, this.mode);
-          this.writeLine(`[tool] ${value.tool} ${value.action} ${value.input} [running @${entry.startedAt}]`);
+          this.writeLine(`[tool] ${value.tool} ${value.action} ${value.input} [running @${formatToolActivityTime(entry.startedAt!)}]`);
         }
       } else if (event.type === 'tool_output') {
         if (this.mode === 'compact' && !this.quiet) this.stream(entry, event.data.tool);
@@ -83,17 +86,35 @@ export class ToolActivityDisplay {
     this.displayedResults.clear();
     this.readableStreams.clear();
     for (const entry of this.history.entries()) {
-      if (entry.status !== 'running') {
-        this.completed.set(entry.key, entry.status);
+      if (entry.status === 'running') this.readOutput(entry);
+      else this.completed.set(entry.key, entry.status);
+    }
+  }
+
+  /** 受け取った差分を、履歴全体を作り直さずに適用する。起点が一致しなければ何もせず false を返す。 */
+  applyUpdate(update: ToolActivityTurnUpdate): boolean {
+    const entries = this.history.applyUpdate(update);
+    if (entries === undefined) return false;
+    for (const entry of entries) {
+      if (entry.status === 'running') {
+        this.readOutput(entry);
         continue;
       }
-      const result = classifyToolResult(entry.output);
-      if (result.kind !== 'text') continue;
-      const redactor = createSensitiveTextStreamRedactor();
-      const normalized = normalizeToolResultText(result.text);
-      const text = redactor.write(normalized, toolResultSensitiveValues(entry.input));
-      this.readableStreams.set(entry.key, { redactor, consumed: normalized.length, text });
+      this.readableStreams.delete(entry.key);
+      this.completed.set(entry.key, entry.status);
     }
+    return true;
+  }
+
+  private readOutput(entry: ToolActivityEntry): void {
+    let stream = this.readableStreams.get(entry.key);
+    if (stream === undefined) {
+      stream = { output: new StreamingToolOutput(), redactor: createSensitiveTextStreamRedactor(), text: '' };
+      this.readableStreams.set(entry.key, stream);
+    }
+    const appended = stream.output.read(entry.output);
+    if (appended === '') return;
+    stream.text += writeToolOutput(stream.redactor, appended, entry);
   }
 
   groups(): ToolActivityGroup[] {
@@ -112,10 +133,8 @@ export class ToolActivityDisplay {
     const results = new Map<string, string>();
     for (const entry of entries) {
       if (entry.status !== 'running') continue;
-      // 構造化出力は、最終結果だけが持つ秘密値の情報が揃うまで公開しない。
-      const text = classifyToolResult(entry.output).kind === 'structured' ? ''
-        : this.readableStreams.get(entry.key)?.text ?? '';
-      results.set(entry.key, text);
+      // 構造化出力は、最終結果だけが持つ秘密値の情報が揃うまで公開しないので、表示用のテキストが空のまま残る。
+      results.set(entry.key, this.readableStreams.get(entry.key)?.text ?? '');
     }
     return results;
   }
@@ -126,7 +145,7 @@ export class ToolActivityDisplay {
       if (entry.status !== 'running') continue;
       if (this.mode === 'expanded' && entry.output !== '') {
         const source = toolResultSensitiveValues(entry.input);
-        const isReadableText = classifyToolResult(entry.output).kind === 'text';
+        const isReadableText = classifyToolResult(entry.output, false).kind === 'text';
         const hasSafeSource = source.exhausted || source.values.size > 0;
         const stream = this.readableStreams.get(entry.key);
         if (isReadableText && hasSafeSource && stream !== undefined) {
@@ -147,7 +166,7 @@ export class ToolActivityDisplay {
       redactor: createSensitiveTextStreamRedactor(), pending: '', printed: '',
       printedLines: 0, printedBytes: 0,
       omitted: false, omissionPrinted: false,
-      headerTool: projectToolActivity({ ...entry, tool: tool || entry.tool }).tool, consumed: 0,
+      headerTool: projectToolActivity({ ...entry, tool: tool || entry.tool }).tool, output: new StreamingToolOutput(),
     };
   }
 
@@ -157,11 +176,10 @@ export class ToolActivityDisplay {
       state = this.newStream(entry, tool);
       this.streams.set(entry.key, state);
     }
-    const result = classifyToolResult(entry.output);
-    if (result.kind !== 'text' || state.omitted) return;
-    const text = normalizeToolResultText(result.text);
-    state.pending += state.redactor.write(text.slice(state.consumed), toolResultSensitiveValues(entry.input));
-    state.consumed = text.length;
+    if (state.omitted) return;
+    const appended = state.output.read(entry.output);
+    if (appended === '') return;
+    state.pending += writeToolOutput(state.redactor, appended, entry);
     this.drain(state, false);
   }
 
@@ -193,7 +211,7 @@ export class ToolActivityDisplay {
       this.writeStreamOmission(state);
       return;
     }
-    const result = classifyToolResult(entry.output);
+    const result = classifyToolResult(entry.output, entry.status !== 'running');
     if (result.kind === 'pending') return;
     if (result.kind === 'structured') {
       const value = projectToolActivity(entry);
@@ -208,10 +226,12 @@ export class ToolActivityDisplay {
       } else state.printed = value.result.text;
       return;
     }
+    // 実行中に保留した出力（`[` で始まるテキストなど）は、完了時にここで初めて redactor へ渡る。
+    const written = writeToolOutput(state.redactor, state.output.readRest(result.text), entry);
     const source = toolResultSensitiveValues(entry.input);
-    state.pending += entry.status === 'running'
+    state.pending += written + (entry.status === 'running'
       ? state.redactor.flushAvailable(source)
-      : state.redactor.flush(source);
+      : state.redactor.flush(source));
     this.drain(state, true);
   }
 
@@ -222,19 +242,18 @@ export class ToolActivityDisplay {
     const value = projectToolActivity(entry, this.mode === 'expanded' ? 'expanded' : 'compact');
     const failed = value.status === 'failure';
     if (this.mode === 'compact' && this.quiet && !failed) return;
-    const name = this.mode === 'compact' && this.quiet ? 'Tool' : value.tool;
     const symbol = failed ? '✗' : '✓';
     const suppressed = entry.tool === 'AskUserQuestion' && !failed;
     if (this.mode === 'expanded') {
       const duration = value.durationMs === undefined ? '' : ` (${value.durationMs} ms)`;
-      this.writeLine(`  ${symbol} ${name} ${value.action} ${value.input}${duration} [${value.status}]`);
+      this.writeLine(`  ${symbol} ${value.tool} ${value.action} ${value.input}${duration} [${value.status}]`);
       if (!suppressed) this.writeExpandedResult(value);
     } else {
       const state = this.streams.get(entry.key);
       const alreadyPrinted = state?.printed.replace(/\n$/u, '') === value.result.text;
       const firstLine = value.result.text.split('\n', 1)[0] ?? '';
       const preview = suppressed || alreadyPrinted ? '' : truncate(firstLine || (failed ? 'Unknown error' : ''), failed ? 70 : 60);
-      this.writeLine(`  ${symbol} ${name}${failed ? ':' : ''}${preview === '' ? '' : ` ${preview}`}`);
+      this.writeLine(`  ${symbol} ${value.tool}${failed ? ':' : ''}${preview === '' ? '' : ` ${preview}`}`);
       if (value.result.truncated || state?.omitted) {
         if (state === undefined) this.writeLine('  [output truncated; more available]');
         else this.writeStreamOmission(state);

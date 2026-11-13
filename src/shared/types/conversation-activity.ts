@@ -28,3 +28,8 @@ export interface ConversationToolEvent {
   event: ToolActivityEvent;
 }
 export type ConversationProgress = string | ConversationActivity | ConversationText | ConversationToolEvent;
+
+/** ツールの開始と完了は履歴の復元に必要なので、配送が詰まっても間引かない。それ以外の途中表示は間引いてよい。 */
+export function isToolHistoryProgress(message: ConversationProgress): boolean {
+  return typeof message !== 'string' && message.kind === 'tool_event' && message.event.type !== 'tool_output';
+}

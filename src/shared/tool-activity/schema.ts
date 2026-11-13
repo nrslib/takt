@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import type { ToolActivityEvent, ToolActivityHistoryState, ToolActivityTurnState } from './types.js';
+import type { ToolActivityEntry, ToolActivityEvent, ToolActivityHistoryState, ToolActivityTurnState, ToolActivityTurnUpdate } from './types.js';
 
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const id = z.string().min(1).max(128);
@@ -15,21 +15,31 @@ export const ToolActivityEventSchema = z.discriminatedUnion('type', [
     toolActivity: context.optional() }).strict(),
 ]) satisfies z.ZodType<ToolActivityEvent>;
 
-const entry = z.object({ key: z.string().regex(/^[1-9]\d*$/), context: context.optional(), toolId: toolId.optional(),
-  tool: z.string(), input, output: z.string(), outputTruncated: z.boolean().optional(), result: z.string().optional(),
-  resultTruncated: z.boolean().optional(),
+const key = z.string().regex(/^[1-9]\d*$/);
+
+export const ToolActivityEntrySchema = z.object({ key, context: context.optional(), toolId: toolId.optional(),
+  tool: z.string(), input, output: z.string(), result: z.string().optional(),
   status: z.enum(['running', 'success', 'failure']), association: z.enum(['matched', 'unmatched']),
   startedAt: z.number().optional(), completedAt: z.number().optional(),
   startSequence: sequence.optional(), completionSequence: sequence.optional(),
 }).strict();
 
-export const ToolActivityHistoryStateSchema = z.object({ entries: z.array(entry), sequence }).strict()
+export const ToolActivityHistoryStateSchema = z.object({ entries: z.array(ToolActivityEntrySchema), sequence }).strict()
   .refine((state) => new Set(state.entries.map((item) => item.key)).size === state.entries.length
     && state.entries.every((item) => (item.startSequence ?? 0) <= state.sequence
       && (item.completionSequence ?? 0) <= state.sequence)) satisfies z.ZodType<ToolActivityHistoryState>;
 
-export const ToolActivityTurnStateSchema = z.object({ operationId: id, generation: sequence.refine((value) => value > 0),
-  finished: z.boolean(), eventIds: z.array(id), history: ToolActivityHistoryStateSchema }).strict()
-  .refine((state) => new Set(state.eventIds).size === state.eventIds.length
-    && state.history.entries.every((item) => item.context?.operationId === state.operationId
-      && item.context.generation === state.generation && (!state.finished || item.status !== 'running'))) satisfies z.ZodType<ToolActivityTurnState>;
+const generation = sequence.refine((value) => value > 0);
+const belongsToTurn = (entries: readonly ToolActivityEntry[], turn: { operationId: string; generation: number }): boolean =>
+  entries.every((item) => item.context?.operationId === turn.operationId && item.context.generation === turn.generation);
+
+export const ToolActivityTurnStateSchema = z.object({ operationId: id, generation,
+  finished: z.boolean(), history: ToolActivityHistoryStateSchema }).strict()
+  .refine((state) => belongsToTurn(state.history.entries, state)
+    && (!state.finished || state.history.entries.every((item) => item.status !== 'running'))) satisfies z.ZodType<ToolActivityTurnState>;
+
+export const ToolActivityTurnUpdateSchema = z.object({ operationId: id, generation, previousSequence: sequence, sequence,
+  entries: z.array(ToolActivityEntrySchema), output: z.object({ key, text: z.string() }).strict().optional() }).strict()
+  .refine((update) => update.previousSequence < update.sequence && belongsToTurn(update.entries, update)
+    && new Set(update.entries.map((item) => item.key)).size === update.entries.length
+    && update.entries.every((item) => (item.startSequence ?? 0) <= update.sequence && (item.completionSequence ?? 0) <= update.sequence)) satisfies z.ZodType<ToolActivityTurnUpdate>;

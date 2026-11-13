@@ -9,6 +9,7 @@ import {
   sanitizeSensitiveValue,
   sanitizeSensitiveValueWithKnownValues,
   sanitizeSensitiveText,
+  writeSensitiveTextInChunks,
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
@@ -486,6 +487,27 @@ describe('sensitiveText', () => {
 
     expect(output).toBe('[REDACTED]');
     expect(output).not.toContain(secret);
+  });
+
+  it('emits output longer than 10,000 characters with a known sensitive value instead of only the redaction marker', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const source = { api_key: 'known-secret-value' };
+    const lines = Array.from({ length: 1500 }, (_, index) => `line-${index}\n`).join('');
+    const text = `using known-secret-value\n${lines}`;
+    expect(text.length).toBeGreaterThan(10_000);
+
+    const output = writeSensitiveTextInChunks(redactor, text, source) + redactor.flush(source);
+
+    expect(output).toBe(`using [REDACTED]\n${lines}`);
+  });
+
+  it('still fails closed for an oversized pending credential written in chunks', () => {
+    const secret = `oversized-${'x'.repeat(10_050)}`;
+    const redactor = createSensitiveTextStreamRedactor();
+
+    const output = writeSensitiveTextInChunks(redactor, `Authorization: Bearer ${secret}`, {}) + redactor.flush({});
+
+    expect(output).toBe('[REDACTED]');
   });
 
   it.each([

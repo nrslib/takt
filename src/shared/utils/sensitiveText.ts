@@ -13,5 +13,5 @@ export {
   sanitizeSensitiveValueWithKnownValues,
 } from './sensitive-value.js';
 export type { SensitiveBudgetExhaustReason } from './sensitive-value.js';
-export { createSensitiveTextStreamRedactor } from './sensitive-stream.js';
+export { createSensitiveTextStreamRedactor, writeSensitiveTextInChunks } from './sensitive-stream.js';
 export type { SensitiveTextStreamRedactor } from './sensitive-stream.js';

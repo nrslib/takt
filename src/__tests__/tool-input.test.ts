@@ -58,10 +58,10 @@ describe('tool input summaries', () => {
   });
 
   it.each([
-    { api_key: 'test-only-key' },
-    { private_blob: { text: 'unselected content' } },
-    { private_blob: ['unselected content'] },
-  ])('should not display arbitrary unknown tool input', (input) => {
-    expect(formatToolInput('Custom', input)).toBe('');
+    { input: { url: 'https://example.com/page', prompt: 'summarize' }, expected: 'https://example.com/page' },
+    { input: { api_key: 'test-only-key' }, expected: '[REDACTED]' },
+    { input: { items: ['first item'] }, expected: 'first item' },
+  ])('should show the first input value of an unknown tool without a summary field: $expected', ({ input, expected }) => {
+    expect(formatToolInput('Custom', input)).toBe(expected);
   });
 });

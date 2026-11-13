@@ -127,8 +127,9 @@ describe('tool activity view state', () => {
       if (!page.hasMore) break;
       state = moveToolActivityView(state, page, 'next');
     }
-    expect(retained.filter((range) => range.key === JSON.stringify(['a', 'time'])).map((range) => range.text))
-      .toEqual(['success @1794440000000 → @1794440000250 (250 ms) completion #2']);
+    const timing = retained.filter((range) => range.key === JSON.stringify(['a', 'time'])).map((range) => range.text);
+    expect(timing).toHaveLength(1);
+    expect(timing[0]).toMatch(/^success @\d{2}:\d{2}:\d{2} → @\d{2}:\d{2}:\d{2} \(250 ms\) completion #2$/u);
   });
   it.each(['group', 'groupOmission', 'omission'] as const)('separates display omission from the source of %s rows', (section) => {
     const { reader, groups } = fixture('ready');
@@ -211,6 +212,13 @@ describe('tool activity view state', () => {
       { key: 'tool/result', offset: 5, text: ' again', omitted: false },
       { key: 'other/result', offset: 0, text: 'separate', omitted: false },
     ]);
+  });
+  it('keeps the incoming text when a retained range ends at the same position with different text', () => {
+    const previous = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
+    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: 'error', omitted: false }]))
+      .toEqual([{ key: 'tool/result', offset: 0, text: 'error', omitted: false }]);
+    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 2, text: 'set', omitted: false }]))
+      .toEqual([{ key: 'tool/result', offset: 0, text: 'reset', omitted: false }]);
   });
   it('retains updated text when a committed range has the same position and length', () => {
     const committed = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
@@ -309,7 +317,8 @@ describe('tool activity view state', () => {
     const { reader, groups } = fixture('one\ntwo\nthree\nfour');
     const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
     expect(page.rows).toContain('✓ Bash Ran printf ready');
-    expect(page.rows).toContain('success @1000 → @1250 (250 ms) completion #2');
+    expect(page.rows.some((row) => /^success @\d{2}:\d{2}:\d{2} → @\d{2}:\d{2}:\d{2} \(250 ms\) completion #2$/u.test(row))).toBe(true);
+    expect(page.rows.join('\n')).not.toContain('@1000');
     expect(page.rows.slice(-4)).toEqual(['one', 'two', 'three', 'more']);
     expect(reader.detail).not.toHaveBeenCalled();
   });

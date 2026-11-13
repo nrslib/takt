@@ -16,6 +16,7 @@ import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { ToolActivityView } from './ToolActivityView.js';
 import { createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from './toolActivityViewState.js';
+import { useToolActivityTranscript } from './useToolActivityTranscript.js';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
@@ -447,6 +448,10 @@ export function ConversationView({
     transcriptRef.current = next;
     setTranscriptView(next);
   }, []);
+  const appendToolTranscript = useCallback((content: string) => {
+    appendTranscript(transcriptEntry('system', content));
+  }, [appendTranscript]);
+  const commitToolTranscript = useToolActivityTranscript(toolDisplay, toolPage.transcript, appendToolTranscript);
 
   const trackPendingWork = useCallback((work: PendingWork) => {
     pendingRef.current.add(work);
@@ -556,6 +561,7 @@ export function ConversationView({
    * would take that half-written line away from them.
    */
   const startSubmission = useCallback((text: string) => {
+    commitToolTranscript();
     // The seeded auto-submit carries no note of its own; its user line is already
     // in the initial transcript, so an empty row would just be noise.
     if (text !== '') {
@@ -578,7 +584,7 @@ export function ConversationView({
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
     trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId, display) });
-  }, [appendTranscript, runSubmission, submitMode, trackPendingWork]);
+  }, [appendTranscript, commitToolTranscript, runSubmission, submitMode, trackPendingWork]);
 
   /**
    * Esc while a call is running. The call is aborted, and whatever was typed

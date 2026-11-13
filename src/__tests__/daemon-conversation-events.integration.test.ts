@@ -1106,12 +1106,13 @@ it('settles interruption after a save commits before its reply reaches the child
     } }),
     transport: { async send(message) {
       if (message.kind === 'daemon_request') {
-        const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
-        expect(reply).toMatchObject({ kind: 'state_saved', version: 1 });
-        committed.resolve();
-        await releaseReply.promise;
-        await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
-        replied.resolve();
+        // 書き込みの完了と返信の到着は別に起きる。返信だけを遅らせる。
+        void f.dispatcher.request(message.turn, message.request, new AbortController().signal).then(async (reply) => {
+          expect(reply).toMatchObject({ kind: 'state_saved', version: 1 });
+          committed.resolve();
+          await releaseReply.promise;
+          await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
+        }).then(replied.resolve, replied.reject);
       } else if (message.kind === 'turn_finished') {
         expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 0 } });
         await f.runner.finish(active, message.outcome);
