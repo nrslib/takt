@@ -267,6 +267,7 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
+      if (target.remote_assignment !== undefined) throw new Error('Remote task retry and requeue are not supported');
       const updated = buildRetryTaskRecord(
         target,
         'running',
@@ -309,6 +310,7 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
+      if (target.remote_assignment !== undefined) throw new Error('Remote task retry and requeue are not supported');
       if (options.freshStart) {
         assertFreshCloneRetryCandidate(target);
         if (options.resumePoint || options.sourceRunSlug) {

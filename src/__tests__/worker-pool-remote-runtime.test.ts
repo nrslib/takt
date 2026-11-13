@@ -64,7 +64,8 @@ function fixture() {
     }
     if (request.kind === 'renew') record.assignment.leaseExpiresAt = request.leaseExpiresAt;
     else if (request.kind === 'fail') { record.status = 'failed'; record.failureReason = request.reason; }
-    else record.status = request.success ? 'completed' : 'failed';
+    else if (request.kind === 'finish') record.status = request.success ? 'completed' : 'failed';
+    else throw new Error('Unexpected execution request in scheduler fixture');
     return { kind: 'updated', record: structuredClone(record) };
   });
   const pool = {

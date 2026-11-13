@@ -118,6 +118,9 @@ export function prepareFailedTaskRetry(
   task: TaskListItem,
   projectDir: string,
 ): FailedTaskRetryPreparation {
+  if (task.remoteAssignment !== undefined) {
+    throw new Error('Remote task retry and requeue are not supported');
+  }
   if (task.kind !== 'failed') {
     throw new Error(`Failed task retry action requires failed task. received: ${task.kind}`);
   }

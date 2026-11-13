@@ -1,25 +1,33 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { RemoteAssignmentSchema, sameExecution, type RemoteProjectRequest, type RemoteProjectReply,
   type RemoteTaskRecord } from '../../core/worker-pool/remoteProtocol.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import { GoalStore } from '../goals/store.js';
 import { isGoalPaused } from '../goals/state.js';
-import { runGoalGit, resolveGoalBranchSha } from '../goals/git-command.js';
+import { runGoalGit, resolveGoalBranchSha, goalGitText } from '../goals/git-command.js';
 import { saveManagerEvent } from '../goals/events.js';
 import { TaskStore } from './store.js';
 import type { TaskRecord } from './schema.js';
 import { resolveTaskContent } from './mapper.js';
 import { buildTerminalTaskRecord } from './taskRecordMutations.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { RemoteExecutionStore } from './remoteExecutionStore.js';
+import { RemoteExecutionControls } from './remoteExecutionControls.js';
+import { LiveInterventionFileStore } from '../workflow/live-intervention-store.js';
+import type { RemoteControl } from '../../core/worker-pool/remoteExecutionProtocol.js';
+import type { RemoteArtifacts } from '../../core/worker-pool/remoteExecutionProtocol.js';
+import { REMOTE_CHUNK_BYTES } from '../../core/worker-pool/remoteExecutionProtocol.js';
+import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 function remoteRecord(task: TaskRecord): RemoteTaskRecord | undefined {
-  if (task.remote_assignment === undefined || task.status === 'pending' || task.status === 'exceeded' || task.status === 'pr_failed') return undefined;
+  if (task.remote_assignment === undefined || task.status === 'pending' || task.status === 'exceeded') return undefined;
   return { assignment: task.remote_assignment, status: task.status,
     ...(task.failure === undefined ? {} : { failureReason: task.failure.error }) };
 }
 
 export class RemoteTaskLifecycle {
-  constructor(private readonly cwd: string, private readonly store: TaskStore) {}
+  constructor(private readonly cwd: string, private readonly store: TaskStore,
+    private readonly prepareInput: (task: TaskRecord, executionId: string) => void) {}
 
   async origin(): Promise<string | undefined> {
     const result = await runGoalGit(this.cwd, ['config', '--get', 'remote.origin.url'], 16 * 1024, undefined, [0, 1]);
@@ -40,28 +48,66 @@ export class RemoteTaskLifecycle {
   }
 
   async request(request: RemoteProjectRequest, concurrency: number): Promise<RemoteProjectReply | { kind: 'unreadable'; taskName: string }> {
+    const startedAt = performance.now();
     if (request.kind === 'claim') return this.claim(request, concurrency);
+    if (request.kind === 'execution') return this.execution(request);
+    let received: RemoteArtifacts | undefined;
+    let receiptFailure: string | undefined;
+    if (request.kind === 'finish') {
+      const task = this.store.read().tasks.find((task) => task.name === request.assignment.taskName);
+      if (task?.remote_assignment === undefined || !sameExecution(task.remote_assignment, request.assignment)) return { kind: 'updated', record: null };
+      if (task.status !== 'running') return { kind: 'updated', record: request.artifacts !== undefined
+        && JSON.stringify(task.remote_artifacts) === JSON.stringify(request.artifacts)
+        && task.completion?.success === (request.success && request.prFailed !== true)
+        && task.pr_url === request.prUrl ? remoteRecord(task) ?? null : null };
+      if (task.remote_assignment.leaseExpiresAt <= request.now || request.success && request.artifacts === undefined) return { kind: 'updated', record: null };
+      if (request.artifacts !== undefined) {
+        try {
+          const artifacts = request.artifacts;
+          const store = new RemoteExecutionStore(this.cwd, request.assignment.executionId);
+          const manifest = await store.inputManifest();
+          if (artifacts.runSlug !== manifest.runSlug || artifacts.branch !== task.remote_assignment.branch
+          ) throw new Error('Remote artifacts do not match the saved run and final log sequence');
+          await store.assertFinalSequence(artifacts.finalLogSequence);
+          const fetchedRef = `refs/takt/remote/${request.assignment.executionId}`;
+          await goalGitText(this.cwd, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin',
+            `+${toLocalBranchRef(artifacts.branch)}:${fetchedRef}`], AbortSignal.timeout(30_000));
+          const sha = await goalGitText(this.cwd, ['rev-parse', '--verify', `${fetchedRef}^{commit}`], undefined);
+          if (sha !== artifacts.sha) throw new Error('Remote artifact SHA does not match origin');
+          // Never replace a pre-existing local branch with a different result.
+          const current = await runGoalGit(this.cwd, ['rev-parse', '--verify', '--quiet', toLocalBranchRef(artifacts.branch)], 1024, undefined, [0, 1]);
+          if (current.code === 0 && current.output.toString('utf8').trim() !== sha) throw new Error('Remote result branch already exists with another SHA');
+          if (current.code === 1) await goalGitText(this.cwd, ['update-ref', toLocalBranchRef(artifacts.branch), sha, '0'.repeat(sha.length)], undefined);
+          received = artifacts;
+        } catch (error) { receiptFailure = sanitizeSensitiveText(error instanceof Error ? error.message : String(error)); }
+      }
+    }
     let updated: RemoteTaskRecord | null = null;
     const saved = withGoalExecutionLock(this.cwd, () => this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         const assignment = task.remote_assignment;
         if (task.status !== 'running' || assignment === undefined || !sameExecution(assignment, request.assignment)) return task;
-        if (request.kind !== 'fail' && assignment.leaseExpiresAt <= request.now) return task;
+        if (request.kind !== 'fail' && assignment.leaseExpiresAt <= request.now + performance.now() - startedAt) return task;
         if (request.kind === 'renew') {
           const next = { ...task, remote_assignment: { ...assignment, leaseExpiresAt: request.leaseExpiresAt } };
           updated = remoteRecord(next)!;
           return next;
         }
-        const success = request.kind === 'finish' && request.success;
+        const prFailed = request.kind === 'finish' && request.success && request.prFailed === true && receiptFailure === undefined;
+        const success = request.kind === 'finish' && request.success && !prFailed && receiptFailure === undefined;
         const reason = sanitizeSensitiveText(request.kind === 'fail' ? request.reason
-          : request.reason ?? 'Remote workflow execution failed');
+          : receiptFailure ?? (prFailed ? request.prError ?? 'Failed to create pull request.' : request.reason) ?? 'Remote workflow execution failed');
         const next = buildTerminalTaskRecord(task, {
-          status: success ? 'completed' : 'failed', completed_at: new Date().toISOString(), owner_pid: null,
-          failure: success ? undefined : { error: reason, retryable: false },
-          run_slug: task.run_slug ?? `remote-${assignment.executionId}`,
-          completion: { success, interrupted: request.kind === 'fail', workflowResult: success ? 'completed' : 'error',
+          status: success ? 'completed' : prFailed ? 'pr_failed' : 'failed', completed_at: new Date().toISOString(), owner_pid: null,
+          failure: success ? undefined : prFailed ? { error: `PR creation failed: ${reason}` }
+            : { error: reason, retryable: request.kind === 'finish' && request.retryable === true },
+          ...(request.kind === 'finish' && received !== undefined && request.prUrl !== undefined ? { pr_url: request.prUrl } : {}),
+          run_slug: received?.runSlug ?? task.run_slug ?? `remote-${assignment.executionId}`,
+          ...(received === undefined ? {} : { branch: received.branch, remote_artifacts: received }),
+          completion: { success, interrupted: request.kind === 'fail' || request.interrupted === true,
+            workflowResult: request.kind === 'finish' && receiptFailure === undefined ? request.workflowResult ?? (success ? 'completed' : 'error') : 'error',
             ...(success ? {} : { failureReason: reason }),
-            shaUnavailableReason: 'Remote artifact transfer is not implemented in this stage' },
+            ...(received === undefined ? { shaUnavailableReason: reason } : { branch: received.branch, sha: received.sha }) },
         });
         updated = remoteRecord(next)!;
         return next;
@@ -70,6 +116,10 @@ export class RemoteTaskLifecycle {
     }));
     if (updated !== null && request.kind !== 'renew') {
       const task = saved.tasks.find((task) => task.name === request.assignment.taskName)!;
+      if (task.run_slug !== undefined) {
+        const interventions = new LiveInterventionFileStore(this.cwd, task.run_slug);
+        if (interventions.read().issuedTotal > 0) await interventions.recordTerminal(task.status === 'completed' ? 'completed' : 'failed');
+      }
       if (task.goal_id !== undefined && task.completion !== undefined && task.run_slug !== undefined) {
         saveManagerEvent(this.cwd, { kind: 'completion', goalId: task.goal_id, taskName: task.name,
           runSlug: task.run_slug, result: task.completion });
@@ -78,14 +128,76 @@ export class RemoteTaskLifecycle {
     return { kind: 'updated', record: updated };
   }
 
+  private async execution(request: Extract<RemoteProjectRequest, { kind: 'execution' }>): Promise<RemoteProjectReply> {
+    const task = this.store.read().tasks.find((task) => task.name === request.assignment.taskName);
+    if (task?.status !== 'running' || task.remote_assignment === undefined
+      || !sameExecution(task.remote_assignment, request.assignment) || task.remote_assignment.leaseExpiresAt <= request.now) {
+      throw new Error('Remote execution assignment is no longer valid');
+    }
+    const store = new RemoteExecutionStore(this.cwd, request.assignment.executionId);
+    const command = request.command;
+    if (command.kind === 'input-manifest') return { kind: 'execution', response: { kind: command.kind, manifest: await store.inputManifest() } };
+    if (command.kind === 'input-chunk') return { kind: 'execution', response: { kind: command.kind, data: await store.inputChunk(command.path, command.offset) } };
+    if (command.kind === 'intervention-delivery') {
+      const manifest = await store.inputManifest();
+      const interventions = new LiveInterventionFileStore(this.cwd, manifest.runSlug);
+      const selected = interventions.read().instructions.filter((instruction) => command.instructionIds.includes(instruction.instructionId));
+      if (selected.length !== command.instructionIds.length) throw new Error('Remote delivery references an unknown instruction');
+      if (selected.every((instruction) => instruction.deliveryMode === command.context.mode)) {
+        return { kind: 'execution', response: { kind: command.kind } };
+      }
+      await interventions.commitDelivery({ instructionIds: command.instructionIds, prompt: '', context: command.context });
+      return { kind: 'execution', response: { kind: command.kind } };
+    }
+    if (command.kind === 'controls') {
+      const candidates: Omit<RemoteControl, 'sequence'>[] = [];
+      const manifest = await store.inputManifest();
+      for (const instruction of new LiveInterventionFileStore(this.cwd, manifest.runSlug).read().instructions) {
+        candidates.push({ kind: 'tell', content: instruction.content, instructionId: instruction.instructionId, issuedAt: instruction.issuedAt });
+      }
+      const goal = task.goal_id === undefined ? undefined : new GoalStore(this.cwd).getSync(task.goal_id);
+      if (task.stop_request !== undefined) candidates.push({ kind: 'stop', issuedAt: task.stop_request.requested_at });
+      if (goal?.executionStatus === 'paused' || goal?.executionStatus === 'aborted') {
+        candidates.push({ kind: goal.executionStatus === 'paused' ? 'pause' : 'abort', issuedAt: new Date().toISOString() });
+      }
+      const controls = await new RemoteExecutionControls(store.directory).poll(command.acknowledgedSequence, candidates);
+      withGoalExecutionLock(this.cwd, () => this.store.update((current) => ({ tasks: current.tasks.map((candidate) =>
+        candidate.status === 'running' && candidate.remote_assignment !== undefined && sameExecution(candidate.remote_assignment, request.assignment)
+          ? { ...candidate, remote_assignment: { ...candidate.remote_assignment,
+            controlSequence: Math.max(candidate.remote_assignment.controlSequence, command.acknowledgedSequence) } } : candidate) })));
+      const control = controls[0];
+      if (control?.content !== undefined) {
+        const content = Buffer.from(control.content, 'utf8');
+        if (content.length > REMOTE_CHUNK_BYTES || Buffer.byteLength(JSON.stringify(control), 'utf8') > 128 * 1024) {
+          const offset = command.contentSequence === control.sequence ? command.contentOffset ?? 0 : 0;
+          if (offset > content.length) throw new Error('Remote instruction chunk offset exceeds its content');
+          return { kind: 'execution', response: { kind: command.kind, controls: [{ ...control, content: undefined,
+            contentChunk: { offset, size: content.length, sha256: createHash('sha256').update(content).digest('hex'),
+              data: content.subarray(offset, offset + REMOTE_CHUNK_BYTES).toString('base64') } }] } };
+        }
+      }
+      return { kind: 'execution', response: { kind: command.kind, controls: control === undefined ? [] : [control] } };
+    }
+    const acknowledgedSequence = await store.receiveRecord(command.record);
+    withGoalExecutionLock(this.cwd, () => this.store.update((current) => ({ tasks: current.tasks.map((candidate) =>
+      candidate.status === 'running' && candidate.remote_assignment !== undefined && sameExecution(candidate.remote_assignment, request.assignment)
+        ? { ...candidate, remote_assignment: { ...candidate.remote_assignment, lastAcknowledgedLogSequence: acknowledgedSequence } } : candidate) })));
+    return { kind: 'execution', response: { kind: 'record', acknowledgedSequence } };
+  }
+
   private async claim(request: Extract<RemoteProjectRequest, { kind: 'claim' }>, concurrency: number): Promise<RemoteProjectReply | { kind: 'unreadable'; taskName: string }> {
     const origin = await this.origin();
     if (origin === undefined) return { kind: 'claim', assignment: null };
     const record = this.store.read().tasks.find((task) => task.name === request.taskName);
-    if (record?.goal_id === undefined || record.merge_task === true) return { kind: 'claim', assignment: null };
+    if (record?.goal_id === undefined || record.status !== 'pending' || record.merge_task === true) return { kind: 'claim', assignment: null };
     const goal = new GoalStore(this.cwd).getSync(record.goal_id);
+    if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return { kind: 'claim', assignment: null };
+    try { resolveTaskContent(this.cwd, record); }
+    catch { return { kind: 'unreadable', taskName: request.taskName }; }
     const originalSha = await resolveGoalBranchSha(this.cwd, record.base_branch ?? goal.branch, undefined);
     const executionId = randomUUID();
+    this.prepareInput(record, executionId);
+    await runGoalGit(this.cwd, ['push', 'origin', `${originalSha}:${toLocalBranchRef(record.base_branch ?? goal.branch)}`], 16 * 1024, undefined);
     let unreadable = false;
     const saved = withGoalExecutionLock(this.cwd, () => this.store.update((current) => {
       const task = current.tasks.find((task) => task.name === request.taskName);
@@ -105,7 +217,7 @@ export class RemoteTaskLifecycle {
         ...task, status: 'running', execution_id: executionId, worker_name: request.workerId, waiting_reason: undefined,
         assignment_generation: assignment.assignmentGeneration, remote_assignment: assignment,
         started_at: new Date().toISOString(), completed_at: null, owner_pid: null, owner_start_time: null,
-        run_slug: undefined, completion: undefined, stop_request: undefined,
+        run_slug: `remote-${executionId}`, completion: undefined, stop_request: undefined,
       }) };
     }));
     if (unreadable) return { kind: 'unreadable', taskName: request.taskName };

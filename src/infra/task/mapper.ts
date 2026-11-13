@@ -157,6 +157,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    remoteAssignment: task.remote_assignment,
     executionId: task.execution_id,
     goalId: task.goal_id,
     name: task.name,
@@ -200,6 +201,7 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    remoteArtifacts: task.remote_artifacts,
     remoteAssignment: task.remote_assignment,
     workerName: task.worker_name,
     waitingReason: task.waiting_reason,

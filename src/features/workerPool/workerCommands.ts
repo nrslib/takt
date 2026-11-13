@@ -3,6 +3,7 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { runRemoteWorker } from './remoteWorker.js';
+import { createRemoteTaskExecutor } from './remoteTaskExecutor.js';
 
 export async function addWorker(name: string, concurrency: number): Promise<void> {
   const { token } = await new WorkerRegistry(getGlobalConfigDir()).add(name, concurrency);
@@ -25,6 +26,7 @@ export async function startWorker(url: string, token: string): Promise<void> {
   process.on('SIGTERM', abort); process.on('SIGINT', abort);
   try {
     await runRemoteWorker({ url, token, version: packageVersion, signal: controller.signal,
+      executor: createRemoteTaskExecutor(Object.fromEntries(Object.entries(process.env).filter(([, value]) => !value?.includes(token)))),
       onConnected(identity) { process.stdout.write(`Worker ${sanitizeTerminalText(identity.workerId)} connected\n`); },
     });
   } finally { process.removeListener('SIGTERM', abort); process.removeListener('SIGINT', abort); }

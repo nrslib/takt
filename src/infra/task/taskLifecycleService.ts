@@ -465,10 +465,14 @@ export class TaskLifecycleService {
       if (task.goal_id !== goalId) throw new Error('Task does not belong to this goal');
       if (task.execution_id !== executionId) throw new Error('Task executionId does not match the saved execution');
       if (task.status !== 'running') throw new Error(`Task is not running: ${task.status}`);
-      if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
+      if (task.remote_assignment !== undefined) {
+        if (task.remote_assignment.executionId !== executionId || task.remote_assignment.leaseExpiresAt <= Date.now()) {
+          throw new Error('Remote task execution has ended or its lease has expired');
+        }
+      } else if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
         throw new Error('Task execution has ended: its owner is not alive');
       }
-      if (task.owner_start_time != null) {
+      if (task.remote_assignment === undefined && task.owner_start_time != null && task.owner_pid != null) {
         const ownerIdentity = getTaskProcessIdentity(task.owner_pid);
         if (ownerIdentity === undefined) {
           throw new Error('Cannot verify task execution owner: current owner start time is unavailable');
