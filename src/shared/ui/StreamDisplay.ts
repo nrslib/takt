@@ -6,8 +6,11 @@
  */
 
 import chalk from 'chalk';
+import { randomUUID } from 'node:crypto';
+import { ToolActivityDisplay, resolveToolActivityDisplayMode } from './ToolActivityDisplay.js';
+import type { ToolActivityDisplayMode } from '../tool-activity/types.js';
+import { projectToolActivity } from '../tool-activity/presentation.js';
 import type { StreamEvent, StreamCallback } from '../types/provider.js';
-import { truncate } from './LogManager.js';
 import { formatToolInput } from './toolInput.js';
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 
@@ -27,18 +30,12 @@ export interface ProgressInfo {
 
 /** Stream display manager for real-time Claude output */
 export class StreamDisplay {
-  private lastToolUse: string | null = null;
-  private currentToolInputPreview: string | null = null;
-  private toolOutputBuffer = '';
-  private toolOutputPrinted = false;
+  private activity: ToolActivityDisplay;
   private textBuffer = '';
-  private thinkingBuffer = '';
   private isFirstText = true;
   private isFirstThinking = true;
   private toolSpinner: {
     intervalId: ReturnType<typeof setInterval>;
-    toolName: string;
-    message: string;
   } | null = null;
   private spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   private spinnerFrame = 0;
@@ -47,7 +44,14 @@ export class StreamDisplay {
     private agentName: string,
     private quiet: boolean,
     private progressInfo?: ProgressInfo,
-  ) {}
+    private readonly toolDisplayMode: ToolActivityDisplayMode = resolveToolActivityDisplayMode('terminal', process.stdout.isTTY !== true),
+  ) {
+    this.activity = this.createActivity();
+  }
+
+  private createActivity(): ToolActivityDisplay {
+    return new ToolActivityDisplay(this.toolDisplayMode, this.quiet, (line) => console.log(line), false);
+  }
 
   /**
    * Build progress prefix string for display.
@@ -63,7 +67,7 @@ export class StreamDisplay {
   }
 
   showInit(model: string): void {
-    if (this.quiet) return;
+    if (this.quiet || this.toolDisplayMode === 'silent') return;
     const progress = this.buildProgressPrefix();
     const progressPart = progress ? ` ${progress}` : '';
     console.log(chalk.gray(`[${this.agentName}]${progressPart} Model: ${sanitizeTerminalText(model)}`));
@@ -80,8 +84,6 @@ export class StreamDisplay {
         this.spinnerFrame = (this.spinnerFrame + 1) % this.spinnerFrames.length;
         process.stdout.write(`\r  ${chalk.cyan(frame)} ${message}`);
       }, 80),
-      toolName: tool,
-      message,
     };
   }
 
@@ -95,109 +97,51 @@ export class StreamDisplay {
   }
 
   showToolUse(tool: string, input: Record<string, unknown>): void {
-    if (this.quiet) return;
-    this.flushText();
-    const inputPreview = formatToolInput(tool, input);
-    // Starting a spinner would corrupt the interactive prompt output.
-    if (tool !== 'AskUserQuestion') {
-      this.startToolSpinner(tool, inputPreview);
-    }
-    this.lastToolUse = tool;
-    this.currentToolInputPreview = inputPreview;
-    this.toolOutputBuffer = '';
-    this.toolOutputPrinted = false;
+    this.handleToolEvent({ type: 'tool_use', data: { id: randomUUID(), tool, input } });
   }
 
   showToolOutput(output: string, tool?: string): void {
-    if (this.quiet) return;
-    if (!output) return;
-    this.stopToolSpinner();
-    this.flushThinking();
-    this.flushText();
-
-    if (tool && !this.lastToolUse) {
-      this.lastToolUse = tool;
-    }
-
-    this.toolOutputBuffer += sanitizeTerminalStreamText(output);
-    const lines = this.toolOutputBuffer.split(/\r?\n/);
-    this.toolOutputBuffer = lines.pop() ?? '';
-
-    this.printToolOutputLines(lines, tool);
-
-    if (this.lastToolUse && this.currentToolInputPreview) {
-      this.startToolSpinner(this.lastToolUse, this.currentToolInputPreview);
-    }
+    const running = this.activity.history.entries().filter((entry) => entry.status === 'running');
+    const label = tool ?? (running.length === 1 ? running[0]!.tool : 'Tool');
+    this.handleToolEvent({ type: 'tool_output', data: { tool: label, output } });
   }
 
   showToolResult(content: string, isError: boolean): void {
-    this.stopToolSpinner();
-    const sanitizedContent = sanitizeTerminalStreamText(content);
-
-    if (this.quiet) {
-      if (isError) {
-        const toolName = sanitizeTerminalText(this.lastToolUse || 'Tool');
-        const errorContent = sanitizedContent || 'Unknown error';
-        console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
-      }
-      this.lastToolUse = null;
-      this.currentToolInputPreview = null;
-      this.toolOutputPrinted = false;
-      return;
-    }
-
-    if (this.toolOutputBuffer) {
-      this.printToolOutputLines([this.toolOutputBuffer], this.lastToolUse ?? undefined);
-      this.toolOutputBuffer = '';
-    }
-
-    const toolName = sanitizeTerminalText(this.lastToolUse || 'Tool');
-    if (isError) {
-      const errorContent = sanitizedContent || 'Unknown error';
-      console.log(chalk.red(`  ✗ ${toolName}:`), chalk.red(truncate(errorContent, 70)));
-    } else if (this.lastToolUse === 'AskUserQuestion') {
-      // SDK content preview includes misleading "Error:" text for successful responses.
-      console.log(chalk.green(`  ✓ ${toolName}`));
-    } else if (sanitizedContent && sanitizedContent.length > 0) {
-      const preview = sanitizedContent.split('\n')[0] || sanitizedContent;
-      console.log(chalk.green(`  ✓ ${toolName}`), chalk.gray(truncate(preview, 60)));
-    } else {
-      console.log(chalk.green(`  ✓ ${toolName}`));
-    }
-    this.lastToolUse = null;
-    this.currentToolInputPreview = null;
-    this.toolOutputPrinted = false;
+    this.handleToolEvent({ type: 'tool_result', data: { content, isError } });
   }
 
-  showThinking(thinking: string): void {
-    if (this.quiet) return;
+  private handleToolEvent(event: StreamEvent): void {
+    this.stopToolSpinner();
+    this.flushThinking();
+    this.flushText();
+    const entries = this.activity.handle(event);
+    if (this.quiet || this.toolDisplayMode !== 'compact') return;
+    if (event.type === 'tool_use' || event.type === 'tool_output') {
+      const entry = entries.at(-1);
+      if (entry && entry.tool !== 'AskUserQuestion') {
+        const preview = formatToolInput(entry.tool, entry.input);
+        if (event.type === 'tool_use' || preview !== '') this.startToolSpinner(projectToolActivity(entry).tool, preview);
+      }
+    }
+  }
+
+  showThinking(_thinking: string): void {
+    if (this.quiet || this.toolDisplayMode === 'silent') return;
     this.stopToolSpinner();
     this.flushText();
-
     if (this.isFirstThinking) {
-      console.log();
       const progress = this.buildProgressPrefix();
-      const progressPart = progress ? ` ${progress}` : '';
-      console.log(chalk.magenta(`💭 [${this.agentName}]${progressPart} thinking:`));
+      console.log(chalk.magenta(`[${this.agentName}]${progress ? ` ${progress}` : ''} thinking:`));
       this.isFirstThinking = false;
     }
-    const sanitized = sanitizeTerminalStreamText(thinking);
-    process.stdout.write(chalk.gray.italic(sanitized));
-    this.thinkingBuffer += sanitized;
   }
 
   flushThinking(): void {
-    if (this.thinkingBuffer) {
-      if (!this.thinkingBuffer.endsWith('\n')) {
-        console.log();
-      }
-      this.thinkingBuffer = '';
-      this.isFirstThinking = true;
-    }
+    this.isFirstThinking = true;
   }
 
   showText(text: string): void {
-    if (this.quiet) return;
+    if (this.quiet || this.toolDisplayMode === 'silent') return;
     this.stopToolSpinner();
     this.flushThinking();
 
@@ -227,9 +171,11 @@ export class StreamDisplay {
     this.stopToolSpinner();
     this.flushThinking();
     this.flushText();
+    this.activity.flush();
   }
 
   showResult(success: boolean, error?: string): void {
+    if (this.toolDisplayMode === 'silent') return;
     this.stopToolSpinner();
     this.flushThinking();
     this.flushText();
@@ -246,12 +192,8 @@ export class StreamDisplay {
 
   reset(): void {
     this.stopToolSpinner();
-    this.lastToolUse = null;
-    this.currentToolInputPreview = null;
-    this.toolOutputBuffer = '';
-    this.toolOutputPrinted = false;
+    this.activity = this.createActivity();
     this.textBuffer = '';
-    this.thinkingBuffer = '';
     this.isFirstText = true;
     this.isFirstThinking = true;
   }
@@ -263,13 +205,13 @@ export class StreamDisplay {
           this.showInit(event.data.model);
           break;
         case 'tool_use':
-          this.showToolUse(event.data.tool, event.data.input);
+          this.handleToolEvent(event);
           break;
         case 'tool_result':
-          this.showToolResult(event.data.content, event.data.isError);
+          this.handleToolEvent(event);
           break;
         case 'tool_output':
-          this.showToolOutput(event.data.output, event.data.tool);
+          this.handleToolEvent(event);
           break;
         case 'text':
           this.showText(event.data.text);
@@ -289,18 +231,4 @@ export class StreamDisplay {
     };
   }
 
-  private ensureToolOutputHeader(tool?: string): void {
-    if (this.toolOutputPrinted) return;
-    const label = sanitizeTerminalText(tool || this.lastToolUse || 'Tool');
-    console.log(chalk.gray(`  ${chalk.yellow(label)} output:`));
-    this.toolOutputPrinted = true;
-  }
-
-  private printToolOutputLines(lines: string[], tool?: string): void {
-    if (lines.length === 0) return;
-    this.ensureToolOutputHeader(tool);
-    for (const line of lines) {
-      console.log(chalk.gray(`  │ ${line}`));
-    }
-  }
 }

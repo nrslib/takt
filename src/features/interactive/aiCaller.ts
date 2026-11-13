@@ -1,3 +1,4 @@
+import { resolveToolActivityDisplayMode } from '../../shared/ui/ToolActivityDisplay.js';
 /**
  * AI call with automatic retry on stale/invalid session.
  *
@@ -9,6 +10,7 @@ import {
   updatePersonaSession,
 } from '../../infra/config/index.js';
 import { isQuietMode } from '../../shared/context.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -277,8 +279,9 @@ export async function callAIWithRetry(
   error?: string;
 }> {
   const outputMode = options.outputMode ?? 'terminal';
+  const toolDisplayMode = resolveToolActivityDisplayMode(outputMode, process.stdout.isTTY !== true);
   const display = outputMode === 'terminal'
-    ? new StreamDisplay('assistant', isQuietMode())
+    ? new StreamDisplay('assistant', isQuietMode(), undefined, toolDisplayMode)
     : undefined;
   const resolveStreamHandler = (activeDisplay: StreamDisplay | undefined): StreamCallback | undefined =>
     activeDisplay === undefined ? options.onStream : activeDisplay.createHandler();
@@ -450,7 +453,7 @@ export async function callAIWithRetry(
         }
         const response = await providerAgent.call(
           promptForProvider,
-          providerCallOptions(activeSessionId, trackedStream, conversationMcp),
+          providerCallOptions(activeSessionId, withToolActivityCall(trackedStream), conversationMcp),
         );
         return {
           response,
@@ -496,7 +499,7 @@ export async function callAIWithRetry(
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = outputMode === 'terminal'
-        ? new StreamDisplay('assistant', isQuietMode())
+        ? new StreamDisplay('assistant', isQuietMode(), undefined, toolDisplayMode)
         : undefined;
       const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
       const retryAttempt = await callProvider(retryAgent, undefined, retryDisplay);

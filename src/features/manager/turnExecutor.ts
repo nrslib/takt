@@ -13,6 +13,7 @@ import { verifyManagerConversation } from './formalSpecVerification.js';
 import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstructionFormat.js';
 import { createTurnActivityReporter } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -37,6 +38,7 @@ export interface ManagerTurnInput {
   onProviderOutput?: () => void;
   onActivity?: (activity: ConversationActivity) => void;
   onText?: (message: string) => void;
+  onToolEvent?: (event: ToolActivityEvent) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
@@ -86,6 +88,9 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             onStream: (event) => {
               input.onProviderOutput?.();
               if (!signal.aborted) reporter.onStream(event);
+              if (!signal.aborted && (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output')) {
+                input.onToolEvent?.(event);
+              }
               if (event.type === 'tool_use') {
                 if (addRepositoryTools.has(event.data.tool)) additions.add(event.data.id);
               }

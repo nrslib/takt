@@ -125,7 +125,13 @@ export interface StreamRateLimitEventData {
   isUsingOverage?: boolean;
 }
 
-export type StreamEvent =
+export interface StreamCallContext {
+  callId: string;
+  operationId?: string;
+  generation?: number;
+}
+
+export type StreamEvent = (
   | { type: 'init'; data: StreamInitEventData }
   | { type: 'tool_use'; data: StreamToolUseEventData }
   | { type: 'tool_result'; data: StreamToolResultEventData }
@@ -138,7 +144,8 @@ export type StreamEvent =
   | { type: 'result'; data: StreamResultEventData }
   | { type: 'assistant_error'; data: StreamAssistantErrorEventData }
   | { type: 'rate_limit'; data: StreamRateLimitEventData }
-  | { type: 'error'; data: StreamErrorEventData };
+  | { type: 'error'; data: StreamErrorEventData }
+) & { toolActivity?: StreamCallContext };
 
 export type StreamCallback = (event: StreamEvent) => void;
 

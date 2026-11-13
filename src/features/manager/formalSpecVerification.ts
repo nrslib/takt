@@ -15,6 +15,7 @@ import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { AgentResponse } from '../../core/models/response.js';
 import { createTurnActivityReporter } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 
 function assertSuccess(response: AgentResponse): void {
   if (response.status === 'done') return;
@@ -37,6 +38,9 @@ export async function verifyManagerConversation(
     onStream: (event: Parameters<typeof reporter.onStream>[0]) => {
       input.onProviderOutput?.();
       if (!input.abortSignal.aborted) reporter.onStream(event);
+      if (!input.abortSignal.aborted && (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output')) {
+        input.onToolEvent?.(event);
+      }
     },
   };
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: [
@@ -71,6 +75,7 @@ export async function verifyManagerConversation(
     try {
       interpreted = await interpreter.call(buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang), {
         ...options, sessionId: generated.sessionId,
+        onStream: withToolActivityCall(options.onStream),
         allowedTools: ['Read'], allowReadonlyFileRead: true,
         readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
         outputSchema: getManagerOutputSchema(ctx.providerType),

@@ -1,3 +1,5 @@
+import { ToolActivityDisplay, resolveToolActivityDisplayMode } from '../../../shared/ui/ToolActivityDisplay.js';
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 /**
  * Parallel step log display
  *
@@ -34,6 +36,8 @@ export interface ParallelProgressInfo {
 }
 
 export interface ParallelLoggerOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
+  quiet?: boolean;
   /** Sub-step names (used to calculate prefix width) */
   subStepNames: string[];
   /** Parent onStream callback to delegate non-prefixed events */
@@ -67,6 +71,10 @@ export interface ParallelLoggerOptions {
  * - Delegate init/result/error events to the parent callback
  */
 export class ParallelLogger {
+  private readonly activities = new Map<string, ToolActivityDisplay>();
+  private readonly thinkingSteps = new Set<string>();
+  private readonly toolDisplayMode: ToolActivityDisplayMode;
+  private readonly quiet: boolean;
   private static readonly DEFAULT_FLUSH_INTERVAL_MS = 300;
   private maxNameDisplayWidth: number;
   private readonly subStepNames: string[];
@@ -82,6 +90,8 @@ export class ParallelLogger {
   private readonly flushIntervalMs: number;
 
   constructor(options: ParallelLoggerOptions) {
+    this.toolDisplayMode = options.toolDisplayMode ?? resolveToolActivityDisplayMode('terminal', process.stdout.isTTY !== true);
+    this.quiet = options.quiet ?? false;
     this.subStepNames = [...options.subStepNames];
     this.maxNameDisplayWidth = Math.max(
       0,
@@ -164,8 +174,10 @@ export class ParallelLogger {
     const prefix = this.buildPrefix(subStepName, index);
 
     return (event: StreamEvent) => {
+      if (event.type !== 'thinking') this.thinkingSteps.delete(subStepName);
       switch (event.type) {
         case 'text':
+          if (this.quiet || this.toolDisplayMode === 'silent') break;
           this.handleTextEvent(subStepName, prefix, event.data.text);
           break;
 
@@ -173,7 +185,7 @@ export class ParallelLogger {
         case 'tool_result':
         case 'tool_output':
         case 'thinking':
-          this.handleBlockEvent(prefix, event);
+          this.handleBlockEvent(subStepName, prefix, event);
           break;
 
         case 'init':
@@ -218,32 +230,22 @@ export class ParallelLogger {
    * Handle block events (tool_use, tool_result, tool_output, thinking).
    * Output with prefix, splitting multi-line content.
    */
-  private handleBlockEvent(prefix: string, event: StreamEvent): void {
-    let text: string;
-    switch (event.type) {
-      case 'tool_use':
-        text = `[tool] ${event.data.tool}`;
-        break;
-      case 'tool_result':
-        text = stripAnsi(event.data.content);
-        break;
-      case 'tool_output':
-        text = stripAnsi(event.data.output);
-        break;
-      case 'thinking':
-        text = stripAnsi(event.data.thinking);
-        break;
-      default:
-        return;
+  private handleBlockEvent(name: string, prefix: string, event: StreamEvent): void {
+    if (this.toolDisplayMode === 'silent') return;
+    if (event.type === 'thinking') {
+      const firstChunk = !this.thinkingSteps.has(name);
+      this.thinkingSteps.add(name);
+      if (!this.quiet && firstChunk) this.writeFn(`${prefix}thinking:\n`);
+      return;
     }
-
-    for (const line of text.split('\n')) {
-      if (line === '') {
-        this.writeFn('\n');
-      } else {
-        this.writeFn(`${prefix}${line}\n`);
-      }
+    let activity = this.activities.get(name);
+    if (activity === undefined) {
+      activity = new ToolActivityDisplay(this.toolDisplayMode, this.quiet, (text) => {
+        for (const line of text.split('\n')) this.writeFn(`${prefix}${line}\n`);
+      }, true);
+      this.activities.set(name, activity);
     }
+    activity.handle(event);
   }
 
   /**
@@ -264,6 +266,7 @@ export class ParallelLogger {
    * Call after all sub-steps complete to output any trailing partial lines.
    */
   flush(): void {
+    for (const activity of this.activities.values()) activity.flush();
     const pending = this.lineBuffer.flushAll();
     for (const { key, text } of pending) {
       this.flushPartialLine(key, text);
@@ -285,6 +288,7 @@ export class ParallelLogger {
     parentStepName: string,
     results: Array<{ name: string; condition: string | undefined }>,
   ): void {
+    if (this.toolDisplayMode === 'silent') return;
     this.flush();
 
     const displayResults = results.map((result) => ({

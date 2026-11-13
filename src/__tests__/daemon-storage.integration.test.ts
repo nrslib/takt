@@ -88,6 +88,115 @@ async function patrolRecords(directory: string) {
   return new FilePatrolRecords(directory);
 }
 
+it('serializes tool history with session saves without changing the business version and restores observed identities', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'call' };
+  const start = { kind: 'tool_event' as const, eventId: 'start', event: { type: 'tool_use' as const,
+    data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity: context } };
+  await Promise.all([
+    store.updateToolHistory(turn, start, signal()),
+    store.save(turn, { operationId: 'session-save', expectedVersion: 0,
+      session: { provider: 'codex', model: null, sessionId: 'retained-session' } }, signal()),
+  ]);
+  const running = await store.readToolHistory(id);
+  expect(running?.history.entries).toMatchObject([{ toolId: 'tool', status: 'running', context }]);
+  expect(await store.updateToolHistory(turn, start, signal())).toBeUndefined();
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'result', event: {
+    type: 'tool_result', data: { id: 'tool', isError: true, content: 'failed read' }, toolActivity: context,
+  } }, signal());
+  await store.updateToolHistory(turn, null, signal());
+  const restored = new ConversationStateStore(directory);
+  const completed = await restored.readToolHistory(id);
+  expect(completed).toMatchObject({ finished: true, eventIds: ['start', 'result'], history: { sequence: 2,
+    entries: [{ key: running!.history.entries[0]!.key, startedAt: running!.history.entries[0]!.startedAt,
+      status: 'failure', result: 'failed read', context }] } });
+  expect((await restored.read(id))!.state).toMatchObject({ version: 1, session: { sessionId: 'retained-session' } });
+  expect(await restored.updateToolHistory(turn, start, signal())).toBeUndefined();
+  expect(await restored.readToolHistory(id)).toEqual(completed);
+});
+
+it('bounds accumulated tool results before saving them with conversation state', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'large-output-call' };
+  const result = 'x'.repeat(6_500 * 1024);
+  for (const toolId of ['first', 'second']) {
+    await store.updateToolHistory(turn, { kind: 'tool_event', eventId: `${toolId}-start`, event: {
+      type: 'tool_use', data: { id: toolId, tool: 'Bash', input: { command: `run ${toolId}` } }, toolActivity: context,
+    } }, signal());
+    await store.updateToolHistory(turn, { kind: 'tool_event', eventId: `${toolId}-result`, event: {
+      type: 'tool_result', data: { id: toolId, content: result, isError: false }, toolActivity: context,
+    } }, signal());
+  }
+
+  const saved = await store.readToolHistory(id);
+  expect(saved?.history.entries).toHaveLength(2);
+  expect(saved?.history.entries.map((entry) => entry.status)).toEqual(['success', 'success']);
+  expect(saved?.history.entries.every((entry) => entry.result?.length === 16 * 1024)).toBe(true);
+  expect(saved?.history.entries.every((entry) => entry.resultTruncated)).toBe(true);
+  expect(saved?.eventIds).toEqual(['first-start', 'first-result', 'second-start', 'second-result']);
+  const content = await readFile(join(directory, 'conversations', `${id}.json`), 'utf8');
+  expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(12 * 1024 * 1024);
+});
+
+it('redacts long tool input values before truncating and records result omission in stored history', async () => {
+  const directory = await root();
+  const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const context = { operationId: turn.operationId, generation: turn.generation, callId: 'large-secret-call' };
+  const secret = `private-${'x'.repeat(9 * 1024)}`;
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'secret-start', event: {
+    type: 'tool_use', data: { id: 'secret-tool', tool: 'Bash', input: { api_key: secret } }, toolActivity: context,
+  } }, signal());
+  const running = await store.readToolHistory(id);
+  expect((running?.history.entries[0]?.input.api_key as string).length).toBeLessThan(secret.length);
+
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'secret-result', event: {
+    type: 'tool_result', data: { id: 'secret-tool', content: `echo ${secret}`, isError: false }, toolActivity: context,
+  } }, signal());
+  const saved = await store.readToolHistory(id);
+  expect(saved?.history.entries[0]?.result).toBe('echo [REDACTED]');
+  expect(saved?.history.entries[0]).not.toHaveProperty('resultTruncated');
+  expect(saved?.history.entries[0]?.result).not.toContain(secret);
+
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'stream-start', event: {
+    type: 'tool_use', data: { id: 'stream-tool', tool: 'Bash', input: {} }, toolActivity: context,
+  } }, signal());
+  await store.updateToolHistory(turn, { kind: 'tool_event', eventId: 'stream-output', event: {
+    type: 'tool_output', data: { id: 'stream-tool', tool: 'Bash', output: 'x'.repeat(16 * 1024 + 1) }, toolActivity: context,
+  } }, signal());
+  const streamed = await store.readToolHistory(id);
+  expect(streamed?.history.entries.find((entry) => entry.toolId === 'stream-tool')).toMatchObject({
+    output: 'x'.repeat(16 * 1024), outputTruncated: true,
+  });
+});
+
+it('drops unfinished history at termination and refuses older generations of the same operation and mismatched event contexts', async () => {
+  const directory = await root(); const store = new ConversationStateStore(directory);
+  await store.create(record());
+  const next = { ...turn, operationId: 'turn-2', generation: 2 };
+  const event = { kind: 'tool_event' as const, eventId: 'start', event: { type: 'tool_use' as const,
+    data: { id: 'reused', tool: 'Read', input: {} }, toolActivity: {
+      callId: 'call', operationId: next.operationId, generation: next.generation,
+    } } };
+  await expect(store.updateToolHistory(turn, event, signal())).rejects.toThrow('Tool event turn mismatch');
+  await store.updateToolHistory(next, event, signal());
+  expect(await store.updateToolHistory({ ...next, generation: 1 }, event, signal())).toBeUndefined();
+  const saved = await store.readToolHistory(id);
+  for (const stale of [turn, { ...next, operationId: 'other' }]) {
+    await expect(store.updateToolHistory(stale, event, signal())).rejects.toThrow('Tool event turn mismatch');
+  }
+  expect(await store.readToolHistory(id)).toEqual(saved);
+  await store.updateToolHistory(next, null, signal());
+  expect(await store.readToolHistory(id)).toMatchObject({ finished: true, history: { entries: [], sequence: 1 } });
+  await store.updateToolHistory({ ...next, operationId: 'turn-3', generation: 3 }, null, signal());
+  expect(await store.readToolHistory(id)).toBeUndefined();
+  expect((await store.read(id))!.state.version).toBe(0);
+});
+
 describe('durable manager patrol timestamps', () => {
   it('returns no timestamp for a repository that has never been patrolled', async () => {
     const records = await patrolRecords(await root());

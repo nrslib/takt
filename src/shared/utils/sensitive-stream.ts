@@ -1,6 +1,7 @@
 import {
   REDACTED_VALUE,
   SENSITIVE_TEXT_BOUNDARY_WINDOW,
+  hasUnterminatedPrivateKeyBlock,
   hasPotentialSensitiveTextSuffix,
   sanitizeSensitiveText,
 } from './sensitive-text.js';
@@ -10,6 +11,7 @@ const MAX_PENDING_SENSITIVE_TEXT_LENGTH = 10_000;
 
 export interface SensitiveTextStreamRedactor {
   write(text: string, source: unknown): string;
+  flushAvailable(source: unknown): string;
   flush(source: unknown): string;
 }
 
@@ -28,19 +30,23 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
     orderedValues = [...knownValues].sort((a, b) => b.length - a.length);
   };
 
-  const drain = (flush: boolean): string => {
+  const drain = (mode: 'stream' | 'available' | 'final'): string => {
+    const final = mode === 'final';
     if (failClosed) {
       const hadPendingText = pending.length > 0;
       pending = '';
       return hadPendingText ? REDACTED_VALUE : '';
     }
-    if (!flush && orderedValues.length === 0) {
+    if (!final && orderedValues.length === 0) {
       if (hasPotentialSensitiveTextSuffix(pending)) {
         return '';
       }
       const sanitized = sanitizeSensitiveText(pending);
       pending = '';
       return sanitized;
+    }
+    if (!final && hasUnterminatedPrivateKeyBlock(pending)) {
+      return '';
     }
     let output = '';
     while (pending.length > 0) {
@@ -50,10 +56,13 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
         pending = pending.slice(matchedValue.length);
         continue;
       }
-      if (!flush && orderedValues.some((value) => value.startsWith(pending))) {
+      if (!final && orderedValues.some((value) => value.startsWith(pending))) {
         break;
       }
-      if (!flush && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW) {
+      if (mode === 'stream' && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW && !pending.includes('\n')) {
+        break;
+      }
+      if (mode === 'available' && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW && hasPotentialSensitiveTextSuffix(pending)) {
         break;
       }
       output += pending[0];
@@ -72,11 +81,15 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
       ) {
         failClosed = true;
       }
-      return drain(false);
+      return drain('stream');
+    },
+    flushAvailable(source: unknown): string {
+      updateKnownValues(source);
+      return drain('available');
     },
     flush(source: unknown): string {
       updateKnownValues(source);
-      return drain(true);
+      return drain('final');
     },
   };
 }

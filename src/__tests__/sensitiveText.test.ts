@@ -352,6 +352,24 @@ describe('sensitiveText', () => {
     expect(output).not.toContain('LEAK-ME');
   });
 
+  it('does not withhold an ordinary line when known sensitive values are tracked', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+
+    expect(redactor.write('ready\n', { api_key: 'test-secret-label' })).toBe('ready\n');
+  });
+
+  it('keeps an unterminated PEM block pending when known sensitive values are tracked', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const source = { api_key: 'test-secret-label' };
+
+    const output = redactor.write('-----BEGIN PRIVATE KEY-----\n', source)
+      + redactor.write('LEAK-ME', source)
+      + redactor.flush(source);
+
+    expect(output).toBe('[REDACTED]');
+    expect(output).not.toContain('LEAK-ME');
+  });
+
   it('redacts a PEM private key split at every stream boundary', () => {
     for (let split = 1; split < privateKey.length; split += 1) {
       const redactor = createSensitiveTextStreamRedactor();

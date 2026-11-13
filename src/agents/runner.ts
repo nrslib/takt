@@ -28,6 +28,7 @@ import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
+import { withToolActivityCall } from '../shared/tool-activity/stream.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
 import { extractPersonaName } from './persona-spec.js';
 import {
@@ -220,7 +221,7 @@ export class AgentRunner {
       permissionMode: resolution.permissionMode,
       edit: options.edit,
       providerOptions: resolution.providerOptions,
-      onStream: options.onStream,
+      onStream: withToolActivityCall(options.onStream),
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onSkillPermissionRequest: options.onSkillPermissionRequest,

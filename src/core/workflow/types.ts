@@ -1,3 +1,4 @@
+import type { ToolActivityDisplayMode } from '../../shared/tool-activity/types.js';
 import type { PermissionResult, PermissionUpdate } from './permission-types.js';
 import type {
   WorkflowStep,
@@ -552,6 +553,8 @@ export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent
 
 /** Options for workflow engine */
 export interface WorkflowEngineOptions extends PrMergeOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
+  streamQuiet?: boolean;
   abortSignal?: AbortSignal;
   /** Project-side append-only channel for instructions issued during a live run. */
   liveIntervention?: LiveInterventionChannel;

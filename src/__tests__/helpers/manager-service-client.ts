@@ -46,8 +46,19 @@ export class ManagerServiceClient {
     if (output.kind === 'pending' || output.kind === 'running') {
       if (version === undefined || version.stateSequence > this.stateSequence) {
         this.stateSequence = version?.stateSequence ?? this.stateSequence;
-        this.update({ state: output.state });
+        const tools = this.committedItems.get('tool_history');
+        const running = output.state.running;
+        const changedHistory = tools?.kind === 'tool_history' && running !== null
+          && (tools.history.operationId !== running.operationId || tools.history.generation !== running.generation);
+        if (changedHistory) {
+          this.committedItems.delete('tool_history');
+        }
+        this.update({ state: output.state, ...(changedHistory ? { items: orderSnapshotItems(this.committedItems) } : {}) });
       }
+    }
+    if (output.kind === 'tool_history') {
+      this.committedItems.set('tool_history', output);
+      this.update({ items: orderSnapshotItems(this.committedItems) });
     }
     if (output.kind === 'result') this.results.push(output.result);
     for (const listener of this.outputs) listener(output);

@@ -8,7 +8,7 @@ export function orderSnapshotItems(items: ReadonlyMap<string, SnapshotDisplayIte
   const assignment = items.get('assignment');
   const repositories = new Map(assignment?.kind === 'assignment'
     ? assignment.assignment.repositoryDirectories.map((directory, index) => [directory, index]) : []);
-  const groups = { assignment: 0, goal: 1, inquiry: 2, display_event: 3 };
+  const groups = { assignment: 0, goal: 1, inquiry: 2, display_event: 3, tool_history: 4 };
   return [...items.values()].sort((left, right) => {
     if (left.kind === 'goal' && right.kind === 'goal') {
       // 未完了の差分では、assignmentから外れたリポジトリの旧項目も保持する。
@@ -27,6 +27,7 @@ export function snapshotItemKey(item: SnapshotValue): string {
   switch (item.kind) {
     case 'state': return 'state';
     case 'assignment': return 'assignment';
+    case 'tool_history': return 'tool_history';
     case 'goal': return JSON.stringify(['goal', item.goal.repositoryDirectory, item.goal.id]);
     case 'inquiry': {
       const { target, question } = item.inquiry;
