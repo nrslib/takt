@@ -3,6 +3,7 @@ import type { PoolAssignment, PoolProject, PoolTask, PoolWorker } from './types.
 export function workerPoolAvailability(task: PoolTask, project: PoolProject, workers: readonly PoolWorker[],
   assignments: readonly PoolAssignment[]): { worker?: PoolWorker; reason?: string } {
   const eligible = workers.filter((worker) => (!task.mergeTask || worker.kind === 'builtin')
+    && (worker.kind === 'builtin' || task.origin !== undefined)
     && (worker.concurrency === undefined && worker.kind === 'builtin' || (worker.concurrency ?? 0) > 0));
   if (eligible.length === 0) return { reason: 'No executable worker is available: worker concurrency is 0' };
   if (assignments.filter((entry) => entry.projectId === project.projectId).length >= project.concurrency) {

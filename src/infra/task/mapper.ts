@@ -200,6 +200,7 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    remoteAssignment: task.remote_assignment,
     workerName: task.worker_name,
     waitingReason: task.waiting_reason,
     executionId: task.execution_id,

@@ -21,6 +21,8 @@ import * as privateFiles from '../shared/utils/private-file.js';
 import { parse as parseYaml } from 'yaml';
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import type { TaskRecord } from '../infra/task/schema.js';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 const doubles = vi.hoisted(() => ({ execute: vi.fn(), preflight: vi.fn(), terminate: vi.fn(), cleanup: vi.fn() }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndCompleteWithDetails: doubles.execute }));
@@ -40,6 +42,73 @@ let runtime: BuiltinProjectRuntime;
 let runner: TaskRunner;
 const finished = vi.fn();
 const fatal = vi.fn();
+
+async function enableRemote(origin = 'https://example.test/repo.git') {
+  for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'test'], ['config', 'user.email', 'test@example.test'],
+    ['commit', '--allow-empty', '-m', 'fixture'], ['branch', goalRecord().branch], ['remote', 'add', 'origin', origin]]) {
+    const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  await runtime.close(); runtime = new BuiltinProjectRuntime(cwd, finished, fatal, true);
+  return (taskName: string) => runtime.remote({ kind: 'claim', taskName, workerId: 'w1', registrationGeneration: randomUUID(),
+    requestId: randomUUID(), leaseExpiresAt: Date.now() + 60_000 });
+}
+
+it.each(['task_dir', 'content_file'] as const)('fails unreadable remote %s input and then claims readable work', async (input) => {
+  const claim = await enableRemote();
+  const prepared = prepareTaskSpecDirectory(cwd, 'missing remote input');
+  const missing = runner.addTask('missing remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative });
+  const file = join(prepared.taskDir, 'order.md'); rmSync(file);
+  if (input === 'content_file') new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === missing.name
+    ? { ...task, task_dir: undefined, content_file: file } : task) }));
+  const next = runner.addTask('readable remote input', { goal_id: goalRecord().id });
+  await runtime.inspect();
+  expect(await claim(missing.name)).toEqual({ kind: 'claim', assignment: null });
+  const failed = new TaskStore(cwd).read().tasks.find((task) => task.name === missing.name)!;
+  expect(failed).toMatchObject({ status: 'failed', failure: { error: expect.any(String) }, run_slug: expect.any(String),
+    completion: { success: false, workflowResult: 'error' } });
+  expect(readManagerEvents(cwd)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({
+    kind: 'completion', taskName: missing.name, runSlug: failed.run_slug, result: failed.completion,
+  }) }));
+  expect(await claim(next.name)).toMatchObject({ kind: 'claim', assignment: { taskName: next.name } });
+  expect(doubles.preflight).not.toHaveBeenCalled();
+});
+
+it('keeps recovered remote input pending at recheck and claims it only on the next attempt', async () => {
+  const claim = await enableRemote();
+  const prepared = prepareTaskSpecDirectory(cwd, 'recovering remote input');
+  const task = runner.addTask('recovering remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative });
+  const file = join(prepared.taskDir, 'order.md'); rmSync(file);
+  const recheck = TaskRunner.prototype.failUnreadableGoalTask;
+  vi.spyOn(TaskRunner.prototype, 'failUnreadableGoalTask').mockImplementation(function (this: TaskRunner, name) {
+    writeFileSync(file, 'recovered remote input'); return recheck.call(this, name);
+  });
+  expect(await claim(task.name)).toEqual({ kind: 'claim', assignment: null });
+  expect(new TaskStore(cwd).read().tasks[0]!.status).toBe('pending');
+  expect(readManagerEvents(cwd)).toEqual([]);
+  expect(await claim(task.name)).toMatchObject({ kind: 'claim', assignment: { taskName: task.name } });
+  expect(doubles.preflight).not.toHaveBeenCalled();
+});
+
+it.each(['paused', 'aborted'] as const)('does not fail unreadable remote content when the goal becomes %s after inspection', async (executionStatus) => {
+  const claim = await enableRemote();
+  const prepared = prepareTaskSpecDirectory(cwd, 'ineligible remote input');
+  const task = runner.addTask('ineligible remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative });
+  rmSync(join(prepared.taskDir, 'order.md'));
+  expect(await runtime.inspect()).toMatchObject({ tasks: [{ taskName: task.name }] });
+  await new GoalStore(cwd).update(goalRecord().id, (goal) => ({ ...goal, executionStatus }));
+  expect(await claim(task.name)).toEqual({ kind: 'claim', assignment: null });
+  expect(new TaskStore(cwd).read().tasks[0]!.status).toBe('pending');
+  expect(readManagerEvents(cwd)).toEqual([]);
+});
+
+it('strips origin userinfo before the real project runtime exposes its candidate snapshot', async () => {
+  await enableRemote('https://fixture:credential@example.test/repo.git');
+  runner.addTask('origin snapshot', { goal_id: goalRecord().id });
+  const snapshot = await runtime.inspect();
+  expect(snapshot).toMatchObject({ tasks: [{ origin: 'https://example.test/repo.git' }] });
+  expect(JSON.stringify(snapshot)).not.toMatch(/fixture:|credential/);
+});
 beforeEach(async () => {
   vi.clearAllMocks();
   doubles.preflight.mockResolvedValue(undefined);

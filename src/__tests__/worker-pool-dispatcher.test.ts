@@ -2,6 +2,8 @@ import { expect, it, vi } from 'vitest';
 import { BuiltinWorkerAdapter } from '../infra/worker-pool/builtinWorkerAdapter.js';
 import { TaskDispatcher } from '../features/daemon/taskDispatcher.js';
 import type { PoolAssignment, ProjectWork, WorkerProject } from '../core/worker-pool/types.js';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 function fixture(concurrency: number | undefined = 1) {
   const snapshots = new Map<string, ProjectWork>([['R1', { concurrency: 3, available: true,
@@ -37,6 +39,42 @@ it('reserves a shared slot until completion and then dispatches only one pending
     expect(f.wake).toHaveBeenCalledOnce();
     await f.pool.dispatch();
     expect(f.hosts.get('R1')!.start.mock.calls).toEqual([['a', 'builtin'], ['b', 'builtin']]);
+  } finally { await f.pool.close(); }
+});
+
+it('restores project snapshots without starting pending work until normal dispatch is enabled', async () => {
+  const f = fixture();
+  try {
+    await f.pool.restore();
+    expect(f.pool.hasCompleteSnapshot()).toBe(true);
+    expect(f.hosts.get('R1')!.start).not.toHaveBeenCalled();
+    await f.pool.dispatch();
+    expect(f.hosts.get('R1')!.start).toHaveBeenCalledExactlyOnceWith('a', 'builtin');
+  } finally { await f.pool.close(); }
+});
+
+it('restores remote reservations before local dispatch and retains them after the local host exits or the worker disconnects', async () => {
+  const f = fixture(1);
+  const assignment = RemoteAssignmentSchema.parse({ projectId: 'R1', taskName: 'remote-task', workerId: 'w1', workerName: 'w1',
+    registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+    originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const snapshot = f.snapshots.get('R1')!;
+  snapshot.concurrency = 1; snapshot.remoteRecords = [{ status: 'running', assignment }];
+  f.pool.setRemoteWorkers([{ name: 'w1', kind: 'remote', concurrency: 1 }]);
+  try {
+    await f.pool.dispatch();
+    expect(f.pool.activeTaskCount).toBe(1);
+    expect(f.hosts.get('R1')!.start).not.toHaveBeenCalled();
+    expect(f.pool.pull('w1')).toBeUndefined();
+    f.finished.get('R1')!(); f.pool.setRemoteWorkers([]);
+    expect(f.pool.activeTaskCount).toBe(1);
+    await f.pool.dispatch();
+    expect(f.pool.activeTaskCount).toBe(1);
+    expect(f.hosts.get('R1')!.start).not.toHaveBeenCalled();
+    snapshot.remoteRecords = [{ status: 'failed', assignment, failureReason: 'Lease expired' }];
+    await f.pool.dispatch();
+    expect(f.hosts.get('R1')!.start).toHaveBeenCalledExactlyOnceWith('a', 'builtin');
   } finally { await f.pool.close(); }
 });
 
@@ -179,8 +217,8 @@ it('hands assignments to remote and builtin adapters through the same pull reser
       expect(port.pull('remote')).toBeUndefined();
     } }, new BuiltinWorkerAdapter({ name: 'builtin', kind: 'builtin', concurrency: 1 })],
     factory: { create: () => ({ inspect: async () => ({ concurrency: 2, available: true, tasks: [
-      { taskName: 'ordinary', mergeTask: false }, { taskName: 'merge', mergeTask: true },
-      { taskName: 'waiting', mergeTask: false },
+      { taskName: 'ordinary', mergeTask: false, origin: 'https://example.com/team/repository.git' }, { taskName: 'merge', mergeTask: true },
+      { taskName: 'waiting', mergeTask: false, origin: 'https://example.com/team/repository.git' },
     ] }), start: started, setWaitingReasons: async () => ({ kind: 'updated' }), close: async () => {} }) },
   });
   const pull = vi.spyOn(pool, 'pull');

@@ -677,6 +677,7 @@ export class TaskLifecycleService {
   }
 
   private isRunningTaskStale(task: TaskRecord): boolean {
+    if (task.remote_assignment !== undefined) return false;
     return isStaleRunningTask(task.owner_pid ?? undefined, task.owner_start_time ?? undefined);
   }
 }

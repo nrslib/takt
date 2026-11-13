@@ -4,8 +4,9 @@ const mocks = vi.hoisted(() => ({
   acquire: vi.fn(), update: vi.fn(), release: vi.fn(), ensure: vi.fn(),
   forceExitAfterOpenCodeCleanup: vi.fn<() => Promise<void>>(),
   preparePoolForForcedShutdown: vi.fn<() => Promise<void>>(),
-  logError: vi.fn(),
+  logError: vi.fn(), records: vi.fn(),
 }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: mocks.records() }; } } }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({ ...await original<typeof import('../infra/task/project-execution-lock.js')>(), acquireProjectExecutionLock: mocks.acquire }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
 vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
@@ -29,6 +30,7 @@ describe('withProjectExecution', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.acquire.mockReturnValue({ updateState: mocks.update, release: mocks.release });
+    mocks.records.mockReturnValue([]);
     sigintBefore = process.rawListeners('SIGINT');
     exitBefore = process.rawListeners('exit');
   });
@@ -36,6 +38,16 @@ describe('withProjectExecution', () => {
     await expect(withProjectExecution('/project', kind, async () => 'done')).resolves.toBe('done');
     expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.ensure).not.toHaveBeenCalled();
+  });
+  it.each(['run', 'watch'] as const)('rejects %s while a persisted remote execution still owns its lease', async (kind) => {
+    mocks.records.mockReturnValue([{ status: 'running', remote_assignment: { workerName: 'w1', leaseExpiresAt: Date.now() + 60_000 } }]);
+    const execute = vi.fn();
+    await expect(withProjectExecution('/project', kind, execute)).rejects.toThrow(/remote.*w1/i);
+    expect(execute).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalledOnce();
+    mocks.records.mockReturnValue([{ status: 'running', remote_assignment: { workerName: 'w1', leaseExpiresAt: Date.now() - 1 } }]);
+    await withProjectExecution('/project', kind, execute);
+    expect(execute).toHaveBeenCalledOnce();
   });
   it.each([false, true])('run は正常終了・例外のどちらでも再起動しない: failure=%s', async (failed) => {
     const failure = new Error('execution failed');

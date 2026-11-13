@@ -4,6 +4,7 @@ import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { ProjectReplySchema, type ProjectReply, type ProjectRequest } from '../../core/worker-pool/projectProtocol.js';
 import type { PendingTaskReason, ProjectClaimRetry, ProjectStartResult, ProjectWaitingResult, ProjectWork, WorkerProject } from '../../core/worker-pool/types.js';
 import { reportDaemonError } from '../daemon/diagnostics.js';
+import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
 
 export class BuiltinProjectHost implements WorkerProject {
   private readonly managed;
@@ -13,13 +14,14 @@ export class BuiltinProjectHost implements WorkerProject {
   private ended = false;
   private stderr = '';
 
-  constructor(cwd: string, configDirectory: string, private readonly finished: (taskName?: string) => void) {
+  constructor(cwd: string, configDirectory: string, private readonly finished: (taskName?: string) => void, remoteEnabled = false) {
     // Source execution uses the repository's installed tsx ESM loader; packaged execution needs no loader.
     const sourceLoader = import.meta.url.endsWith('.ts')
       ? ` --import ${JSON.stringify(new URL('../../../node_modules/tsx/dist/esm/index.mjs', import.meta.url).href)}` : '';
     this.managed = spawnManagedProcess(process.execPath, [fileURLToPath(new URL('../../app/worker-pool-project/index.js', import.meta.url))], {
       cwd, shell: false, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: { ...process.env, TAKT_CONFIG_DIR: configDirectory,
+        TAKT_REMOTE_WORKER_POOL: remoteEnabled ? '1' : undefined,
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''}${sourceLoader}`,
         TAKT_SLACK_APP_TOKEN: undefined, TAKT_SLACK_BOT_TOKEN: undefined },
     }, undefined);
@@ -94,6 +96,12 @@ export class BuiltinProjectHost implements WorkerProject {
   async start(taskName: string, workerName: string): Promise<ProjectStartResult> {
     const reply = await this.request({ kind: 'start', id: randomUUID(), taskName, workerName });
     if (reply.kind !== 'started') throw new Error('Unexpected builtin worker start reply');
+    return reply.result;
+  }
+
+  async remote(request: RemoteProjectRequest): Promise<RemoteProjectReply> {
+    const reply = await this.request({ kind: 'remote', id: randomUUID(), request });
+    if (reply.kind !== 'remote') throw new Error('Unexpected remote worker project reply');
     return reply.result;
   }
 

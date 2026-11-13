@@ -48,6 +48,21 @@ it('correlates snapshots and claims and emits completion separately', async () =
   expect(f.terminate).toHaveBeenCalled();
 });
 
+it('transfers the candidate origin from the project reply to the dispatcher snapshot', async () => {
+  const f = fixture();
+  const work = { concurrency: 2, available: true, tasks: [
+    { taskName: 'shared', mergeTask: false, origin: 'https://example.com/team/repository.git' },
+    { taskName: 'local-only', mergeTask: false },
+  ] };
+  try {
+    const reply = ProjectReplySchema.parse({ kind: 'snapshot', id: 'check', work });
+    const inspected = f.host.inspect();
+    const request = f.child.send.mock.calls[0]![0];
+    f.child.emit('message', { ...reply, id: request.id });
+    await expect(inspected).resolves.toEqual(work);
+  } finally { await f.host.close(); }
+});
+
 it('retains occupied slots until the exited process tree has terminated', async () => {
   const f = fixture();
   const terminated = deferred<void>();

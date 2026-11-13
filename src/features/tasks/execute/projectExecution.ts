@@ -7,6 +7,7 @@ import type { WorkerPoolShutdownSignals } from './parallelExecution.js';
 import { createLogger } from '../../../shared/utils/debug.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import { TaskStore } from '../../../infra/task/store.js';
 
 const log = createLogger('project-execution');
 
@@ -29,6 +30,9 @@ export async function withProjectExecution<Result>(
     }
   };
   try {
+    const remote = new TaskStore(cwd).read().tasks.find((record) => record.status === 'running'
+      && record.remote_assignment !== undefined && record.remote_assignment.leaseExpiresAt > Date.now());
+    if (remote !== undefined) throw new Error(`Remote worker ${remote.remote_assignment!.workerName} is running in this project`);
     // process.exit bypasses finally, including forced SIGINT shutdown.
     process.on('exit', onExit);
     shutdownManager = new ShutdownManager({

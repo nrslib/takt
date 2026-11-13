@@ -39,6 +39,8 @@ import { TaskDispatcher } from './taskDispatcher.js';
 import { BuiltinWorkerAdapter } from '../../infra/worker-pool/builtinWorkerAdapter.js';
 import { BuiltinProjectHost } from '../../infra/worker-pool/projectHost.js';
 import { readProjectRegistry } from '../../infra/config/global/projectRegistry.js';
+import { RemoteWorkerRuntime } from '../workerPool/remoteWorkerRuntime.js';
+import { createWorkerServer } from '../../infra/worker-pool/remoteTransport.js';
 
 class DaemonCleanupError extends AggregateError {}
 
@@ -66,6 +68,8 @@ export async function startDaemon(options: {
   let taskPool: DaemonResources | undefined;
   let taskLoop: WatchLoop | undefined;
   let tasks: TaskDispatcher | undefined;
+  let remoteWorkers: RemoteWorkerRuntime | undefined;
+  let workerServer: Awaited<ReturnType<typeof createWorkerServer>> | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
@@ -167,12 +171,26 @@ export async function startDaemon(options: {
         const registry = await readProjectRegistry(directory);
         return registry.projects.filter((project) => project.available && project.managerUsed === true).map((project) => project.canonicalDirectory);
       },
-      factory: { create: (cwd, finished) => new BuiltinProjectHost(cwd, directory, finished) },
+      factory: { create: (cwd, finished) => new BuiltinProjectHost(cwd, directory, finished, global.daemon?.remote_worker !== undefined) },
       wake: () => taskLoop?.wake(), onError: reportDaemonError,
     });
     const pool = tasks;
-    taskPool = { async close() { try { await pool.close(); } finally { await taskLoop?.close(); } } };
-    taskLoop = startWatchLoop(1_000, async () => { await pool.dispatch(); }, reportDaemonError);
+    taskPool = { async close() {
+      const failures: unknown[] = [];
+      for (const resource of [taskLoop, workerServer, remoteWorkers, pool]) {
+        try { await resource?.close(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length > 0) throw new AggregateError(failures, 'Worker pool shutdown failed');
+    } };
+    if (global.daemon?.remote_worker !== undefined) {
+      remoteWorkers = new RemoteWorkerRuntime({ directory, dispatcher: pool, version: options.owner.version, now: Date.now });
+      await remoteWorkers.restore();
+      workerServer = await createWorkerServer({ ...global.daemon.remote_worker, runtime: remoteWorkers, onError: reportDaemonError });
+    }
+    taskLoop = startWatchLoop(1_000, async () => {
+      if (remoteWorkers === undefined) await pool.dispatch();
+      else await remoteWorkers.check();
+    }, reportDaemonError);
     const repositories: SlackRepositoryConfig[] = [];
     for (const route of await routing.routes()) {
       const assignment = routeAssignment(route);
@@ -227,6 +245,7 @@ export async function startDaemon(options: {
     options.signal.throwIfAborted();
     waitCommandCheck = startWatchLoop(5000, () => waitCommands.check(), reportDaemonError);
     const idle = (): boolean => !stopping && options.owner.resident !== true && !slack?.listening && input.attachmentCount === 0 && tasks?.activeTaskCount === 0
+      && (remoteWorkers?.connectionCount ?? 0) === 0
       && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents && !waitCommands.hasWork;
     // 起動元が接続する猶予は旧 daemon と同じ500msにする。
     const idleAfter = Date.now() + 500;
@@ -235,7 +254,8 @@ export async function startDaemon(options: {
       await watchers?.drain();
       if (!await watchSource.hasWork(files) && idle()) void close().catch(reportDaemonError);
     }, reportDaemonError);
-    return { dispatcher, input, conversations, watchers, stopped, close };
+    return { dispatcher, input, conversations, watchers, stopped, close,
+      ...(workerServer === undefined ? {} : { workerPort: workerServer.port }) };
   } catch (error) {
     resolveSlack(undefined);
     finishStartup();

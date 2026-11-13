@@ -15,6 +15,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 let directory: string;
 let reader: WatchGoalReader;
@@ -40,6 +41,26 @@ async function watchSource(onError: (error: unknown) => void) {
   source = new FileDaemonWatchSource(conversations, async () => {}, onError);
   return { source, files: new DaemonPersistedFiles(globalDirectory) };
 }
+
+it('keeps remote work alive while observing process identity only for local tasks', async () => {
+  const errors = vi.fn(); const { source, files } = await watchSource(errors);
+  const assignment = RemoteAssignmentSchema.parse({ projectId: directory, taskName: 'remote', workerId: 'w1', workerName: 'w1',
+    registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+    originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const running = { name: 'local', status: 'running', goal_id: goalRecord().id, owner_pid: 123, owner_start_time: 'local-start',
+    created_at: '2026-11-13T00:00:00Z', started_at: '2026-11-13T00:00:00Z', completed_at: null };
+  await mkdir(join(directory, '.takt'), { recursive: true });
+  const remote = { ...running, name: 'remote', owner_pid: null, owner_start_time: null, remote_assignment: assignment };
+  const path = join(directory, '.takt/tasks.yaml');
+  await writeFile(path, JSON.stringify({ tasks: [running, remote] }));
+  expect(await source.runs()).toEqual([expect.objectContaining({ task: expect.objectContaining({ taskName: 'local' }),
+    owner: { pid: 123, startTime: 'local-start' } })]);
+  await writeFile(path, JSON.stringify({ tasks: [remote] }));
+  expect(await source.runs()).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).not.toHaveBeenCalled();
+});
 
 it('parses goal histories in a reusable worker and returns only observation data', async () => {
   const goal = { ...goalRecord(), createdAt: '2026-11-01T00:00:00Z', workLog: [...Array.from({ length: 200 }, () => ({

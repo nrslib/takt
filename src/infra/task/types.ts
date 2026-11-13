@@ -109,6 +109,7 @@ export interface TaskListItem {
 
 /** Task metadata used by state readers that must not resolve task content. */
 export interface TaskState {
+  remoteAssignment?: import('../../core/worker-pool/remoteProtocol.js').RemoteAssignment;
   workerName?: string;
   waitingReason?: string;
   executionId?: string;

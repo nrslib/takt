@@ -13,6 +13,7 @@ export interface PoolTask {
   projectId: string;
   taskName: string;
   mergeTask: boolean;
+  origin?: string;
 }
 
 export interface PoolAssignment {
@@ -24,13 +25,15 @@ export interface PoolAssignment {
 export interface ProjectWork {
   concurrency: number;
   available: boolean;
-  tasks: { taskName: string; mergeTask: boolean }[];
+  tasks: { taskName: string; mergeTask: boolean; origin?: string }[];
+  remoteRecords?: import('./remoteProtocol.js').RemoteTaskRecord[];
 }
 
 export interface WorkerProject {
   inspect(): Promise<ProjectWork | ProjectClaimRetry>;
   setWaitingReasons(reasons: readonly PendingTaskReason[]): Promise<ProjectWaitingResult>;
   start(taskName: string, workerName: string): Promise<ProjectStartResult>;
+  remote?(request: import('./remoteProtocol.js').RemoteProjectRequest): Promise<import('./remoteProtocol.js').RemoteProjectReply>;
   close(): Promise<void>;
 }
 

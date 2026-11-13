@@ -451,7 +451,7 @@ export interface ProjectConfig {
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
-  daemon?: { builtinWorker?: { concurrency?: number } };
+  daemon?: { builtinWorker?: { concurrency?: number }; remoteWorker?: { host: string; port: number } };
   /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
   manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; workflows?: ManagerWorkflowsConfig; notifications?: ManagerNotifications };

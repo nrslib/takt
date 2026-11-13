@@ -126,6 +126,7 @@ export function buildRetryTaskRecord(
     ...taskSpecSource,
     status,
     worker_name: undefined,
+    remote_assignment: undefined,
     waiting_reason: undefined,
     execution_id: status === 'running' ? randomUUID() : undefined,
     stop_request: undefined,

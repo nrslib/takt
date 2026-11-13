@@ -232,6 +232,7 @@ export class GlobalConfigManager {
       ),
       caccia: parsed.caccia,
       daemon: parsed.daemon === undefined ? undefined : {
+        remoteWorker: parsed.daemon.remote_worker,
         builtinWorker: parsed.daemon.builtin_worker === undefined ? undefined : {
           concurrency: parsed.daemon.builtin_worker.concurrency,
         },

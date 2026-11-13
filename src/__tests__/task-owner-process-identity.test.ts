@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskRecord, TasksFileData } from '../infra/task/schema.js';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 
 const { inspect } = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({
@@ -50,6 +52,20 @@ describe('interrupted task recovery outside the update lock', () => {
     expect(store.update).not.toHaveBeenCalled();
     expect(state).toEqual(before);
     expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it('leaves remote ownership and lease expiry to the remote assignment owner without inspecting a PID', () => {
+    const assignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: 'task-a', workerId: 'w1', workerName: 'w1',
+      registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+      originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 0,
+      lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+    state.tasks[0] = { ...state.tasks[0]!, owner_pid: null, owner_start_time: null, worker_name: 'w1',
+      execution_id: assignment.executionId, remote_assignment: assignment, assignment_generation: 1 };
+    const original = structuredClone(state);
+    expect(lifecycle.failInterruptedRunningTasks()).toBe(0);
+    expect(state).toEqual(original);
+    expect(store.update).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
   });
 
   it('checks owners before updating and notifies only after saving the recovered task', () => {
