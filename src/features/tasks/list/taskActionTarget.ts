@@ -27,6 +27,12 @@ export function resolveTargetWorktreePath(target: BranchActionTarget): string | 
   return target.info.worktreePath;
 }
 
+export function isWorktreeTaskWithoutRecordedPath(target: BranchActionTarget): boolean {
+  return 'kind' in target
+    && target.worktreePath === undefined
+    && Boolean(target.data?.worktree);
+}
+
 export function resolveTargetInstruction(target: BranchActionTarget): string {
   if ('kind' in target) {
     return target.content;

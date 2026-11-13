@@ -231,7 +231,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Pull from remote** | Pull the latest changes from remote origin (fast-forward only) |
 | **Try merge** | Squash merge (stages changes without committing, for manual review) |
 | **Merge & cleanup** | Squash merge and delete the branch |
-| **Delete** | Remove the task and its worktree and delete the branch; uncommitted changes in a removed worktree or clone are discarded. Tasks with `worktree: false` keep their recorded branch and uncommitted changes |
+| **Delete** | Remove the task and its worktree and delete the branch; uncommitted changes in a removed worktree or clone are discarded. Tasks with `worktree: false`, and tasks with `worktree` set to `true` or a path string but no recorded `worktree_path`, keep their branch |
 
 ### Actions for Failed Tasks
 
@@ -351,7 +351,7 @@ Available actions: `diff`, `sync`, `try`, `merge`, `delete`.
 
 At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
 
-Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. A task configured with `worktree: false` is deleted without touching its recorded branch or uncommitted changes. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
+Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. A task configured with `worktree: false` is deleted without touching its recorded branch or uncommitted changes. A task with `worktree` set to `true` or a path string and no recorded `worktree_path` keeps its recorded branch regardless of task status or whether the branch is merged. If clone metadata exists for that recorded branch, its clone and metadata are still cleaned up. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
 
 ```bash
 # Preview matching tasks, then delete them after checking the list

@@ -8,6 +8,7 @@ import {
   type BranchActionTarget,
   type ListAction,
   ensureRootBranchReady,
+  isWorktreeTaskWithoutRecordedPath,
   resolveTargetBranch,
   resolveTargetInstruction,
 } from './taskActionTarget.js';
@@ -73,6 +74,7 @@ export async function showDiffAndPromptActionForTask(
   const branch = resolveTargetBranch(target);
   const instruction = resolveTargetInstruction(target);
   const keepsProjectChanges = 'kind' in target && target.data?.worktree === false;
+  const keepsBranch = isWorktreeTaskWithoutRecordedPath(target);
 
   header(branch);
   if (instruction) {
@@ -95,7 +97,9 @@ export async function showDiffAndPromptActionForTask(
       value: 'delete' as ListAction,
       description: keepsProjectChanges
         ? 'Remove task; keep uncommitted changes and branch'
-        : 'Discard changes, delete branch',
+        : keepsBranch
+          ? 'Remove task; keep branch'
+          : 'Discard changes, delete branch',
     },
   ];
 

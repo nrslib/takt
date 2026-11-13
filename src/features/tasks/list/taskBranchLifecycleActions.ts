@@ -10,6 +10,7 @@ import { lstatOrUndefined } from '../../../shared/utils/private-path-identity.js
 import {
   type BranchActionTarget,
   ensureRootBranchReady,
+  isWorktreeTaskWithoutRecordedPath,
   resolveTargetBranch,
   resolveTargetWorktreePath,
 } from './taskActionTarget.js';
@@ -177,23 +178,31 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
       return true;
     }
 
-    const branchExists = options?.resume !== true || execFileSync('git', [
-      'for-each-ref', '--format=%(refname)', `refs/heads/${branch}`,
-    ], { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }).split('\n').includes(`refs/heads/${branch}`);
-    if (branchExists) {
-      execFileSync('git', ['branch', '-D', branch], {
-        cwd: projectDir,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      });
+    // A worktree task without a recorded path does not establish ownership of its root branch.
+    const preserveRootBranch = isWorktreeTaskWithoutRecordedPath(target);
+    if (!preserveRootBranch) {
+      const branchExists = options?.resume !== true || execFileSync('git', [
+        'for-each-ref', '--format=%(refname)', `refs/heads/${branch}`,
+      ], { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }).split('\n').includes(`refs/heads/${branch}`);
+      if (branchExists) {
+        execFileSync('git', ['branch', '-D', branch], {
+          cwd: projectDir,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+      }
     }
 
     if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
       cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
     }
 
-    if (options?.quiet !== true) success(`Deleted ${branch}`);
-    log.info('Branch deleted', { branch });
+    if (options?.quiet !== true) {
+      if (preserveRootBranch) info(`Preserved ${branch}: worktree task has no recorded worktree path.`);
+      else success(`Deleted ${branch}`);
+    }
+    if (preserveRootBranch) log.info('Branch deletion skipped for worktree task without recorded path', { branch });
+    else log.info('Branch deleted', { branch });
     return true;
   } catch (err) {
     const msg = getErrorMessage(err);

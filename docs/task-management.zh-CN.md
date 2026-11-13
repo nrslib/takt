@@ -212,7 +212,7 @@ takt list
 | **Pull from remote** | 从 remote origin 拉取最新修改（仅 fast-forward） |
 | **Try merge** | squash merge（只 stage，不 commit，便于人工检查） |
 | **Merge & cleanup** | squash merge 并删除分支 |
-| **Delete** | 删除任务和工作树并删除分支；被删除的 worktree/clone 中的未提交修改也会丢失。`worktree: false` 的任务会保留记录的分支和未提交修改 |
+| **Delete** | 删除任务和工作树并删除分支；被删除的 worktree/clone 中的未提交修改也会丢失。`worktree: false` 的任务，以及 `worktree` 设置为 `true` 或路径字符串但未记录 `worktree_path` 的任务会保留分支 |
 
 ### 失败任务的操作
 
@@ -330,7 +330,7 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。clone 任务也会在清理后使用 `git branch -d` 删除原仓库中的同名分支。配置为 `worktree: false` 的任务会保留记录的分支和工作区中的修改。如果 Git 因分支尚未完全合并等原因拒绝删除，则保留分支并发出警告，但 clone 和任务记录的删除仍会成功。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。clone 任务也会在清理后使用 `git branch -d` 删除原仓库中的同名分支。配置为 `worktree: false` 的任务会保留记录的分支和工作区中的修改。对于 `worktree` 设置为 `true` 或路径字符串但未记录 `worktree_path` 的任务，无论任务状态或分支是否已合并，都会保留记录的分支。如果该分支仍有 clone 元数据，则仍会清理对应 clone 和元数据。如果 Git 因分支尚未完全合并等原因拒绝删除，则保留分支并发出警告，但 clone 和任务记录的删除仍会成功。
 
 ```bash
 # 先确认匹配列表，再执行删除

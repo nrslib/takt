@@ -61,7 +61,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../features/tasks/list/taskActionTarget.js', () => ({
+vi.mock('../features/tasks/list/taskActionTarget.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../features/tasks/list/taskActionTarget.js')>(),
   ensureRootBranchReady: (...args: unknown[]) => mockEnsureRootBranchReady(...args),
   resolveTargetBranch: () => 'takt/test-branch',
   resolveTargetWorktreePath: mockWorktreePath,
@@ -255,7 +256,7 @@ describe('taskBranchLifecycleActions', () => {
     expect(mockSuccess).not.toHaveBeenCalled();
   });
 
-  it('force deletes the root branch for a pending worktree task without a recorded path', () => {
+  it('preserves a pending worktree task branch when no worktree path was recorded', () => {
     const pendingTask = {
       ...target,
       kind: 'pending' as const,
@@ -266,9 +267,8 @@ describe('taskBranchLifecycleActions', () => {
 
     expect(deleteBranch('/project', pendingTask)).toBe(true);
 
-    expect(mockExecFileSync.mock.calls.filter(([, args]) => args[0] === 'branch')).toEqual([
-      ['git', ['branch', '-D', 'takt/test-branch'], { cwd: '/project', encoding: 'utf-8', stdio: 'pipe' }],
-    ]);
+    expect(mockExecFileSync.mock.calls.filter(([, args]) => args[0] === 'branch')).toEqual([]);
+    expect(mockCleanupOrphanedClone).toHaveBeenCalledWith('/project', 'takt/test-branch');
   });
 
   it.each([false, true])('resumes only remaining branch and orphan clone cleanup (branch exists: %s)', (branchExists) => {
