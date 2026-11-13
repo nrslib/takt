@@ -1,6 +1,7 @@
 import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
 import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
 import { jsonResult } from './response.js';
+import { EPIC_TOOL_NAMES, registerEpicTools } from './epicOperations.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -94,6 +95,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
+  ...EPIC_TOOL_NAMES,
   ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace',
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
@@ -211,6 +213,12 @@ export function createTaktMcpServer(
     }, false));
   }
   if (options.toolSet === 'manager') {
+    registerEpicTools(server, { globalConfigDirectory, currentAssignment, withTurn, turnSignal,
+      changed: options.requestDaemon === undefined ? undefined : async (workspaceId, epicId, reason) => {
+        const reply = await options.requestDaemon!({ kind: 'publish_epic_events', workspaceId, epicId, reason });
+        if (reply.kind === 'error') throw new Error(reply.message);
+        if (reply.kind !== 'epic_events_published') throw new Error('Unexpected Epic event reply');
+      } });
     const connection = options.goalExecutionConnection;
     if (connection !== undefined) {
       const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>

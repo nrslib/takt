@@ -1,4 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
+import { publishEpicEvents } from './epicEvents.js';
 import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { DaemonWaitCommands } from './waitCommands.js';
@@ -22,6 +24,14 @@ export function createDaemonStateRequests(options: {
     signal.throwIfAborted();
     if (request.kind === 'save_conversation') return conversations.store.save(turn, request.change, signal);
     const source = await conversations.store.read(turn.conversationId);
+    if (request.kind === 'publish_epic_events') {
+      const owner = source?.state.assignment;
+      if (owner?.kind !== 'workspace' || owner.workspaceId !== request.workspaceId || !await conversations.routing.permits(owner, turn.conversationId)) return forbidden();
+      const epic = await new DaemonEpicFiles(conversations.routing.directory).get(owner.workspaceId, request.epicId);
+      signal.throwIfAborted();
+      await publishEpicEvents(epic, options.ingress, request.reason);
+      return { kind: 'epic_events_published' };
+    }
     if (request.kind === 'wait_command') {
       const owner = source?.state.assignment;
       if (owner === undefined || owner.kind === 'daemon' || turn.conversationId !== conversationId(owner)

@@ -13,6 +13,7 @@
    - For operations the chosen method adds or moves onto an affected path, check whether their success or failure can change a result or failure that the acceptance criteria require. If that behavior is unknown, include a plan-scoped investigation and the safe repair and verification conditional on its result; do not leave the required result unaddressed in a finalized plan
    - For each result covered by the acceptance criteria, list, within the scope specified in “Scope of inputs used for counterexamples” above, the inputs or states that can affect whether those criteria hold
    - If those inputs or states can each change the result on their own, treat them as separate paths even when they lead to the same result
+   - Do not collapse states, supported targets, or side effects distinguished by findings or acceptance criteria into a representative example merely because they share a function or final result. For each target, separately record the path from entry through consumer or terminal, expected result, and counterevidence
    - For each path, write where its input or state is defined and which functions it passes through from the entry to the result
    - Write a concrete input or state and its expected result without omitting values that will be checked
    - Change exactly one input or state used by that path, and record how the result seen from the same entry changes. Use the before-and-after results as the counterexample

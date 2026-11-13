@@ -44,7 +44,8 @@ it.each(['ja', 'en'] as const)('shows key guidance followed by one status line a
     ]);
     expect(rows.slice(0, end + 1).join('\n')).not.toContain('manager-repository');
     expect(rows.join('\n')).not.toContain('/make-goal');
-    for (const row of rows) expect(row).not.toMatch(/\^[ONP]|Ctrl\+[ONP]/iu);
+    expect(rows.join('\n')).toContain(lang === 'ja' ? '^O Epic' : '^O Epics');
+    for (const row of rows) expect(row).not.toMatch(/\^[NP]|Ctrl\+[NP]/iu);
   });
 });
 
@@ -65,8 +66,8 @@ it.each(['ja', 'en'] as const)('wraps guidance only between whole key items at w
   Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: 80 });
   context.app.stdout.emit('resize');
   const items = lang === 'ja'
-    ? ['Enter 送信', 'Shift+Enter 改行', 'Esc 中断', '^R 問い合わせ', '^G ゴール', '^C 終了']
-    : ['Enter Send', 'Shift+Enter Newline', 'Esc Interrupt', '^R Inquiries', '^G Goals', '^C Exit'];
+    ? ['Enter 送信', 'Shift+Enter 改行', 'Esc 中断', '^R 問い合わせ', '^G ゴール', '^O Epic', '^C 終了']
+    : ['Enter Send', 'Shift+Enter Newline', 'Esc Interrupt', '^R Inquiries', '^G Goals', '^O Epics', '^C Exit'];
   await waitFor(() => {
     const rows = context.app.lastFrame()!.split('\n');
     const end = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);

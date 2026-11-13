@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -28,12 +29,15 @@ const digest = (value: unknown): string => createHash('sha256').update(JSON.stri
 export class FileDaemonWatchSource implements DaemonWatchSource {
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
+  private readonly epicFiles: DaemonEpicFiles;
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
     private readonly stateChanges?: WatchObservations,
     private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
-    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {}
+    private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {
+    this.epicFiles = new DaemonEpicFiles(conversations.routing.directory);
+  }
 
   private async *projects() {
     for (const route of await this.conversations.routing.routes()) {
@@ -61,6 +65,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     }
     for (const assignment of await this.conversations.routing.assignments()) {
       if (assignment.kind === 'daemon') continue;
+      if (assignment.kind === 'workspace') {
+        try {
+          if ((await this.epicFiles.activeIds(assignment.workspaceId)).length > 0) return true;
+        } catch (error) { this.onError(error); return true; }
+      }
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
@@ -93,6 +102,16 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async patrols(): Promise<readonly ManagerPatrolTarget[]> {
     const global = await globalDaemonConfiguration(this.conversations.routing.directory);
     const targets: ManagerPatrolTarget[] = [];
+    for (const assignment of await this.conversations.routing.assignments()) {
+      if (assignment.kind !== 'workspace') continue;
+      try {
+        const epicIds = await this.epicFiles.activeIds(assignment.workspaceId);
+        if (epicIds.length === 0) continue;
+        await this.conversations.ensure(assignment);
+        targets.push({ conversationId: conversationId(assignment), workspaceId: assignment.workspaceId, epicIds,
+          intervalSeconds: global.manager?.patrol_interval ?? 1800 });
+      } catch (error) { this.onError(error); }
+    }
     for await (const project of this.projects()) {
       try {
         const config = await readDaemonConfiguration(join(project.repositoryDirectory, '.takt', 'config.yaml'));

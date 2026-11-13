@@ -93,5 +93,5 @@ export function useManagerSelection() {
       update(null);
     }
   };
-  return { selection, open, refresh, handleInput };
+  return { selection, open, close: () => update(null), refresh, handleInput };
 }
