@@ -1,14 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, join, parse, relative } from 'node:path';
-import { isGitRepository, resolveGitRepositoryDirectory } from '../task/repositoryDirectory.js';
-
-export async function resolveOpenCodeWorktreeDirectory(directory: string): Promise<string> {
-  const canonicalDirectory = realpathSync(directory);
-  if (await isGitRepository(canonicalDirectory)) {
-    return resolveGitRepositoryDirectory(canonicalDirectory);
-  }
-  return parse(canonicalDirectory).root;
-}
+import { isAbsolute, join, parse } from 'node:path';
 
 export function normalizeOpenCodeExternalDirectories(
   directories: readonly string[] | undefined,
@@ -36,32 +27,19 @@ export function openCodeExternalDirectoryPattern(directory: string): string {
   return join(directory, '*');
 }
 
-export function openCodeExternalDirectoryEditPattern(directory: string, worktreeDirectory: string): string {
-  // V1 edit and write permission checks use worktree-relative paths.
-  return join(relative(realpathSync(worktreeDirectory), directory), '*');
-}
-
 export function buildOpenCodeV1ExternalDirectoryPermissions(
   directories: readonly string[] | undefined,
-  worktreeDirectory?: string,
 ): {
   external_directory: 'deny' | Record<string, 'allow' | 'deny'>;
-  edit?: Record<string, 'deny'>;
 } {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
   if (normalized.length === 0) return { external_directory: 'deny' };
-  if (worktreeDirectory === undefined) {
-    throw new Error('OpenCode worktree directory is required for external context edit rules');
-  }
   const externalDirectory: Record<string, 'allow' | 'deny'> = { '*': 'deny' };
-  const edit: Record<string, 'deny'> = {};
   for (const directory of normalized) {
     externalDirectory[openCodeExternalDirectoryPattern(directory)] = 'allow';
-    edit[openCodeExternalDirectoryEditPattern(directory, worktreeDirectory)] = 'deny';
   }
   return {
     external_directory: externalDirectory,
-    edit,
   };
 }
 

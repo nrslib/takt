@@ -8,7 +8,6 @@ import type { ProviderActivityCallback, StreamCallback } from '../../shared/type
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import {
   normalizeOpenCodeExternalDirectories,
-  openCodeExternalDirectoryEditPattern,
   openCodeExternalDirectoryPattern,
 } from './external-directories.js';
 
@@ -222,9 +221,8 @@ export type OpenCodeAllowedTools = readonly string[];
  * restriction is enforced by the explicit per-prompt tools map instead
  * (see buildOpenCodePromptTools).
  *
- * `external_directory` is denied except for explicitly supplied TAKT
- * context directories; direct edits to those paths are denied too. This
- * session-scoped rule only holds until the first prompt: a prompt-level tools map is
+ * `external_directory` is denied except for explicitly supplied TAKT context
+ * directories. This session-scoped rule only holds until the first prompt: a prompt-level tools map is
  * materialized into `session.permission` by OpenCode and replaces this
  * ruleset. The external-directory deny and its narrow exceptions live in
  * the server config passed to `createOpencode` in `server-pool.ts`, which the
@@ -238,9 +236,8 @@ export function buildOpenCodeSessionPermission(
   allowedMcpTools?: readonly string[],
   strictToolAllowlist?: OpenCodeAllowedTools,
   externalDirectoryAllowlist?: readonly string[],
-  worktreeDirectory?: string,
 ): OpenCodePermissionRule[] {
-  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist, worktreeDirectory);
+  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist);
   if (strictToolAllowlist !== undefined) {
     return [
       ...buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools),
@@ -264,23 +261,14 @@ export function buildOpenCodeSessionPermission(
 
 function buildExternalDirectorySessionRules(
   directories: readonly string[] | undefined,
-  worktreeDirectory: string | undefined,
 ): OpenCodePermissionRule[] {
   const normalized = normalizeOpenCodeExternalDirectories(directories);
-  if (normalized.length > 0 && worktreeDirectory === undefined) {
-    throw new Error('OpenCode worktree directory is required for external context edit rules');
-  }
   return [
     { permission: 'external_directory', pattern: '*', action: 'deny' },
     ...normalized.map((directory) => ({
       permission: 'external_directory',
       pattern: openCodeExternalDirectoryPattern(directory),
       action: 'allow' as const,
-    })),
-    ...normalized.map((directory) => ({
-      permission: 'edit',
-      pattern: openCodeExternalDirectoryEditPattern(directory, worktreeDirectory!),
-      action: 'deny' as const,
     })),
   ];
 }

@@ -130,20 +130,18 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
   it('uses a separate shared server for each external context allowlist', async () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-opencode-pool-identity-'));
     temporaryDirectories.push(root);
-    const worktreeDirectory = join(root, 'worktree');
     const contextA = join(root, 'context-a');
     const contextB = join(root, 'context-b');
-    mkdirSync(worktreeDirectory);
     mkdirSync(contextA);
     mkdirSync(contextB);
     const canonicalContextA = realpathSync(contextA);
     const canonicalContextB = realpathSync(contextB);
     const a = await acquireOpenCodeClient(
-      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextA], worktreeDirectory,
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextA],
     );
     a.release();
     const b = await acquireOpenCodeClient(
-      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextB], worktreeDirectory,
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextB],
     );
 
     try {

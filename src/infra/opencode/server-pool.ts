@@ -1,5 +1,4 @@
 import { createServer } from 'node:net';
-import { realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '@opencode-ai/sdk/v2/types';
@@ -94,12 +93,10 @@ function buildSharedServerKey(
   mcpIdentity: string | undefined,
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
-  worktreeDirectory: string | undefined,
 ): string {
   const runtime = openCodeRuntimeSelection();
   return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
     ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist,
-    ...(runtime.generation === 'v1' && externalDirectoryAllowlist.length > 0 ? [worktreeDirectory] : []),
   ]);
 }
 
@@ -164,7 +161,6 @@ async function createSharedServer(
   serverConfig: Record<string, unknown> | undefined,
   skillsEnabled: boolean,
   externalDirectoryAllowlist: readonly string[],
-  worktreeDirectory: string | undefined,
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
@@ -183,7 +179,7 @@ async function createSharedServer(
           pluginPath('coerce-tool-args.js'),
           ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
         ],
-        permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist, worktreeDirectory),
+        permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
         ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
         agent: {
           [TAKT_AGENT]: {
@@ -260,21 +256,13 @@ export async function acquireOpenCodeClient(
   skillsEnabled = false,
   executionContext?: OpenCodeExecutionContext,
   externalDirectoryAllowlist?: readonly string[],
-  worktreeDirectory?: string,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
   const normalizedExternalDirectories = normalizeOpenCodeExternalDirectories(externalDirectoryAllowlist);
-  let normalizedWorktreeDirectory: string | undefined;
-  if (openCodeRuntimeSelection().generation === 'v1' && normalizedExternalDirectories.length > 0) {
-    if (worktreeDirectory === undefined) {
-      throw new Error('OpenCode worktree directory is required for external context edit rules');
-    }
-    normalizedWorktreeDirectory = realpathSync(worktreeDirectory);
-  }
   const key = buildSharedServerKey(
     model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
-    normalizedExternalDirectories, normalizedWorktreeDirectory,
+    normalizedExternalDirectories,
   );
   const entry = getSharedServerEntry(key, normalizedExternalDirectories);
   const sessionKey = sessionId ?? '';
@@ -292,7 +280,7 @@ export async function acquireOpenCodeClient(
 
   const initPromise = createSharedServer(
     key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
-    normalizedExternalDirectories, normalizedWorktreeDirectory,
+    normalizedExternalDirectories,
   )
     .then((server) => {
       entry.server = server;
@@ -422,9 +410,9 @@ export function resetSharedServerPool(): void {
 }
 
 export async function closeOpenCodeServersForExternalDirectories(
-  directories: readonly string[],
+  normalizedDirectories: readonly string[],
 ): Promise<void> {
-  const allowlistIdentity = JSON.stringify(normalizeOpenCodeExternalDirectories(directories));
+  const allowlistIdentity = JSON.stringify(normalizedDirectories);
   if (allowlistIdentity === '[]') return;
 
   const entries: SharedServerEntry[] = [];

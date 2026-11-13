@@ -37,14 +37,18 @@ const {
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
     static nextRunImpl: ((instance: MockWorkflowEngine) => Promise<{ status: string; iteration: number }>) | undefined;
+    static nextOpenCodeExternalDirectories: readonly string[] | undefined;
     readonly receivedOptions: Record<string, unknown>;
     readonly receivedConfig: WorkflowConfig;
+    openCodeExternalDirectories: readonly string[] = [];
     currentResumePoint: unknown;
 
     constructor(config: WorkflowConfig, _cwd: string, _task: string, options: Record<string, unknown>) {
       super();
       this.receivedConfig = config;
       this.receivedOptions = options;
+      this.openCodeExternalDirectories = MockWorkflowEngine.nextOpenCodeExternalDirectories ?? [];
+      MockWorkflowEngine.nextOpenCodeExternalDirectories = undefined;
       MockWorkflowEngine.lastInstance = this;
       this.currentResumePoint = undefined;
     }
@@ -380,6 +384,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
     mockResolvedProviderModel('cursor', undefined);
     MockWorkflowEngine.nextRunImpl = undefined;
+    MockWorkflowEngine.nextOpenCodeExternalDirectories = undefined;
     cleanupDirs = [];
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-structured-caller-project-'));
     cleanupDirs.push(projectCwd);
@@ -449,7 +454,15 @@ describe('executeWorkflow structuredCaller injection', () => {
   it('外部にある run context の OpenCode server を run 完了時に閉じる', async () => {
     const runPathsDirectory = mkdtempSync(join(tmpdir(), 'takt-structured-caller-runs-'));
     cleanupDirs.push(runPathsDirectory);
-    mkdirSync(join(runPathsDirectory, 'external-context-run', 'context'), { recursive: true });
+    const contextDirectory = join(runPathsDirectory, 'external-context-run', 'context');
+    mkdirSync(contextDirectory, { recursive: true });
+    const resolvedContextDirectory = realpathSync(contextDirectory);
+    MockWorkflowEngine.nextOpenCodeExternalDirectories = [resolvedContextDirectory];
+    MockWorkflowEngine.nextRunImpl = async (instance) => {
+      const result = await instance.run();
+      rmSync(contextDirectory, { recursive: true, force: true });
+      return result;
+    };
 
     await executeWorkflow(makeConfig(), 'task', projectCwd, {
       projectCwd,
@@ -458,7 +471,7 @@ describe('executeWorkflow structuredCaller injection', () => {
     });
 
     expect(mockCloseOpenCodeServersForExternalDirectories).toHaveBeenCalledWith([
-      realpathSync(join(runPathsDirectory, 'external-context-run', 'context')),
+      resolvedContextDirectory,
     ]);
   });
 

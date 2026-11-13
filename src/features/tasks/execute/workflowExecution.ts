@@ -1,7 +1,6 @@
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
-import { resolveOpenCodeExternalDirectories } from '../../../core/workflow/engine/WorkflowEngineSetup.js';
 import { hasCacciaEffect } from '../../../core/workflow/workflow-step-traversal.js';
 import { getAllParallelSubSteps } from '../../../core/models/index.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
@@ -359,6 +358,7 @@ async function executeWorkflowInternal(
     });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
+  let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   let cacciaFailure: { step: string; reason: string } | undefined;
   let activeStep: WorkflowStep;
@@ -563,6 +563,7 @@ async function executeWorkflowInternal(
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });
+      openCodeExternalDirectories = engine.openCodeExternalDirectories;
 
       engine.on('step:start', (startedStep: WorkflowStep, _iteration, _instruction, _provider, _workflowName,
         _resumeStepName, _stepIteration, stack) => {
@@ -751,12 +752,9 @@ async function executeWorkflowInternal(
     captureError(cleanupErrors, () => bootstrap.warnIfAutoStrategyUnused());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
-    if (engine !== null) {
+    const externalDirectories = openCodeExternalDirectories;
+    if (externalDirectories !== undefined) {
       await captureAsyncError(cleanupErrors, async () => {
-        const externalDirectories = resolveOpenCodeExternalDirectories(
-          cwd,
-          join(activeRun.runPaths.runRootAbs, 'context'),
-        );
         await closeOpenCodeServersForExternalDirectories(externalDirectories);
       });
     }

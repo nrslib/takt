@@ -150,7 +150,6 @@ export async function compactOpenCodeSessionWithCoordinator(options: OpenCodeCom
       options.skillsEnabled,
       executionContext,
       options.externalDirectoryAllowlist,
-      options.cwd,
     ));
     acquired = client;
     const onInvalidated = (): void => deadline.abort(sharedServerInvalidationError(client.invalidationSignal));

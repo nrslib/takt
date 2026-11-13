@@ -5,7 +5,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { afterEach, describe, it, expect } from 'vitest';
 import { tmpdir } from 'node:os';
-import { join, parse, relative } from 'node:path';
+import { join, parse } from 'node:path';
 import {
   buildOpenCodePermissionRuleset,
   buildOpenCodePromptTools,
@@ -34,14 +34,11 @@ afterEach(() => {
 function createExternalContextDirectories() {
   const root = mkdtempSync(join(tmpdir(), 'takt-opencode-permissions-'));
   temporaryDirectories.push(root);
-  const worktreeDirectory = join(root, 'worktree');
   const realRunDirectory = join(root, 'real-run');
   const linkedRunDirectory = join(root, 'run-link');
-  mkdirSync(worktreeDirectory);
   mkdirSync(join(realRunDirectory, 'context'), { recursive: true });
   symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
   return {
-    worktreeDirectory: realpathSync(worktreeDirectory),
     contextDirectory: join(linkedRunDirectory, 'context'),
     canonicalContextDirectory: realpathSync(join(realRunDirectory, 'context')),
   };
@@ -392,36 +389,29 @@ describe('buildOpenCodeSessionPermission', () => {
     }
   });
 
-  it('allows only the selected external context and denies edits there', () => {
-    const { worktreeDirectory, contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
-    const relativeContextDirectory = relative(worktreeDirectory, canonicalContextDirectory);
+  it('allows only the selected external context without denying edits in v1 session rules', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
     const rules = buildOpenCodeSessionPermission(
-      'edit', undefined, undefined, undefined, undefined, [contextDirectory], worktreeDirectory,
+      'edit', undefined, undefined, undefined, undefined, [contextDirectory],
     );
 
-    expect(rules.slice(-3)).toEqual([
+    expect(rules.slice(-2)).toEqual([
       { permission: 'external_directory', pattern: '*', action: 'deny' },
       { permission: 'external_directory', pattern: join(canonicalContextDirectory, '*'), action: 'allow' },
-      { permission: 'edit', pattern: join(relativeContextDirectory, '*'), action: 'deny' },
     ]);
-    expect(relative(worktreeDirectory, join(canonicalContextDirectory, 'order.md')))
-      .toBe(join(relativeContextDirectory, 'order.md'));
+    expect(rules.some((rule) => rule.permission === 'edit' && rule.action === 'deny')).toBe(false);
   });
 });
 
 describe('OpenCode external directory rules', () => {
-  it('builds narrow v1 external permissions while keeping edits denied', () => {
-    const { worktreeDirectory, contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
-    const relativeContextDirectory = relative(worktreeDirectory, canonicalContextDirectory);
-    expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory], worktreeDirectory)).toEqual({
+  it('builds v1 external permissions without an edit deny rule', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory])).toEqual({
       external_directory: {
         '*': 'deny',
         [join(canonicalContextDirectory, '*')]: 'allow',
       },
-      edit: { [join(relativeContextDirectory, '*')]: 'deny' },
     });
-    expect(relative(worktreeDirectory, join(canonicalContextDirectory, 'order.md')))
-      .toBe(join(relativeContextDirectory, 'order.md'));
   });
 
   it('builds ordered v2 external permissions with the exact directory exception', () => {

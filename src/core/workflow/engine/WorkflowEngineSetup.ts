@@ -131,6 +131,7 @@ interface WorkflowEngineSetupParams {
 }
 
 export interface WorkflowEngineServices {
+  openCodeExternalDirectories: readonly string[];
   stepAbortSignalContext: WorkflowStepAbortSignalContext;
   optionsBuilder: OptionsBuilder;
   stepExecutor: StepExecutor;
@@ -691,6 +692,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   return {
+    openCodeExternalDirectories,
     stepAbortSignalContext,
     optionsBuilder,
     stepExecutor,

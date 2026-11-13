@@ -1,8 +1,4 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
@@ -1096,55 +1092,6 @@ describe('OpenCodeClient permissions', () => {
         }),
       }),
     );
-  });
-
-  it('uses the Git worktree root for external edit denies when cwd is nested', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'takt-opencode-nested-cwd-'));
-    const worktreeDirectory = join(root, 'worktree');
-    const cwd = join(worktreeDirectory, 'packages', 'app');
-    const contextDirectory = join(root, 'run-context');
-    try {
-      mkdirSync(cwd, { recursive: true });
-      mkdirSync(contextDirectory);
-      execFileSync('git', ['init', '--quiet'], { cwd: worktreeDirectory, stdio: 'ignore' });
-
-      const { OpenCodeClient } = await import('../infra/opencode/client.js');
-      const sessionId = 'session-nested-cwd';
-      const stream = new MockEventStream([sessionIdle(sessionId)], sessionId);
-      const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
-      createOpencodeMock.mockResolvedValue({
-        client: {
-          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-          session: {
-            create: sessionCreate,
-            promptAsync: vi.fn().mockResolvedValue(undefined),
-            abort: successfulSessionAbort(),
-          },
-          event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
-          permission: { reply: vi.fn() },
-        },
-        server: { close: vi.fn() },
-      });
-
-      await new OpenCodeClient().call('coder', 'hello', {
-        cwd,
-        model: 'probe/probe',
-        externalDirectoryAllowlist: [contextDirectory],
-      });
-
-      const expectedPattern = join(relative(realpathSync(worktreeDirectory), realpathSync(contextDirectory)), '*');
-      expect(sessionCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          directory: cwd,
-          permission: expect.arrayContaining([
-            { permission: 'edit', pattern: expectedPattern, action: 'deny' },
-          ]),
-        }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it('should reject the permission but continue the call when allowedTools is empty', async () => {

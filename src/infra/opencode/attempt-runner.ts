@@ -21,7 +21,6 @@ import {
   type OpenCodeCompactSessionOptions,
   type OpenCodeCallOptions,
 } from './types.js';
-import { resolveOpenCodeWorktreeDirectory } from './external-directories.js';
 import {
   type OpenCodeStreamEvent,
   type OpenCodePart,
@@ -815,9 +814,6 @@ export class OpenCodeAttemptRunner {
     let guardSuite: OpenCodeGuardSuite | undefined;
     let modelResolutionTimeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const worktreeDirectory = options.externalDirectoryAllowlist?.length
-        ? await resolveOpenCodeWorktreeDirectory(options.cwd)
-        : undefined;
       let model = options.model;
       let variant = options.variant;
       let initialAttemptTimeoutMs: number | undefined;
@@ -846,7 +842,6 @@ export class OpenCodeAttemptRunner {
               options.skillsEnabled,
               executionContext,
               options.externalDirectoryAllowlist,
-              worktreeDirectory,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -973,7 +968,6 @@ export class OpenCodeAttemptRunner {
           activeGuardSuite,
           callState,
           executionContext,
-          worktreeDirectory,
         );
         if (result !== RETRY_ATTEMPT) return result;
       }
@@ -995,7 +989,6 @@ export class OpenCodeAttemptRunner {
   guardSuite: OpenCodeGuardSuite,
   callState: OpenCodeCallState,
   executionContext: OpenCodeExecutionContext,
-  worktreeDirectory: string | undefined,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
   let timeoutMessage = OPENCODE_STREAM_ABORTED_MESSAGE;
@@ -1213,7 +1206,6 @@ export class OpenCodeAttemptRunner {
       options.skillsEnabled,
       executionContext,
       options.externalDirectoryAllowlist,
-      worktreeDirectory,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1265,7 +1257,6 @@ export class OpenCodeAttemptRunner {
       allowedMcpPermissions,
       options.strictToolAllowlist,
       options.externalDirectoryAllowlist,
-      worktreeDirectory,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
