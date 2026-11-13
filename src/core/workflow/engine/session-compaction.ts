@@ -43,6 +43,9 @@ export async function compactSessionBeforePhase1(
     await provider.compactSession({
       cwd: agentOptions.cwd,
       sessionId: agentOptions.sessionId,
+      ...(agentOptions.resolvedProvider !== 'opencode' || agentOptions.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: agentOptions.openCodeExternalDirectories }),
       model: agentOptions.resolvedModel,
       ...(agentOptions.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       abortSignal: agentOptions.abortSignal,

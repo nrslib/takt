@@ -54,6 +54,7 @@ export interface StructuredAgentCallOptions {
   readonly mcpServers?: RunAgentOptions['mcpServers'];
   readonly mcpAssignment?: RunAgentOptions['mcpAssignment'];
   readonly mcpServerIdentity?: RunAgentOptions['mcpServerIdentity'];
+  readonly openCodeExternalDirectories?: RunAgentOptions['openCodeExternalDirectories'];
   readonly outputSchema?: RunAgentOptions['outputSchema'];
 }
 
@@ -133,6 +134,9 @@ async function executeFreshAgent(
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     ...(options.mcpAssignment === undefined ? {} : { mcpAssignment: options.mcpAssignment }),
     ...(options.mcpServerIdentity === undefined ? {} : { mcpServerIdentity: options.mcpServerIdentity }),
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { openCodeExternalDirectories: options.openCodeExternalDirectories }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.language === undefined ? {} : { language: options.language }),
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),

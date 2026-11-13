@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -136,6 +137,38 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: true },
     });
+  });
+
+  it('passes the external run context directory to OpenCode when execution uses a clone', async () => {
+    const cloneCwd = join(tmpDir, 'clone');
+    mkdirSync(cloneCwd, { recursive: true });
+    const step = makeStep('review', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'external-run-context',
+      steps: [step],
+      initialStep: 'review',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([makeResponse({ persona: step.persona, content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    engine = new WorkflowEngine(config, cloneCwd, 'review task', {
+      projectCwd: tmpDir,
+      runPathsDirectory: join(tmpDir, '.takt', 'runs'),
+      reportDirName: 'test-report-dir',
+      provider: 'opencode',
+      model: 'opencode/probe',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.openCodeExternalDirectories).toEqual([
+      realpathSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context')),
+    ]);
   });
 
   it('should propagate merged claude allowedTools to runAgent options.allowedTools', async () => {
@@ -459,7 +492,7 @@ describe('WorkflowEngine provider_options resolution', () => {
       mcpServers: {
         docs: { type: 'stdio', command: 'docs-mcp' },
       },
-      structuredOutput: { schema },
+      structuredOutput: { schemaRef: 'provider-options-result', schema },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -506,7 +539,7 @@ describe('WorkflowEngine provider_options resolution', () => {
       mcpServers: {
         docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
       },
-      structuredOutput: { schema },
+      structuredOutput: { schemaRef: 'provider-options-decision', schema },
       rules: [makeRule('done', 'COMPLETE')],
     });
 
@@ -567,6 +600,7 @@ describe('WorkflowEngine provider_options resolution', () => {
   it('should switch structured_output to prompt fallback when the resolved provider is cursor', async () => {
     const step = makeStep('implement', {
       structuredOutput: {
+        schemaRef: 'provider-options-cursor-result',
         schema: {
           type: 'object',
           properties: {

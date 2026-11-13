@@ -219,6 +219,7 @@
     "src/__tests__/engine-loop-monitors.test.ts",
     "src/__tests__/engine-loop-phase3.integration.test.ts",
     "src/__tests__/engine-parallel.test.ts",
+    "src/__tests__/engine-provider-options.test.ts",
     "src/__tests__/engine-rate-limit-fallback.test.ts",
     "src/__tests__/engine-report-fallback-integration.test.ts",
     "src/__tests__/engine-team-leader.test.ts",

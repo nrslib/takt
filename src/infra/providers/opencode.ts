@@ -84,6 +84,9 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 
   return {
     cwd: options.cwd,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
     callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
@@ -122,6 +125,9 @@ function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions)
   return {
     cwd: options.cwd,
     sessionId: options.sessionId,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
     ...(model === undefined ? {} : { model }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     abortSignal: options.abortSignal,

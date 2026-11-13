@@ -92,6 +92,7 @@ import { LiveInterventionFileStore } from '../../../infra/workflow/live-interven
 import { createOutputFns } from './outputFns.js';
 import { validateWorkflowReportReferences } from '../../../core/workflow/instruction/report-reference-validation.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { closeOpenCodeServersForExternalDirectories } from '../../../infra/opencode/server-pool.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -358,6 +359,7 @@ async function executeWorkflowInternal(
     });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
+  let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   let cacciaFailure: { step: string; reason: string } | undefined;
   let activeStep: WorkflowStep;
@@ -564,6 +566,7 @@ async function executeWorkflowInternal(
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });
+      openCodeExternalDirectories = engine.openCodeExternalDirectories;
 
       engine.on('step:start', (startedStep: WorkflowStep, _iteration, _instruction, _provider, _workflowName,
         _resumeStepName, _stepIteration, stack) => {
@@ -755,6 +758,12 @@ async function executeWorkflowInternal(
     captureError(cleanupErrors, () => bootstrap.flushStream());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
+    const externalDirectories = openCodeExternalDirectories;
+    if (externalDirectories !== undefined) {
+      await captureAsyncError(cleanupErrors, async () => {
+        await closeOpenCodeServersForExternalDirectories(externalDirectories);
+      });
+    }
     await captureAsyncError(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),
