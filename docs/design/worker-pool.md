@@ -2,7 +2,7 @@
 
 ## 範囲
 
-daemon が自動実行する manager のゴールタスクと PR マージ用タスクを一つの dispatcher に通す。今回実装するのは組み込み worker と割り当て規則だけである。ネットワーク接続、登録、認証情報の配布、リモートでの失敗予約は後続タスクで実装する。この文書で「リモート」と付けた契約は後続実装の前提であり、現在の公開 API を意味しない。
+daemon が自動実行する manager のゴールタスクと PR マージ用タスクを一つの dispatcher に通す。組み込み worker に加え、リモート worker の登録、認証済み接続、割り当ての保存と lease による復旧を実装する。リモートでの clone・workflow 実行、実行資産と認証情報の配布、成果取得、run 記録の集約、通常の操作配送、失敗予約は後続タスクで実装する。
 
 手動の `takt run`、`takt watch`、対話モードは移行しない。`--resident` とバージョン差による daemon の扱いは別タスク `add-resident-daemon-option` が担当する。
 
@@ -12,7 +12,7 @@ daemon の `TaskDispatcher` が登録済みの全プロジェクトを読み、p
 
 組み込み worker は論理的には一つで、名前は `builtin`。各プロジェクトのローカル処理は daemon の管理する子プロセスに委譲する。子プロセスは候補の返却、指定されたタスクの確定取得、実行、保存を担当する。独自の割り当てループや待機キューを持たない。daemon へ同期 I/O を持ち込まず、子入口を到達性検査のプロセス境界として宣言する。
 
-割り当ての受け渡しは `TaskDispatcher.pull(workerName)` に統一する。worker adapter は空きがある間だけ pull し、dispatcher が両上限と既存割り当てを確認して確保した一件を受け取る。組み込みの `BuiltinWorkerAdapter` もこの境界を通った割り当てだけを host へ渡す。`builtin` の構成は daemon の組み立て箇所で指定する。後続のリモート通信も認証後に同じ pull 境界を利用し、ネットワークの受け渡しだけを別の adapter が担う。
+割り当ての受け渡しは `TaskDispatcher.pull(workerName)` に統一する。worker adapter は空きがある間だけ pull し、dispatcher が両上限と既存割り当てを確認して確保した一件を受け取る。組み込みの `BuiltinWorkerAdapter` もこの境界を通った割り当てだけを host へ渡す。`builtin` の構成は daemon の組み立て箇所で指定する。リモート通信も認証後に同じ pull 境界を利用し、ネットワークの受け渡しを `RemoteWorkerRuntime` が担う。
 
 根拠:
 
@@ -39,7 +39,7 @@ daemon:
 
 worker の使用数は全リポジトリの実行中割り当ての合計、プロジェクトの使用数は当該プロジェクトの実行中割り当ての合計である。worker とプロジェクトの両方に空きがあるときだけ同じ dispatch 内で確保する。起動失敗、確定取得の拒否、実行終了で解放する。プロセスが異常終了した場合は、そのプロセスツリーの終了を確認してから解放する。実行待ちは daemon 側の pending に残す。
 
-`src/core/worker-pool/scheduler.ts:3` が共通の判断を所有する。PR マージ用タスクは `builtin` だけを候補にする。後続実装では origin のないプロジェクトも同じ判断でリモートの候補から除く。ラベルによる振り分けは導入しない。
+`src/core/worker-pool/scheduler.ts:3` が共通の判断を所有する。PR マージ用タスクと origin のないプロジェクトのタスクは `builtin` だけを候補にする。ラベルによる振り分けは導入しない。
 
 `daemon.builtin_worker.concurrency` の schema は `src/core/models/daemon-config-schema.ts:3`、非同期読込は `src/features/daemon/configuration.ts:16`、読込・直列化は `src/infra/config/global/globalConfigCore.ts:234` と `src/infra/config/global/globalConfigSerializer.ts:22` にある。
 
@@ -48,6 +48,8 @@ worker の使用数は全リポジトリの実行中割り当ての合計、プ�
 割り当ての決定だけではタスクを running にしない。ローカル子プロセスが既存 project lock を取り、provider の準備後に保存済み状態を再確認する。ゴール排他内で、指定タスクが pending、削除中でない、ゴールが一時停止・中止されていないことを検証し、execution ID、実行所有者、worker 名を running への遷移と同時に保存する。
 
 `src/infra/task/taskLifecycleService.ts:253` の選択取得は既存の取得判定を共有する。`src/features/workerPool/builtinProjectRuntime.ts:134` が準備・取得・実行を接続する。`src/infra/task/project-execution-lock.ts:221` の PID と開始時刻を持つ project lock は手動 run/watch と共通である。準備中、実行中、終了保存中は lock を保持し、全実行の収束後に解放する。手動コマンドの競合時の理由表示を保持する。
+
+remote の割り当ては host の終了後も保存されるため、手動 run/watch の共通入口は project lock の取得後、実行開始前に保存済みの running と lease を確認する。有効な remote 割り当てがあれば開始を拒否する。remote の復元・lease 更新・完了受理でも project lock の所有権を確認し、別の手動所有者がいる間は lease を延長しない。期限切れの失敗保存はこの競合で妨げない。
 
 pending の取り消しは既存の `takt_remove_goal_task` が担当する。候補を読み取った後に削除されても、選択取得で存在を再確認するため実行されない。子への送信待ちを新しいタスク状態にしない。
 
@@ -75,15 +77,45 @@ pending の取り消しは既存の `takt_remove_goal_task` が担当する。�
 
 run の読み先は `src/features/mcp/operations.ts:105` の clone 所有権検証を保持する。`takt_get_run` はその run の段階、ログ、レポートを読む。`takt_tell_run` は `src/features/tasks/liveIntervention.ts:118` の既存指示保存を使う。停止要求は execution ID と生存所有者を検証して保存し、`src/features/tasks/execute/goalAbortMonitor.ts:49` が停止・一時停止・中止を実行へ伝える。停止要求だけで running を終端にせず、収束と保存の後に停止した理由を持つ失敗へ遷移する。requeue/retry の再開位置、作業場所、追加指示の意味も既存処理を保持する。
 
-## リモートの登録と通信（後続実装）
+## リモートの登録と通信
+
+daemon マシン上で登録し、出力されたトークンを worker の起動時に渡す。
+
+```sh
+takt worker add w1 --concurrency 2
+takt worker list
+takt worker --url https://daemon.example.test --token '<登録時のトークン>'
+takt worker remove w1
+```
+
+待受はグローバル設定で指定する。`remote_worker` がなければネットワーク待受を開始しない。host と port は必須で、port は 0〜65535 の整数とする。0 は OS による空きポートの選択に使える。外部公開時の HTTPS 終端は利用者が用意する。
+
+```yaml
+daemon:
+  builtin_worker:
+    concurrency: 0
+  remote_worker:
+    host: 127.0.0.1
+    port: 9090
+```
+
+ネットワークでは `POST /worker` の継続 HTTP 接続で NDJSON を交換する。認証、再接続、pull、heartbeat、完了通知と応答だけを扱い、会話 IPC は公開しない。登録は設定ディレクトリの private file `workers.json` に保存する。確定した pull 応答は登録世代を含む要求識別子のハッシュを使い、`worker-pull-responses/<登録世代>/` の private file へ一件ずつ保存する。再送時はその要求のファイルだけを読み、起動時に応答履歴全体をメモリへ読み込まない。登録 CLI と daemon の認証・送信は同じファイル排他を通り、登録削除後に古い認証結果から新規割り当てを送らない。登録削除では再認証できなくなった世代の応答履歴も削除し、他の有効な世代の履歴は保持する。
+
+worker 起動は共通のプロジェクト初期化を通らず、worker マシンの設定ファイルを必要としない。実行部分は `RemoteTaskExecutor` で差し替える。この段階の公開 CLI は executor を設定せず、接続と heartbeat を維持しながら新規 pull を送らない。実行未対応を理由に pending タスクを取得・失敗させない。テストでは偽 executor の有効な完了通知を受理するが、成果の branch・SHA は保存せず、remote タスクの取り込みを拒否する。
 
 worker の管理は daemon マシン上の `takt worker add/list/remove` だけが行う。登録は worker 名、登録世代、concurrency、トークンの検証用ハッシュを保存する。暗号学的乱数のトークン平文は登録時の端末に一度だけ出力し、設定、ログ、run 記録へ保存しない。list は名前と concurrency を表示し、トークンは表示しない。
 
-worker は URL とトークンだけを持ち、外向きに接続する。接続要求は TAKT バージョンと protocol version、worker の登録識別子を含める。localhost 以外の平文 HTTP、不明・削除済みトークン、異なる TAKT バージョンはタスクや認証情報を送る前に拒否し、worker は理由を表示して終了する。HTTPS の終端はリバースプロキシか VPN が担当する。TAKT 自身の TLS は作らない。
+worker は URL とトークンだけを持ち、外向きに接続する。接続要求は TAKT バージョンと protocol version、worker の登録識別子、executor の有無から決めた必須 boolean `canExecute` を含める。再接続でも同じ構成から伝える。daemon は認証・版照合後に実行可否を接続へ保持し、接続時と定期確認時の候補生成に同じ値を使う。実行不能な接続にも heartbeat を受理するが、割り当てと待機理由の判断では実行可能な候補に含めない。登録 concurrency は変更しない。localhost 以外の平文 HTTP、不明・削除済みトークン、異なる TAKT バージョンはタスクや認証情報を送る前に拒否し、worker は理由を表示して終了する。HTTPS の終端はリバースプロキシか VPN が担当する。TAKT 自身の TLS は作らない。
 
 通信は認証済みの継続接続で行う。メッセージは `protocolVersion`、`requestId`、`workerId`、`registrationGeneration` を持つ。worker は空きがあるときだけ `pull` を送る。daemon は保存済みの割り当てを確認し、空きの判断と割り当ての保存を済ませて一件ずつ返す。worker に実行待ちタスクを積まない。同じ request ID の再送には同じ結果を返し、重複取得しない。
 
-割り当てレコードは次を持つ。task status とは別の制御情報とする。
+候補がない通常待機では pull を未応答のまま保持し、daemon の確認ループで再評価する。直列化区間を抜けて待つため heartbeat・削除・終了処理を妨げず、待機時間に比例する空応答履歴を作らない。同じ未応答要求の再送は合流させる。claim の拒否で確定した空結果は保存し、応答喪失・再起動後も同じ ID へ同じ空結果を返す。切断では未確定の待機情報だけを解放し、確定結果と保存済み claim の回復を維持する。
+
+待機要求の claim・応答保存の失敗は、その要求を所有する接続の transport へ渡す。transport は受信処理の例外と同じ境界で変換し、認証拒否は理由を返して終了する。一般エラーは worker を識別できる診断を残し、その接続だけを切断する。診断と通信へ生の例外本文や token を含めず、重複した終了でも診断・終了を重ねない。他の worker の受信や待機処理は継続する。認証基盤の一般エラー、登録一覧取得、dispatch、snapshot 復元の共通障害は従来どおり呼出元へ伝播する。保存済み claim と確定応答は接続の終了で消さず、再送と lease の既存処理へ引き継ぐ。
+
+候補と割り当ての origin は共通の取得境界で HTTPS URL の userinfo を除去してから保存・転送する。秘密情報のない origin と元の Git 設定は変更しない。安全に解析できない HTTP URL は秘密値を含まない理由で remote 利用を拒否する。
+
+割り当てレコードは次を持つ。task record の `remote_assignment` に running と同じ更新で保存する。`assignment_generation` は再試行後も保持して次回の割り当てで増加させる。リモート所有者をローカル PID による中断回復の対象にしない。task status とは別の制御情報とする。
 
 | 項目 | 意味 |
 |---|---|
@@ -115,7 +147,7 @@ run 記録は daemon の当該プロジェクトの `.takt/runs/<run slug>/` に
 
 追加指示、停止、一時停止、中止は割り当てと control sequence に結び付く要求として永続化して送る。worker は受信と反映を ACK し、run 記録へ受領を残す。追加指示は既存の指示保存へ、一時停止と中止は既存の abort と結果保存へ接続する。停止したことを受領するまでは running を保持する。古い execution ID や世代への制御を新しい実行へ適用しない。
 
-heartbeat 間隔は5秒、再接続の猶予と lease は最後の正常確認から60秒とする。組み込みの生存確認にこの時刻判定を流用せず、ローカル PID・開始時刻とリモート接続・lease を区別する。
+heartbeat 間隔は5秒、再接続の猶予と lease は最後の正常確認から60秒とする。接続復旧と期限判定は今回の実装対象で、記録と通常操作の再送は後続実装とする。組み込みの生存確認にこの時刻判定を流用せず、ローカル PID・開始時刻とリモート接続・lease を区別する。
 
 切断の猶予内は running と割り当てを保持する。再接続で登録、execution ID、世代が一致すれば継続し、欠けた記録と未 ACK の制御を再送する。猶予を超えたら切断理由で失敗として記録し、自動で別 worker へ渡さない。失敗後の再接続には停止を返し、遅れて届いた完了や成果を拒否する。
 
@@ -148,10 +180,10 @@ Git トークンを clone URL や保存 Git config に埋め込まない。認�
 | --resident の daemon は停止の指示で止まる（stop / SIGTERM） | 範囲 | resident 別タスク |
 | --resident の daemon はバージョンの違う manager に入れ替えられない | 範囲 | resident 別タスク |
 | オプションなしの daemon は今と同じく仕事がなければ止まる | 範囲・dispatcher と組み込み worker | 既存動作を保持 |
-| daemon のマシンで worker を登録するとトークンが端末にだけ表示される | リモートの登録と通信 | 後続 |
-| 正しいトークンの worker は URL とトークンだけで daemon につながる | リモートの登録と通信 | 後続 |
-| つなぐことを許されない worker は断られる（未登録・削除済み・版違い・平文 URL） | リモートの登録と通信 | 後続 |
-| 実行中に登録を消すと worker は切り離され、その後に届いた成果は使われない | リモートの登録と通信・入力と成果 | 後続 |
+| daemon のマシンで worker を登録するとトークンが端末にだけ表示される | リモートの登録と通信 | 今回 |
+| 正しいトークンの worker は URL とトークンだけで daemon につながる | リモートの登録と通信 | 今回 |
+| つなぐことを許されない worker は断られる（未登録・削除済み・版違い・平文 URL） | リモートの登録と通信 | 今回 |
+| 実行中に登録を消すと worker は切り離され、その後に届いた成果は使われない | リモートの登録と通信・入力と成果 | 切断と遅延完了の拒否は今回、成果取得は後続 |
 | worker を登録していなければ組み込みの worker が今と同じく実行する | 設定と空き | 今回 |
 | 組み込みの worker の concurrency が 0 のとき daemon のマシンでは実行しない | 設定と空き・保存と表示 | 待機は今回、リモート接続後は後続 |
 | PR のマージ用のタスクは組み込みの worker だけで実行される | 設定と空き | 今回、リモート対向は後続 |
@@ -159,18 +191,18 @@ Git トークンを clone URL や保存 Git config に埋め込まない。認�
 | 複数のリポジトリのタスクは同じ worker pool で動き、それぞれの上限で抑えられる | 設定と空き | 偽 worker の検証は今回 |
 | 同じプロジェクトで takt run / takt watch と取り合わない | 確定取得と排他 | 今回 |
 | daemon のキューで待っているタスクは取り消せる | 確定取得と排他 | 今回 |
-| タスクの一覧にどの worker で動いているかが出る | 保存と表示 | 組み込みは今回 |
+| タスクの一覧にどの worker で動いているかが出る | 保存と表示 | 組み込みとリモートを実装 |
 | リモートの worker はコードを origin から、それ以外を daemon から受け取る | リモートの入力と成果 | 後続 |
 | daemon が成果を受け取ってからタスクを完了にする | リモートの入力と成果 | 後続 |
 | 成果を取得できない、または SHA が合わないときは完了にしない | リモートの入力と成果 | 後続 |
-| origin のないリポジトリのタスクは組み込みの worker だけが実行する | 設定と空き・リモートの入力と成果 | 後続のリモート適格性判定 |
+| origin のないリポジトリのタスクは組み込みの worker だけが実行する | 設定と空き・リモートの入力と成果 | 今回 |
 | リモートの worker の run の記録は daemon に集まる | リモートの記録・制御・接続復旧 | 後続 |
 | 追加指示、停止、ゴールの一時停止と中止はリモートの worker に届く | リモートの記録・制御・接続復旧 | 後続 |
 | ゴールの状態の変化がリモートのタスクに届く（pause / abort） | リモートの記録・制御・接続復旧 | 後続 |
-| worker との接続が戻らなければタスクは失敗として記録され、そこまでの記録は残る | リモートの記録・制御・接続復旧 | 後続 |
-| 失敗として記録したあとに接続が戻った worker はそのタスクを止め、成果は使われない | リモートの記録・制御・接続復旧 | 後続 |
-| 接続が定めた時間の内に戻ればタスクは続く | リモートの記録・制御・接続復旧 | 後続 |
-| daemon を起動し直してもリモートで実行中のタスクの扱いが崩れない | リモートの記録・制御・接続復旧 | 後続 |
+| worker との接続が戻らなければタスクは失敗として記録され、そこまでの記録は残る | リモートの記録・制御・接続復旧 | 切断失敗は今回、run 記録の集約は後続 |
+| 失敗として記録したあとに接続が戻った worker はそのタスクを止め、成果は使われない | リモートの記録・制御・接続復旧 | 停止と遅延完了の拒否は今回 |
+| 接続が定めた時間の内に戻ればタスクは続く | リモートの記録・制御・接続復旧 | running の継続は今回 |
+| daemon を起動し直してもリモートで実行中のタスクの扱いが崩れない | リモートの記録・制御・接続復旧 | 割り当てと元の期限の復元は今回 |
 | 失敗したタスクのために、失敗した worker の空きを 1 つ取っておく | リモートの失敗予約と再試行 | 後続 |
 | 失敗したタスクを戻すと同じ worker で途中から再開する（requeue / retry） | リモートの失敗予約と再試行 | 後続 |
 | 失敗したタスクを片付けると空きを手放し、作業場所を消す | リモートの失敗予約と再試行 | 後続 |

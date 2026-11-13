@@ -3,7 +3,7 @@ import { scheduleWorkerPool } from '../core/worker-pool/scheduler.js';
 
 function pendingTasks(projectId: string, count: number) {
   return Array.from({ length: count }, (_, index) => ({
-    projectId, taskName: `${projectId}-${index}`, mergeTask: false,
+    projectId, taskName: `${projectId}-${index}`, mergeTask: false, origin: 'https://example.com/team/repository.git',
   }));
 }
 
@@ -121,6 +121,29 @@ describe('worker pool scheduling', () => {
         { name: 'builtin', kind: 'builtin', concurrency: 1 }],
       projects: [{ projectId: 'R1', concurrency: 3 }],
       pendingTasks: [{ ...pendingTasks('R1', 1)[0]!, mergeTask: true }], activeAssignments: [],
+    })).toEqual([{ projectId: 'R1', taskName: 'R1-0', workerName: 'builtin' }]);
+  });
+
+  it('leaves originless work pending while a remote worker accepts work with an origin', () => {
+    const tasks = [
+      { ...pendingTasks('local-only', 1)[0]!, origin: undefined },
+      ...pendingTasks('shared', 1),
+    ];
+    expect(scheduleWorkerPool({
+      workers: [{ name: 'builtin', kind: 'builtin', concurrency: 0 },
+        { name: 'w1', kind: 'remote', concurrency: 2 }],
+      projects: [{ projectId: 'local-only', concurrency: 2 }, { projectId: 'shared', concurrency: 2 }],
+      pendingTasks: tasks, activeAssignments: [],
+    })).toEqual([{ projectId: 'shared', taskName: 'shared-0', workerName: 'w1' }]);
+  });
+
+  it('routes originless work to builtin even when a remote worker has capacity and is listed first', () => {
+    const tasks = [{ ...pendingTasks('R1', 1)[0]!, origin: undefined }];
+    expect(scheduleWorkerPool({
+      workers: [{ name: 'w1', kind: 'remote', concurrency: 2 },
+        { name: 'builtin', kind: 'builtin', concurrency: 1 }],
+      projects: [{ projectId: 'R1', concurrency: 2 }],
+      pendingTasks: tasks, activeAssignments: [],
     })).toEqual([{ projectId: 'R1', taskName: 'R1-0', workerName: 'builtin' }]);
   });
 });

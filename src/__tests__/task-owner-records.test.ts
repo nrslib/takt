@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRecordSchema, serializeTaskRecord, type TaskRecord } from '../infra/task/schema.js';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
 import {
   buildClaimedTaskRecord, buildExceededTaskRecord, buildRetryTaskRecord, buildTerminalTaskRecord,
 } from '../infra/task/taskRecordMutations.js';
@@ -44,6 +46,19 @@ describe('persisted ordinary task owner metadata', () => {
   it('clears both owner fields when retry queues a task', () => {
     const retried = buildRetryTaskRecord(running(), 'pending', { resumeSource: { resumeMode: 'retry' } });
     expect(TaskRecordSchema.parse(retried)).toMatchObject({ owner_pid: null, owner_start_time: null });
+  });
+
+  it('clears the old remote assignment on retry while keeping its monotonically increasing generation', () => {
+    const assignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: 'owner-test', workerId: 'w1', workerName: 'w1',
+      registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 3, requestId: 'r1',
+      originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+      lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+    const retried = buildRetryTaskRecord({ ...running(), owner_pid: null, owner_start_time: null,
+      remote_assignment: assignment, assignment_generation: 3, worker_name: 'w1' }, 'pending', {});
+    const saved = TaskRecordSchema.parse(serializeTaskRecord(retried));
+    expect(saved.remote_assignment).toBeUndefined();
+    expect(saved.worker_name).toBeUndefined();
+    expect(saved.assignment_generation).toBe(3);
   });
 
   it('clears the identity when a task becomes failed', () => {

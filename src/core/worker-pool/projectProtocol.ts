@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { RemoteProjectRequestSchema, RemoteProjectReplySchema, RemoteTaskRecordSchema } from './remoteProtocol.js';
 
 const StartResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('started') }).strict(),
@@ -8,6 +9,7 @@ const StartResultSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const ProjectRequestSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('remote'), id: z.string(), request: RemoteProjectRequestSchema }).strict(),
   z.object({ kind: z.literal('inspect'), id: z.string() }).strict(),
   z.object({ kind: z.literal('waiting'), id: z.string(), reasons: z.array(z.object({
     taskName: z.string().min(1), reason: z.string().optional(),
@@ -17,9 +19,11 @@ export const ProjectRequestSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const ProjectReplySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('remote'), id: z.string(), result: RemoteProjectReplySchema }).strict(),
   z.object({ kind: z.literal('snapshot'), id: z.string(), work: z.object({
     concurrency: z.number().int().positive(), available: z.boolean(),
-    tasks: z.array(z.object({ taskName: z.string(), mergeTask: z.boolean() }).strict()),
+    tasks: z.array(z.object({ taskName: z.string(), mergeTask: z.boolean(), origin: z.string().min(1).optional() }).strict()),
+    remoteRecords: z.array(RemoteTaskRecordSchema).optional(),
   }).strict() }).strict(),
   z.object({ kind: z.literal('started'), id: z.string(), result: StartResultSchema }).strict(),
   z.object({ kind: z.literal('updated'), id: z.string() }).strict(),

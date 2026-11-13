@@ -20,6 +20,8 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
+import { RemoteTaskLifecycle } from '../../infra/task/remoteTaskLifecycle.js';
+import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
 
 const log = createLogger('builtin-worker');
 
@@ -35,9 +37,10 @@ export class BuiltinProjectRuntime implements WorkerProject {
   private preparationFailure: unknown;
   private preparationStopRequested = false;
   private claimRetryAt: number | undefined;
+  private readonly remoteTasks: RemoteTaskLifecycle;
 
   constructor(private readonly cwd: string, private readonly finished: (taskName: string) => void,
-    private readonly failed: (error: unknown) => void) {
+    private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false) {
     const onAcquisitionError = (error: unknown): never => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
         throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
@@ -46,6 +49,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
     };
     this.runner = new TaskRunner(cwd, { goalTasksOnly: true, onAcquisitionError });
     this.store = new TaskStore(cwd, onAcquisitionError);
+    this.remoteTasks = new RemoteTaskLifecycle(cwd, this.store);
   }
 
   private resolveConfig(): { concurrency: number; ignoreExceed: boolean } {
@@ -95,8 +99,17 @@ export class BuiltinProjectRuntime implements WorkerProject {
         }
       });
       if (this.config === undefined || (tasks.length > 0 && this.active.size === 0 && this.starting.size === 0)) this.resolveConfig();
+      const origin = this.remoteEnabled ? await this.remoteTasks.origin() : undefined;
+      const remoteRecords = this.remoteEnabled ? this.remoteTasks.records() : [];
+      if (remoteRecords.some((record) => record.status === 'running') && this.lock === undefined
+        && (owner === undefined || owner.pid === process.pid)) {
+        this.lock = acquireProjectExecutionLock(this.cwd, 'run');
+        this.lock.updateState('running');
+      }
       return { concurrency: this.config!.concurrency, available,
-        tasks: tasks.map((task) => ({ taskName: task.name, mergeTask: task.merge_task === true })),
+        ...(remoteRecords.length === 0 ? {} : { remoteRecords }),
+        tasks: tasks.map((task) => ({ taskName: task.name, mergeTask: task.merge_task === true,
+          ...(origin === undefined ? {} : { origin }) })),
       };
     } catch (error) { return this.acquisitionFailed(error); }
   }
@@ -108,6 +121,32 @@ export class BuiltinProjectRuntime implements WorkerProject {
       for (const { taskName, reason } of reasons) this.runner.setPendingWaitingReason([taskName], reason);
       return { kind: 'updated' };
     } catch (error) { return this.acquisitionFailed(error); }
+  }
+
+  async remote(request: RemoteProjectRequest): Promise<RemoteProjectReply> {
+    if (!this.remoteEnabled || this.controller.signal.aborted) throw new Error('Remote worker project is unavailable');
+    if (request.kind === 'claim') {
+      if (!resolveManagerConfig(this.cwd).autoRun) return { kind: 'claim', assignment: null };
+    }
+    if (request.kind !== 'fail') {
+      if (this.lock === undefined) {
+        try { this.lock = acquireProjectExecutionLock(this.cwd, 'run'); this.lock.updateState('running'); }
+        catch (error) {
+          if (error instanceof ProjectExecutionAlreadyRunningError) return request.kind === 'claim'
+            ? { kind: 'claim', assignment: null } : { kind: 'updated', record: null };
+          throw error;
+        }
+      }
+    }
+    try {
+      this.config ??= this.resolveConfig();
+      const result = await this.remoteTasks.request(request, this.config.concurrency);
+      if (result.kind === 'unreadable') {
+        this.saveCompletion(this.runner.failUnreadableGoalTask(result.taskName));
+        return { kind: 'claim', assignment: null };
+      }
+      return result;
+    } finally { this.releaseIdleLock(); }
   }
 
   start(taskName: string, workerName: string): Promise<ProjectStartResult> {
@@ -203,6 +242,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
 
   private releaseIdleLock(): void {
     if (this.controller.signal.aborted || this.closing !== undefined || this.active.size !== 0 || this.starting.size !== 0) return;
+    if (this.remoteEnabled && this.remoteTasks.records().some((record) => record.status === 'running')) return;
     if (this.preparationFailure !== undefined) {
       if (!this.preparationStopRequested) {
         this.preparationStopRequested = true;

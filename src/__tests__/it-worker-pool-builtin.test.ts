@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { startDaemon } from '../features/daemon/runDaemon.js';
@@ -16,6 +17,73 @@ import { packageVersion } from '../shared/package-info.js';
 import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+
+function workerCliFixture() {
+  const directory = getGlobalConfigDir();
+  const home = mkdtempSync(join(directory, 'worker-cli-home-'));
+  const cwd = mkdtempSync(join(directory, 'worker-cli-cwd-'));
+  const configDirectory = join(home, '.takt');
+  return {
+    configDirectory,
+    run(args: readonly string[]) {
+      return new AsyncCommand().run({
+        executable: process.execPath,
+        args: [join(process.cwd(), 'dist/app/cli/index.js'), '--no-update-notifier', 'worker', ...args],
+        cwd, env: { ...process.env, HOME: home, USERPROFILE: home, TAKT_CONFIG_DIR: configDirectory, NODE_OPTIONS: '' },
+        maxOutputBytes: 64 * 1024,
+      }, { signal: new AbortController().signal, timeoutMs: 10_000 });
+    },
+  };
+}
+
+it('persists worker registration for list and remove in separate CLI processes', async () => {
+  const f = workerCliFixture();
+  const registered = await f.run(['add', 'w1', '--concurrency', '2']);
+  expect(registered.code, Buffer.from(registered.stderr).toString()).toBe(0);
+  const token = Buffer.from(registered.stdout).toString().trim();
+  expect(token.split('\n')).toHaveLength(1);
+  expect(token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+
+  const listed = await f.run(['list']);
+  expect(listed.code, Buffer.from(listed.stderr).toString()).toBe(0);
+  const output = Buffer.from(listed.stdout).toString();
+  expect(output).toMatch(/\bw1\b/);
+  expect(output).toMatch(/\b2\b/);
+  expect(output).not.toContain(token);
+
+  const removed = await f.run(['remove', 'w1']);
+  expect(removed.code, Buffer.from(removed.stderr).toString()).toBe(0);
+  const afterRemoval = await f.run(['list']);
+  expect(afterRemoval.code, Buffer.from(afterRemoval.stderr).toString()).toBe(0);
+  expect(Buffer.from(afterRemoval.stdout).toString()).not.toMatch(/\bw1\b/);
+});
+
+it('rejects a non-localhost HTTP URL before opening a connection or initializing worker configuration', async () => {
+  const f = workerCliFixture();
+  const connections = vi.fn();
+  const server = createServer((_request, response) => { response.writeHead(403).end('Unexpected worker connection'); });
+  server.on('connection', connections);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Test listener has no TCP address');
+    expect(existsSync(f.configDirectory)).toBe(false);
+
+    const result = await f.run(['--url', `http://0.0.0.0:${address.port}`, '--token', 'rejected-worker-test-token']);
+
+    expect(result.code).not.toBeNull();
+    expect(result.code).not.toBe(0);
+    expect(Buffer.from(result.stdout).toString() + Buffer.from(result.stderr).toString()).toMatch(/https/i);
+    expect(connections).not.toHaveBeenCalled();
+    expect(existsSync(f.configDirectory)).toBe(false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve(); }));
+  }
+});
 
 it.each([false, true])('keeps mergeTask=%s pending and exposes its waiting reason through the real daemon', async (mergeTask) => {
   const directory = getGlobalConfigDir();

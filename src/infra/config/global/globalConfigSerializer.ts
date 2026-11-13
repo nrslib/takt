@@ -21,6 +21,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   };
   if (config.daemon !== undefined) {
     raw.daemon = {
+      ...(config.daemon.remoteWorker === undefined ? {} : { remote_worker: config.daemon.remoteWorker }),
       ...(config.daemon.builtinWorker === undefined ? {} : { builtin_worker: {
         ...(config.daemon.builtinWorker.concurrency === undefined ? {} : { concurrency: config.daemon.builtinWorker.concurrency }),
       } }),

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   ensure: vi.fn(),
 }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
+vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: [] }; } } }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({
   ...await original<typeof import('../infra/task/project-execution-lock.js')>(),
   acquireProjectExecutionLock: mocks.acquire,
