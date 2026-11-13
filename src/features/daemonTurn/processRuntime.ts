@@ -33,13 +33,16 @@ interface ActiveTurn {
 const sameTurn = (a: TurnIdentity, b: TurnIdentity): boolean => a.conversationId === b.conversationId
   && a.operationId === b.operationId && a.generation === b.generation;
 
+/** 結合後の出力が途中経過テキストの上限を超える場合は結合しない。送信が詰まっている間に、1 件の待ちが出力全体まで膨らむのを防ぐ。 */
 function mergeToolOutput(previous: ConversationProgress, next: ConversationProgress): ConversationProgress | undefined {
   if (typeof previous === 'string' || previous.kind !== 'tool_event' || typeof next === 'string' || next.kind !== 'tool_event') return undefined;
   const before = previous.event;
   const after = next.event;
   if (before.type !== 'tool_output' || after.type !== 'tool_output' || before.data.id !== after.data.id
     || before.data.tool !== after.data.tool || before.toolActivity?.callId !== after.toolActivity?.callId) return undefined;
-  return { ...previous, event: { ...before, data: { ...before.data, output: before.data.output + after.data.output } } };
+  const output = before.data.output + after.data.output;
+  if (Buffer.byteLength(output) > MAX_PROCESS_PROGRESS_BYTES) return undefined;
+  return { ...previous, event: { ...before, data: { ...before.data, output } } };
 }
 
 /** 待機対象の Promise は失敗しない。中断されたら待つのをやめる。 */

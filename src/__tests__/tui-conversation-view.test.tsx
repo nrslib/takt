@@ -3024,6 +3024,30 @@ describe('ConversationView tool history', () => {
     }
   });
 
+  it('should keep the previous turn tool history before a local command line in the transcript', async () => {
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/accept', { kind: 'notice', message: 'No assistant response found.' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const first = await begin(app, conversation);
+      emit(first, { type: 'tool_use', data: { id: 'old', tool: 'Read', input: { file_path: 'old-turn.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'old', content: 'old-turn-result', isError: false } });
+      conversation.resolveWith({ kind: 'assistant_response', content: 'committed first answer' });
+      await flushFrames();
+      await press(app, '/accept');
+      await press(app, ENTER);
+      await press(app, 'next question');
+      const frame = await press(app, ENTER);
+      expect(countOccurrences(frame, 'old-turn-result')).toBe(1);
+      expect(frame.indexOf('old-turn-result')).toBeLessThan(frame.indexOf('/accept'));
+      expect(frame.indexOf('/accept')).toBeLessThan(frame.indexOf('next question'));
+    } finally {
+      app.unmount();
+    }
+  });
+
   it('should associate reverse completions by call context and keep a failure after a duplicate success', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());

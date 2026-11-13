@@ -30,6 +30,7 @@ import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
 import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
 
 const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false }));
 vi.mock('node:fs/promises', async (original) => {
@@ -151,7 +152,7 @@ it('sends, clones, and redacts only the appended part of each output chunk of a 
   vi.spyOn(sensitiveText, 'createSensitiveTextStreamRedactor').mockImplementation(() => {
     const redactor = createRedactor();
     return { write: (text, source) => { redacted.push(text); return redactor.write(text, source); },
-      flushAvailable: (source) => redactor.flushAvailable(source), flush: (source) => redactor.flush(source) };
+      flush: (source) => redactor.flush(source) };
   });
   const chunk = `${'o'.repeat(1023)}\n`;
   const count = 3000;
@@ -193,6 +194,53 @@ it('does not deliver a secret tool input value split across output chunks and se
   expect(completed).toMatchObject({ kind: 'tool_history_update', update: { entries: [{ key, status: 'success', output: 'using [REDACTED] now\ndeploying' }] } });
 });
 
+it('does not deliver the continuation lines of a quoted secret value that spans three output chunks', async () => {
+  const directory = await root();
+  const f = toolOwner(directory);
+  await f.store.create(record());
+  f.start(turn);
+  const parts = ['part1-secret', 'part2-secret', 'part3-secret'];
+  await f.owner.progress(turn, toolEvent(turn, 'use', { type: 'tool_use', data: { id: 'env', tool: 'Bash', input: { command: 'cat deploy.env' } } }), signal());
+  for (const [index, output] of [`API_TOKEN="${parts[0]}\n`, `${parts[1]}\n`, `${parts[2]}"\nready\n`].entries()) {
+    await f.owner.progress(turn, toolEvent(turn, `output-${index}`, { type: 'tool_output', data: { id: 'env', tool: 'Bash', output } }), signal());
+  }
+  const key = (await f.snapshotHistory())!.history.entries[0]!.key;
+
+  expect(f.streamedText(key)).toBe('API_TOKEN="[REDACTED]"\nready\n');
+  const delivered = f.toolOutputs().flatMap((output) => output.kind === 'tool_history_update'
+    ? [...output.update.entries.map((entry) => entry.output), output.update.output?.text ?? '']
+    : output.kind === 'tool_history' ? output.history.history.entries.map((entry) => entry.output) : []);
+  expect(delivered.length).toBeGreaterThan(0);
+  for (const text of delivered) for (const part of parts) expect(text).not.toContain(part);
+});
+
+it.each(splitSecretScenarios.flatMap((scenario) => [
+  { known: false, input: { command: 'cat deploy.env' } },
+  { known: true, input: { command: 'cat deploy.env', api_key: 'seed-secret' } },
+].map(({ known, input }) => ({ scenario, known, input }))))(
+  'does not deliver any part of a secret that output chunks split in the middle of the value: $scenario.name (known=$known)',
+  async ({ scenario, input }) => {
+    const directory = await root();
+    const f = toolOwner(directory);
+    await f.store.create(record());
+    f.start(turn);
+    await f.owner.progress(turn, toolEvent(turn, 'use', { type: 'tool_use', data: { id: 'env', tool: 'Bash', input } }), signal());
+    for (const [index, output] of scenario.chunks.entries()) {
+      await f.owner.progress(turn, toolEvent(turn, `output-${index}`, { type: 'tool_output', data: { id: 'env', tool: 'Bash', output } }), signal());
+    }
+    const key = (await f.snapshotHistory())!.history.entries[0]!.key;
+
+    expect(f.streamedText(key)).toBe(sensitiveText.sanitizeSensitiveText(scenarioText(scenario)));
+    await f.owner.progress(turn, toolEvent(turn, 'result', { type: 'tool_result', data: { id: 'env', content: '', isError: false } }), signal());
+    await f.finish(turn);
+    const delivered = f.toolOutputs().flatMap((output) => output.kind === 'tool_history_update'
+      ? [...output.update.entries.map((entry) => entry.output), output.update.output?.text ?? '']
+      : output.kind === 'tool_history' ? output.history.history.entries.map((entry) => entry.output) : []);
+    const saved = await readFile(toolHistoryFile(directory), 'utf8');
+    for (const text of [f.streamedText(key), ...delivered, saved]) expect(secretFragmentsIn(text, scenario)).toEqual([]);
+  },
+);
+
 it('does not save or deliver the first part of a secret when the output chunks after it were dropped', async () => {
   const directory = await root();
   const f = toolOwner(directory);
@@ -221,6 +269,33 @@ it('does not save or deliver the first part of a secret when the output chunks a
   const delivered = f.toolOutputs().flatMap((output) => output.kind === 'tool_history_update'
     ? [...output.update.entries.flatMap((entry) => [entry.output, entry.result ?? '']), output.update.output?.text ?? '']
     : output.kind === 'tool_history' ? output.history.history.entries.flatMap((entry) => [entry.output, entry.result ?? '']) : []);
+  expect(delivered.length).toBeGreaterThan(0);
+  for (const text of delivered) expect(text).not.toContain(leaked);
+});
+
+it('does not save or deliver the first part of a secret from the output when the result is empty and the later chunks were dropped', async () => {
+  const directory = await root();
+  const f = toolOwner(directory);
+  await f.store.create(record());
+  f.start(turn);
+  const secret = 'live-secret-0123456789abcdef';
+  const leaked = secret.slice(0, 9);
+  await f.owner.progress(turn, toolEvent(turn, 'use', { type: 'tool_use', data: { id: 'deploy', tool: 'Bash', input: { api_key: secret } } }), signal());
+  await f.owner.progress(turn, toolEvent(turn, 'output-1', { type: 'tool_output', data: { id: 'deploy', tool: 'Bash', output: `ready\nusing ${leaked}` } }), signal());
+  await f.owner.progress(turn, toolEvent(turn, 'result', { type: 'tool_result', data: { id: 'deploy', content: '', isError: false } }), signal());
+  await f.finish(turn);
+
+  const finished = await f.snapshotHistory();
+  expect(finished?.history.entries[0]).toMatchObject({ toolId: 'deploy', status: 'success' });
+  expect(finished?.history.entries[0]?.output).toContain('ready');
+  expect(finished?.history.entries[0]?.output).not.toContain(leaked);
+  const saved = (await readFile(toolHistoryFile(directory), 'utf8')).split('\n').filter((line) => line !== '')
+    .flatMap((line) => (JSON.parse(line) as { entries?: Array<{ output: string }> }).entries ?? []);
+  expect(saved.length).toBeGreaterThan(0);
+  for (const entry of saved) expect(entry.output).not.toContain(leaked);
+  const delivered = f.toolOutputs().flatMap((output) => output.kind === 'tool_history_update'
+    ? [...output.update.entries.map((entry) => entry.output), output.update.output?.text ?? '']
+    : output.kind === 'tool_history' ? output.history.history.entries.map((entry) => entry.output) : []);
   expect(delivered.length).toBeGreaterThan(0);
   for (const text of delivered) expect(text).not.toContain(leaked);
 });
@@ -410,7 +485,7 @@ it('restores the whole current history on reconnect, ignores repeated and stale 
   await f.owner.progress(turn, toolEvent(turn, 'a-output', { type: 'tool_output', data: { id: 'a', tool: 'Read', output: 'partial' } }), signal());
   await f.owner.progress(turn, toolEvent(turn, 'a-result', { type: 'tool_result', data: { id: 'a', content: 'done', isError: false } }), signal());
   await f.owner.progress(turn, toolEvent(turn, 'b-use', { type: 'tool_use', data: { id: 'b', tool: 'Bash', input: { command: 'sleep' } } }), signal());
-  await f.owner.progress(turn, toolEvent(turn, 'b-output', { type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'waiting' } }), signal());
+  await f.owner.progress(turn, toolEvent(turn, 'b-output', { type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'waiting\n' } }), signal());
   const delivered = f.toolOutputs().length;
   await f.owner.progress(turn, use, signal());
   const stale = { ...turn, generation: 2 };
@@ -420,7 +495,7 @@ it('restores the whole current history on reconnect, ignores repeated and stale 
   expect(await f.snapshotHistory()).toMatchObject({ operationId: turn.operationId, generation: turn.generation, finished: false,
     history: { sequence: 5, entries: [
       { toolId: 'a', output: '', result: 'done', status: 'success' },
-      { toolId: 'b', output: 'waiting', status: 'running' },
+      { toolId: 'b', output: 'waiting\n', status: 'running' },
     ] } });
   await f.finish(turn);
   const finished = f.toolOutputs().filter((output) => output.kind === 'tool_history').at(-1);
@@ -496,7 +571,8 @@ it('redacts secret tool input values from delivered and stored results without t
   const secret = `private-${'x'.repeat(9 * 1024)}`;
   await f.owner.progress(turn, toolEvent(turn, 'secret-use', { type: 'tool_use', data: { id: 'secret-tool', tool: 'Bash', input: { api_key: secret } } }), signal());
   await f.owner.progress(turn, toolEvent(turn, 'secret-result', { type: 'tool_result', data: { id: 'secret-tool', content: `echo ${secret}`, isError: false } }), signal());
-  const output = 'x'.repeat(16 * 1024 + 1);
+  // 改行のない行は保留の上限（1 万文字）を超えると伏せるので、行に分けて 16KB を超える出力にする。
+  const output = `${'x'.repeat(1023)}\n`.repeat(16) + 'x';
   await f.owner.progress(turn, toolEvent(turn, 'stream-use', { type: 'tool_use', data: { id: 'stream-tool', tool: 'Bash', input: {} } }), signal());
   await f.owner.progress(turn, toolEvent(turn, 'stream-output', { type: 'tool_output', data: { id: 'stream-tool', tool: 'Bash', output } }), signal());
 

@@ -1,11 +1,12 @@
 import {
+  type BoundedSensitiveValues,
   createBoundedSensitiveValues,
   sanitizeSensitiveTextWithKnownValues,
 } from '../utils/sensitiveText.js';
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 import type { ToolActivityEntry, ToolActivityGroup, ToolActivityPage, ToolActivityProjection } from './types.js';
 import { classifyToolResult } from './result.js';
-import { sanitizeToolResultText, toolResultSensitiveValues } from './sanitize.js';
+import { sanitizeToolResultText } from './sanitize.js';
 
 export const COMPACT_RESULT_LINES = 3;
 export const COMPACT_RESULT_BYTES = 1024;
@@ -70,7 +71,14 @@ function action(tool: string): string {
   }
 }
 
-function displayResult(entry: ToolActivityEntry, resultText?: string): { text: string; source: unknown } {
+/** 表示する結果のテキストと、結果や入力ラベルのマスクに使う秘密値。 */
+export interface ToolActivityResultView {
+  text: string;
+  sensitiveValues: BoundedSensitiveValues;
+}
+
+/** entry の結果全体を分類し、秘密値を集めてマスクする。出力全体を処理するので、entry が変わったときだけ呼ぶ。 */
+export function toolActivityResultView(entry: ToolActivityEntry): ToolActivityResultView {
   const raw = entry.result === undefined || entry.result === '' ? entry.output : entry.result;
   const { text, parsed } = classifyToolResult(raw, entry.status !== 'running');
   const known = createBoundedSensitiveValues();
@@ -78,10 +86,7 @@ function displayResult(entry: ToolActivityEntry, resultText?: string): { text: s
   known.collect(raw);
   known.collect(entry.output);
   known.collect(parsed);
-  // resultText は ToolActivityDisplay が追記分ごとに正規化済みなので、描画のたびに全体を正規化し直さない。
-  const sanitized = resultText === undefined ? sanitizeToolResultText(text, known)
-    : sanitizeSensitiveTextWithKnownValues(resultText, toolResultSensitiveValues(known));
-  return { text: sanitized, source: known };
+  return { text: sanitizeToolResultText(text, known), sensitiveValues: known };
 }
 
 export function toolActivityDetail(
@@ -89,12 +94,12 @@ export function toolActivityDetail(
   offset = 0,
   maxLines = DETAIL_RESULT_LINES,
   maxBytes = DETAIL_RESULT_BYTES,
-  resultText?: string,
+  view?: ToolActivityResultView,
 ): ToolActivityPage {
   if (!Number.isInteger(offset) || offset < 0
     || !Number.isInteger(maxLines) || maxLines < 1
     || !Number.isInteger(maxBytes) || maxBytes < 4) throw new RangeError('Invalid tool activity page bounds');
-  const { text } = displayResult(entry, resultText);
+  const { text } = view ?? toolActivityResultView(entry);
   return textPage(text, offset, Math.min(maxLines, DETAIL_RESULT_LINES), Math.min(maxBytes, DETAIL_RESULT_BYTES));
 }
 
@@ -117,21 +122,25 @@ function textPage(text: string, offset: number, maxLines: number, maxBytes: numb
   };
 }
 
-function projectLabel(text: string, source: unknown): string {
+export function projectLabel(text: string, source: unknown): string {
   const safe = sanitizeTerminalText(sanitizeSensitiveTextWithKnownValues(text, source));
   const page = textPage(safe, 0, 1, COMPACT_INPUT_BYTES - Buffer.byteLength(NAME_TRUNCATION_MARKER));
   return page.text + (page.truncated ? NAME_TRUNCATION_MARKER : '');
 }
 
-export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 'expanded' = 'compact', resultText?: string): ToolActivityProjection {
-  const { text, source } = displayResult(entry, resultText);
+export function projectToolActivity(
+  entry: ToolActivityEntry,
+  mode: 'compact' | 'expanded' = 'compact',
+  view?: ToolActivityResultView,
+): ToolActivityProjection {
+  const { text, sensitiveValues } = view ?? toolActivityResultView(entry);
   const inputBytes = mode === 'compact' ? COMPACT_INPUT_BYTES : DETAIL_RESULT_BYTES;
-  const input = textPage(projectToolInput(entry.tool, entry.input, source), 0,
+  const input = textPage(projectToolInput(entry.tool, entry.input, sensitiveValues), 0,
     mode === 'compact' ? 1 : DETAIL_RESULT_LINES,
     inputBytes - Buffer.byteLength(INPUT_TRUNCATION_MARKER));
   return {
-    key: entry.key, tool: projectLabel(entry.tool, source),
-    action: projectLabel(action(entry.tool), source),
+    key: entry.key, tool: projectLabel(entry.tool, sensitiveValues),
+    action: projectLabel(action(entry.tool), sensitiveValues),
     input: input.text + (input.truncated ? INPUT_TRUNCATION_MARKER : ''), status: entry.status,
     startedAt: entry.startedAt, completedAt: entry.completedAt,
     startSequence: entry.startSequence, completionSequence: entry.completionSequence,
@@ -143,11 +152,14 @@ export function projectToolActivity(entry: ToolActivityEntry, mode: 'compact' | 
   };
 }
 
-export function groupToolActivities(entries: readonly ToolActivityEntry[], resultTexts?: ReadonlyMap<string, string>): ToolActivityGroup[] {
+export function groupToolActivities(
+  entries: readonly ToolActivityEntry[],
+  views?: ReadonlyMap<string, ToolActivityResultView>,
+): ToolActivityGroup[] {
   const groups: ToolActivityGroup[] = [];
   let previousTool: string | undefined;
   for (const entry of entries) {
-    const projection = projectToolActivity(entry, 'compact', resultTexts?.get(entry.key));
+    const projection = projectToolActivity(entry, 'compact', views?.get(entry.key));
     const previous = groups.at(-1);
     const tool = canonicalToolName(entry.tool);
     if (previous !== undefined && previousTool === tool) previous.entries.push(projection);

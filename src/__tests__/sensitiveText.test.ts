@@ -9,10 +9,10 @@ import {
   sanitizeSensitiveValue,
   sanitizeSensitiveValueWithKnownValues,
   sanitizeSensitiveText,
-  writeSensitiveTextInChunks,
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
+import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
 
 describe('sensitiveText', () => {
   describe.each(["'", '"'])('shell header enclosed in %s', (quote) => {
@@ -496,18 +496,110 @@ describe('sensitiveText', () => {
     const text = `using known-secret-value\n${lines}`;
     expect(text.length).toBeGreaterThan(10_000);
 
-    const output = writeSensitiveTextInChunks(redactor, text, source) + redactor.flush(source);
+    const output = redactor.write(text, source) + redactor.flush(source);
 
     expect(output).toBe(`using [REDACTED]\n${lines}`);
   });
 
-  it('still fails closed for an oversized pending credential written in chunks', () => {
+  it.each([
+    ['Authorization: Bearer ', 'Authorization: Bearer [REDACTED]\n'],
+    ['token=', 'token=[REDACTED]\n'],
+  ])('redacts a credential value of 5,000 characters written at once with known sensitive values: %s', (prefix, expected) => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const source = { api_key: 'seed-secret' };
+
+    const output = redactor.write(`${prefix}${'x'.repeat(5000)}\n`, source) + redactor.flush(source);
+
+    expect(output).toBe(expected);
+  });
+
+  it('emits a line longer than the pending limit written at once with known sensitive values', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const source = { api_key: 'seed-secret' };
+    const text = `${'a'.repeat(30_000)}\n`;
+
+    const output = redactor.write(text, source) + redactor.flush(source);
+
+    expect(output).toBe(text);
+  });
+
+  it.each([
+    ['without known sensitive values', {}],
+    ['with known sensitive values', { api_key: 'seed-secret' }],
+  ])('redacts a quoted credential value that spans three stream writes %s', (_label, source) => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const chunks = ['API_TOKEN="part1-secret\n', 'part2-secret\n', 'part3-secret"\nready\n'];
+
+    const output = chunks.map((chunk) => redactor.write(chunk, source)).join('') + redactor.flush(source);
+
+    expect(output).toBe('API_TOKEN="[REDACTED]"\nready\n');
+  });
+
+  it.each([
+    ['without known sensitive values', {}],
+    ['with known sensitive values', { api_key: 'seed-secret' }],
+  ])('keeps a closed multi-line quoted credential value with the next credential on its closing line %s', (_label, source) => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const chunks = ['API_TOKEN="part1-secret\n', 'part2-secret\n', 'part3-secret" password=', 'next-secret\n'];
+
+    const output = chunks.map((chunk) => redactor.write(chunk, source)).join('') + redactor.flush(source);
+
+    expect(output).toBe('API_TOKEN="[REDACTED]" password=[REDACTED]\n');
+  });
+
+  it('still fails closed for an oversized pending credential written at once', () => {
     const secret = `oversized-${'x'.repeat(10_050)}`;
     const redactor = createSensitiveTextStreamRedactor();
 
-    const output = writeSensitiveTextInChunks(redactor, `Authorization: Bearer ${secret}`, {}) + redactor.flush({});
+    const output = redactor.write(`Authorization: Bearer ${secret}`, {}) + redactor.flush({});
 
     expect(output).toBe('[REDACTED]');
+  });
+
+  describe('stream redactor that commits only complete lines', () => {
+    const sources = [
+      ['without known sensitive values', {}],
+      ['with known sensitive values', { api_key: 'seed-secret' }],
+    ] as const;
+
+    it.each(splitSecretScenarios.flatMap((scenario) => sources.map(([label, source]) => ({ scenario, label, source }))))(
+      'emits no part of the secret and masks the whole line: $scenario.name $label', ({ scenario, source }) => {
+        const redactor = createSensitiveTextStreamRedactor();
+
+        const output = scenario.chunks.map((chunk) => redactor.write(chunk, source)).join('') + redactor.flush(source);
+
+        expect(secretFragmentsIn(output, scenario)).toEqual([]);
+        expect(output).toBe(sanitizeSensitiveText(scenarioText(scenario)));
+      },
+    );
+
+    it.each(sources)('holds a line until its newline arrives %s', (_label, source) => {
+      const redactor = createSensitiveTextStreamRedactor();
+
+      expect(redactor.write('progress 50%', source)).toBe('');
+      expect(redactor.write(' done\nnext', source)).toBe('progress 50% done\n');
+      expect(redactor.flush(source)).toBe('next');
+    });
+
+    it.each(sources)('fails closed when a line without a newline exceeds the pending limit %s', (_label, source) => {
+      const redactor = createSensitiveTextStreamRedactor();
+      const progress = Array.from({ length: 200 }, (_, index) => `\r${'#'.repeat(60)} ${index}%`);
+
+      const output = [...progress, '\ndone\n'].map((chunk) => redactor.write(chunk, source)).join('') + redactor.flush(source);
+
+      expect(output.replaceAll('[REDACTED]', '')).toBe('');
+    });
+
+    it('keeps the first line of a known multi-line value pending until the value ends', () => {
+      const redactor = createSensitiveTextStreamRedactor();
+      const source = { private_key: 'first-line-secret\nsecond-line-secret' };
+
+      const first = redactor.write('key follows:\nfirst-line-secret\n', source);
+      const rest = redactor.write('second-line-secret\ndone\n', source) + redactor.flush(source);
+
+      expect(first).toBe('key follows:\n');
+      expect(first + rest).toBe('key follows:\n[REDACTED]\ndone\n');
+    });
   });
 
   it.each([

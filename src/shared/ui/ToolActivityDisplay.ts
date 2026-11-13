@@ -1,13 +1,14 @@
 import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
 import { classifyToolResult, StreamingToolOutput } from '../tool-activity/result.js';
-import { normalizeToolResultText, toolResultSensitiveValues } from '../tool-activity/sanitize.js';
+import { RunningToolResult } from '../tool-activity/runningResult.js';
+import { toolResultSensitiveValues, writeToolResultText } from '../tool-activity/sanitize.js';
 import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, formatToolActivityTime, groupToolActivities,
-  projectToolActivity, toolActivityDetail } from '../tool-activity/presentation.js';
+  projectLabel, projectToolActivity, toolActivityDetail, toolActivityResultView, type ToolActivityResultView } from '../tool-activity/presentation.js';
 import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection,
   ToolActivityTurnUpdate } from '../tool-activity/types.js';
 import { truncateUtf8 } from '../utils/utf8.js';
-import { createSensitiveTextStreamRedactor, writeSensitiveTextInChunks, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
 import { truncate } from './LogManager.js';
 
 interface StreamOutputState {
@@ -22,16 +23,10 @@ interface StreamOutputState {
   output: StreamingToolOutput;
 }
 
-/** 実行中の entry の表示用テキスト。追記分だけを整形とマスクにかけて足していく。 */
-interface ReadableOutput {
-  output: StreamingToolOutput;
-  redactor: SensitiveTextStreamRedactor;
-  text: string;
-}
-
-/** 追記分を端末表現に正規化し、同じ表現にした秘密値で照合して redactor へ分けて渡す。 */
-function writeToolOutput(redactor: SensitiveTextStreamRedactor, appended: string, entry: ToolActivityEntry): string {
-  return writeSensitiveTextInChunks(redactor, normalizeToolResultText(appended), toolResultSensitiveValues(entry.input));
+/** 完了した entry は、最終結果だけが持つ秘密値（JSON の項目名で判る値など）も照合に使う。 */
+function toolOutputSensitiveSource(entry: ToolActivityEntry): unknown {
+  return entry.status === 'running' ? entry.input
+    : [entry.input, entry.result, classifyToolResult(entry.result ?? '', true).parsed];
 }
 
 export function resolveToolActivityDisplayMode(
@@ -46,7 +41,9 @@ export class ToolActivityDisplay {
   private readonly streams = new Map<string, StreamOutputState>();
   private readonly completed = new Map<string, ToolActivityEntry['status']>();
   private readonly displayedResults = new Map<string, { text: string; bytes: number; lines: number; truncated: boolean }>();
-  private readonly readableStreams = new Map<string, ReadableOutput>();
+  /** 表示用の結果。実行中の entry は追記分だけで更新し、完了した entry は完了時に一度だけ作る。 */
+  private readonly runningResults = new Map<string, RunningToolResult>();
+  private readonly completedResults = new Map<string, ToolActivityResultView>();
 
   constructor(
     readonly mode: ToolActivityDisplayMode,
@@ -57,12 +54,7 @@ export class ToolActivityDisplay {
 
   handle(event: StreamEvent): ToolActivityEntry[] {
     const entries = this.history.apply(event);
-    if (event.type === 'tool_output') {
-      for (const entry of entries) this.readOutput(entry);
-    }
-    if (event.type === 'tool_result') {
-      for (const entry of entries) this.readableStreams.delete(entry.key);
-    }
+    for (const entry of entries) this.updateResult(entry);
     if (this.mode === 'silent') return entries;
     for (const entry of entries) {
       if (event.type === 'tool_use') {
@@ -84,10 +76,11 @@ export class ToolActivityDisplay {
     this.streams.clear();
     this.completed.clear();
     this.displayedResults.clear();
-    this.readableStreams.clear();
+    this.runningResults.clear();
+    this.completedResults.clear();
     for (const entry of this.history.entries()) {
-      if (entry.status === 'running') this.readOutput(entry);
-      else this.completed.set(entry.key, entry.status);
+      this.updateResult(entry);
+      if (entry.status !== 'running') this.completed.set(entry.key, entry.status);
     }
   }
 
@@ -96,47 +89,55 @@ export class ToolActivityDisplay {
     const entries = this.history.applyUpdate(update);
     if (entries === undefined) return false;
     for (const entry of entries) {
-      if (entry.status === 'running') {
-        this.readOutput(entry);
-        continue;
-      }
-      this.readableStreams.delete(entry.key);
-      this.completed.set(entry.key, entry.status);
+      this.updateResult(entry);
+      if (entry.status !== 'running') this.completed.set(entry.key, entry.status);
     }
     return true;
   }
 
-  private readOutput(entry: ToolActivityEntry): void {
-    let stream = this.readableStreams.get(entry.key);
-    if (stream === undefined) {
-      stream = { output: new StreamingToolOutput(), redactor: createSensitiveTextStreamRedactor(), text: '' };
-      this.readableStreams.set(entry.key, stream);
+  /** 変わった entry の表示用の結果を更新する。結果が訂正されたときも、完了した entry として作り直す。 */
+  private updateResult(entry: ToolActivityEntry): void {
+    if (entry.status !== 'running') {
+      this.runningResults.delete(entry.key);
+      this.completedResults.set(entry.key, toolActivityResultView(entry));
+      return;
     }
-    const appended = stream.output.read(entry.output);
-    if (appended === '') return;
-    stream.text += writeToolOutput(stream.redactor, appended, entry);
+    let result = this.runningResults.get(entry.key);
+    if (result === undefined) {
+      result = new RunningToolResult();
+      this.runningResults.set(entry.key, result);
+    }
+    result.read(entry);
+  }
+
+  private runningResult(entry: ToolActivityEntry): RunningToolResult {
+    const result = this.runningResults.get(entry.key);
+    if (result === undefined) throw new Error(`Running tool activity ${entry.key} has no result`);
+    return result;
+  }
+
+  private resultView(entry: ToolActivityEntry): ToolActivityResultView {
+    if (entry.status === 'running') return this.runningResult(entry).view();
+    const view = this.completedResults.get(entry.key);
+    if (view === undefined) throw new Error(`Completed tool activity ${entry.key} has no result`);
+    return view;
+  }
+
+  /** 秘密値を伏せたツール名。保持している結果の秘密値を使い、出力全体を処理し直さない。 */
+  toolLabel(entry: ToolActivityEntry): string {
+    return projectLabel(entry.tool, this.resultView(entry).sensitiveValues);
   }
 
   groups(): ToolActivityGroup[] {
     const entries = this.history.entries();
-    return groupToolActivities(entries, this.readableResults(entries));
+    return groupToolActivities(entries, new Map(entries.map((entry) => [entry.key, this.resultView(entry)])));
   }
 
   detail(key: string, offset: number): ToolActivityProjection {
     const entry = this.history.get(key);
     if (entry === undefined) throw new RangeError('Unknown tool activity key');
-    const text = this.readableResults([entry]).get(entry.key);
-    return { ...projectToolActivity(entry, 'expanded', text), result: toolActivityDetail(entry, offset, undefined, undefined, text) };
-  }
-
-  private readableResults(entries: readonly ToolActivityEntry[]): ReadonlyMap<string, string> {
-    const results = new Map<string, string>();
-    for (const entry of entries) {
-      if (entry.status !== 'running') continue;
-      // 構造化出力は、最終結果だけが持つ秘密値の情報が揃うまで公開しないので、表示用のテキストが空のまま残る。
-      results.set(entry.key, this.readableStreams.get(entry.key)?.text ?? '');
-    }
-    return results;
+    const view = this.resultView(entry);
+    return { ...projectToolActivity(entry, 'expanded', view), result: toolActivityDetail(entry, offset, undefined, undefined, view) };
   }
 
   flush(): void {
@@ -144,15 +145,9 @@ export class ToolActivityDisplay {
     for (const entry of this.history.entries()) {
       if (entry.status !== 'running') continue;
       if (this.mode === 'expanded' && entry.output !== '') {
-        const source = toolResultSensitiveValues(entry.input);
+        // テキストの出力は、redactor が確定した行だけを出す。出力全体をマスクし直すと、改行の届いていない行の途中まで出てしまう。
         const isReadableText = classifyToolResult(entry.output, false).kind === 'text';
-        const hasSafeSource = source.exhausted || source.values.size > 0;
-        const stream = this.readableStreams.get(entry.key);
-        if (isReadableText && hasSafeSource && stream !== undefined) {
-          stream.text += stream.redactor.flushAvailable(source);
-        }
-        const text = isReadableText && hasSafeSource ? stream?.text ?? '' : undefined;
-        const value = projectToolActivity(entry, 'expanded', text);
+        const value = projectToolActivity(entry, 'expanded', isReadableText ? this.runningResult(entry).view() : undefined);
         if (!this.displayedResults.has(entry.key)) this.writeLine(`  ${value.tool} output: [running]`);
         this.writeExpandedResult(value);
       } else if (this.mode === 'compact' && !this.quiet) {
@@ -179,7 +174,7 @@ export class ToolActivityDisplay {
     if (state.omitted) return;
     const appended = state.output.read(entry.output);
     if (appended === '') return;
-    state.pending += writeToolOutput(state.redactor, appended, entry);
+    state.pending += writeToolResultText(state.redactor, appended, entry.input);
     this.drain(state, false);
   }
 
@@ -227,11 +222,11 @@ export class ToolActivityDisplay {
       return;
     }
     // 実行中に保留した出力（`[` で始まるテキストなど）は、完了時にここで初めて redactor へ渡る。
-    const written = writeToolOutput(state.redactor, state.output.readRest(result.text), entry);
-    const source = toolResultSensitiveValues(entry.input);
-    state.pending += written + (entry.status === 'running'
-      ? state.redactor.flushAvailable(source)
-      : state.redactor.flush(source));
+    // 実行中は redactor が確定した行だけを出し、改行の届いていない行は完了まで出さない。
+    const sensitiveSource = toolOutputSensitiveSource(entry);
+    const written = writeToolResultText(state.redactor, state.output.readRest(result.text), sensitiveSource);
+    state.pending += entry.status === 'running' ? written
+      : written + state.redactor.flush(toolResultSensitiveValues(sensitiveSource));
     this.drain(state, true);
   }
 
@@ -239,7 +234,7 @@ export class ToolActivityDisplay {
     if (this.completed.get(entry.key) === entry.status) return;
     this.completed.set(entry.key, entry.status);
     if (this.mode === 'compact') this.flushStream(entry);
-    const value = projectToolActivity(entry, this.mode === 'expanded' ? 'expanded' : 'compact');
+    const value = projectToolActivity(entry, this.mode === 'expanded' ? 'expanded' : 'compact', this.resultView(entry));
     const failed = value.status === 'failure';
     if (this.mode === 'compact' && this.quiet && !failed) return;
     const symbol = failed ? '✗' : '✓';

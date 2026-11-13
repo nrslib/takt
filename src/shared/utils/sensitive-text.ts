@@ -108,8 +108,55 @@ const SENSITIVE_KEY_FRAGMENTS = [
   'session_id',
   'session-id',
 ] as const;
+// 引用符で囲んだ代入やオプションの値。閉じた値は 1 つ目の選択肢が引用符まで消費するので、2 つ目の選択肢に一致するのは閉じていない引用符だけになる。
+const SENSITIVE_QUOTED_ASSIGNMENT_REGEX = new RegExp(
+  String.raw`(?:${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*|(?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(?:${SENSITIVE_QUOTED_VALUE_PATTERN}|(["']))`,
+  'gi',
+);
+// 値がまだ始まっていない代入、認証ヘッダ、オプション。区切りやオプションの後ろの空白は改行を含むので、値は次の行から始まりうる。
+const TRAILING_SENSITIVE_KEY_REGEX = new RegExp(
+  String.raw`(?:(?:${SENSITIVE_ASSIGNMENT_KEY_PATTERN}|\b(?:${SENSITIVE_HEADER_KEY_PATTERN}))\s*[:=]|(?<!-)--(?:${SENSITIVE_KEY_PATTERN}|(?:proxy-)?user)|(?<!\S)-u)$`,
+  'i',
+);
+const PRIVATE_KEY_BEGIN_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g;
 const TRAILING_ASSIGNMENT_REGEX = /(?:^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)\s*[:=]\s*(?:(?:bearer|basic)\s*)?[^\r\n]*$/i;
 const TRAILING_KEY_FRAGMENT_REGEX = /[A-Za-z0-9_.-]+$/;
+
+interface QuotedSensitiveValues {
+  /** 閉じた値の範囲。改行をまたぐ値もある。 */
+  closed: { start: number; end: number }[];
+  /** 閉じていない値の代入の位置。 */
+  unclosedStart: number | undefined;
+}
+
+function quotedSensitiveValues(text: string): QuotedSensitiveValues {
+  const closed: QuotedSensitiveValues['closed'] = [];
+  for (const match of text.matchAll(SENSITIVE_QUOTED_ASSIGNMENT_REGEX)) {
+    // 閉じていない引用符の後ろには閉じる引用符がないので、それより後の代入はすべてこの値の中にある。
+    if (match[1] !== undefined) return { closed, unclosedStart: match.index };
+    closed.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return { closed, unclosedStart: undefined };
+}
+
+function unterminatedPrivateKeyStart(text: string): number | undefined {
+  const lastMatch = [...text.matchAll(PRIVATE_KEY_BEGIN_REGEX)].at(-1);
+  if (lastMatch === undefined) return undefined;
+  return text.slice(lastMatch.index).includes(`-----END ${lastMatch[1]}-----`) ? undefined : lastMatch.index;
+}
+
+/** text の end より前が、末尾の空白を除いて値の始まっていないキー名で終わっていれば、その位置を返す。 */
+function trailingSensitiveKeyStart(text: string, end: number): number | undefined {
+  let trimmedEnd = end;
+  while (trimmedEnd > 0 && /\s/u.test(text[trimmedEnd - 1]!)) trimmedEnd -= 1;
+  const windowStart = Math.max(0, trimmedEnd - SENSITIVE_TEXT_BOUNDARY_WINDOW);
+  const match = TRAILING_SENSITIVE_KEY_REGEX.exec(text.slice(windowStart, trimmedEnd));
+  return match === null ? undefined : windowStart + match.index;
+}
+
+function lineStart(text: string, index: number): number {
+  return index === 0 ? 0 : text.lastIndexOf('\n', index - 1) + 1;
+}
 
 interface HttpHeaderValue {
   start: number;
@@ -226,7 +273,8 @@ export function hasPotentialSensitiveTextSuffix(text: string): boolean {
     (lastLine !== '' && '-----BEGIN '.startsWith(lastLine))
     || /^-----BEGIN [A-Z0-9 ]*$/.test(lastLine)
     || (lastLine.startsWith('-----BEGIN ') && !lastLine.endsWith('-----'))
-    || hasUnterminatedPrivateKeyBlock(text)
+    || unterminatedPrivateKeyStart(text) !== undefined
+    || quotedSensitiveValues(text).unclosedStart !== undefined
   ) {
     return true;
   }
@@ -252,6 +300,30 @@ export function hasPotentialSensitiveTextSuffix(text: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * 改行で終わるテキストの末尾で秘密値の値が閉じていなければ、その値を持つ代入の行頭を返す。
+ * 値が閉じていないのは、キー名の後ろの引用符が閉じていないとき、キー名の後ろで値がまだ始まっていないとき、
+ * 秘密鍵のブロックが終わっていないとき、呼び出し側が保留する値（heldValueStart から始まる値）があるとき。
+ * これらの値は次の行へ続くので、行頭より後ろを先に確定すると、続きの行はキー名のない文字列になり伏せられない。
+ */
+export function openSensitiveValueLineStart(text: string, heldValueStart: number | undefined): number | undefined {
+  const quoted = quotedSensitiveValues(text);
+  const starts = [heldValueStart, quoted.unclosedStart, unterminatedPrivateKeyStart(text), trailingSensitiveKeyStart(text, text.length)]
+    .filter((start): start is number => start !== undefined);
+  if (starts.length === 0) return undefined;
+  let start = lineStart(text, Math.min(...starts));
+  // 保留を始める行が前の行から続く値の途中なら、その値のキー名の行まで戻す。
+  // 続く値は、改行をまたいで閉じた引用符付きの値と、前の行の末尾のキー名の後ろの値。
+  for (let previous = -1; previous !== start;) {
+    previous = start;
+    const enclosing = quoted.closed.find((value) => value.start < start && start < value.end);
+    if (enclosing !== undefined) start = lineStart(text, enclosing.start);
+    const key = trailingSensitiveKeyStart(text, start);
+    if (key !== undefined) start = lineStart(text, key);
+  }
+  return start;
 }
 
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
@@ -281,15 +353,6 @@ function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): vo
     addSensitiveValue(values, value);
     addCredentialComponents(values, value);
   }
-}
-
-export function hasUnterminatedPrivateKeyBlock(text: string): boolean {
-  const matches = [...text.matchAll(/-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g)];
-  const lastMatch = matches.at(-1);
-  if (lastMatch === undefined || lastMatch.index === undefined) {
-    return false;
-  }
-  return !text.slice(lastMatch.index).includes(`-----END ${lastMatch[1]}-----`);
 }
 
 export function addSensitiveValue(values: Set<string>, rawValue: string, key?: string): void {

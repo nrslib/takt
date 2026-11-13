@@ -73,6 +73,21 @@ describe('tool activity view state', () => {
     }
   });
 
+  it('reads the detail of each entry once while laying out an expanded page', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    for (const id of ['first', 'second']) {
+      display.handle({ type: 'tool_use', data: { id, tool: 'Bash', input: { command: `printf ${id} ${'long-argument '.repeat(8)}` } } });
+      display.handle({ type: 'tool_result', data: { id, content: Array.from({ length: 8 }, (_, index) => `${id}-${index}`).join('\n'), isError: false } });
+    }
+    const groups = display.groups();
+    const detail = vi.spyOn(display, 'detail');
+
+    const page = toolActivityViewPage(display, groups, toggleToolActivityView(createToolActivityViewState()), 30, 60, labels);
+
+    expect(page.rows).toEqual(expect.arrayContaining(['first-0', 'first-7', 'second-0', 'second-7']));
+    expect(detail.mock.calls.map(([key]) => key)).toEqual(groups.flatMap((group) => group.entries.map((entry) => entry.key)));
+  });
+
   it('moves from the latest position when consecutive page requests reuse an old render', () => {
     const { reader, groups } = fixture(Array.from({ length: 12 }, (_, index) => `line ${index}`).join('\n'));
     const first = toolActivityViewPage(reader, groups, createToolActivityViewState(), 20, 1, labels);
@@ -219,6 +234,22 @@ describe('tool activity view state', () => {
       .toEqual([{ key: 'tool/result', offset: 0, text: 'error', omitted: false }]);
     expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 2, text: 'set', omitted: false }]))
       .toEqual([{ key: 'tool/result', offset: 0, text: 'reset', omitted: false }]);
+  });
+  it.each([
+    ['longer', 'permission denied'],
+    ['shorter', 'err'],
+  ])('replaces a retained result with a %s corrected result', (_length, corrected) => {
+    const previous = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
+    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: corrected, omitted: false }]))
+      .toEqual([{ key: 'tool/result', offset: 0, text: corrected, omitted: false }]);
+  });
+  it('drops a retained range after a corrected result even when the corrected text does not reach it', () => {
+    const previous = [
+      { key: 'tool/result', offset: 0, text: 'a'.repeat(100), omitted: false },
+      { key: 'tool/result', offset: 150, text: 'b'.repeat(100), omitted: false },
+    ];
+    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: 'c'.repeat(50), omitted: false }]))
+      .toEqual([{ key: 'tool/result', offset: 0, text: 'c'.repeat(50), omitted: false }]);
   });
   it('retains updated text when a committed range has the same position and length', () => {
     const committed = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];

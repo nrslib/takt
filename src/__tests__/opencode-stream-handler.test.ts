@@ -358,13 +358,13 @@ describe('emitResult', () => {
       id: 'text-part',
       sessionID: 'session-1',
       type: 'text',
-      text: 'opencode-sensitive-value',
-    }, 'opencode-sensitive-value', onStream, state);
+      text: 'opencode-sensitive-value\n',
+    }, 'opencode-sensitive-value\n', onStream, state);
     emitResult(onStream, true, 'opencode-sensitive-value', 'session-1', state.sensitiveSources);
 
     expect(onStream).toHaveBeenNthCalledWith(2, {
       type: 'text',
-      data: { text: '[REDACTED]' },
+      data: { text: '[REDACTED]\n' },
     });
     expect(onStream).toHaveBeenNthCalledWith(3, {
       type: 'result',
@@ -383,13 +383,13 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
+    const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello\nworld' };
 
-    handlePartUpdated(part, 'Hello', onStream, state);
+    handlePartUpdated(part, 'Hello\n', onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
-      data: { text: 'Hello' },
+      data: { text: 'Hello\n' },
     });
   });
 
@@ -398,35 +398,35 @@ describe('handlePartUpdated', () => {
     const state = createStreamTrackingState();
 
     handlePartUpdated(
-      { id: 'text-1', type: 'text', text: 'Hello world' },
-      'Hello',
+      { id: 'text-1', type: 'text', text: 'Hello\nworld\n' },
+      'Hello\n',
       onStream,
       state,
     );
     handlePartUpdated(
-      { id: 'reasoning-1', type: 'reasoning', text: 'Thinking...' },
-      'Think',
+      { id: 'reasoning-1', type: 'reasoning', text: 'Think\ning...\n' },
+      'Think\n',
       onStream,
       state,
     );
     handlePartUpdated(
-      { id: 'text-1', type: 'text', text: 'Hello world' },
+      { id: 'text-1', type: 'text', text: 'Hello\nworld\n' },
       undefined,
       onStream,
       state,
     );
     handlePartUpdated(
-      { id: 'reasoning-1', type: 'reasoning', text: 'Thinking...' },
+      { id: 'reasoning-1', type: 'reasoning', text: 'Think\ning...\n' },
       undefined,
       onStream,
       state,
     );
 
     expect(onStream.mock.calls.map(([event]) => event)).toEqual([
-      { type: 'text', data: { text: 'Hello' } },
-      { type: 'thinking', data: { thinking: 'Think' } },
-      { type: 'text', data: { text: ' world' } },
-      { type: 'thinking', data: { thinking: 'ing...' } },
+      { type: 'text', data: { text: 'Hello\n' } },
+      { type: 'thinking', data: { thinking: 'Think\n' } },
+      { type: 'text', data: { text: 'world\n' } },
+      { type: 'thinking', data: { thinking: 'ing...\n' } },
     ]);
   });
 
@@ -436,10 +436,10 @@ describe('handlePartUpdated', () => {
       const onStream = vi.fn();
       const state = createStreamTrackingState();
       state.sensitiveSources.collect({ token: secret });
-      const part: OpenCodeTextPart = { id: `p-${split}`, sessionID: 'session-1', type: 'text', text: secret };
+      const part: OpenCodeTextPart = { id: `p-${split}`, sessionID: 'session-1', type: 'text', text: `${secret}\n` };
 
       handlePartUpdated(part, secret.slice(0, split), onStream, state);
-      handlePartUpdated(part, secret.slice(split), onStream, state);
+      handlePartUpdated(part, `${secret.slice(split)}\n`, onStream, state);
 
       const streamedText = onStream.mock.calls
         .map(([event]) => (event as { data: { text?: string } }).data.text ?? '')
@@ -453,22 +453,22 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part1: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
+    const part1: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello\n' };
     handlePartUpdated(part1, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
-      data: { text: 'Hello' },
+      data: { text: 'Hello\n' },
     });
 
     onStream.mockClear();
 
-    const part2: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
+    const part2: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello\nworld\n' };
     handlePartUpdated(part2, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
-      data: { text: ' world' },
+      data: { text: 'world\n' },
     });
   });
 
@@ -489,21 +489,21 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Thinking...' };
+    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Thinking\n...' };
 
-    handlePartUpdated(part, 'Thinking', onStream, state);
+    handlePartUpdated(part, 'Thinking\n', onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'thinking',
-      data: { thinking: 'Thinking' },
+      data: { thinking: 'Thinking\n' },
     });
   });
 
   it('should not apply the text byte limit to reasoning parts', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
-    const repeatCount = Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 'Reasoning '.length) + 1;
-    const reasoning = 'Reasoning '.repeat(repeatCount);
+    const repeatCount = Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 'Reasoning\n'.length) + 1;
+    const reasoning = 'Reasoning\n'.repeat(repeatCount);
     const part: OpenCodeReasoningPart = {
       id: 'r1',
       sessionID: 'session-1',
@@ -525,12 +525,12 @@ describe('handlePartUpdated', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
 
-    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Step 1' };
+    const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Step 1\n' };
     handlePartUpdated(part, undefined, onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'thinking',
-      data: { thinking: 'Step 1' },
+      data: { thinking: 'Step 1\n' },
     });
   });
 

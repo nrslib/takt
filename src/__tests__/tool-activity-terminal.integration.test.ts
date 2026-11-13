@@ -161,7 +161,7 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
 
   it('should flush observed output without inventing completion when no result arrives', () => {
     adapter.handler(start('shell', 'Bash', { command: 'printf pending' }));
-    adapter.handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'observed-while-running' } });
+    adapter.handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'observed-while-running\n' } });
     adapter.flush();
     expect(visible()).toContain('observed-while-running');
     expect(visible()).toContain('[running]');

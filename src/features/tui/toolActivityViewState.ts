@@ -1,7 +1,7 @@
 import stringWidth from 'string-width';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { COMPACT_RESULT_LINES, formatToolActivityTime } from '../../shared/tool-activity/presentation.js';
-import type { ToolActivityGroup, ToolActivityProjection } from '../../shared/tool-activity/types.js';
+import type { ToolActivityGroup, ToolActivityPage, ToolActivityProjection } from '../../shared/tool-activity/types.js';
 import type { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 
 interface ToolActivityPosition {
@@ -52,22 +52,26 @@ export function mergeToolActivityTranscript(
   }
   return [...fields.values()].flatMap((ranges) => {
     const merged: ToolActivityTranscriptRange[] = [];
+    let corrected = false;
     for (const { range, incoming: isIncoming } of ranges.sort((left, right) => left.range.offset - right.range.offset)) {
+      // 訂正された位置より後ろの古い範囲は、訂正後の本文と重ならなくても訂正前の本文なので残さない。
+      if (corrected && !isIncoming) continue;
       const last = merged.at(-1);
       if (last === undefined || last.offset + last.text.length < range.offset) merged.push({ ...range });
       else {
         const previousEnd = last.offset + last.text.length;
         const end = range.offset + range.text.length;
-        if (end > previousEnd) {
+        const overlapEnd = Math.min(end, previousEnd);
+        // 重なる部分の本文が違うのは、完了後に結果が訂正されたとき。訂正後の本文で置き換える。
+        if (isIncoming && last.text.slice(range.offset - last.offset, overlapEnd - last.offset)
+          !== range.text.slice(0, overlapEnd - range.offset)) {
+          last.text = last.text.slice(0, range.offset - last.offset) + range.text;
+          last.omitted = range.omitted;
+          corrected = true;
+        } else if (end > previousEnd) {
           last.text += range.text.slice(previousEnd - range.offset);
           last.omitted = range.omitted;
-        } else if (end === previousEnd) {
-          const overlap = last.text.slice(range.offset - last.offset);
-          if (isIncoming && overlap !== range.text) {
-            last.text = last.text.slice(0, range.offset - last.offset) + range.text;
-            last.omitted = range.omitted;
-          } else last.omitted &&= range.omitted;
-        }
+        } else if (end === previousEnd) last.omitted &&= range.omitted;
       }
     }
     return merged;
@@ -179,6 +183,34 @@ function nextEntry(groups: readonly ToolActivityGroup[], position: ToolActivityP
     : { group: position.group + 1, entry: 0, section: 'group', offset: 0 };
 }
 
+/** 1 ページを組む間、entry ごとに最後に読んだ detail を使い回し、行ごとに読み直さない。 */
+class ToolActivityDetailReader {
+  private readonly details = new Map<string, { offset: number; value: ToolActivityProjection }>();
+
+  constructor(private readonly reader: Pick<ToolActivityDisplay, 'detail'>, private readonly columns: number) {}
+
+  input(key: string): string {
+    return (this.details.get(key)?.value ?? this.read(key, 0)).input;
+  }
+
+  /** offset からの結果。読んだページの終わりまでで 1 行を組めないときだけ、offset から読み直す。 */
+  result(key: string, offset: number): ToolActivityPage {
+    const cached = this.details.get(key);
+    const start = cached === undefined ? -1 : offset - cached.offset;
+    if (cached !== undefined && start >= 0 && start <= cached.value.result.text.length) {
+      const page = { ...cached.value.result, text: cached.value.result.text.slice(start) };
+      if (!page.hasMore || textRow(page.text, this.columns).consumed < page.text.length) return page;
+    }
+    return this.read(key, offset).result;
+  }
+
+  private read(key: string, offset: number): ToolActivityProjection {
+    const value = this.reader.detail(key, offset);
+    this.details.set(key, { offset, value });
+    return value;
+  }
+}
+
 export function toolActivityViewPage(
   reader: Pick<ToolActivityDisplay, 'detail'>,
   groups: readonly ToolActivityGroup[],
@@ -190,6 +222,7 @@ export function toolActivityViewPage(
   const rows: string[] = [];
   const transcript: ToolActivityTranscriptRange[] = [];
   const width = Math.max(1, columns);
+  const details = new ToolActivityDetailReader(reader, width);
   let position = state.position;
   while (rows.length < maxRows && position.group < groups.length) {
     const group = groups[position.group]!;
@@ -283,7 +316,7 @@ export function toolActivityViewPage(
         break;
       }
       case 'input': {
-        const input = reader.detail(entry.key, 0).input;
+        const input = details.input(entry.key);
         if (position.offset >= input.length) {
           position = advance('result');
           break;
@@ -298,7 +331,7 @@ export function toolActivityViewPage(
       case 'result': {
         const compact = state.expanded ? '' : compactResultText(entry.result.text, width);
         const result = state.expanded
-          ? reader.detail(entry.key, position.offset).result
+          ? details.result(entry.key, position.offset)
           : { ...entry.result, text: compact.slice(position.offset), nextOffset: compact.length,
             hasMore: entry.result.hasMore || compact.length < entry.result.text.length };
         if (result.text === '') {

@@ -1,4 +1,8 @@
-import { createBoundedSensitiveValues, sanitizeSensitiveTextWithKnownValues } from '../utils/sensitiveText.js';
+import {
+  createBoundedSensitiveValues,
+  sanitizeSensitiveTextWithKnownValues,
+  type SensitiveTextStreamRedactor,
+} from '../utils/sensitiveText.js';
 import { sanitizeTerminalStreamText } from '../utils/text.js';
 import { stableToolResultPrefix } from './result.js';
 
@@ -17,4 +21,9 @@ export function toolResultSensitiveValues(source: unknown): ReturnType<typeof cr
 
 export function sanitizeToolResultText(text: string, source: unknown): string {
   return sanitizeSensitiveTextWithKnownValues(normalizeToolResultText(text), toolResultSensitiveValues(source));
+}
+
+/** 追記分を端末表現に正規化し、同じ表現にした秘密値で照合して redactor へ渡す。 */
+export function writeToolResultText(redactor: SensitiveTextStreamRedactor, appended: string, source: unknown): string {
+  return redactor.write(normalizeToolResultText(appended), toolResultSensitiveValues(source));
 }

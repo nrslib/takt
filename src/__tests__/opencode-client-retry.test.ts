@@ -1251,9 +1251,10 @@ describe('OpenCodeClient retry', () => {
 
   it('replays the OpenCode event order from issue #1130 without mixing reasoning and text', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const reasoningPartOne = 'Reasoning '.repeat(6_600);
+    // 途中出力は改行で終わった行だけが出るので、各 part の最初の差分は改行で終わらせ、残りは完了時に出る。
+    const reasoningPartOne = 'Reasoning\n'.repeat(6_600);
     const reasoningPartTwo = 'tail';
-    const textPartOne = 'text delta one ';
+    const textPartOne = 'text delta one\n';
     const textPartTwo = 'text delta two';
     const reasoning = `${reasoningPartOne}${reasoningPartTwo}`;
     const content = `${textPartOne}${textPartTwo}`;
@@ -1368,7 +1369,8 @@ describe('OpenCodeClient retry', () => {
 
   it('handles large reasoning delta after the part type is known without applying the text byte limit', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const reasoningPartOne = 'Reasoning '.repeat(6_600);
+    // 改行のない行は 1 万文字を超えると伏せるので、行に分けた reasoning にする。
+    const reasoningPartOne = 'Reasoning\n'.repeat(6_600);
     const reasoningPartTwo = 'tail';
     const textPart = 'short body';
     const reasoning = `${reasoningPartOne}${reasoningPartTwo}`;
@@ -1683,7 +1685,8 @@ describe('OpenCodeClient retry', () => {
   it('holds a reasoning-first delta until the authoritative part type arrives', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-unknown-delta-reasoning';
-    const reasoningPrefix = 'x'.repeat(40_000);
+    // 改行のない行は 1 万文字を超えると伏せるので、行に分けた reasoning にする。
+    const reasoningPrefix = `${'x'.repeat(99)}\n`.repeat(400);
     const reasoningSuffix = 'tail';
     const reasoningText = `${reasoningPrefix}${reasoningSuffix}`;
     const stream = new MockEventStream([

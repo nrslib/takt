@@ -192,6 +192,26 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     },
   );
 
+  it('keeps the previous turn tool history ahead of a user message sent from another client', async () => {
+    const { app, client } = mount(lang);
+    const previous = { operationId: randomUUID(), generation: 1 };
+    client.change({ items: [...client.getSnapshot().items, { kind: 'tool_history', history: { ...previous, finished: true, history: {
+      sequence: 2, entries: [{ key: '1', toolId: 'read', tool: 'Read', input: { file_path: 'previous.ts' }, output: '',
+        result: 'previous-tool-result', status: 'success', association: 'matched', startedAt: 1000, completedAt: 1250,
+        startSequence: 1, completionSequence: 2 }],
+    } } }] });
+    await waitFor(() => expect(app.lastFrame()).toContain('previous-tool-result'));
+    const next = randomUUID();
+    client.output({ kind: 'user_message', operationId: next, message: 'Message from another client' });
+    client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { operationId: next, kind: 'turn', generation: 1 } } });
+    await waitFor(() => {
+      const contents = entries().map((entry) => entry.content);
+      const tools = contents.findIndex((content) => content.includes('previous-tool-result'));
+      expect(tools).toBeGreaterThanOrEqual(0);
+      expect(tools).toBeLessThan(contents.indexOf('Message from another client'));
+    });
+  });
+
   it('shows queued acceptance as a system notice without an assistant marker', async () => {
     const { app, client } = mount(lang);
     client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });

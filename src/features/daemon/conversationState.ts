@@ -17,8 +17,9 @@ import { DaemonRouting } from './routing.js';
 import type { ConversationProgress, ConversationToolEvent } from '../../shared/types/conversation-activity.js';
 import { ToolActivityHistory } from '../../shared/tool-activity/history.js';
 import type { ToolActivityEntry, ToolActivityTurnState, ToolActivityTurnUpdate } from '../../shared/tool-activity/types.js';
-import { createBoundedSensitiveValues, createSensitiveTextStreamRedactor, sanitizeSensitiveTextWithKnownValues, writeSensitiveTextInChunks,
+import { createBoundedSensitiveValues, createSensitiveTextStreamRedactor, sanitizeSensitiveTextWithKnownValues,
   type BoundedSensitiveValues, type SensitiveTextStreamRedactor } from '../../shared/utils/sensitiveText.js';
+import { REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
 
 /** 実行中の entry の途中出力。配信済みのマスク済みテキストと、チャンクの境目をまたぐ秘密値を保留する redactor を持つ。 */
 interface ToolOutputStream {
@@ -46,14 +47,40 @@ interface RunningTurn {
 }
 
 /**
- * result を持つ完了 entry は output を持たない。表示は result を使う。
+ * result を持つ完了 entry は output を持たない。表示は result を使う。result のない entry は、渡された output を使う。
  * 途中出力を落としたツールの output は秘密値の途中で切れていることがあり、値全体の一致でしか伏せられないため。
  */
-function redactToolEntry(entry: ToolActivityEntry, sensitiveValues: BoundedSensitiveValues | undefined): ToolActivityEntry {
+function redactToolEntry(entry: ToolActivityEntry, sensitiveValues: BoundedSensitiveValues | undefined, output: string): ToolActivityEntry {
   const source = sensitiveValues ?? entry.input;
-  const output = entry.result === undefined || entry.result === '' ? sanitizeSensitiveTextWithKnownValues(entry.output, source) : '';
-  return { ...entry, output,
+  return { ...entry, output: entry.result === undefined || entry.result === '' ? sanitizeSensitiveTextWithKnownValues(output, source) : '',
     ...(entry.result === undefined ? {} : { result: sanitizeSensitiveTextWithKnownValues(entry.result, source) }) };
+}
+
+/** 末尾が既知の秘密値の先頭部分で終わっていれば、その部分を伏せる。 */
+function redactTrailingSecretPrefix(text: string, values: ReadonlySet<string>): string {
+  let start = text.length;
+  for (const value of values) {
+    for (let length = Math.min(value.length - 1, text.length); length > text.length - start; length--) {
+      if (text.endsWith(value.slice(0, length))) {
+        start = text.length - length;
+        break;
+      }
+    }
+  }
+  return start === text.length ? text : text.slice(0, start) + REDACTED_VALUE;
+}
+
+/**
+ * 完了した entry の出力を、途中出力の redactor を通した値で作る。
+ * 後続の途中出力が落ちると秘密値が途中で切れたまま末尾に残り、値全体の一致では伏せられないので、末尾の先頭部分の一致も伏せる。
+ */
+function settledToolOutput(tools: ToolTurn, entry: ToolActivityEntry): string {
+  const stream = entry.status === 'running' ? undefined : tools.outputs.get(entry.key);
+  if (stream === undefined) return '';
+  const source = tools.sensitiveValues ?? entry.input;
+  const known = createBoundedSensitiveValues();
+  known.collect(source);
+  return stream.text + redactTrailingSecretPrefix(stream.redactor.flush(source), known.values);
 }
 
 function toolTurnState(turn: TurnIdentity, tools: ToolTurn, finished: boolean): ToolActivityTurnState {
@@ -70,7 +97,7 @@ function appendToolOutput(tools: ToolTurn, changed: readonly ToolActivityEntry[]
   const existing = tools.outputs.get(entry.key);
   const stream = existing ?? { redactor: createSensitiveTextStreamRedactor(), text: '' };
   if (existing === undefined) tools.outputs.set(entry.key, stream);
-  const text = writeSensitiveTextInChunks(stream.redactor, chunk, tools.sensitiveValues ?? entry.input);
+  const text = stream.redactor.write(chunk, tools.sensitiveValues ?? entry.input);
   stream.text += text;
   if (existing !== undefined) return { entries: [], output: { key: entry.key, text } };
   // 最初の途中出力では、出力のない entry を先に送る。途中出力だけで作られた entry もこれで受け手に届く。
@@ -231,7 +258,7 @@ export class DaemonConversations implements ConversationOwner {
     }
     if (saved.finished) return undefined;
     const history: ToolActivityTurnState = { ...saved, finished: true, history: { ...saved.history,
-      entries: saved.history.entries.filter((entry) => entry.status !== 'running').map((entry) => redactToolEntry(entry, undefined)) } };
+      entries: saved.history.entries.filter((entry) => entry.status !== 'running').map((entry) => redactToolEntry(entry, undefined, entry.output)) } };
     this.savedToolHistories.set(id, history);
     await this.store.writeToolHistory(id, history);
     return history;
@@ -259,10 +286,10 @@ export class DaemonConversations implements ConversationOwner {
     const update = { operationId: turn.operationId, generation: turn.generation, previousSequence, sequence: tools.history.currentSequence };
     // 途中出力は保存しない。完了時の entry が出力全体を持つ。
     if (message.event.type === 'tool_output') return { ...update, ...appendToolOutput(tools, changed, message.event.data.output) };
+    const entries = changed.map((entry) => redactToolEntry(entry, tools.sensitiveValues, settledToolOutput(tools, entry)));
     for (const entry of changed) {
       if (entry.status !== 'running') tools.outputs.delete(entry.key);
     }
-    const entries = changed.map((entry) => redactToolEntry(entry, tools.sensitiveValues));
     for (const entry of entries) tools.entries.set(entry.key, entry);
     await this.saveToolChange(turn, tools, { sequence: update.sequence, entries });
     return { ...update, entries };

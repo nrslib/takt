@@ -237,6 +237,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (output.kind === 'user_message') {
         if (!displayedMessages.current.has(output.operationId)) {
           displayedMessages.current.add(output.operationId);
+          // 別のクライアントからの発言も、この画面からの送信と同じく前のターンのツール履歴の後に置く。
+          commitToolTranscript();
           append(output.message, 'user');
         }
       } else if (output.kind === 'result') {

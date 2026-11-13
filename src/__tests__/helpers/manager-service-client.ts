@@ -163,11 +163,13 @@ export class ManagerServiceClient {
       const next = read.mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
       for (const [key, item] of updates) next.set(key, item);
       for (const key of removed) next.delete(key);
-      // 読込中に届いた差分の方が新しければ、古い snapshot で戻さない。
+      // 読込中に届いた差分や確定の方が新しければ、古い snapshot で戻さない。確定しても sequence は変わらない。
       const snapshotHistory = next.get('tool_history');
       const live = this.liveToolHistory;
       if (snapshotHistory?.kind === 'tool_history' && live !== undefined && live.operationId === snapshotHistory.history.operationId
-        && live.generation === snapshotHistory.history.generation && live.history.sequence > snapshotHistory.history.history.sequence) {
+        && live.generation === snapshotHistory.history.generation
+        && (live.history.sequence > snapshotHistory.history.history.sequence
+          || live.history.sequence === snapshotHistory.history.history.sequence && live.finished && !snapshotHistory.history.finished)) {
         next.set('tool_history', { kind: 'tool_history', history: live });
       }
       read.complete();
@@ -206,13 +208,15 @@ export class ManagerServiceClient {
     const attachmentId = this.attachmentId;
     let loadFailed = false;
     const toolHistory = this.toolHistoryBehind;
+    // 読込中に起点のない差分が届いて捨てた場合は、次の再取得でもう一度ツール履歴の全体を受け取る。
+    this.toolHistoryBehind = false;
     try {
       await this.read(() => this.service.snapshot(attachmentId, { toolHistory }).catch((error: unknown) => {
         loadFailed = true;
         throw error;
       }));
-      if (toolHistory) this.toolHistoryBehind = false;
     } catch (error) {
+      if (toolHistory) this.toolHistoryBehind = true;
       if (generation !== this.readGeneration || !loadFailed) return;
       if (error instanceof ConversationError && error.code === 'invalid_assignment') await this.open();
       else throw error;

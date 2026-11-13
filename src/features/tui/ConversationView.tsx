@@ -725,11 +725,14 @@ export function ConversationView({
   const submitLine = useCallback((text: string) => {
     const command = conversation.resolveLocalCommand(text);
     if (command) {
+      // A local command line also enters the transcript, so the tool history
+      // shown for the previous turn has to be recorded ahead of it.
+      commitToolTranscript();
       applyLocalCommand(command, text);
       return;
     }
     startSubmission(text);
-  }, [applyLocalCommand, conversation, startSubmission]);
+  }, [applyLocalCommand, commitToolTranscript, conversation, startSubmission]);
 
   /**
    * Sends what was typed while the assistant was answering.

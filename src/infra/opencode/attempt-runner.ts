@@ -37,6 +37,7 @@ import {
   flushSensitiveTextStreams,
   handlePartUpdated,
   OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
+  sensitiveTextStream,
   trackOpenCodeReasoningBytes,
 } from './OpenCodeStreamHandler.js';
 import {
@@ -79,7 +80,6 @@ import {
 } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
 import {
-  createSensitiveTextStreamRedactor,
   sanitizeSensitiveText,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
@@ -1423,11 +1423,9 @@ export class OpenCodeAttemptRunner {
 
     const consumeTextDelta = (partId: string, visibleDelta: string): void => {
       if (visibleDelta) {
-        const redactor = state.textRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-        state.textRedactors.set(partId, redactor);
         emitText(
           options.onStream,
-          redactor.write(visibleDelta, state.sensitiveSources),
+          sensitiveTextStream(state, 'text', partId).write(visibleDelta, state.sensitiveSources),
         );
         const previous = textContentParts.get(partId) ?? '';
         textContentParts.set(partId, `${previous}${visibleDelta}`);
@@ -1444,11 +1442,9 @@ export class OpenCodeAttemptRunner {
           state.thinkingRedactors.set(partId, fallbackRedactor);
         }
       }
-      const redactor = state.thinkingRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
-      state.thinkingRedactors.set(partId, redactor);
       emitThinking(
         options.onStream,
-        redactor.write(rawDelta, state.sensitiveSources),
+        sensitiveTextStream(state, 'thinking', partId).write(rawDelta, state.sensitiveSources),
       );
       const prevOffset = state.thinkingOffsets.get(partId) ?? 0;
       const nextOffset = prevOffset + rawDelta.length;

@@ -1,34 +1,53 @@
-import {
-  REDACTED_VALUE,
-  SENSITIVE_TEXT_BOUNDARY_WINDOW,
-  hasUnterminatedPrivateKeyBlock,
-  hasPotentialSensitiveTextSuffix,
-  sanitizeSensitiveText,
-} from './sensitive-text.js';
+import { REDACTED_VALUE, openSensitiveValueLineStart, sanitizeTextWithValues } from './sensitive-text.js';
 import { collectSensitiveStringValues } from './sensitive-value.js';
 
 const MAX_PENDING_SENSITIVE_TEXT_LENGTH = 10_000;
-// 保留が上限を超えると以後の出力をすべて伏せるので、まとめて届いた大きな追記は上限より十分小さく分けて渡す。
-const STREAM_WRITE_CHARS = 4096;
 
 export interface SensitiveTextStreamRedactor {
   write(text: string, source: unknown): string;
-  flushAvailable(source: unknown): string;
   flush(source: unknown): string;
 }
 
-/** 長さに関係なく、追記を redactor へ分けて渡し、確定した部分をまとめて返す。 */
-export function writeSensitiveTextInChunks(redactor: SensitiveTextStreamRedactor, text: string, source: unknown): string {
-  let written = '';
-  for (let offset = 0; offset < text.length; offset += STREAM_WRITE_CHARS) {
-    written += redactor.write(text.slice(offset, offset + STREAM_WRITE_CHARS), source);
-  }
-  return written;
+/** 複数行にわたる既知の秘密値と、値の途中にある改行の位置。 */
+interface MultiLineValue {
+  readonly value: string;
+  readonly newlines: readonly number[];
 }
 
+function multiLineValue(value: string): MultiLineValue | undefined {
+  const newlines = [...value.matchAll(/\n/g)].map((match) => match.index).filter((index) => index < value.length - 1);
+  return newlines.length === 0 ? undefined : { value, newlines };
+}
+
+/**
+ * 複数行にわたる既知の秘密値の先頭の行が末尾にあれば、その値の位置を返す。
+ * 値の続きは次の行で届くので、先頭の行だけを確定すると、値全体の一致では伏せられない。
+ */
+function knownMultiLineValueStart(text: string, values: readonly MultiLineValue[]): number | undefined {
+  let start: number | undefined;
+  for (const { value, newlines } of values) {
+    for (const newline of newlines) {
+      if (text.endsWith(value.slice(0, newline + 1))) start = Math.min(start ?? text.length, text.length - newline - 1);
+    }
+  }
+  return start;
+}
+
+/** 確定してよい長さ。改行で終わった完全な行のうち、改行をまたいで続く秘密値の行より前まで。 */
+function committableLength(text: string, values: readonly MultiLineValue[]): number {
+  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
+  if (complete === '') return 0;
+  return openSensitiveValueLineStart(complete, knownMultiLineValueStart(complete, values)) ?? complete.length;
+}
+
+/**
+ * 追記を保留し、改行で終わった完全な行だけを、確定する範囲ごとにまとめてマスクして返す。
+ * 行の途中で確定すると、値の後半はキー名のない文字列になり伏せられないため。
+ * 改行のないまま保留が上限を超えたら、以後の出力はすべて伏せる。
+ */
 export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor {
   const knownValues = new Set<string>();
-  let orderedValues: readonly string[] = [];
+  const multiLineValues: MultiLineValue[] = [];
   let pending = '';
   let failClosed = false;
 
@@ -36,71 +55,38 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
     const collected = collectSensitiveStringValues(source);
     failClosed ||= collected.exhausted;
     for (const value of collected.values) {
+      if (knownValues.has(value)) continue;
       knownValues.add(value);
+      const multiLine = multiLineValue(value);
+      if (multiLine !== undefined) multiLineValues.push(multiLine);
     }
-    orderedValues = [...knownValues].sort((a, b) => b.length - a.length);
   };
 
-  const drain = (mode: 'stream' | 'available' | 'final'): string => {
-    const final = mode === 'final';
-    if (failClosed) {
-      const hadPendingText = pending.length > 0;
-      pending = '';
-      return hadPendingText ? REDACTED_VALUE : '';
-    }
-    if (!final && orderedValues.length === 0) {
-      if (hasPotentialSensitiveTextSuffix(pending)) {
-        return '';
-      }
-      const sanitized = sanitizeSensitiveText(pending);
-      pending = '';
-      return sanitized;
-    }
-    if (!final && hasUnterminatedPrivateKeyBlock(pending)) {
-      return '';
-    }
-    let output = '';
-    while (pending.length > 0) {
-      const matchedValue = orderedValues.find((value) => pending.startsWith(value));
-      if (matchedValue !== undefined) {
-        output += REDACTED_VALUE;
-        pending = pending.slice(matchedValue.length);
-        continue;
-      }
-      if (!final && orderedValues.some((value) => value.startsWith(pending))) {
-        break;
-      }
-      if (mode === 'stream' && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW && !pending.includes('\n')) {
-        break;
-      }
-      if (mode === 'available' && pending.length <= SENSITIVE_TEXT_BOUNDARY_WINDOW && hasPotentialSensitiveTextSuffix(pending)) {
-        break;
-      }
-      output += pending[0];
-      pending = pending.slice(1);
-    }
-    return sanitizeSensitiveText(output);
+  const redactPending = (): string => {
+    const hadPendingText = pending.length > 0;
+    pending = '';
+    return hadPendingText ? REDACTED_VALUE : '';
   };
 
   return {
     write(text: string, source: unknown): string {
       updateKnownValues(source);
       pending += text;
-      if (
-        pending.length > MAX_PENDING_SENSITIVE_TEXT_LENGTH
-        && (orderedValues.length > 0 || hasPotentialSensitiveTextSuffix(pending))
-      ) {
-        failClosed = true;
-      }
-      return drain('stream');
-    },
-    flushAvailable(source: unknown): string {
-      updateKnownValues(source);
-      return drain('available');
+      if (failClosed) return redactPending();
+      const end = committableLength(pending, multiLineValues);
+      const committed = pending.slice(0, end);
+      pending = pending.slice(end);
+      const output = committed === '' ? '' : sanitizeTextWithValues(committed, knownValues);
+      if (pending.length <= MAX_PENDING_SENSITIVE_TEXT_LENGTH) return output;
+      failClosed = true;
+      return output + redactPending();
     },
     flush(source: unknown): string {
       updateKnownValues(source);
-      return drain('final');
+      if (failClosed) return redactPending();
+      const text = pending;
+      pending = '';
+      return text === '' ? '' : sanitizeTextWithValues(text, knownValues);
     },
   };
 }

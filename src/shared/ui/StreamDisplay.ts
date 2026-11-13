@@ -9,7 +9,6 @@ import chalk from 'chalk';
 import { randomUUID } from 'node:crypto';
 import { ToolActivityDisplay, resolveToolActivityDisplayMode } from './ToolActivityDisplay.js';
 import type { ToolActivityDisplayMode } from '../tool-activity/types.js';
-import { projectToolActivity } from '../tool-activity/presentation.js';
 import type { StreamEvent, StreamCallback } from '../types/provider.js';
 import { formatToolInput } from './toolInput.js';
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
@@ -120,7 +119,7 @@ export class StreamDisplay {
       const entry = entries.at(-1);
       if (entry && entry.tool !== 'AskUserQuestion') {
         const preview = formatToolInput(entry.tool, entry.input);
-        if (event.type === 'tool_use' || preview !== '') this.startToolSpinner(projectToolActivity(entry).tool, preview);
+        if (event.type === 'tool_use' || preview !== '') this.startToolSpinner(this.activity.toolLabel(entry), preview);
       }
     }
   }
