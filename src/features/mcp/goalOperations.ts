@@ -1,15 +1,18 @@
 import { resolveTaskOrderContent } from '../tasks/orderRevision.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { createGoal } from '../../infra/goals/service.js';
+import type { GoalCreateInput } from '../../infra/goals/schema.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
 import { listWorkflows, loadWorkflowByIdentifier } from '../../infra/config/index.js';
-import { assertCwdAllowedByMcpRoot, errorResult, type McpOperationDependencies } from './operations.js';
+import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
 import { goalWrite } from './goalWrite.js';
+import { goalWriteSummary } from './goalResponse.js';
 import { pagedResult } from './response.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
@@ -61,4 +64,13 @@ export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDepen
     const offset = input.offset ?? 0;
     return pagedResult('workflows', workflows.slice(offset, offset + (input.limit ?? 50)), workflows.length, offset);
   } catch (error) { return errorResult('Workflow list failed', error); }
+}
+
+export async function createTaktGoal(input: GoalCreateInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    signal.throwIfAborted();
+    const goal = await createGoal(input, signal);
+    return jsonResult({ goal: goalWriteSummary(goal) });
+  } catch (error) { return errorResult('Goal creation failed', error); }
 }
