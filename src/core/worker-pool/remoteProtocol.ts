@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { RemoteArtifactsSchema, RemoteExecutionCommandSchema, RemoteExecutionResponseSchema, RemoteExecutionResultFields } from './remoteExecutionProtocol.js';
 
 export const WORKER_PROTOCOL_VERSION = 1;
 export const WORKER_HEARTBEAT_MS = 5_000;
@@ -34,7 +35,7 @@ export const RemoteAssignmentSchema = RemoteExecutionIdentitySchema.extend({
 export type RemoteAssignment = z.infer<typeof RemoteAssignmentSchema>;
 export const RemoteTaskRecordSchema = z.object({
   assignment: RemoteAssignmentSchema,
-  status: z.enum(['running', 'completed', 'failed']),
+  status: z.enum(['running', 'completed', 'failed', 'pr_failed']),
   failureReason: z.string().optional(),
 }).strict();
 export type RemoteTaskRecord = z.infer<typeof RemoteTaskRecordSchema>;
@@ -46,8 +47,12 @@ export const WorkerRequestSchema = z.discriminatedUnion('kind', [
     active: z.array(RemoteExecutionIdentitySchema) }).strict(),
   z.object({ ...envelope, kind: z.literal('pull') }).strict(),
   z.object({ ...envelope, kind: z.literal('heartbeat'), active: z.array(RemoteExecutionIdentitySchema) }).strict(),
+  z.object({ ...envelope, kind: z.literal('execution'), assignment: RemoteExecutionIdentitySchema,
+    command: RemoteExecutionCommandSchema }).strict(),
   z.object({ ...envelope, kind: z.literal('complete'), assignment: RemoteExecutionIdentitySchema,
-    success: z.boolean(), reason: z.string().max(8192).optional() }).strict(),
+    ...RemoteExecutionResultFields,
+    success: z.boolean(), reason: z.string().max(8192).optional(), artifacts: RemoteArtifactsSchema.optional() }).strict()
+    .refine((message) => !message.success || message.artifacts !== undefined, 'Successful completion requires artifacts'),
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequestSchema>;
 
@@ -56,6 +61,7 @@ export const WorkerResponseSchema = z.discriminatedUnion('kind', [
     running: z.array(RemoteAssignmentSchema), stop: z.array(RemoteExecutionIdentitySchema) }).strict(),
   z.object({ ...envelope, kind: z.literal('assignment'), assignment: RemoteAssignmentSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal('heartbeat'), stop: z.array(RemoteExecutionIdentitySchema) }).strict(),
+  z.object({ ...envelope, kind: z.literal('execution'), response: RemoteExecutionResponseSchema }).strict(),
   z.object({ ...envelope, kind: z.literal('completed'), accepted: z.boolean() }).strict(),
   z.object({ ...envelope, kind: z.literal('stop'), assignment: RemoteExecutionIdentitySchema, reason: z.string() }).strict(),
   z.object({ kind: z.literal('rejected'), reason: z.string() }).strict(),
@@ -75,14 +81,18 @@ export const RemoteProjectRequestSchema = z.discriminatedUnion('kind', [
     requestId: z.string().min(1), leaseExpiresAt: z.number().finite() }).strict(),
   z.object({ kind: z.literal('renew'), assignment: RemoteExecutionIdentitySchema,
     now: z.number().finite(), leaseExpiresAt: z.number().finite() }).strict(),
+  z.object({ kind: z.literal('execution'), assignment: RemoteExecutionIdentitySchema,
+    now: z.number().finite(), command: RemoteExecutionCommandSchema }).strict(),
   z.object({ kind: z.literal('finish'), assignment: RemoteExecutionIdentitySchema,
-    now: z.number().finite(), success: z.boolean(), reason: z.string().optional() }).strict(),
+    ...RemoteExecutionResultFields,
+    now: z.number().finite(), success: z.boolean(), reason: z.string().optional(), artifacts: RemoteArtifactsSchema.optional() }).strict(),
   z.object({ kind: z.literal('fail'), assignment: RemoteExecutionIdentitySchema, reason: z.string() }).strict(),
 ]);
 export type RemoteProjectRequest = z.infer<typeof RemoteProjectRequestSchema>;
 export const RemoteProjectReplySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('claim'), assignment: RemoteAssignmentSchema.nullable() }).strict(),
   z.object({ kind: z.literal('updated'), record: RemoteTaskRecordSchema.nullable() }).strict(),
+  z.object({ kind: z.literal('execution'), response: RemoteExecutionResponseSchema }).strict(),
 ]);
 export type RemoteProjectReply = z.infer<typeof RemoteProjectReplySchema>;
 

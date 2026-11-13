@@ -458,6 +458,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
   'src/__tests__/taskInstructionActions.test.ts',
   'src/__tests__/verify-across-providers.integration.test.ts',
+  'src/__tests__/worker-pool-transfer.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

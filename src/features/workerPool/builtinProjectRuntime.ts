@@ -22,6 +22,7 @@ import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
 import { RemoteTaskLifecycle } from '../../infra/task/remoteTaskLifecycle.js';
 import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
+import { prepareRemoteExecutionInput } from './remoteExecutionInput.js';
 
 const log = createLogger('builtin-worker');
 
@@ -49,7 +50,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
     };
     this.runner = new TaskRunner(cwd, { goalTasksOnly: true, onAcquisitionError });
     this.store = new TaskStore(cwd, onAcquisitionError);
-    this.remoteTasks = new RemoteTaskLifecycle(cwd, this.store);
+    this.remoteTasks = new RemoteTaskLifecycle(cwd, this.store, (task, executionId) => prepareRemoteExecutionInput(cwd, task, executionId));
   }
 
   private resolveConfig(): { concurrency: number; ignoreExceed: boolean } {

@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { RemoteAssignmentSchema } from '../core/worker-pool/remoteProtocol.js';
+import { TaskRecordSchema } from '../infra/task/schema.js';
+import { toFailedTaskItem } from '../infra/task/mapper.js';
 import type { TaskListItem } from '../infra/task/index.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { TaskRetryRunSelection } from '../features/tasks/taskRetryRunSelection.js';
@@ -304,6 +308,29 @@ describe('prepareFailedTaskRetry', () => {
     expect(() => prepareFailedTaskRetry(task, '/project'))
       .toThrow('Failed task retry action requires failed task. received: exceeded');
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '/worker-only/clone'])('rejects remote retry before resolving local resources with worktree=%s', (worktreePath) => {
+    const assignment = RemoteAssignmentSchema.parse({
+      projectId: '/project', taskName: failedTask.name, workerId: 'w1', workerName: 'w1',
+      registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1,
+      requestId: 'remote-pull', origin: 'https://example.test/repo.git', originalSha: 'a'.repeat(40),
+      branch: 'takt/remote-result', leaseExpiresAt: 60_000, lastAcknowledgedLogSequence: 0,
+      controlSequence: 0, workLocation: '/worker-only/clone', retryReservation: false,
+    });
+    const task = toFailedTaskItem('/project', failedTask.filePath, TaskRecordSchema.parse({
+      name: failedTask.name, content: failedTask.content, status: 'failed', workflow: 'default', worktree: true,
+      created_at: failedTask.createdAt, started_at: '2026-09-28T00:00:00.000Z', completed_at: '2026-09-28T00:01:00.000Z',
+      worktree_path: worktreePath, run_slug: failedTask.runSlug, failure: failedTask.failure, remote_assignment: assignment,
+    }));
+    const before = structuredClone(task);
+
+    expect(() => prepareFailedTaskRetry(task, '/project')).toThrow(/remote/i);
+
+    expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+    expect(mockResolveTaskOrderContent).not.toHaveBeenCalled();
+    expect(mockResolveRunSelection).not.toHaveBeenCalled();
+    expect(task).toEqual(before);
   });
 
   it.each(['en', 'ja'] as const)('describes initial start, absent source and skipped run in %s', (lang) => {

@@ -71,6 +71,10 @@ it('pulls only into available slots and sends heartbeat every five seconds', asy
     await vi.advanceTimersByTimeAsync(1);
     expect(f.connections[0]!.send.mock.calls.filter(([message]) => message.kind === 'heartbeat')).toHaveLength(1);
     f.finishers[0]!({ success: true }); await vi.advanceTimersByTimeAsync(0);
+    expect(f.connections[0]!.send.mock.calls.filter(([message]) => message.kind === 'pull')).toHaveLength(2);
+    const completion = f.connections[0]!.send.mock.calls.map(([message]) => message as WorkerRequest)
+      .find((message) => message.kind === 'complete')!;
+    f.connections[0]!.receive({ ...f.envelope(), kind: 'completed', requestId: completion.requestId, accepted: true });
     expect(f.connections[0]!.send.mock.calls.filter(([message]) => message.kind === 'pull')).toHaveLength(3);
     for (const [assignment] of f.executor.execute.mock.calls) expect(assignment).not.toHaveProperty('token');
   } finally { f.controller.abort(); await f.result; }

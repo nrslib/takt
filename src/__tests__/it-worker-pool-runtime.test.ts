@@ -43,7 +43,14 @@ let runner: TaskRunner;
 const finished = vi.fn();
 const fatal = vi.fn();
 
-async function enableRemote(origin = 'https://example.test/repo.git') {
+async function enableRemote(origin?: string) {
+  if (origin === undefined) {
+    origin = join(cwd, '.takt', 'origin.git');
+    expect(spawnSync('git', ['init', '--bare', origin]).status).toBe(0);
+  }
+  mkdirSync(join(cwd, '.takt/workflows'), { recursive: true });
+  writeFileSync(join(cwd, '.takt/workflows/remote-test.yaml'),
+    'name: remote-test\nsteps:\n  - name: work\n    instruction: Complete the task\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
   for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'test'], ['config', 'user.email', 'test@example.test'],
     ['commit', '--allow-empty', '-m', 'fixture'], ['branch', goalRecord().branch], ['remote', 'add', 'origin', origin]]) {
     const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -57,11 +64,11 @@ async function enableRemote(origin = 'https://example.test/repo.git') {
 it.each(['task_dir', 'content_file'] as const)('fails unreadable remote %s input and then claims readable work', async (input) => {
   const claim = await enableRemote();
   const prepared = prepareTaskSpecDirectory(cwd, 'missing remote input');
-  const missing = runner.addTask('missing remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative });
+  const missing = runner.addTask('missing remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative, workflow: 'remote-test' });
   const file = join(prepared.taskDir, 'order.md'); rmSync(file);
   if (input === 'content_file') new TaskStore(cwd).update((state) => ({ tasks: state.tasks.map((task) => task.name === missing.name
     ? { ...task, task_dir: undefined, content_file: file } : task) }));
-  const next = runner.addTask('readable remote input', { goal_id: goalRecord().id });
+  const next = runner.addTask('readable remote input', { goal_id: goalRecord().id, workflow: 'remote-test' });
   await runtime.inspect();
   expect(await claim(missing.name)).toEqual({ kind: 'claim', assignment: null });
   const failed = new TaskStore(cwd).read().tasks.find((task) => task.name === missing.name)!;
@@ -77,7 +84,7 @@ it.each(['task_dir', 'content_file'] as const)('fails unreadable remote %s input
 it('keeps recovered remote input pending at recheck and claims it only on the next attempt', async () => {
   const claim = await enableRemote();
   const prepared = prepareTaskSpecDirectory(cwd, 'recovering remote input');
-  const task = runner.addTask('recovering remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative });
+  const task = runner.addTask('recovering remote input', { goal_id: goalRecord().id, task_dir: prepared.taskDirRelative, workflow: 'remote-test' });
   const file = join(prepared.taskDir, 'order.md'); rmSync(file);
   const recheck = TaskRunner.prototype.failUnreadableGoalTask;
   vi.spyOn(TaskRunner.prototype, 'failUnreadableGoalTask').mockImplementation(function (this: TaskRunner, name) {

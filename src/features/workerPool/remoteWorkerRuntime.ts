@@ -167,12 +167,22 @@ export class RemoteWorkerRuntime {
             if (record === undefined || await this.renew(record.assignment) === undefined) stop.push(active);
           }
           sink.send({ ...envelope, kind: 'heartbeat', stop });
+        } else if (request.kind === 'execution') {
+          if (request.assignment.workerId !== request.workerId || request.assignment.registrationGeneration !== request.registrationGeneration) {
+            throw new WorkerRejectedError('Execution assignment does not belong to this worker');
+          }
+          const result = await this.project(request.assignment.projectId, { kind: 'execution', assignment: request.assignment,
+            now: this.input.now(), command: request.command });
+          if (result.kind !== 'execution') throw new Error('Unexpected remote execution result');
+          sink.send({ ...envelope, kind: 'execution', response: result.response });
         } else {
           if (request.assignment.workerId !== request.workerId || request.assignment.registrationGeneration !== request.registrationGeneration) {
             throw new WorkerRejectedError('Completion assignment does not belong to this worker');
           }
           const result = await this.project(request.assignment.projectId, { kind: 'finish', assignment: request.assignment,
-            now: this.input.now(), success: request.success, reason: request.reason?.replaceAll(token, '[REDACTED]') });
+            interrupted: request.interrupted, retryable: request.retryable, workflowResult: request.workflowResult,
+            prUrl: request.prUrl, prFailed: request.prFailed, prError: request.prError?.replaceAll(token, '[REDACTED]'),
+            now: this.input.now(), success: request.success, reason: request.reason?.replaceAll(token, '[REDACTED]'), artifacts: request.artifacts });
           if (result.kind !== 'updated') throw new Error('Unexpected remote completion result');
           if (result.record !== null) {
             this.updateRecord(result.record);

@@ -1,4 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
@@ -17,6 +21,8 @@ import { packageVersion } from '../shared/package-info.js';
 import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { WorkerRegistry } from '../infra/worker-pool/workerRegistry.js';
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 
 function workerCliFixture() {
   const directory = getGlobalConfigDir();
@@ -148,6 +154,84 @@ it.each([false, true])('keeps mergeTask=%s pending and exposes its waiting reaso
     controller.abort();
     await daemon?.close();
     vi.restoreAllMocks();
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform !== 'darwin')('executes originless work on the builtin worker while an isolated remote worker has an available slot', async () => {
+  const directory = getGlobalConfigDir();
+  const project = mkdtempSync(join(directory, 'originless-project-'));
+  const home = mkdtempSync(join(tmpdir(), 'originless-remote-worker-'));
+  const controller = new AbortController();
+  let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
+  let worker: ReturnType<typeof spawn> | undefined;
+  let closed: Promise<void> | undefined;
+  try {
+    writeFileSync(join(directory, 'config.yaml'), 'provider: mock\ndaemon:\n  builtin_worker:\n    concurrency: 1\n  remote_worker:\n    host: 127.0.0.1\n    port: 0\n');
+    invalidateGlobalConfigCache();
+    for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'Test'], ['config', 'user.email', 'test@example.test'],
+      ['commit', '--allow-empty', '-m', 'fixture']]) {
+      expect(spawnSync('git', ['-C', project, ...args]).status).toBe(0);
+    }
+    mkdirSync(join(project, '.takt/workflows'), { recursive: true });
+    writeFileSync(join(project, '.takt/config.yaml'), 'provider: mock\nconcurrency: 1\n');
+    writeFileSync(join(project, '.takt/workflows/originless.yaml'), 'name: originless\nsteps:\n  - name: work\n    instruction: Complete originless work\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+    const builtinHook = join(home, 'builtin-hook.mjs');
+    writeFileSync(builtinHook, `
+import { writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { MockProvider } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'src/infra/providers/mock.ts')).href)};
+MockProvider.prototype.setup = config => ({ call: async (_prompt, options) => {
+  writeFileSync(${JSON.stringify(join(home, 'builtin.json'))}, JSON.stringify({ pid: process.pid, cwd: options.cwd }));
+  return { persona: config.name, status: 'done', content: 'Originless work completed', timestamp: new Date(), sessionId: randomUUID() };
+} });
+`);
+    const tsx = createRequire(import.meta.url).resolve('tsx/esm');
+    vi.stubEnv('NODE_OPTIONS', `--import ${JSON.stringify(tsx)} --import ${JSON.stringify(pathToFileURL(builtinHook).href)}`);
+    const goal = await new GoalStore(project).create(goalRecord());
+    expect(spawnSync('git', ['-C', project, 'branch', goal.branch]).status).toBe(0);
+    await registerProject({ globalConfigDirectory: directory, projectDirectory: project, command: 'manager', managerUsed: true });
+    const identity = getSelfProcessIdentity();
+    if (identity === undefined) throw new Error('Test process identity is unavailable');
+    const owner = { pid: process.pid, identity, version: packageVersion, cliPath: daemonEntryPath() };
+    await writeDaemonOwner(directory, owner);
+    const registered = await new WorkerRegistry(directory).add('w1', 1);
+    daemon = await startDaemon({ configDirectory: directory, owner, tokens: undefined, signal: controller.signal,
+      runnerFactory(bus) { const turns = new ControlledTurnRunner(); turns.bus = bus; return turns; } });
+    const probe = join(home, 'probe.mjs');
+    writeFileSync(probe, `import { readFileSync, writeFileSync } from 'node:fs';
+let denied; try { readFileSync(${JSON.stringify(join(project, '.takt/config.yaml'))}); } catch (error) { denied = error.code; }
+writeFileSync(${JSON.stringify(join(home, 'probe.json'))}, JSON.stringify({ denied }));`);
+    worker = spawn('/usr/bin/sandbox-exec', ['-p', `(version 1)(allow default)(deny file-read* (subpath ${JSON.stringify(directory)}))`,
+      process.execPath, join(process.cwd(), 'dist/app/cli/index.js'), '--no-update-notifier', 'worker',
+      '--url', `http://127.0.0.1:${daemon.workerPort}`, '--token', registered.token], {
+      cwd: home, env: { ...process.env, HOME: home, USERPROFILE: home, TAKT_CONFIG_DIR: join(home, '.takt'),
+        NODE_OPTIONS: `--import ${JSON.stringify(pathToFileURL(probe).href)}` }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    worker.stdout?.on('data', (bytes: Buffer) => { output += bytes.toString(); });
+    worker.stderr?.on('data', (bytes: Buffer) => { output += bytes.toString(); });
+    closed = new Promise<void>((resolve) => worker!.once('close', () => resolve()));
+    await vi.waitFor(() => expect(output).toContain('w1 connected'), { timeout: 20_000 });
+    expect(JSON.parse(readFileSync(join(home, 'probe.json'), 'utf8'))).toEqual({ denied: 'EPERM' });
+    const runner = new TaskRunner(project);
+    const task = runner.addTask('originless work', { goal_id: goal.id, base_branch: goal.branch, workflow: 'originless', worktree: false });
+    await vi.waitFor(() => expect(runner.listTaskStateItems().find((item) => item.name === task.name)).toMatchObject({
+      status: 'completed', workerName: 'builtin', completion: { success: true } }), { timeout: 30_000 });
+    const observed = JSON.parse(readFileSync(join(home, 'builtin.json'), 'utf8'));
+    expect(observed).toMatchObject({ cwd: project });
+    expect(observed.pid).not.toBe(worker.pid);
+    expect(observed.pid).not.toBe(process.pid);
+    expect(new TaskStore(project).read().tasks[0]!.remote_assignment).toBeUndefined();
+    expect(existsSync(join(home, '.takt/worker-executions'))).toBe(false);
+    expect(worker.exitCode).toBeNull();
+  } finally {
+    if (worker !== undefined && worker.exitCode === null && worker.signalCode === null) worker.kill('SIGTERM');
+    const timer = setTimeout(() => worker?.kill('SIGKILL'), 5000);
+    await closed; clearTimeout(timer);
+    controller.abort(); await daemon?.close();
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });
   }
 });

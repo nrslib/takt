@@ -29,11 +29,11 @@ it('does not print a token when registration persistence fails', async () => {
   expect(output).not.toHaveBeenCalled();
 });
 
-it('starts a connection without an executor and removes its signal handlers on exit', async () => {
+it('starts an executable worker and removes its signal handlers on exit', async () => {
   const listeners = process.listenerCount('SIGTERM');
   doubles.run.mockImplementation(async (input: Parameters<typeof import('../features/workerPool/remoteWorker.js').runRemoteWorker>[0]) => {
     expect(input).toMatchObject({ url: 'http://localhost', token: 'token' });
-    expect(input.executor).toBeUndefined();
+    expect(input.executor?.execute).toBeTypeOf('function');
     process.emit('SIGTERM');
     expect(input.signal.aborted).toBe(true);
   });
