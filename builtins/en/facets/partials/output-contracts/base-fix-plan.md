@@ -14,9 +14,9 @@
 | {Name} | {Verified cause and primary alternatives ruled out} | {Externally observable condition} | {Actual paths from the top-level production entry through every relevant stage to the observable result} | {Minimum necessary changes} | {Separate contracts, adjacent work, and unnecessary mechanism changes} | {Applied rule names and how they support the boundary decision} |
 
 ## Repair Method Comparison
-| Repair Unit | History and Fixed-Version References | Required Conditions and Earlier Assumptions | Compared Methods and Change Locations | Selection Reason and Shared-Cause Treatment | Preserved Conditions | Verification Changes from Earlier Method |
-|-------------|--------------------------------------|--------------------------------------------|---------------------------------------|---------------------------------------------|----------------------|------------------------------------------|
-| {Name} | {Decision history and evidence, or no history} | {Requirements versus implementation assumptions} | {Concrete retention/change options and locations} | {Selected method, assumption removed or reason to retain it} | {Scope, mandated method, success and failure outcomes} | {Observation of shared-cause removal and conditions failing under the old method, or reason for no change} |
+| Repair Unit | History and Fixed-Version References | Method Review Decision | Required Conditions and Earlier Assumptions | Compared Methods and Change Locations | Selection Reason and Shared-Cause Treatment | Preserved Conditions | Verification Changes from Earlier Method |
+|-------------|--------------------------------------|------------------------|--------------------------------------------|---------------------------------------|---------------------------------------------|----------------------|------------------------------------------|
+| {Name} | {Decision history and evidence, or no history} | {Trigger / Do not trigger and why; explicitly do not trigger when completing an in-progress plan} | {Requirements versus implementation assumptions} | {Concrete retention/change options and locations} | {Selected method, assumption removed or reason to retain it} | {Scope, mandated method, success and failure outcomes} | {Observation of shared-cause removal and conditions failing under the old method, or reason for no change} |
 
 ## Impact Paths
 | Repair Unit / Path | Source of Truth and Input / State | Entry to Observable Result | Treatment | Successful Example | Counterexample Detecting a Violation |
