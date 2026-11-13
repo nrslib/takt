@@ -126,8 +126,13 @@ export class ToolActivityDisplay {
       if (entry.status !== 'running') continue;
       if (this.mode === 'expanded' && entry.output !== '') {
         const source = toolResultSensitiveValues(entry.input);
-        const text = classifyToolResult(entry.output).kind === 'text' && (source.exhausted || source.values.size > 0)
-          ? this.readableResults([entry]).get(entry.key) : undefined;
+        const isReadableText = classifyToolResult(entry.output).kind === 'text';
+        const hasSafeSource = source.exhausted || source.values.size > 0;
+        const stream = this.readableStreams.get(entry.key);
+        if (isReadableText && hasSafeSource && stream !== undefined) {
+          stream.text += stream.redactor.flushAvailable(source);
+        }
+        const text = isReadableText && hasSafeSource ? stream?.text ?? '' : undefined;
         const value = projectToolActivity(entry, 'expanded', text);
         if (!this.displayedResults.has(entry.key)) this.writeLine(`  ${value.tool} output: [running]`);
         this.writeExpandedResult(value);
@@ -205,7 +210,7 @@ export class ToolActivityDisplay {
     }
     const source = toolResultSensitiveValues(entry.input);
     state.pending += entry.status === 'running'
-      ? state.redactor.write('', source)
+      ? state.redactor.flushAvailable(source)
       : state.redactor.flush(source);
     this.drain(state, true);
   }

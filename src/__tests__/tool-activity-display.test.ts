@@ -405,6 +405,36 @@ describe('tool activity display', () => {
     expect(display.history.entries()[0]!.status).toBe('success');
   });
 
+  it('should flush readable running output while redacting a known trailing secret', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf output', api_key: 'private123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output private123' } });
+
+    display.flush();
+    display.flush();
+
+    expect(output).toContain('  │ observed-output [REDACTED]');
+    expect(output.join('\n')).not.toContain('private123');
+    expect(output.filter((line) => line.includes('observed-output'))).toHaveLength(1);
+    expect(output.join('\n')).toContain('output: [running]');
+    expect(display.history.entries()[0]!.status).toBe('running');
+  });
+
+  it('should keep a partial known secret private when flushing running output', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf output', api_key: 'private123' } } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output private12' } });
+
+    display.flush();
+
+    expect(output.join('\n')).toContain('observed-output');
+    expect(output.join('\n')).not.toContain('private12');
+    expect(output.join('\n')).not.toContain('private123');
+    expect(display.history.entries()[0]!.status).toBe('running');
+  });
+
   it('should keep additional completed output after a running output flush', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
