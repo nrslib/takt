@@ -458,6 +458,9 @@ export class StepExecutor {
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
+                ...(judgeOptions.openCodeExternalDirectories === undefined
+                  ? {}
+                  : { openCodeExternalDirectories: judgeOptions.openCodeExternalDirectories }),
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
                 mcpServers: judgeOptions.mcpServers,

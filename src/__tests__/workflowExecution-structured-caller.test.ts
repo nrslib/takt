@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -27,6 +27,7 @@ const {
   mockGetProvider,
   mockRunAgent,
   mockResolveConfigValueWithSource,
+  mockCloseOpenCodeServersForExternalDirectories,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -92,6 +93,7 @@ const {
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
     mockResolveConfigValueWithSource: vi.fn(),
+    mockCloseOpenCodeServersForExternalDirectories: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -177,6 +179,11 @@ vi.mock('../agents/runner.js', () => ({
 
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
+}));
+
+vi.mock('../infra/opencode/server-pool.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/opencode/server-pool.js')>()),
+  closeOpenCodeServersForExternalDirectories: mockCloseOpenCodeServersForExternalDirectories,
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -437,6 +444,22 @@ describe('executeWorkflow structuredCaller injection', () => {
       resolvedExecution: expect.objectContaining({ provider: 'cursor' }),
     }));
     expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
+  it('外部にある run context の OpenCode server を run 完了時に閉じる', async () => {
+    const runPathsDirectory = mkdtempSync(join(tmpdir(), 'takt-structured-caller-runs-'));
+    cleanupDirs.push(runPathsDirectory);
+    mkdirSync(join(runPathsDirectory, 'external-context-run', 'context'), { recursive: true });
+
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
+      reportDirName: 'external-context-run',
+      runPathsDirectory,
+    });
+
+    expect(mockCloseOpenCodeServersForExternalDirectories).toHaveBeenCalledWith([
+      realpathSync(join(runPathsDirectory, 'external-context-run', 'context')),
+    ]);
   });
 
   it('PR実行APIが同じPRとcloneのcontextおよび方式をengineへ渡す', async () => {

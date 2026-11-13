@@ -206,6 +206,9 @@ export class AgentRunner {
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
+      ...(resolution.provider !== 'opencode' || options.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: options.openCodeExternalDirectories }),
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,

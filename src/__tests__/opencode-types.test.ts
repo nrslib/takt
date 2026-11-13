@@ -2,7 +2,10 @@
  * Tests for OpenCode type definitions and permission mapping
  */
 
-import { describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join, parse, relative } from 'node:path';
 import {
   buildOpenCodePermissionRuleset,
   buildOpenCodePromptTools,
@@ -13,6 +16,36 @@ import {
 } from '../infra/opencode/types.js';
 import { toOpenCodeMcpServerPermission, toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
 import { toV2Tools } from '../infra/opencode/v2-contract.js';
+import {
+  buildOpenCodeV1ExternalDirectoryPermissions,
+  buildOpenCodeV2ExternalDirectoryRules,
+  normalizeOpenCodeExternalDirectories,
+} from '../infra/opencode/external-directories.js';
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.length = 0;
+});
+
+function createExternalContextDirectories() {
+  const root = mkdtempSync(join(tmpdir(), 'takt-opencode-permissions-'));
+  temporaryDirectories.push(root);
+  const worktreeDirectory = join(root, 'worktree');
+  const realRunDirectory = join(root, 'real-run');
+  const linkedRunDirectory = join(root, 'run-link');
+  mkdirSync(worktreeDirectory);
+  mkdirSync(join(realRunDirectory, 'context'), { recursive: true });
+  symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
+  return {
+    worktreeDirectory: realpathSync(worktreeDirectory),
+    contextDirectory: join(linkedRunDirectory, 'context'),
+    canonicalContextDirectory: realpathSync(join(realRunDirectory, 'context')),
+  };
+}
 
 describe('mapToOpenCodePermissionReply', () => {
   it('should map readonly to reject', () => {
@@ -357,6 +390,63 @@ describe('buildOpenCodeSessionPermission', () => {
     ]) {
       expect(rules).toContainEqual({ permission: 'external_directory', pattern: '*', action: 'deny' });
     }
+  });
+
+  it('allows only the selected external context and denies edits there', () => {
+    const { worktreeDirectory, contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    const relativeContextDirectory = relative(worktreeDirectory, canonicalContextDirectory);
+    const rules = buildOpenCodeSessionPermission(
+      'edit', undefined, undefined, undefined, undefined, [contextDirectory], worktreeDirectory,
+    );
+
+    expect(rules.slice(-3)).toEqual([
+      { permission: 'external_directory', pattern: '*', action: 'deny' },
+      { permission: 'external_directory', pattern: join(canonicalContextDirectory, '*'), action: 'allow' },
+      { permission: 'edit', pattern: join(relativeContextDirectory, '*'), action: 'deny' },
+    ]);
+    expect(relative(worktreeDirectory, join(canonicalContextDirectory, 'order.md')))
+      .toBe(join(relativeContextDirectory, 'order.md'));
+  });
+});
+
+describe('OpenCode external directory rules', () => {
+  it('builds narrow v1 external permissions while keeping edits denied', () => {
+    const { worktreeDirectory, contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    const relativeContextDirectory = relative(worktreeDirectory, canonicalContextDirectory);
+    expect(buildOpenCodeV1ExternalDirectoryPermissions([contextDirectory], worktreeDirectory)).toEqual({
+      external_directory: {
+        '*': 'deny',
+        [join(canonicalContextDirectory, '*')]: 'allow',
+      },
+      edit: { [join(relativeContextDirectory, '*')]: 'deny' },
+    });
+    expect(relative(worktreeDirectory, join(canonicalContextDirectory, 'order.md')))
+      .toBe(join(relativeContextDirectory, 'order.md'));
+  });
+
+  it('builds ordered v2 external permissions with the exact directory exception', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectories();
+    expect(buildOpenCodeV2ExternalDirectoryRules([contextDirectory])).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
+  it('deduplicates and sorts directories and rejects broad or relative paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-opencode-directory-set-'));
+    temporaryDirectories.push(root);
+    const directoryA = join(root, 'a');
+    const directoryB = join(root, 'b');
+    const directoryBLink = join(root, 'b-link');
+    mkdirSync(directoryA);
+    mkdirSync(directoryB);
+    symlinkSync(directoryB, directoryBLink, 'dir');
+    expect(normalizeOpenCodeExternalDirectories([directoryB, directoryA, directoryB, directoryBLink]))
+      .toEqual([realpathSync(directoryA), realpathSync(directoryB)]);
+    expect(() => normalizeOpenCodeExternalDirectories([join(root, '*')])).toThrow(/wildcard/);
+    expect(() => normalizeOpenCodeExternalDirectories(['relative/context'])).toThrow(/absolute/);
+    expect(() => normalizeOpenCodeExternalDirectories([parse(root).root])).toThrow(/filesystem root/);
   });
 });
 

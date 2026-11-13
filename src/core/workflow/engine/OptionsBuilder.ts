@@ -107,6 +107,7 @@ export class OptionsBuilder {
     private readonly recordActivity: ProviderActivityCallback = () => {},
     private readonly getReportsRootDir?: () => string,
     private readonly getWorkflowPromptContext?: (step: WorkflowStep, assignment?: WorkflowAssignment) => WorkflowPromptContext | undefined,
+    private readonly openCodeExternalDirectories: readonly string[] = [],
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -495,6 +496,9 @@ export class OptionsBuilder {
       edit: step.edit,
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
+      ...(this.openCodeExternalDirectories.length === 0
+        ? {}
+        : { openCodeExternalDirectories: this.openCodeExternalDirectories }),
       abortSignal: this.resolveAbortSignal(),
       personaPath: step.personaPath,
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
@@ -552,6 +556,9 @@ export class OptionsBuilder {
       executionPhase: 2,
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
+      ...(baseOptions.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: baseOptions.openCodeExternalDirectories }),
       abortSignal: baseOptions.abortSignal,
       personaPath: baseOptions.personaPath,
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,

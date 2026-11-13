@@ -34,6 +34,7 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
+  readonly openCodeExternalDirectories?: readonly string[];
 }
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -81,6 +82,8 @@ function createBuilder(
     reportsRootDir === undefined
       ? undefined
       : () => reportsRootDir,
+    undefined,
+    phaseContextSources.openCodeExternalDirectories,
   );
 }
 
@@ -103,6 +106,21 @@ describe('OptionsBuilder.buildBaseOptions', () => {
         codex: { defaultPermissionMode: 'full' },
       },
     });
+  });
+
+  it('carries TAKT external context directories into OpenCode workflow options', () => {
+    const contextDirectory = '/state/.takt/runs/run-a/context';
+    const builder = createBuilder(
+      createStep({ provider: 'opencode', model: 'opencode/model' }),
+      { provider: 'opencode', model: 'opencode/model' },
+      undefined,
+      { openCodeExternalDirectories: [contextDirectory] },
+    );
+
+    const step = createStep({ provider: 'opencode', model: 'opencode/model' });
+    expect(builder.buildBaseOptions(step).openCodeExternalDirectories).toEqual([contextDirectory]);
+    expect(builder.buildNewSessionReportOptions(step, { maxTurns: 1 }).openCodeExternalDirectories)
+      .toEqual([contextDirectory]);
   });
 
   it('passes runtime defaults permission mode to the actual provider call', () => {
