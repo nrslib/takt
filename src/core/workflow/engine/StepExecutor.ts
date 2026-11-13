@@ -2032,6 +2032,9 @@ export class StepExecutor {
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
+                    ...(agentOptions.openCodeExternalDirectories === undefined
+                      ? {}
+                      : { openCodeExternalDirectories: agentOptions.openCodeExternalDirectories }),
                   }).then((response) => {
                     const freshResponse = { ...response };
                     delete freshResponse.sessionId;
