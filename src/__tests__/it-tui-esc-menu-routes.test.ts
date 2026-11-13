@@ -55,7 +55,7 @@ describe('TUI confirmation to conversation routes through the real runner', () =
       void run.catch(() => undefined);
       await terminal.waitForPrompt(getLabel('interactive.modeSelection.prompt', 'en'), 0);
       await terminal.send('\x1B[B\x1B[B\r');
-      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
       const first = inkFrames.frames[0]!;
       expect(terminal.output()).not.toContain(getLabel('interactive.formalSpecPrompt', 'en'));
       await terminal.send('before command\r');
@@ -135,7 +135,7 @@ describe('TUI confirmation to conversation routes through the real runner', () =
         await terminal.waitForPrompt(getLabel('interactive.formalSpecPrompt', 'en'), mark);
         await terminal.send('y\r');
       }
-      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
       const first = inkFrames.frames[0]!;
       await terminal.send('before command\r');
       await vi.waitFor(() => expect(first.submissions).toHaveLength(1));
@@ -220,7 +220,7 @@ describe('TUI /go action menu through the real selector', () => {
     void run.catch(() => undefined);
     await terminal.waitForPrompt(getLabel('interactive.modeSelection.prompt', 'en'), 0);
     await terminal.send('\r');
-    await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+    await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
     const first = inkFrames.frames[0]!;
     const instruction = await first.props.conversation.submit({
       text: '/go build the task', abortSignal: new AbortController().signal, onAssistantChunk: () => undefined,

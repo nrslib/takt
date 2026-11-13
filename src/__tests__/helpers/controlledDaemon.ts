@@ -138,6 +138,7 @@ export async function harness() {
   };
   const stateRequests = { handle: vi.fn<DaemonStateOwner['handle']>(async (_turn, request) => {
     switch (request.kind) {
+      case 'publish_epic_events': return { kind: 'error', code: 'forbidden', message: 'No workspace Epic store in this double' };
       case 'wait_command': return { kind: 'error', code: 'forbidden', message: 'No wait command owner in this double' };
       case 'save_conversation': return { kind: 'state_saved', version: request.change.expectedVersion + 1, duplicate: false };
       case 'get_delivery': return { kind: 'delivery', conversationId: request.conversationId, assignment: turnState().assignment, connectedPorts: ['tui'] };

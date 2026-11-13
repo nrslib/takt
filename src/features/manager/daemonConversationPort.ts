@@ -16,6 +16,7 @@ export function createDaemonConversationInput(options: {
   const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number; activitySequence: number | undefined }>();
   const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
   let accepting = true;
+  let attachmentGeneration = 0;
   const attached = (id: string) => {
     const attachment = attachments.get(id);
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
@@ -29,6 +30,7 @@ export function createDaemonConversationInput(options: {
     const projected = attachment.changes.read(screen, (async function* () {
       try {
         for await (const item of screen.items) {
+          if (item.kind === 'tool_history' && attachment.input.binding.port !== 'tui') continue;
           if (item.kind === 'remove') throw new Error('Conversation owner must provide a complete projection');
           if (item.kind === 'display_event') {
             if (attachment.input.assignment.kind !== 'daemon' && item.recordedAt !== undefined && Date.parse(item.recordedAt) < attachment.startedAt) continue;
@@ -77,6 +79,7 @@ export function createDaemonConversationInput(options: {
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
       attachments.set(attachmentId, attachment);
+      attachmentGeneration++;
       return { attachmentId, read: replayActivityAfterRead(attachmentId, snapshot) };
     },
     async submit(request) {
@@ -142,6 +145,7 @@ export function createDaemonConversationInput(options: {
   };
   return { ...input,
     get attachmentCount() { return attachments.size; },
+    get attachmentGeneration() { return attachmentGeneration; },
     connectedPorts(id: string): string[] {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },
@@ -173,6 +177,7 @@ export function createDaemonConversationInput(options: {
       const value = output;
       await Promise.all(recipients.map(async (attachment) => {
         if (signal?.aborted) return;
+        if (value.kind === 'tool_history' && attachment.input.binding.port !== 'tui') return;
         if (value.kind === 'turn_text') {
           if (attachment.input.binding.port === 'tui') await attachment.delivery.deliver(id, value, version, signal);
           return;

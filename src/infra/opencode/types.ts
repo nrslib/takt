@@ -6,6 +6,10 @@ import type { AskUserQuestionHandler, PermissionHandler, SkillPermissionHandler 
 import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
+import {
+  normalizeOpenCodeExternalDirectories,
+  openCodeExternalDirectoryPattern,
+} from './external-directories.js';
 
 /** OpenCode permission reply values */
 export type OpenCodePermissionReply = 'once' | 'always' | 'reject';
@@ -217,12 +221,13 @@ export type OpenCodeAllowedTools = readonly string[];
  * restriction is enforced by the explicit per-prompt tools map instead
  * (see buildOpenCodePromptTools).
  *
- * `external_directory` is denied explicitly. Note that this session-scoped
- * rule only holds until the first prompt: a prompt-level tools map is
+ * `external_directory` is denied except for explicitly supplied TAKT context
+ * directories. This session-scoped rule only holds until the first prompt: a prompt-level tools map is
  * materialized into `session.permission` by OpenCode and replaces this
- * ruleset. The authoritative deny lives in the server config passed to
- * `createOpencode` (see client.ts), which the rewrite does not touch; the
- * rule here covers the window before the first prompt.
+ * ruleset. The external-directory deny and its narrow exceptions live in
+ * the server config passed to `createOpencode` in `server-pool.ts`, which the
+ * rewrite does not touch; the rule here covers the window before the first
+ * prompt.
  */
 export function buildOpenCodeSessionPermission(
   mode?: PermissionMode,
@@ -230,11 +235,13 @@ export function buildOpenCodeSessionPermission(
   allowedTools?: OpenCodeAllowedTools,
   allowedMcpTools?: readonly string[],
   strictToolAllowlist?: OpenCodeAllowedTools,
+  externalDirectoryAllowlist?: readonly string[],
 ): OpenCodePermissionRule[] {
+  const externalDirectoryRules = buildExternalDirectorySessionRules(externalDirectoryAllowlist);
   if (strictToolAllowlist !== undefined) {
     return [
       ...buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools),
-      { permission: 'external_directory', pattern: '*', action: 'deny' },
+      ...externalDirectoryRules,
     ];
   }
   const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools, allowedMcpTools)
@@ -248,8 +255,22 @@ export function buildOpenCodeSessionPermission(
       rules.push({ permission, pattern: '*', action: 'allow' });
     }
   }
-  rules.push({ permission: 'external_directory', pattern: '*', action: 'deny' });
+  rules.push(...externalDirectoryRules);
   return rules;
+}
+
+function buildExternalDirectorySessionRules(
+  directories: readonly string[] | undefined,
+): OpenCodePermissionRule[] {
+  const normalized = normalizeOpenCodeExternalDirectories(directories);
+  return [
+    { permission: 'external_directory', pattern: '*', action: 'deny' },
+    ...normalized.map((directory) => ({
+      permission: 'external_directory',
+      pattern: openCodeExternalDirectoryPattern(directory),
+      action: 'allow' as const,
+    })),
+  ];
 }
 
 /**
@@ -461,6 +482,8 @@ function toOpenCodeAllowedPermission(tool: string): string | null {
 export interface OpenCodeCallOptions {
   callerManagedSession?: true;
   cwd: string;
+  /** Exact TAKT-owned context directories approved for external reads. */
+  externalDirectoryAllowlist?: readonly string[];
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
@@ -503,6 +526,8 @@ export interface OpenCodeCallOptions {
 export interface OpenCodeCompactSessionOptions {
   cwd: string;
   sessionId: string;
+  /** Exact TAKT-owned context directories approved for external reads. */
+  externalDirectoryAllowlist?: readonly string[];
   model?: string;
   /** Workflow-only permission to use the model stored on the OpenCode session. */
   allowDefaultModel?: boolean;

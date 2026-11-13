@@ -13,7 +13,7 @@ async function fixture(timestamps = new Map([['/project', Date.now()], ['/second
   const target: ManagerPatrolTarget = { conversationId: 'conversation', repositoryDirectory: '/project',
     intervalSeconds: 10 };
   let goalIds: string[] = [randomUUID(), randomUUID()];
-  let targets = [target];
+  let targets: ManagerPatrolTarget[] = [target];
   const errors = vi.fn();
   const records = { async read(repository: string) { return timestamps.get(repository); },
     async write(repository: string, lastQueued: number) { timestamps.set(repository, lastQueued); } };
@@ -51,6 +51,29 @@ it('does not patrol repositories without active goals', async () => {
     await vi.advanceTimersByTimeAsync(30000);
     expect(f.runner.calls).toHaveLength(0);
     expect(f.dispatcher.hasPendingEvents).toBe(false);
+  } finally { await f.close(); }
+});
+
+it('transfers an Epic-only patrol through both schemas and interrupts it for human input without duplicating it', async () => {
+  const f = await fixture();
+  try {
+    const workspaceId = randomUUID(); const epicId = randomUUID();
+    f.setTargets([{ conversationId: 'conversation', workspaceId, epicIds: [epicId], intervalSeconds: 10 }]);
+    f.setGoals([]);
+    f.loop.wake(); await f.loop.drain();
+    const patrol = await f.runner.started(1);
+    expect(patrol.input.event.event).toEqual({ kind: 'patrol', workspaceId, epicIds: [epicId], goalIds: [] });
+    AcceptedEventSchema.parse(patrol.input.event);
+    parseDaemonProcessMessage({ kind: 'start_turn', protocolVersion: 1, launchId: 'launch', input: patrol.input }, 'launch');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect([...f.store.records.values()].filter(({ event }) => event.event.kind === 'patrol')).toHaveLength(1);
+    accepted(await f.dispatcher.accept(input('human')));
+    expect(patrol.signal.aborted).toBe(true);
+    await f.runner.finish(patrol, { kind: 'interrupted' });
+    const human = await f.runner.started(2);
+    expect(human.input.event.eventId).toBe('human');
+    await f.runner.finish(human);
+    expect(f.errors).not.toHaveBeenCalled();
   } finally { await f.close(); }
 });
 

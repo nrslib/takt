@@ -30,6 +30,7 @@ import {
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import type { CodexCallOptions } from './types.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
 import { buildCodexSessionConfig } from './session-config.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from './mcp-isolation.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
@@ -50,6 +51,10 @@ import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
 } from './failure-message.js';
+import {
+  createCodexRolloutObservation,
+  detectCodexCompaction,
+} from './compaction.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -380,6 +385,7 @@ export class CodexClient {
     };
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
+    let rolloutObservation: Awaited<ReturnType<typeof createCodexRolloutObservation>>;
     try {
       isolation = options.mcpOnlySideEffects
         ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
@@ -387,6 +393,11 @@ export class CodexClient {
       if (isolation === undefined) {
         mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
       }
+      rolloutObservation = createCodexRolloutObservation(
+        codexEnvironment,
+        threadId,
+        new Date(),
+      );
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -400,8 +411,19 @@ export class CodexClient {
       return errorResponse;
     }
 
+    const compactedThreadIds = new Set<string | undefined>();
+    const signalCompaction = (sessionId: string | undefined): void => {
+      if (compactedThreadIds.has(sessionId)) return;
+      compactedThreadIds.add(sessionId);
+      options.onStream?.({
+        type: 'context_compacted',
+        data: { ...(sessionId !== undefined ? { sessionId } : {}) },
+      });
+    };
+
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
+      const onStream = withToolActivityCall(options.onStream);
       options.onActivity?.({ kind: 'attempt_started' });
       let currentThreadId = threadId;
       const codexClientOptions: CodexOptions = {
@@ -487,7 +509,12 @@ export class CodexClient {
 
           if (event.type === 'thread.started') {
             currentThreadId = typeof event.thread_id === 'string' ? event.thread_id : currentThreadId;
-            emitInit(options.onStream, options.model, currentThreadId);
+            emitInit(onStream, options.model, currentThreadId);
+            continue;
+          }
+
+          if (event.type === 'compacted') {
+            signalCompaction(currentThreadId);
             continue;
           }
 
@@ -515,7 +542,7 @@ export class CodexClient {
           if (event.type === 'item.started') {
             const item = event.item as CodexItem | undefined;
             if (item) {
-              emitCodexItemStart(item, options.onStream, state);
+              emitCodexItemStart(item, onStream, state);
             }
             continue;
           }
@@ -537,7 +564,7 @@ export class CodexClient {
                   }
                 }
               }
-              emitCodexItemUpdate(item, options.onStream, state);
+              emitCodexItemUpdate(item, onStream, state);
             }
             continue;
           }
@@ -565,7 +592,7 @@ export class CodexClient {
                   content += text;
                 }
               }
-              emitCodexItemCompleted(item, options.onStream, state);
+              emitCodexItemCompleted(item, onStream, state);
             }
             continue;
           }
@@ -611,7 +638,7 @@ export class CodexClient {
               options,
               totalRetryCount(),
             );
-            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+            emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
             return rateLimitedResponse;
           }
 
@@ -640,7 +667,7 @@ export class CodexClient {
             totalRetryCount(),
           );
           emitResult(
-            options.onStream,
+            onStream,
             false,
             errorResponse.error ?? errorResponse.content,
             currentThreadId,
@@ -658,7 +685,7 @@ export class CodexClient {
             totalRetryCount(),
             'error_text',
           );
-          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return {
             ...rateLimitedResponse,
             providerUsage: providerUsage ?? {
@@ -699,7 +726,7 @@ export class CodexClient {
             totalRetryCount(),
           );
           emitResult(
-            options.onStream,
+            onStream,
             false,
             errorResponse.error ?? errorResponse.content,
             currentThreadId,
@@ -708,7 +735,11 @@ export class CodexClient {
           return errorResponse;
         }
 
-        emitResult(options.onStream, true, trimmed, currentThreadId);
+        if (!compactedThreadIds.has(currentThreadId)
+          && await detectCodexCompaction(rolloutObservation, currentThreadId)) {
+          signalCompaction(currentThreadId);
+        }
+        emitResult(onStream, true, trimmed, currentThreadId);
 
         const response: AgentResponse = {
           persona: agentType,
@@ -748,7 +779,7 @@ export class CodexClient {
             options,
             totalRetryCount(),
           );
-          emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
+          emitResult(onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return rateLimitedResponse;
         }
 
@@ -794,7 +825,7 @@ export class CodexClient {
           totalRetryCount(),
         );
         emitResult(
-          options.onStream,
+          onStream,
           false,
           errorResponse.error ?? errorResponse.content,
           currentThreadId,

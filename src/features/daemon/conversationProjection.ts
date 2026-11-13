@@ -1,4 +1,7 @@
 import { join } from 'node:path';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
+import { epicVerificationRecovery } from '../../infra/epics/state.js';
+import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { SnapshotItem } from '../manager/conversationPort.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { GoalQuestionSchema } from '../../infra/goals/schema.js';
@@ -25,6 +28,21 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
     const assignment = await routing.display(identity);
     const global = await globalDaemonConfiguration(routing.directory);
     yield { kind: 'assignment', assignment };
+    if (identity.kind === 'workspace') {
+      reading = join(routing.directory, 'workspaces', identity.workspaceId, 'epics');
+      if (cancelled()) return;
+      for await (const epic of new DaemonEpicFiles(routing.directory).list(identity.workspaceId)) {
+        const memberProgress: EpicSnapshot['memberProgress'] = [];
+        for (const member of epic.members) {
+          if (!assignment.repositoryDirectories.includes(member.repositoryDirectory)) continue;
+          const goal = await files.goal(join(member.repositoryDirectory, '.takt', 'goals', member.goalId, 'goal.json'));
+          if (goal.id !== member.goalId) throw new Error('Epic member identity mismatch');
+          memberProgress.push({ ...member, status: goal.status, executionStatus: goal.executionStatus });
+        }
+        yield { kind: 'epic', epic, memberProgress, recovery: epicVerificationRecovery(epic) };
+        if (cancelled()) return;
+      }
+    }
     for (const directory of assignment.repositoryDirectories) {
       const configuration = await readDaemonConfiguration(join(directory, '.takt', 'config.yaml'));
       const policy = Object.fromEntries((['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)

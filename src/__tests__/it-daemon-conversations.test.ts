@@ -123,12 +123,12 @@ it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the 
     const beforeReconnect = await tui.frame();
     expect(beforeReconnect).toContain('コードを読んでいるところです。');
     expect(beforeReconnect.indexOf('コードを読んでいるところです。')).toBeLessThan(beforeReconnect.indexOf('見回りの予定のコードを読む'));
-    expect(await tui.frame()).not.toContain('private-');
+    expect(await tui.frame()).not.toContain('private-reasoning-marker');
     await tui.exit();
     const reconnected = await fixture.start(fixture.repository, undefined);
     await waitForManager(reconnected, '見回りの予定のコードを読む');
     const during = await reconnected.frame();
-    expect(during).not.toContain('private-');
+    expect(during).not.toContain('private-reasoning-marker');
     expect(during).not.toContain('コードを読んでいるところです。');
     expect(during.split('\n').find((row) => row.includes('見回りの予定のコードを読む'))).toMatch(/\b\d+(?:m\d{2})?s\b/u);
     const owner = (await readDaemonOwner(fixture.directory))!;
@@ -144,10 +144,64 @@ it.each(['ja', 'en'] as const)('delivers descriptions and ordered text from the 
     expect(frame).not.toContain('調べがつきました。');
     expect(frame.split('Activity completed')).toHaveLength(2);
     expect(frame).not.toContain(getLabel('tui.ui.extendedThinking', lang));
-    expect(frame).not.toContain('private-');
+    expect(frame).not.toContain('private-reasoning-marker');
     const saved = JSON.stringify(await fixture.state());
-    for (const transient of ['見回りの予定のコードを読む', 'コードを読んでいるところです。', '調べがつきました。']) expect(saved).not.toContain(transient);
-    expect(saved).not.toContain('private-');
+    for (const transient of ['コードを読んでいるところです。', '調べがつきました。', 'private-reasoning-marker']) expect(saved).not.toContain(transient);
+    await reconnected.exit();
+  } finally { fixture.release(); await fixture.cleanup(); }
+});
+
+it('restores a tool completed while the TUI process was closed exactly once without restarting the provider', async () => {
+  const fixture = managerDaemonFixture('en', ['Detached tool completed'], true);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await tui.ready();
+    await submitManagerText(tui, 'Keep the tool running after close');
+    await waitForManager(tui, getLabel('tui.ui.extendedThinking', 'en'));
+    fixture.useTool();
+    await waitForManager(tui, '見回りの予定のコードを読む');
+    const before = (await fixture.state())!;
+    expect(before.turn).not.toBeNull();
+    const owner = (await readDaemonOwner(fixture.directory))!;
+    const calls = () => fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
+    expect(calls()).toHaveLength(1);
+    const workerPid = calls()[0]!.pid;
+    expect(workerPid).not.toBe(tui.child.pid);
+    expect(workerPid).not.toBe(owner.pid);
+    await tui.exit();
+    expect(tui.child.exitCode).toBe(0);
+    expect((await fixture.state())?.turn).toEqual(before.turn);
+    expect(await isDaemonOwnerRunning(owner, { signal: AbortSignal.timeout(5000), timeoutMs: 5000 })).toBe(true);
+    fixture.release();
+    await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager'))
+      .toEqual([expect.objectContaining({ pid: workerPid })]);
+
+    const reconnected = await fixture.start(fixture.repository, undefined);
+    await reconnected.ready(null);
+    await waitForManager(reconnected, 'private-result-marker');
+    const checkHistory = (value: string): void => {
+      const frame = stripVTControlCharacters(value);
+      expect(frame.split('private-result-marker')).toHaveLength(2);
+      expect(frame).toContain('private-input-marker');
+      expect(frame).toMatch(/success.*\(\d+ ms\)/u);
+      expect(frame).not.toContain('private-reasoning-marker');
+      expect(frame).not.toContain('コードを読んでいるところです。');
+      expect(frame).not.toContain('調べがつきました。');
+    };
+    checkHistory(await reconnected.frame());
+    const snapshotsBefore = fixture.readObservations().filter(({ event, method, pid }) =>
+      event === 'request' && method === 'snapshot' && pid === reconnected.child.pid).length;
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, method, pid }) =>
+      event === 'request' && method === 'snapshot' && pid === reconnected.child.pid).length)
+      .toBeGreaterThanOrEqual(snapshotsBefore + 2), { timeout: 10000 });
+    checkHistory(await reconnected.frame());
+    expect(calls()).toHaveLength(1);
+    const opens = fixture.readObservations().filter(({ event, method }) => event === 'request' && method === 'open');
+    for (const screen of [tui, reconnected]) {
+      expect(opens.filter(({ pid }) => pid === screen.child.pid).map(({ conversationId }) => conversationId)).toEqual([before.id]);
+    }
+    expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'abort_turn')).toEqual([]);
     await reconnected.exit();
   } finally { fixture.release(); await fixture.cleanup(); }
 });

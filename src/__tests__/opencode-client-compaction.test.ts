@@ -1,6 +1,9 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
@@ -121,6 +124,53 @@ describe('OpenCodeClient compactSession', () => {
     expect(requestOptions.signal).not.toBe(abortController.signal);
     expect(sessionCreate).not.toHaveBeenCalled();
     expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  it('Given an external context server When the context directory is removed Then the server still closes', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'opencode-server-cleanup-'));
+    try {
+      const contextDirectory = join(tempRoot, 'context');
+      mkdirSync(contextDirectory, { recursive: true });
+      const normalizedContextDirectory = realpathSync(contextDirectory);
+      const serverClose = vi.fn();
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn() },
+          session: {
+            create: vi.fn(),
+            promptAsync: vi.fn(),
+            summarize: vi.fn(),
+            messages: createAutoCompletingMessagesMock(),
+          },
+          event: { subscribe: vi.fn() },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: serverClose },
+      });
+
+      const { acquireOpenCodeClient, closeOpenCodeServersForExternalDirectories } = await import(
+        '../infra/opencode/server-pool.js'
+      );
+      const acquired = await acquireOpenCodeClient(
+        'opencode/big-pickle',
+        undefined,
+        undefined,
+        undefined,
+        'session-1',
+        undefined,
+        false,
+        undefined,
+        [normalizedContextDirectory],
+      );
+      acquired.release();
+
+      rmSync(contextDirectory, { recursive: true, force: true });
+      await closeOpenCodeServersForExternalDirectories([normalizedContextDirectory]);
+
+      expect(serverClose).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('Given a workflow without a model When compactSession runs Then it resolves the session model before summarize', async () => {

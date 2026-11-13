@@ -1711,6 +1711,10 @@ provider_options:
 
 runtime profile または capability preset で設定できます。legacy モードでは `provider_routing`、deprecated の `persona_providers`、project、global config からも設定できます。環境変数 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` でも上書きできます。
 
+#### Codex の context compaction からの復帰
+
+Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行し、provider call ごとに3回までです。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+
 #### Codex の fast mode (`fast_mode`)
 
 `provider_options.codex.fast_mode` で Codex の fast mode を明示的に設定できます。
@@ -2083,7 +2087,7 @@ merge:
     same_repository: true
 ```
 
-既定では `merge-review-fix-simple` が1体のレビュアーによるレビューと別ステップの裁定・修正・検証を行い、`squash` でマージします。並列レビューを使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。
+既定では `merge-review-fix-simple` がベースブランチを同期します。競合のない同期ではフルレビューを呼ばず、AIによる競合解消時は1体のレビュアーによるレビューと別ステップの裁定・修正・検証を行います。CacciaとCI通過後に `squash` でマージします。並列レビューを使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。
 
 GitLab は MR 詳細・CI 状態の取得と一括選定に対応します。Caccia が有効な場合、`takt merge` と `from_pr` タスクの Caccia 効果は `github_unavailable` の `skipped` を返し、その head の CI 待ちへ進みます。統合結果 pipeline は merge commit の第2親と source head の一致を確認します。pipeline がない場合や古い head に対応する場合は成功扱いにしません。マージ方式の指定と head 一致制約には未対応のため、これらを使う `merge_pr` は失敗します。CI 待機の完了はマージ成功を意味しません。
 

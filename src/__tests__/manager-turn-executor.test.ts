@@ -21,6 +21,25 @@ function fixture() {
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
 
+it('forwards tool identities and batched results with a separate call identity for each provider call', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'thinking', data: { thinking: 'hidden' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: '日本語.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { completedToolIds: ['reused'], content: 'failed', isError: true } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.map(([event]) => event.type)).toEqual(['tool_use', 'tool_result', 'tool_use', 'tool_result']);
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events[0]).toMatchObject({ data: { id: 'reused', input: { file_path: '日本語.ts' } } });
+  expect(events[1]).toMatchObject({ data: { completedToolIds: ['reused'], isError: true } });
+  expect(events[0].toolActivity.callId).toBe(events[1].toolActivity.callId);
+  expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
+});
+
 it.each([true, false, undefined])('uses fresh business context only for patrols when patrol=%s', async (patrol) => {
   const { call, executor, input, invalidateSession } = fixture();
   call.mockResolvedValue(success);

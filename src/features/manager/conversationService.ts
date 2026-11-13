@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
 import { buildManagerTurnPrompt } from './conversationPrompt.js';
 import { eventGoalReference } from '../../core/daemon/events.js';
@@ -68,15 +69,22 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
+        if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
+          if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
+          return { kind: 'completed', result: { kind: 'notice', message: '' } };
+        }
         const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
         if (patrol) {
-          const store = new GoalStore(event.repositoryDirectory);
-          const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          if (event.workspaceId !== undefined && (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId)) throw new ConversationError('invalid_assignment');
+          const reads = await Promise.allSettled(event.goalIds.map((id) => {
+            if (event.repositoryDirectory === undefined) throw new ConversationError('invalid_assignment');
+            return new GoalStore(event.repositoryDirectory).get(id);
+          }));
           // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
           let tasks: readonly WatchTask[] = [];
-          try { tasks = await readWatchTasks(event.repositoryDirectory); }
+          try { if (event.repositoryDirectory !== undefined) tasks = await readWatchTasks(event.repositoryDirectory); }
           catch {
             io.signal.throwIfAborted();
             // 読取失敗は見回り対象の選定側が知らせるため、ターン内では通知しない。
@@ -87,7 +95,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const patrolEvent = { ...event,
             goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
-          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          const epicIds: string[] = [];
+          if (event.workspaceId !== undefined) {
+            for await (const epic of new DaemonEpicFiles(configDirectory).list(event.workspaceId)) {
+              if (epic.status === 'active' && event.epicIds?.includes(epic.id)) epicIds.push(epic.id);
+            }
+          }
+          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0 && epicIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          if (event.epicIds !== undefined) patrolEvent.epicIds = epicIds;
           promptEvent = patrolEvent;
         }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
@@ -181,7 +196,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               }
             }
             language = resolved.language;
-            const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
+            const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending, configDirectory);
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
               ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
@@ -197,6 +212,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               abortSignal: io.signal,
               onActivity: (activity) => io.progress(activity),
               onText: (message) => io.progress({ kind: 'turn_text', message }),
+              onToolEvent: (event) => {
+                if (event.toolActivity === undefined) throw new Error('Missing tool call identity');
+                io.progress({ kind: 'tool_event', eventId: randomUUID(), event: {
+                  ...event, toolActivity: { ...event.toolActivity, operationId: input.turn.operationId, generation: input.turn.generation },
+                } });
+              },
               patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });

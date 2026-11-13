@@ -16,6 +16,7 @@ import {
 import {
   getProvider,
   type ProviderType,
+  type ProviderAgent,
   type ProviderCallOptions,
 } from '../infra/providers/index.js';
 import {
@@ -27,6 +28,7 @@ import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
+import { withToolActivityCall } from '../shared/tool-activity/stream.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
 import { extractPersonaName } from './persona-spec.js';
 import {
@@ -206,6 +208,9 @@ export class AgentRunner {
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
+      ...(resolution.provider !== 'opencode' || options.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: options.openCodeExternalDirectories }),
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
@@ -219,7 +224,7 @@ export class AgentRunner {
       permissionMode: resolution.permissionMode,
       edit: options.edit,
       providerOptions: resolution.providerOptions,
-      onStream: options.onStream,
+      onStream: withToolActivityCall(options.onStream),
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onSkillPermissionRequest: options.onSkillPermissionRequest,
@@ -230,6 +235,71 @@ export class AgentRunner {
       failureDir: options.failureDir,
       childProcessEnv: options.childProcessEnv,
     };
+  }
+
+  private static async callAgent(
+    agent: ProviderAgent,
+    task: string,
+    options: ProviderCallOptions,
+  ): Promise<AgentResponse> {
+    const recoverFromCompaction = agent.recoverFromCompaction;
+    if (options.executionPhase !== 1 || recoverFromCompaction === undefined) {
+      return agent.call(task, options);
+    }
+
+    const maxCompactionRecoveries = 3;
+    let recoveryCount = 0;
+    let currentOptions = options;
+    while (true) {
+      let compactionDetected = false;
+      let compactionSessionId: string | undefined;
+      const callOptions = {
+        ...currentOptions,
+        onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          if (event.type === 'context_compacted') {
+            compactionDetected = true;
+            compactionSessionId = event.data.sessionId;
+          }
+          if (
+            compactionDetected
+            && event.type === 'result'
+            && event.data.success
+            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
+          ) {
+            return;
+          }
+          currentOptions.onStream?.(event);
+        },
+      };
+      const response = recoveryCount === 0
+        ? await agent.call(task, callOptions)
+        : await recoverFromCompaction.call(agent, task, callOptions);
+      const responseSessionId = response.sessionId ?? currentOptions.sessionId;
+      const compactionMatchesResponse = compactionSessionId === undefined
+        || compactionSessionId === responseSessionId;
+      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
+        return response;
+      }
+
+      currentOptions = {
+        ...currentOptions,
+        sessionId: responseSessionId,
+      };
+      if (recoveryCount === maxCompactionRecoveries) {
+        const error = 'Provider compaction recovery limit reached';
+        currentOptions.onStream?.({
+          type: 'result',
+          data: {
+            result: error,
+            sessionId: currentOptions.sessionId ?? 'unknown',
+            success: false,
+            error,
+          },
+        });
+        return { ...response, status: 'error', error };
+      }
+      recoveryCount += 1;
+    }
   }
 
   private static buildMcpPrepareContext(
@@ -333,7 +403,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await agent.call(task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -394,7 +464,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions);
       }
 
       if (options.personaPath) {
@@ -413,7 +483,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions);
       }
 
       if (personaSpec) {
@@ -437,7 +507,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -453,7 +523,7 @@ export class AgentRunner {
         : { name: personaName };
       const agent = setupAgent(agentSetup);
       options.onDispatch?.(resolution.permissionMode);
-      return await agent.call(task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }

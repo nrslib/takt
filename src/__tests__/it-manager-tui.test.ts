@@ -185,7 +185,7 @@ it.each(['typed', 'Tab completion', 'pasted'] as const)('regenerates a displayed
 });
 
 it.each(['empty', 'draft', 'proposal'].flatMap((state) => [
-  { name: 'Ctrl+O', key: '\x0f' }, { name: 'Ctrl+N', key: '\x0e' }, { name: 'Ctrl+P', key: '\x10' },
+  { name: 'Ctrl+N', key: '\x0e' }, { name: 'Ctrl+P', key: '\x10' },
 ].map((entry) => ({ state, ...entry }))))(
   'keeps $state input and the displayed proposal unchanged after retired key $name', async ({ state, key }) => {
     const client = new ManagerClientDouble();
@@ -201,6 +201,28 @@ it.each(['empty', 'draft', 'proposal'].flatMap((state) => [
     expect(context.client.commands()).toEqual([]);
     expect(context.app.lastFrame()).toBe(before);
   });
+
+it.each(['empty', 'draft', 'proposal'] as const)('opens Epic browsing and restores the same %s input and proposal on Escape', async (state) => {
+  const client = new ManagerClientDouble();
+  const context = mount('en', client);
+  if (state === 'proposal') await showProposal(context);
+  else if (state === 'draft') {
+    context.app.stdin.write('unsent draft');
+    await waitFor(() => expect(promptFrame(context)).toContain('unsent draft'));
+  } else await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+  const before = context.app.lastFrame();
+  const pending = client.getSnapshot().state?.pending;
+  context.app.stdin.write('\x0f');
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.epics.listTitle', 'en'));
+    expect(context.app.lastFrame()).toContain(getLabel('manager.epics.workspaceRequired', 'en'));
+  });
+  expect(client.commands()).toEqual([]);
+  expect(client.getSnapshot().state?.pending).toEqual(pending);
+  context.app.stdin.write(ESC);
+  await waitFor(() => expect(context.app.lastFrame()).toBe(before));
+  expect(client.commands()).toEqual([]);
+});
 
 it('withdraws the displayed proposal when a /make-goal prefix becomes ordinary conversation input', async () => {
   const context = mount();

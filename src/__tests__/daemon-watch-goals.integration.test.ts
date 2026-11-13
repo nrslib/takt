@@ -15,6 +15,10 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { abortEpic, completeEpic, getEpic, recordEpicVerificationResult, startEpicVerification } from '../infra/epics/index.js';
+import { completedEpicGoal, epicRecord, verificationResultFor } from './helpers/epic-fixtures.js';
 
 let directory: string;
 let reader: WatchGoalReader;
@@ -216,5 +220,94 @@ it('reports corrupt tasks and patrols ordinary active goals while excluding awai
 
   expect(await source.patrolGoalIds(directory)).toEqual([active.id]);
   expect(errors).toHaveBeenCalledOnce();
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});
+
+async function savePendingEpic() {
+  const globalConfigDirectory = join(directory, 'global');
+  const workspace = await createWorkspace({ globalConfigDirectory, name: '結合確認待ち', repositoryDirectories: [] });
+  await writeFile(join(globalConfigDirectory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+    ...workspace, repositoryDirectories: [directory],
+  }));
+  const goal = completedEpicGoal('b'.repeat(40), 'a'.repeat(40));
+  const path = join(directory, '.takt', 'goals', goal.id);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  const member = { repositoryDirectory: directory, goalId: goal.id };
+  const epic = { ...epicRecord(), workspaceId: workspace.id, members: [member], targets: [{ ...member, targetSha: goal.completion!.targetSha! }] };
+  await new EpicStore(globalConfigDirectory, workspace.id).create(epic);
+  return { globalConfigDirectory, workspaceId: workspace.id, epicId: epic.id,
+    path: join(globalConfigDirectory, 'workspaces', workspace.id, 'epics', epic.id, 'epic.json') };
+}
+
+it('keeps a pending Epic active after all goals complete and becomes idle only after the Epic is aborted', async () => {
+  const context = await savePendingEpic();
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect((await source.patrols()).filter((target) => target.workspaceId === context.workspaceId))
+    .toMatchObject([{ epicIds: [context.epicId] }]);
+  await abortEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId,
+    epicId: context.epicId, reason: '確認を中止する' });
+  expect(await source.hasWork(files)).toBe(false);
+  expect((await source.patrols()).filter((target) => target.workspaceId === context.workspaceId)).toEqual([]);
+  expect(await getEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId, epicId: context.epicId }))
+    .toMatchObject({ status: 'aborted', members: [{ repositoryDirectory: directory, goalId: goalRecord().id }] });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('keeps the same pending Epic in daemon work and patrols until explicit completion and retains its evidence afterwards', async () => {
+  execFileSync('git', ['init', '--quiet', directory]);
+  const saved = await savePendingEpic();
+  const context = { globalConfigDirectory: saved.globalConfigDirectory, workspaceId: saved.workspaceId, epicId: saved.epicId };
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  const patrols = async () => (await source.patrols()).filter((target) => target.workspaceId === context.workspaceId);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
+  expect(await patrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+
+  const run = await startEpicVerification(context);
+  await recordEpicVerificationResult({ ...context, result: verificationResultFor(run) });
+  expect(await source.hasWork(files)).toBe(true);
+  expect(await patrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+
+  await completeEpic(context);
+  expect(await source.hasWork(files)).toBe(false);
+  expect(await patrols()).toEqual([]);
+  expect(await getEpic(context)).toMatchObject({ status: 'completed', currentEvidence: { id: run.id },
+    members: [{ repositoryDirectory: directory, goalId: goalRecord().id }], verificationRuns: [{ id: run.id, status: 'succeeded' }] });
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it('keeps all active Epic IDs and reports later failures without returning a partial workspace patrol', async () => {
+  const context = await savePendingEpic();
+  const later = { ...epicRecord(), id: '950e8400-e29b-41d4-a716-446655440000', workspaceId: context.workspaceId };
+  await new EpicStore(context.globalConfigDirectory, context.workspaceId).create(later);
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  const workspacePatrols = async () => (await source.patrols()).filter((target) => target.workspaceId === context.workspaceId);
+  expect(await workspacePatrols()).toMatchObject([{ epicIds: [context.epicId, later.id] }]);
+  await abortEpic({ globalConfigDirectory: context.globalConfigDirectory, workspaceId: context.workspaceId, epicId: later.id, reason: 'Stop later Epic' });
+  expect(await workspacePatrols()).toMatchObject([{ epicIds: [context.epicId] }]);
+  expect(await source.hasWork(files)).toBe(true);
+  errors.mockClear();
+  await writeFile(join(context.globalConfigDirectory, 'workspaces', context.workspaceId, 'epics', later.id, 'epic.json'), '{');
+  expect(await source.hasWork(files)).toBe(true);
+  expect(errors).toHaveBeenCalledWith(expect.any(Error));
+  expect(await workspacePatrols()).toEqual([]);
+  expect(errors).toHaveBeenCalledTimes(2);
+});
+
+it.each(['missing', 'invalid JSON', 'wrong workspace'] as const)('keeps the daemon active and reports an Epic with %s', async (failure) => {
+  const context = await savePendingEpic();
+  if (failure === 'missing') await rm(context.path);
+  else if (failure === 'invalid JSON') await writeFile(context.path, '{broken');
+  else await writeFile(context.path, JSON.stringify({ ...epicRecord(), workspaceId: randomUUID() }));
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+  expect(await source.patrolGoalIds(directory)).toEqual([]);
+  expect(await source.hasWork(files)).toBe(true);
   expect(errors).toHaveBeenCalledWith(expect.any(Error));
 });

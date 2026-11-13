@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
+import { buildRunPaths, buildRunPathsFromRunsDirectory } from '../../core/workflow/run/run-paths.js';
 import { generateReportDir, isValidReportDirName } from '../../shared/utils/index.js';
 import { RunMetaManager } from '../../features/tasks/execute/runMeta.js';
 import type {
@@ -31,7 +31,9 @@ export function createWorkflowRunLifecycleCompositionTestDouble(
         if (!isValidReportDirName(runSlug)) {
           throw new Error(`Invalid reportDirName: ${runSlug}`);
         }
-        const runPaths = buildRunPaths(input.cwd, runSlug);
+        const runPaths = input.runPathsDirectory === undefined
+          ? buildRunPaths(input.cwd, runSlug)
+          : buildRunPathsFromRunsDirectory(input.runPathsDirectory, runSlug);
         let runMetaManager: RunMetaManager | undefined;
         const bootstrap: WorkflowRunBootstrap = {
           runSlug,

@@ -9,6 +9,8 @@ import type { TurnIo } from '../features/daemonTurn/processRuntime.js';
 import { turnStart, deferred } from './helpers/daemon-turn.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { randomUUID } from 'node:crypto';
+import { epicRecord, verificationRunId, verificationStartedAt, verificationResultFor } from './helpers/epic-fixtures.js';
+import { beginEpicVerification, applyEpicVerificationResult, finishEpic, epicView } from '../infra/epics/state.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
@@ -25,8 +27,9 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
-const doubles = vi.hoisted(() => ({ readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
+const doubles = vi.hoisted(() => ({ epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
   validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../infra/daemon/epicFiles.js', () => ({ DaemonEpicFiles: class { async *list(workspaceId: string) { yield* await doubles.epics(workspaceId); } } }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
@@ -66,6 +69,27 @@ function fixture() {
 function humanMessage(text: string): TurnEvent {
   return { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'human', id: 'test' } };
 }
+
+it('uses the daemon turn identity for tool events while preserving call and provider tool identities', async () => {
+  const f = fixture();
+  const event = { type: 'tool_use' as const, data: { id: 'provider-tool', tool: 'Read', input: { file_path: 'a.ts' } },
+    toolActivity: { callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 } };
+  f.execute.mockImplementationOnce(async (input) => {
+    input.onToolEvent!(event);
+    input.onToolEvent!({ type: 'tool_result', data: { completedToolIds: ['provider-tool'], content: 'done', isError: false },
+      toolActivity: event.toolActivity });
+    return { message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined };
+  });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  const tools = f.io.progress.mock.calls.map(([message]) => message).filter((message) => message.kind === 'tool_event');
+  expect(tools).toHaveLength(2);
+  expect(new Set(tools.map((message) => message.eventId)).size).toBe(2);
+  for (const message of tools) expect(message.event.toolActivity).toEqual({
+    callId: 'provider-call', operationId: f.input.turn.operationId, generation: f.input.turn.generation,
+  });
+  expect(tools[1]!.event.data).toMatchObject({ completedToolIds: ['provider-tool'] });
+  expect(event.toolActivity).toEqual({ callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 });
+});
 
 function conversationFixture() {
   const f = fixture();
@@ -858,6 +882,47 @@ async function workspaceVerificationFixture(repositoryDirectories: string[]) {
   doubles.assignment.mockResolvedValue({ ...assignment, name: 'Workspace', repositoryDirectories });
   return f;
 }
+
+it('patrols an active Epic without goals and stops on the same service after completion', async () => {
+  const f = await workspaceVerificationFixture(['/repository']);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  const member = { repositoryDirectory: '/repository', goalId: goalRecord().id };
+  const started = beginEpicVerification({ ...epicRecord(), workspaceId: owner.workspaceId,
+    members: [member], targets: [{ ...member, targetSha: 'b'.repeat(40) }] }, verificationRunId, verificationStartedAt);
+  const epic = applyEpicVerificationResult(started.epic, verificationResultFor(started.run));
+  const other = { ...epicRecord(), id: randomUUID(), workspaceId: owner.workspaceId };
+  doubles.epics.mockResolvedValue([other, epicView(epic)]);
+  f.input.event.event = { kind: 'patrol', workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+  expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toMatchObject({ workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] });
+  doubles.epics.mockResolvedValue([other, epicView(finishEpic(epic))]);
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.execute).toHaveBeenCalledTimes(1);
+});
+
+it('does not run a partial Epic patrol when a later record cannot be read', async () => {
+  const f = await workspaceVerificationFixture([]);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  const epic = { ...epicRecord(), workspaceId: owner.workspaceId };
+  doubles.epics.mockImplementation(async function* () { yield epic; throw new Error('Later Epic is unreadable'); });
+  f.input.event.event = { kind: 'patrol', workspaceId: owner.workspaceId, epicIds: [epic.id], goalIds: [] };
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it.each(['epic_verification_result', 'epic_completed'] as const)('settles %s without starting a model or another verification', async (kind) => {
+  const f = await workspaceVerificationFixture([]);
+  const owner = f.input.state.assignment;
+  if (owner.kind !== 'workspace') throw new Error('Expected workspace');
+  f.input.event.event = { kind, workspaceId: owner.workspaceId, epicId: epicRecord().id, revision: 1, runId: randomUUID() };
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
 
 it.each([true, false])('uses the proposed repository settings rather than the workspace first repository when enabled=%s', async (mode) => {
   const f = await workspaceVerificationFixture(['/A', '/B']);

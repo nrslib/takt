@@ -8,8 +8,9 @@ export function orderSnapshotItems(items: ReadonlyMap<string, SnapshotDisplayIte
   const assignment = items.get('assignment');
   const repositories = new Map(assignment?.kind === 'assignment'
     ? assignment.assignment.repositoryDirectories.map((directory, index) => [directory, index]) : []);
-  const groups = { assignment: 0, goal: 1, inquiry: 2, display_event: 3 };
+  const groups = { assignment: 0, goal: 1, epic: 2, inquiry: 3, display_event: 4, tool_history: 5 };
   return [...items.values()].sort((left, right) => {
+    if (left.kind === 'epic' && right.kind === 'epic') return left.epic.workspaceId.localeCompare(right.epic.workspaceId) || left.epic.id.localeCompare(right.epic.id);
     if (left.kind === 'goal' && right.kind === 'goal') {
       // 未完了の差分では、assignmentから外れたリポジトリの旧項目も保持する。
       return (repositories.get(left.goal.repositoryDirectory) ?? Infinity) - (repositories.get(right.goal.repositoryDirectory) ?? Infinity)
@@ -27,6 +28,8 @@ export function snapshotItemKey(item: SnapshotValue): string {
   switch (item.kind) {
     case 'state': return 'state';
     case 'assignment': return 'assignment';
+    case 'epic': return JSON.stringify(['epic', item.epic.workspaceId, item.epic.id]);
+    case 'tool_history': return 'tool_history';
     case 'goal': return JSON.stringify(['goal', item.goal.repositoryDirectory, item.goal.id]);
     case 'inquiry': {
       const { target, question } = item.inquiry;

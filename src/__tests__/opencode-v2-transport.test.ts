@@ -1,5 +1,8 @@
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { V2Event } from '@opencode/client';
 import { createV2Transport } from '../infra/opencode/v2-transport.js';
 import { v2EventTranslator } from '../infra/opencode/v2-events.js';
@@ -17,6 +20,28 @@ const prompt = {
   model: { providerID: 'probe', modelID: 'probe' }, parts: [{ type: 'text' as const, text: 'review' }],
   tools: { read: true, write: false, bash: false, task: false },
 };
+const temporaryDirectories: string[] = [];
+
+function createExternalContextDirectory() {
+  const root = mkdtempSync(join(tmpdir(), 'takt-opencode-v2-context-'));
+  temporaryDirectories.push(root);
+  const realRunDirectory = join(root, 'real-run');
+  const linkedRunDirectory = join(root, 'run-link');
+  const realContextDirectory = join(realRunDirectory, 'context');
+  mkdirSync(realContextDirectory, { recursive: true });
+  symlinkSync(realRunDirectory, linkedRunDirectory, 'dir');
+  return {
+    contextDirectory: join(linkedRunDirectory, 'context'),
+    canonicalContextDirectory: realpathSync(realContextDirectory),
+  };
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories.length = 0;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,6 +108,24 @@ describe('OpenCode v2 transport', () => {
     expect(transport.nativeStructuredOutput).toBe(false);
   });
 
+  it('allows the TAKT context directory while keeping other external paths denied', async () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const transport = await createV2Transport('http://localhost', 'password');
+    await transport.session.promptAsync({
+      ...prompt,
+      externalDirectoryAllowlist: [contextDirectory],
+    });
+
+    const permissions = api.session.update.mock.calls[0]![0].permissions as Array<{
+      action: string; resource: string; effect: string;
+    }>;
+    expect(permissions.slice(-3)).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
+  });
+
   it('switches to the neutral read agent while carrying interpretation instructions and read-only tools', async () => {
     await (await createV2Transport('http://localhost', '')).session.promptAsync({
       ...prompt, agent: 'takt-read', system: 'Interpret verification results.',
@@ -124,6 +167,16 @@ describe('OpenCode v2 transport', () => {
     await (await createV2Transport('http://localhost', '')).session.promptAsync(prompt);
     expect(api.plugin.list).toHaveBeenCalledTimes(2);
     expect(api.session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('adds a narrow external context rule to the v2 server configuration', () => {
+    const { contextDirectory, canonicalContextDirectory } = createExternalContextDirectory();
+    const config = buildV2ServerConfig(undefined, undefined, '/plugin', {}, false, [contextDirectory]);
+    expect(config.permissions).toEqual([
+      { action: 'external_directory', resource: '*', effect: 'deny' },
+      { action: 'external_directory', resource: join(canonicalContextDirectory, '*'), effect: 'allow' },
+      { action: 'edit', resource: join(canonicalContextDirectory, '*'), effect: 'deny' },
+    ]);
   });
 
   it('waits for MCP catalog registration before exposing an allowed tool', async () => {

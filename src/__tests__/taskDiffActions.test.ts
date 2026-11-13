@@ -38,6 +38,14 @@ const task = {
   branch: 'takt/task',
   worktreePath: '/project/.takt/worktrees/task',
 };
+const taskWithoutWorktreePath = {
+  kind: task.kind,
+  name: task.name,
+  createdAt: task.createdAt,
+  filePath: task.filePath,
+  content: task.content,
+  branch: task.branch,
+};
 
 describe('showDiffAndPromptActionForTask', () => {
   beforeEach(() => {
@@ -58,5 +66,41 @@ describe('showDiffAndPromptActionForTask', () => {
 
     const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options.map((option) => option.value)).toContain('create_pr');
+  });
+
+  it('delete action description preserves changes and branch for tasks without a worktree', async () => {
+    await showDiffAndPromptActionForTask('/project', {
+      ...task,
+      data: { task: 'Implement task', worktree: false },
+    });
+
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string; description: string }>;
+    const deleteOption = options.find((option) => option.value === 'delete');
+    expect(deleteOption?.description).toBe('Remove task; keep uncommitted changes and branch');
+  });
+
+  it.each([
+    ['worktree enabled', true],
+    ['a custom worktree path', '/custom/worktree'],
+  ])('delete action description says the branch is kept for %s without a recorded path', async (_case, worktree) => {
+    await showDiffAndPromptActionForTask('/project', {
+      ...taskWithoutWorktreePath,
+      data: { task: 'Implement task', worktree },
+    });
+
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string; description: string }>;
+    const deleteOption = options.find((option) => option.value === 'delete');
+    expect(deleteOption?.description).toBe('Remove task; keep branch');
+  });
+
+  it.each([
+    ['worktree: true with a recorded path', { task: 'Implement task', worktree: true }],
+    ['worktree is unspecified with a recorded path', { task: 'Implement task' }],
+  ])('keeps the original delete description when %s', async (_case, data) => {
+    await showDiffAndPromptActionForTask('/project', { ...task, data });
+
+    const options = mockSelectOption.mock.calls[0]?.[1] as Array<{ value: string; description: string }>;
+    const deleteOption = options.find((option) => option.value === 'delete');
+    expect(deleteOption?.description).toBe('Discard changes, delete branch');
   });
 });

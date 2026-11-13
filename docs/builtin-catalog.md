@@ -33,9 +33,9 @@ Organized by category.
 |  | `review-fix` | Fix review findings and check again. |
 |  | `caccia` | One CodeRabbit review iteration: judge supplied threads, fix valid findings, and write a decision report. |
 |  | `merge-review` | Runs review and the Caccia effect, waits for CI, and comments on the evaluation. |
-|  | `merge-review-fix` | review-fix → push → Caccia effect → CI and review checks on the latest head → merge. |
-|  | `merge-review-fix-simple` | Default for takt merge: one reviewer with separate adjudication, fixes and verification, then push → Caccia effect → CI and review checks → merge. |
-|  | `merge-prepare` | Synchronize, resolve conflicts, review with one reviewer, adjudicate and fix, push, run Caccia and wait for CI, then wait for human merge. |
+|  | `merge-review-fix` | Synchronize; if AI resolves conflicts, run review-fix. Then push → Caccia effect → CI and review checks on the latest head → merge. |
+|  | `merge-review-fix-simple` | Default for takt merge: synchronize; if AI resolves conflicts, review with one reviewer, adjudicate, fix and verify. Then push → Caccia effect → CI and review checks → merge. |
+|  | `merge-prepare` | Synchronize; if AI resolves conflicts, review with one reviewer, adjudicate and fix. Then push, run Caccia and wait for CI before human merge. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |
@@ -103,7 +103,7 @@ YAML itself does not contain provider/model/provider-options fields.
 
 Run `takt` to choose a workflow interactively.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia. Automatic post-PR Caccia follows the enablement, exclusion, and ordering rules in the [configuration reference](./configuration.md#caccia-review-loop).
 
 `merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. CI timeouts also end ABORT as unresolved; `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
 

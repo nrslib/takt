@@ -223,7 +223,7 @@ export function isSensitiveKeyName(key: string): boolean {
 export function hasPotentialSensitiveTextSuffix(text: string): boolean {
   const lastLine = text.slice(text.lastIndexOf('\n') + 1);
   if (
-    '-----BEGIN '.startsWith(lastLine)
+    (lastLine !== '' && '-----BEGIN '.startsWith(lastLine))
     || /^-----BEGIN [A-Z0-9 ]*$/.test(lastLine)
     || (lastLine.startsWith('-----BEGIN ') && !lastLine.endsWith('-----'))
     || hasUnterminatedPrivateKeyBlock(text)
@@ -283,7 +283,7 @@ function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): vo
   }
 }
 
-function hasUnterminatedPrivateKeyBlock(text: string): boolean {
+export function hasUnterminatedPrivateKeyBlock(text: string): boolean {
   const matches = [...text.matchAll(/-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g)];
   const lastMatch = matches.at(-1);
   if (lastMatch === undefined || lastMatch.index === undefined) {

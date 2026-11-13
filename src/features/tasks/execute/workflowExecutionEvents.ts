@@ -1,3 +1,4 @@
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 import type { ReportReferenceDiagnostic } from '../../../core/workflow/instruction/report-reference-validation.js';
 import type { ReportReferencesResolved } from '../../../core/workflow/instruction/prepared-instruction.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
@@ -64,6 +65,8 @@ export interface WorkflowExecutionEventState {
 }
 
 interface WorkflowExecutionEventBridgeDeps {
+  toolDisplayMode?: ToolActivityDisplayMode;
+  flushStream?: () => void;
   getCacciaFailureReason?: () => string | undefined;
   runtimeReportDiagnostics?: readonly ReportReferenceDiagnostic[];
   engine: WorkflowEngine;
@@ -670,7 +673,7 @@ export function bindWorkflowExecutionEvents(
         maxSteps: deps.workflowConfig.maxSteps,
         stepIndex: resolvedStepIndex,
         totalSteps: resolvedTotalSteps,
-      });
+      }, deps.toolDisplayMode);
       deps.handlerRef.current = null;
     }
 
@@ -693,6 +696,7 @@ export function bindWorkflowExecutionEvents(
       deps.displayRef.current.flush();
       deps.displayRef.current = null;
     }
+    deps.flushStream?.();
     deps.prefixWriter?.flush();
     deps.out.blankLine();
 
@@ -796,6 +800,7 @@ export function bindWorkflowExecutionEvents(
     if (deps.displayRef.current) {
       deps.displayRef.current.flush();
     }
+    deps.flushStream?.();
     deps.prefixWriter?.flush();
     const message = response.error ?? `Step "${step.name}" hit a rate limit`;
     if (deps.shouldNotifyRateLimit) {
@@ -1000,6 +1005,7 @@ export function bindWorkflowExecutionEvents(
       deps.displayRef.current = null;
       captureTerminalCleanup(() => display.flush());
     }
+    captureTerminalCleanup(() => deps.flushStream?.());
     captureTerminalCleanup(() => deps.prefixWriter?.flush());
   });
 
