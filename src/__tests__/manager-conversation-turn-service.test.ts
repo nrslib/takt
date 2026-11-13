@@ -607,6 +607,32 @@ it('keeps the reservation when registration fails after leaving a goal or branch
     .toEqual([expect.objectContaining({ state: 'reserved' })]);
   expect(doubles.artifacts).toHaveBeenCalledWith('/repository', expect.any(String));
 });
+it('keeps the reservation and reports reconciliation failure when registration artifacts cannot be checked', async () => {
+  const f = conversationFixture();
+  f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
+  } });
+  await f.run(humanMessage('prepare a goal'));
+  const pending = f.state().pending;
+  if (pending === null) throw new Error('Expected a pending proposal');
+  f.request.mockClear();
+  doubles.register.mockRejectedValue(new Error('registration failed'));
+  const reconciliationError = new Error('artifact inspection failed');
+  doubles.artifacts.mockRejectedValue(reconciliationError);
+
+  const outcome = await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'approve_summary', revision: pending.revision } });
+
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(doubles.artifacts).toHaveBeenCalledExactlyOnceWith('/repository', f.state().approval?.goalId);
+  expect(f.request.mock.calls.map(([request]) => request.kind === 'save_conversation' ? request.change.approval : undefined))
+    .toEqual([expect.objectContaining({ state: 'reserved' })]);
+  expect(f.state()).toMatchObject({ approval: { state: 'reserved', revision: pending.revision,
+    goalId: expect.any(String), repositoryDirectory: '/repository' }, pending });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+    message: expect.stringContaining(reconciliationError.message) } });
+  expect(outcome.change).toBeUndefined();
+});
 it('invalidates the saved session before retrying and returns interrupted cleanup at the latest version', async () => {
   const f = conversationFixture();
   f.execute.mockImplementationOnce(async (turn) => {
