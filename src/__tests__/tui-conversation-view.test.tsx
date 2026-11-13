@@ -251,6 +251,7 @@ function createScriptedConversation(
 }
 
 interface RenderOverrides {
+  readonly lang?: 'ja' | 'en';
   readonly autoSubmit?: boolean;
   readonly initialHistory?: readonly string[];
   readonly initialDraft?: EditorDraft;
@@ -271,7 +272,7 @@ function renderConversation(
   return render(
     <ConversationView
       ui={UI}
-      lang="en"
+      lang={overrides.lang ?? 'en'}
       conversation={conversation}
       initialEntries={INITIAL_ENTRIES}
       userMessageColors={overrides.userMessageColors ?? {
@@ -2619,6 +2620,25 @@ describe('ConversationView tool history', () => {
   const CTRL_O = '\x0f';
   const PAGE_UP = '\x1b[5~';
   const PAGE_DOWN = '\x1b[6~';
+
+  it.each(['ja', 'en'] as const)('should show Ctrl+O guidance and toggle history with that key in %s', async (lang) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn(), { lang });
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'guidance', tool: 'Bash', input: { command: 'printf ready' } } });
+      emit(input, { type: 'tool_result', data: { id: 'guidance', content: 'ready', isError: false } });
+      await flushFrames();
+      const hint = () => stripAnsi(app.lastFrame() ?? '').split('\n').find((row) => /Tools:|ツール履歴:/u.test(row));
+      expect(hint()).toContain('Ctrl+O');
+      expect(hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+      await press(app, CTRL_O);
+      expect(hint()).toContain('Ctrl+O');
+      expect(hint()).toContain(lang === 'ja' ? '折りたたみ' : 'collapse');
+      await press(app, CTRL_O);
+      expect(hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+    } finally { app.unmount(); }
+  });
 
   it.each(['ja', 'en'] as const)('should retain continuation and end states in one row at 32 columns with real %s labels', (lang) => {
     const labels = {

@@ -55,6 +55,24 @@ it('queues and saves one patrol during the first observation when no timestamp e
   expect(f.errors).not.toHaveBeenCalled();
 });
 
+it('keeps workspace Epic patrols without goals and suppresses duplicate or completed targets', async () => {
+  const target = { conversationId: 'workspace-conversation', workspaceId: '650e8400-e29b-41d4-a716-446655440001',
+    epicIds: ['650e8400-e29b-41d4-a716-446655440000'], intervalSeconds: 1800 };
+  const f = fixture({ targets: [target], goalIds: [] });
+  await f.loop.drain();
+  expect(f.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ event: { kind: 'patrol',
+    workspaceId: target.workspaceId, epicIds: target.epicIds, goalIds: [] } }));
+  expect(f.records.write).toHaveBeenCalledWith(JSON.stringify(['workspace', target.workspaceId]), initialTime);
+  f.setPending(true);
+  await f.observe(initialTime + interval);
+  expect(f.accept).toHaveBeenCalledTimes(1);
+  f.setPending(false);
+  f.setTargets([]);
+  await f.observe(initialTime + 2 * interval);
+  expect(f.accept).toHaveBeenCalledTimes(1);
+  expect(f.errors).not.toHaveBeenCalled();
+});
+
 it.each([interval, 4 * interval])('queues only one patrol on startup after %i milliseconds without replaying missed periods', async (elapsed) => {
   const f = fixture({ records: memoryRecords([[repositoryDirectory, initialTime - elapsed]]) });
   await f.loop.drain();

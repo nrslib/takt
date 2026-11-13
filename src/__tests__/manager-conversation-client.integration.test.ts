@@ -10,7 +10,7 @@ import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
 import * as toolActivityView from '../features/tui/ToolActivityView.js';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
@@ -40,6 +40,13 @@ import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
+import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
+import { abortEpic, addEpicMember, completeEpic, createEpic, getEpic, recordEpicVerificationResult,
+  startEpicVerification, updateEpicDefinition } from '../infra/epics/index.js';
+import { removeManagerRepository } from '../features/manager/workspaceOperations.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
+import { completedEpicGoal, epicDefinition, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -258,12 +265,12 @@ it.each([1, 2])('retains each of %s identical completed results once after unfin
     finish.resolve(); await fixture.settled();
     await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
     await waitFor(() => expect(toolRows()).not.toContain('background'));
-    await browseToolPage(app, '\x0f');
+    await browseToolPage(app, '\x14');
     while (currentToolPage().page.hasMore) await browseToolPage(app, '\x1b[6~');
     const columns = vi.spyOn(app.stdout, 'columns', 'get');
     columns.mockReturnValue(40); app.stdout.emit('resize');
     await waitFor(() => { for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(40); });
-    await browseToolPage(app, '\x0f');
+    await browseToolPage(app, '\x14');
     await client.submit({ kind: 'message', text: 'Advance to the next turn' }); await fixture.settled();
     await waitFor(() => {
       const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
@@ -330,7 +337,7 @@ it('retains the received start and completion times once after compact display a
     expect(entry.startedAt).toEqual(expect.any(Number)); expect(entry.completedAt).toEqual(expect.any(Number));
     const timing = `success @${entry.startedAt} → @${entry.completedAt} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms) ${getLabel('tui.ui.toolHistoryCompletion', 'en')} #${entry.completionSequence}`;
     const observed: string[] = [];
-    await browseToolPage(app, '\x0f');
+    await browseToolPage(app, '\x14');
     for (let page = 0; page < 30; page++) {
       observed.push(...currentToolPage().page.rows);
       if (!currentToolPage().page.hasMore) break;
@@ -367,7 +374,7 @@ it.each([5, 6])('fits a %s line draft and expanded results while resizing the sa
     app.stdin.write('\x1b[200~' + draft + '\x1b[201~');
     await waitFor(() => expect(app.lastFrame()).toContain(lines.at(-1)!));
     app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
-    await browseToolPage(app, '\x0f');
+    await browseToolPage(app, '\x14');
     const columns = vi.spyOn(app.stdout, 'columns', 'get');
     for (const width of [80, 40, 80]) {
       columns.mockReturnValue(width); app.stdout.emit('resize');
@@ -604,13 +611,13 @@ it.each([
     await waitFor(check);
     const saved = await fixture.store.readToolHistory(client.getSnapshot().state!.conversationId);
     expect(saved?.history.entries[0]?.result).toBe(content.replaceAll('secret123', '[REDACTED]'));
-    await browseToolPage(app, '\x0f'); check();
+    await browseToolPage(app, '\x14'); check();
     expect(currentToolPage().state.expanded).toBe(true);
     connections[0]!.socket.destroy();
     await waitFor(() => expect(connections).toHaveLength(2));
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
     check();
-    await browseToolPage(app, '\x0f'); check();
+    await browseToolPage(app, '\x14'); check();
     expect(currentToolPage().state.expanded).toBe(false);
     finish.resolve(); await fixture.settled();
     await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
@@ -641,7 +648,7 @@ it('groups five completed reads and exposes every path and result through bounde
     const compactResults = toolRows().match(/read-result-\d/gu) ?? [];
     expect(compactResults.length).toBeGreaterThanOrEqual(1);
     expect(compactResults.length).toBeLessThanOrEqual(3);
-    const pages = [await browseToolPage(app, '\x0f')];
+    const pages = [await browseToolPage(app, '\x14')];
     for (let page = 0; page < 30 && currentToolPage().page.hasMore; page++) {
       pages.push(await browseToolPage(app, '\x1b[6~'));
     }
@@ -683,7 +690,7 @@ it('keeps start order and matches a delayed background failure after a later too
     expect(app.lastFrame()).toContain('later-success');
     expect(app.lastFrame()).toContain('✗ Bash Ran');
     expect(app.lastFrame()).toContain('✓ Grep Used Grep');
-    const expanded = await browseToolPage(app, '\x0f');
+    const expanded = await browseToolPage(app, '\x14');
     expect(expanded.split('\n')).toContain('✗ Bash Ran');
     expect(expanded.split('\n')).toContain('✓ Grep Used Grep');
     expect(expanded).toContain('background-command');
@@ -713,7 +720,7 @@ it('keeps the selected slash completion and running turn while toggling and pagi
     app.stdin.write('\x1b[B');
     await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify'));
     const running = client.getSnapshot().state!.running;
-    for (const key of ['\x0f', '\x1b[6~', '\x1b[5~', '\x0f']) {
+    for (const key of ['\x14', '\x1b[6~', '\x1b[5~', '\x14']) {
       await browseToolPage(app, key);
       expect(app.lastFrame()).toContain('❯ /verify');
       expect(client.getSnapshot().state!.running).toEqual(running);
@@ -751,7 +758,7 @@ it('preserves a Japanese draft and insertion point while paging a truncated long
     await waitFor(() => expect(app.lastFrame()).toContain('日本語下書き'));
     app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
     const running = { ...client.getSnapshot().state!.running! };
-    const pages = [await browseToolPage(app, '\x0f')];
+    const pages = [await browseToolPage(app, '\x14')];
     for (let page = 0; page < 100 && currentToolPage().page.hasMore; page++) {
       pages.push(await browseToolPage(app, '\x1b[6~'));
       expect(currentToolPage().page.rows.length).toBeLessThan(24);
@@ -806,7 +813,7 @@ it.each([32, 40])('reserves wrapped control hints and the draft before filling t
     await waitFor(() => expect(toolRows()).toContain('result-line-0'));
     app.stdin.write('日本語の下書き');
     await waitFor(() => expect(app.lastFrame()).toContain('日本語の下書き'));
-    await browseToolPage(app, '\x0f');
+    await browseToolPage(app, '\x14');
     const previousHeight = currentToolPage().height;
     vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(width); app.stdout.emit('resize');
     await waitFor(() => {
@@ -1886,7 +1893,8 @@ async function displayedSelection(key: string, kind: 'answer' | 'goal') {
 it('re-resolves an invalidated repository attachment into its new workspace without replaying a rejected mutation', async () => {
   await client.connect(); await complete();
   const original = client.getSnapshot().state!.conversationId;
-  assignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'Promoted workspace', repositoryDirectories: [repository] };
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Promoted workspace', repositoryDirectories: [repository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   doubles.assignment.mockResolvedValue(assignment);
   const rejected = await client.submit({ kind: 'message', text: 'Do not replay this request' });
   expect(rejected).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
@@ -2261,7 +2269,8 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
 it('keeps events for identical goals in different workspace repositories across delta reads', async () => {
   const secondRepository = join(directory, 'second-repository');
   mkdirSync(secondRepository, { recursive: true });
-  assignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'Workspace', repositoryDirectories: [repository, secondRepository] };
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Workspace', repositoryDirectories: [repository, secondRepository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   doubles.assignment.mockResolvedValue(assignment);
   client.close();
   client = new ConversationIpcClient(assignment, { provider: 'mock' });
@@ -2404,7 +2413,7 @@ it('reuses unchanged goal files and reloads modified or deleted goals on the sam
   const [goal, other] = seedSnapshotGoals(2, 0, 0);
   const connections = observeIpcConnections();
   const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
-  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => path.endsWith('/goal.json'));
+  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json');
   await client.connect(); await complete();
   expect(goalReads()).toHaveLength(2);
   reads.mockClear();
@@ -2483,4 +2492,275 @@ it('reprojects unchanged goal files when notification policy changes on the same
   await refreshSnapshot(client, observation);
   expect(events()).toHaveLength(1);
   expect(events()[0]).toMatchObject({ event: { message: expect.stringContaining('Policy-controlled notice') } });
+});
+
+async function seedEpicSnapshot() {
+  const secondRepository = join(directory, 'second-repository');
+  mkdirSync(secondRepository);
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: '連携確認',
+    repositoryDirectories: [repository, secondRepository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name,
+    repositoryDirectories: workspace.repositoryDirectories };
+  doubles.assignment.mockResolvedValue(assignment);
+  const goal = completedEpicGoal('b'.repeat(40), 'a'.repeat(40));
+  saveGoal(goal);
+  saveGoal(goal, secondRepository);
+  const members = [repository, secondRepository].map((repositoryDirectory) => ({ repositoryDirectory, goalId: goal.id }));
+  const started = beginEpicVerification({ ...epicRecord(), workspaceId: workspace.id, members,
+    targets: members.map((member) => ({ ...member, targetSha: goal.completion!.targetSha! })) }, verificationRunId, verificationStartedAt);
+  const completed = finishEpic(applyEpicVerificationResult(started.epic, verificationResultFor(started.run)));
+  await new EpicStore(directory, workspace.id).create(completed);
+  client.close();
+  client = new ConversationIpcClient(assignment, { provider: 'mock' });
+  return { workspace, completed, run: started.run,
+    context: { globalConfigDirectory: directory, workspaceId: workspace.id, epicId: completed.id } };
+}
+
+function displayedEpics(value: ConversationIpcClient) {
+  return value.getSnapshot().items.filter((item: { kind: string }) => item.kind === 'epic');
+}
+
+async function openEpicDetail(app: ReturnType<typeof render>, objective: string, targetSha: string) {
+  vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(160);
+  Object.defineProperty(app.stdout, 'rows', { configurable: true, value: 80 });
+  app.stdout.emit('resize');
+  await waitFor(() => expect(app.lastFrame()).toContain('╭'));
+  app.stdin.write('\x0f');
+  await waitFor(() => expect(app.lastFrame()).toContain(objective));
+  app.stdin.write('\r');
+  await waitFor(() => expect(app.lastFrame()).toContain(targetSha));
+}
+
+function epicEvidenceRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /current.*evidence/iu.test(line));
+  expect(row, '現在の証拠を検証履歴と区別して表示する').toBeDefined();
+  return row!;
+}
+
+function epicStatusRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /status\s*:/iu.test(line));
+  expect(row, 'Epic自体の状態をメンバーの状態と区別して表示する').toBeDefined();
+  return row!;
+}
+
+it('updates existing Epic evidence on the same IPC client and restores one current item after reconnect', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toMatchObject([{ kind: 'epic', epic: { ...f.completed,
+    currentEvidence: { id: f.run.id, result: verificationResultFor(f.run) } },
+    memberProgress: f.completed.members.map((member) => ({ ...member, status: 'completed', executionStatus: 'active' })), recovery: [] }]);
+  expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+  expect(epicEvidenceRow(app)).toContain(f.run.id);
+
+  const reason = '接続中に結合確認手順を改訂する';
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['改訂した手順'] } }, reason });
+  const changed = await getEpic(f.context);
+  const delta = await refreshSnapshot(client, connections[0]!);
+  expect(delta.items.filter((item: { kind: string }) => item.kind === 'epic')).toHaveLength(1);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { ...changed, status: 'active',
+    verificationRuns: [expect.objectContaining({ id: f.run.id, invalidationReason: reason })] } }]);
+  expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+    expect(epicStatusRow(app)).toMatch(/active|in progress/iu);
+  });
+  expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
+
+  connections[0]!.socket.destroy();
+  await waitFor(() => {
+    expect(connections).toHaveLength(2);
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(connections[1]!.snapshots[0]?.complete).toBe(true);
+  });
+  expect(displayedEpics(client)).toMatchObject([{ epic: changed }]);
+  expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
+  expect(displayedGoals(client)).toHaveLength(2);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => {
+    expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha);
+    expect(app.lastFrame()!.split(f.completed.objective)).toHaveLength(2);
+  });
+});
+
+it('shows creation, member changes and stale results on the same IPC-backed Epic screen before explicit completion', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+
+  const replacement = { ...completedEpicGoal('d'.repeat(40), 'e'.repeat(40)), id: randomUUID() };
+  saveGoal(replacement);
+  const reason = 'Add the corrected API goal';
+  await addEpicMember({ ...f.context, member: { repositoryDirectory: repository, goalId: replacement.id }, reason });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(replacement.id);
+    expect(app.lastFrame()).toMatch(/3\s*\/\s*3/u);
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+
+  const old = await startEpicVerification(f.context);
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Recheck the corrected API'] } },
+    reason: 'Change the integration procedure while verification is running' });
+  const current = await startEpicVerification(f.context);
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(old) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(current.id);
+    expect(app.lastFrame()).toContain(old.id);
+    expect(app.lastFrame()).toMatch(/stale/iu);
+    expect(epicEvidenceRow(app)).not.toContain(old.id);
+  });
+  await expect(completeEpic(f.context)).rejects.toThrow();
+  expect(await getEpic(f.context)).toMatchObject({ status: 'active', runningVerification: { id: current.id } });
+
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(current) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicEvidenceRow(app)).toContain(current.id));
+  await completeEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(/completed/iu));
+
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha));
+  const created = await createEpic({ globalConfigDirectory: directory, workspaceId: f.workspace.id,
+    ...epicDefinition(), objective: 'New Epic created while the list is open', reason: 'Request another integration check' });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(app.lastFrame()).toContain(created.objective));
+  expect(displayedEpics(client)).toHaveLength(2);
+});
+
+it('retains a running verification for result recovery across an IPC reconnect without replaying it', async () => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Explicit recovery check'] } }, reason: 'Require another check' });
+  const run = await startEpicVerification(f.context);
+  const stored = await getEpic(f.context);
+  const connections = observeIpcConnections();
+  const submit = vi.spyOn(client, 'submit');
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, stored.objective, stored.targets[0]!.targetSha);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+    expect(epicEvidenceRow(app)).not.toContain(run.id);
+  });
+  connections[0]!.socket.destroy();
+  await waitFor(() => {
+    expect(connections).toHaveLength(2);
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(connections[1]!.snapshots[0]?.complete).toBe(true);
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  expect(await getEpic(f.context)).toEqual(stored);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { runningVerification: { id: run.id } }, recovery: [{ id: run.id }] }]);
+});
+
+it.each(['complete', 'abort'] as const)('updates the same Epic detail after %s and repository removal while preserving its saved history', async (operation) => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { objective: 'Epic retained across repository removal' }, reason: 'Reopen integration work' });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, 'Epic retained across repository removal', f.completed.targets[0]!.targetSha);
+  await expect(removeManagerRepository(assignment, repository, directory)).rejects.toThrow();
+  if (operation === 'complete') {
+    const run = await startEpicVerification(f.context);
+    await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(run) });
+    await completeEpic(f.context);
+  } else await abortEpic({ ...f.context, reason: 'Stop integration without changing member goals' });
+  const saved = await getEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(operation === 'complete' ? /completed/iu : /aborted/iu));
+
+  for (const repositoryDirectory of f.workspace.repositoryDirectories) {
+    await removeManagerRepository(assignment, repositoryDirectory, directory);
+  }
+  assignment = { ...assignment, repositoryDirectories: [] };
+  doubles.assignment.mockResolvedValue(assignment);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(saved.objective);
+    expect(app.lastFrame()).toContain(saved.targets[0]!.targetSha);
+    expect(app.lastFrame()).toContain(f.run.id);
+    expect(app.lastFrame()).toMatch(/unknown|unavailable|not (?:available|loaded)/iu);
+  });
+  expect(displayedGoals(client)).toEqual([]);
+  expect(displayedEpics(client)).toMatchObject([{ epic: saved, memberProgress: [] }]);
+  expect(await getEpic(f.context)).toEqual(saved);
+});
+
+it('restores completed Epic history after repository removal without reading removed member goals', async () => {
+  const f = await seedEpicSnapshot();
+  for (const repositoryDirectory of assignment.repositoryDirectories) {
+    await removeWorkspaceRepository(directory, f.workspace.id, repositoryDirectory);
+  }
+  assignment = { ...assignment, repositoryDirectories: [] };
+  doubles.assignment.mockResolvedValue(assignment);
+  const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toMatchObject([{ epic: { ...f.completed,
+    currentEvidence: { id: f.run.id } } }]);
+  expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toEqual([]);
+  expect(displayedGoals(client)).toEqual([]);
+});
+
+it('does not commit the delta baseline after a later Epic read failure and resends the repaired change', async () => {
+  const f = await seedEpicSnapshot();
+  const later = { ...epicRecord(), id: '950e8400-e29b-41d4-a716-446655440000', workspaceId: f.workspace.id };
+  await new EpicStore(directory, f.workspace.id).create(later);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toHaveLength(2);
+  await updateEpicDefinition({ ...f.context, changes: { objective: 'Changed before later read failure' }, reason: 'Update objective' });
+  const path = join(directory, 'workspaces', f.workspace.id, 'epics', later.id, 'epic.json');
+  writeFileSync(path, '{');
+  await client.refresh();
+  await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }, { epic: later }]);
+  writeFileSync(path, JSON.stringify(later));
+  const repaired = await refreshSnapshot(client, connections.at(-1)!);
+  expect(repaired.items.filter((item) => item.kind === 'epic')).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }]);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }, { epic: later }]);
+  expect((await refreshSnapshot(client, connections.at(-1)!)).items).toEqual([]);
+});
+
+it('rejects an Epic from another workspace before replacing the existing item and accepts a repaired transfer', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toHaveLength(1);
+  const before = displayedEpics(client);
+  const transfer = frames.conversationTransferFrames;
+  const foreignWorkspaceId = randomUUID();
+  const corrupted = vi.spyOn(frames, 'conversationTransferFrames').mockImplementation((id, metadata, purpose, items) =>
+    transfer(id, metadata, purpose, (async function* () {
+      for await (const item of items) {
+        if (purpose === 'snapshot' && typeof item === 'object' && item !== null && 'kind' in item && item.kind === 'epic'
+          && 'epic' in item && typeof item.epic === 'object' && item.epic !== null) {
+          yield { ...item, epic: { ...item.epic, workspaceId: foreignWorkspaceId } };
+        } else yield item;
+      }
+    })()));
+  await updateEpicDefinition({ ...f.context, changes: { objective: '転送中に改訂した目的' }, reason: '目的を改訂する' });
+  await client.refresh();
+  await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
+  expect(displayedEpics(client)).toEqual(before);
+  corrupted.mockRestore();
+  await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+  await refreshSnapshot(client, connections.at(-1)!);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, workspaceId: f.workspace.id,
+    objective: '転送中に改訂した目的' } }]);
 });

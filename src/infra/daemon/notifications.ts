@@ -6,6 +6,7 @@ import { FileAsyncLock } from './lock.js';
 import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
 
 const notification = z.object({ id: z.string().min(1).max(128), message: z.string().min(1), turnOperationId: z.string().min(1).optional(),
+  conversationId: z.string().min(1).optional(),
   subject: z.object({ key: z.string().min(1), state: z.string().min(1) }).strict().optional() }).strict();
 export type DirectorNotification = Pick<z.infer<typeof notification>, 'id' | 'message'>;
 export type DirectorNotificationSubject = NonNullable<z.infer<typeof notification>['subject']>;

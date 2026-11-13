@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
+import { epicEventId, epicEvents } from './epicEvents.js';
 import { join } from 'node:path';
 import { eventGoalReference } from '../../core/daemon/events.js';
 import { ToolHistoryPersistenceError } from '../../core/daemon/toolHistoryPersistenceError.js';
@@ -86,6 +88,18 @@ export class DaemonConversations implements ConversationOwner {
       this.running.delete(result.conversationId);
       const current = await this.store.read(result.conversationId);
       if (current === undefined) throw new Error('Missing result conversation');
+      const event = result.event.event;
+      if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
+        if (current.state.assignment.kind !== 'workspace' || current.state.assignment.workspaceId !== event.workspaceId
+          || !await this.routing.permits(current.state.assignment, result.conversationId)) throw new Error('Epic event outside assignment');
+        const epic = await new DaemonEpicFiles(this.routing.directory).get(event.workspaceId, event.epicId);
+        const id = epicEventId(event);
+        if (result.outcome.kind === 'completed' && epicEvents(epic).some((candidate) => candidate.eventId === id)) {
+          const run = epic.verificationRuns.find((entry) => entry.id === event.runId)!;
+          await this.notifications.save({ id, conversationId: result.conversationId,
+            message: `Epic ${epic.id} revision ${event.revision}: ${event.kind === 'epic_completed' ? 'completed' : `verification ${run.result!.outcome}`} (${event.runId})` }, new AbortController().signal);
+        }
+      }
       if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
       else this.interrupted.delete(result.conversationId);
       return { history, current, version: this.version(result.conversationId, current.state.revision, result.operationId) };
@@ -202,10 +216,11 @@ export class DaemonConversations implements ConversationOwner {
           yield* conversationProjection(routing, displayFiles, current.state.assignment, () => cancelled);
         } else {
           yield { kind: 'assignment', assignment: await routing.display(current.state.assignment) };
-          for await (const notice of notifications.iterate()) {
-            if (cancelled) return;
-            yield { kind: 'display_event', event: { id: notice.id, message: notice.message } };
-          }
+        }
+        for await (const notice of notifications.iterate()) {
+          if (cancelled) return;
+          if ((notice.conversationId ?? conversationId({ kind: 'daemon' })) !== id) continue;
+          yield { kind: 'display_event', event: { id: notice.id, message: notice.message } };
         }
       })(), complete() { cancelled = true; }, cancel() { cancelled = true; } };
   }

@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { EpicSnapshotSchema } from '../../infra/epics/projection.js';
 import { ConversationActivitySchema, ConversationTextSchema } from '../../shared/types/conversation-activity.js';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -48,6 +49,7 @@ const displayAssignmentSchema = z.union([
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid(), name: z.string(), repositoryDirectories: z.array(repository) }).strict(),
 ]);
 const snapshotItemSchema = z.discriminatedUnion('kind', [
+  EpicSnapshotSchema,
   z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema }).strict(),
   z.object({ kind: z.literal('state'), state: stateSchema }).strict(),
   z.object({ kind: z.literal('assignment'), assignment: displayAssignmentSchema }).strict(),
@@ -230,6 +232,10 @@ export class ConversationTransferReceiver {
             : parsed.kind === 'inquiry' && parsed.inquiry.target.goalId !== null ? parsed.inquiry.target.repositoryDirectory : undefined;
           if (directory !== undefined && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
             throw new Error('Display repository outside assignment');
+          }
+          if (parsed.kind === 'epic' && (transfer.assignment?.kind !== 'workspace' || parsed.epic.workspaceId !== transfer.assignment.workspaceId
+            || parsed.memberProgress.some((member) => !transfer.assignment!.repositoryDirectories.includes(member.repositoryDirectory)))) {
+            throw new Error('Epic outside workspace assignment');
           }
           this.observer.item(parsed, output.transferId, transfer.metadata);
         }

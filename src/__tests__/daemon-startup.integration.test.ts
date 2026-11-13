@@ -15,6 +15,11 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import { Client } from './helpers/conversation-ipc-client.js';
 import { ControlledTurnRunner } from './helpers/controlledDaemon.js';
 import { deferred } from './helpers/daemon-turn.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
+import { readWatchTasks } from '../features/daemon/watchers/state.js';
 
 const doubles = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -150,4 +155,52 @@ it('preserves idle shutdown after an ordinary ensure without retaining an attach
   await lifecycle.ensureDaemon();
   await vi.waitFor(async () => { await f.idleAfter(500); expect(f.runner.closed).toBe(true); });
   await f.stopWhenIdle();
+});
+
+it.each([true, false])('keeps saved work when the idle scan starts before saving: %s', async (scanBeforeSave) => {
+  const directory = getGlobalConfigDir();
+  const repository = join(directory, 'repository');
+  await mkdir(join(repository, '.takt'), { recursive: true });
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  const f = await fixture();
+  const daemon = await f.daemon();
+  await daemon.watchers.close();
+  const reached = deferred<boolean>();
+  const resume = deferred<void>();
+  const hasWork = FileDaemonWatchSource.prototype.hasWork;
+  const observed: boolean[] = [];
+  vi.spyOn(FileDaemonWatchSource.prototype, 'hasWork').mockImplementationOnce(async function (this: FileDaemonWatchSource, files) {
+    const result = await hasWork.call(this, files);
+    observed.push(result);
+    reached.resolve(result);
+    await resume.promise;
+    return result;
+  });
+  const taskPath = join(repository, '.takt', 'tasks.yaml');
+  const tasks = [{ name: 'task', status: 'running', created_at: '2026-11-03T00:00:00Z', started_at: null, completed_at: null }];
+  let checking: Promise<void> | undefined;
+  try {
+    if (scanBeforeSave) { checking = f.idleAfter(1000); expect(await reached.promise).toBe(false); }
+    const socket = await lifecycle.ensureDaemon({ retainConnection: true });
+    cleanups.push(async () => { socket.destroy(); });
+    const client = new Client(socket);
+    const selected = await createTuiConversationPort(directory, { async deliver() { return { kind: 'delivered' }; } })
+      .resolve({ kind: 'repository', repositoryDirectory: repository });
+    const opened = (await client.request('open', selected)).result!;
+    await client.items(opened.read.transferId);
+    await writeFile(taskPath, JSON.stringify({ tasks }));
+    expect(await readWatchTasks(repository)).toEqual(tasks);
+    await client.request('detach', { attachmentId: opened.attachmentId });
+    expect(daemon.input.attachmentCount).toBe(0);
+    if (!scanBeforeSave) { checking = f.idleAfter(1000); expect(await reached.promise).toBe(true); }
+    resume.resolve();
+    await checking;
+    expect(observed).toEqual([!scanBeforeSave]);
+    expect(f.runner.closed).toBe(false);
+    await f.idleAfter(500);
+    expect(f.runner.closed).toBe(false);
+    await writeFile(taskPath, '{"tasks":[]}');
+    expect(await readWatchTasks(repository)).toEqual([]);
+    await f.stopWhenIdle();
+  } finally { resume.resolve(); await checking; }
 });

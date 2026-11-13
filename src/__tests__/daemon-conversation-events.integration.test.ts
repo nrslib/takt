@@ -48,6 +48,8 @@ import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
 import { inquiryAnswerEvent } from '../features/daemon/inquiryAnswerEvent.js';
 import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
+import * as watchLoop from '../features/daemon/watchers/loop.js';
+import { DaemonConversations } from '../features/daemon/conversationState.js';
 
 const turnData = (prompt: string) => JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2));
 const ipc = vi.hoisted(() => ({ initializingCount: 0 }));
@@ -63,24 +65,103 @@ async function fixture(seed?: (directory: string, repository: string) => Promise
   await mkdir(join(repository, '.takt'), { recursive: true });
   await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
   await seed?.(directory, repository);
-  const runner = new ControlledTurnRunner();
-  const daemon = await startDaemon({ configDirectory: directory, owner: { pid: process.pid, identity: { startTime: 'fixture' }, version: 'test', cliPath: '/daemon.js' },
-    tokens: undefined, signal: new AbortController().signal, runnerFactory(bus) { runner.bus = bus; return runner; } });
-  cleanups.push(daemon.close);
-  await daemon.watchers.drain();
-  await daemon.watchers.close();
-  const assignment = { kind: 'repository' as const, repositoryDirectory: repository };
-  await daemon.conversations.ensure(assignment);
-  const id = conversationId(assignment);
-  const outputs: PortOutput[] = [];
-  const opened = await daemon.input.open({ conversationId: id, assignment, speaker: { namespace: 'local', id: 'operator' },
-    binding: { port: 'tui', key: 'fixture', counterpart: { namespace: 'local', id: 'operator' } } }, {
-    async deliver(_id, output) { outputs.push(output); return { kind: 'delivered' }; },
-  });
-  opened.read.cancel();
-  const post = (name: string, lane: 'human' | 'other' = 'human') => daemon.dispatcher.accept(input(name, id, lane));
-  return { ...daemon, directory, repository, runner, id, opened, post, outputs };
+  // 実IPCと同様、接続準備からattachment登録までを初期化中として扱う。
+  ipc.initializingCount++;
+  try {
+    const runner = new ControlledTurnRunner();
+    const daemon = await startDaemon({ configDirectory: directory, owner: { pid: process.pid, identity: { startTime: 'fixture' }, version: 'test', cliPath: '/daemon.js' },
+      tokens: undefined, signal: new AbortController().signal, runnerFactory(bus) { runner.bus = bus; return runner; } });
+    cleanups.push(daemon.close);
+    await daemon.watchers.drain();
+    await daemon.watchers.close();
+    const assignment = { kind: 'repository' as const, repositoryDirectory: repository };
+    await daemon.conversations.ensure(assignment);
+    const id = conversationId(assignment);
+    const outputs: PortOutput[] = [];
+    const opened = await daemon.input.open({ conversationId: id, assignment, speaker: { namespace: 'local', id: 'operator' },
+      binding: { port: 'tui', key: 'fixture', counterpart: { namespace: 'local', id: 'operator' } } }, {
+      async deliver(_id, output) { outputs.push(output); return { kind: 'delivered' }; },
+    });
+    opened.read.cancel();
+    const post = (name: string, lane: 'human' | 'other' = 'human') => daemon.dispatcher.accept(input(name, id, lane));
+    return { ...daemon, directory, repository, runner, id, opened, post, outputs };
+  } finally { ipc.initializingCount--; }
 }
+
+it('releases fixture initialization protection after both successful and failed opens', async () => {
+  const f = await fixture();
+  expect(ipc.initializingCount).toBe(0);
+  await f.close();
+  const closed = vi.spyOn(ControlledTurnRunner.prototype, 'close');
+  const failure = new Error('snapshot unavailable');
+  vi.spyOn(DaemonConversations.prototype, 'snapshot').mockRejectedValueOnce(failure);
+  await expect(fixture()).rejects.toBe(failure);
+  expect(ipc.initializingCount).toBe(0);
+  await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce(), { timeout: 3000 });
+});
+
+it.each([0, 1])('compares idle shutdown during snapshot preparation with %s initializing connections', async (initializing) => {
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const startLoop = watchLoop.startWatchLoop;
+  let checkIdle!: () => Promise<void>;
+  vi.spyOn(watchLoop, 'startWatchLoop').mockImplementation((interval, check, onError) => {
+    if (interval !== 500) return startLoop(interval, check, onError);
+    checkIdle = () => check(new AbortController().signal);
+    return { wake() {}, async drain() {}, async close() {} };
+  });
+  for (let round = 0; round < 2; round++) {
+    const directory = getGlobalConfigDir();
+    const repository = join(directory, 'repository');
+    await mkdir(join(repository, '.takt'), { recursive: true });
+    await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+    const runner = new ControlledTurnRunner();
+    const daemon = await startDaemon({ configDirectory: directory,
+      owner: { pid: process.pid, identity: { startTime: 'fixture' }, version: 'test', cliPath: '/daemon.js' },
+      tokens: undefined, signal: new AbortController().signal, runnerFactory(bus) { runner.bus = bus; return runner; } });
+    cleanups.push(daemon.close);
+    await daemon.watchers.drain();
+    await daemon.watchers.close();
+    const assignment = { kind: 'repository' as const, repositoryDirectory: repository };
+    await daemon.conversations.ensure(assignment);
+    const reached = deferred<void>();
+    const resume = deferred<void>();
+    const snapshot = daemon.dispatcher.snapshot.bind(daemon.dispatcher);
+    vi.spyOn(daemon.dispatcher, 'snapshot').mockImplementation(async (id) => {
+      const saved = await snapshot(id);
+      reached.resolve();
+      await resume.promise;
+      return saved;
+    });
+    const opening = daemon.input.open({ conversationId: conversationId(assignment), assignment,
+      speaker: { namespace: 'local', id: 'operator' },
+      binding: { port: 'tui', key: 'fixture', counterpart: { namespace: 'local', id: 'operator' } } },
+    { async deliver() { return { kind: 'delivered' }; } }).then(
+      (opened) => ({ opened }), (error: unknown) => ({ error }));
+    try {
+      await reached.promise;
+      ipc.initializingCount = initializing;
+      expect(daemon.input.attachmentCount).toBe(0);
+      now += 500;
+      await checkIdle();
+      resume.resolve();
+      const result = await opening;
+      if (initializing === 0) {
+        expect(result).toMatchObject({ error: { code: 'shutting_down' } });
+      } else {
+        if (!('opened' in result)) throw result.error;
+        expect(runner.closed).toBe(false);
+        expect(daemon.input.attachmentCount).toBe(1);
+        result.opened.read.cancel();
+        daemon.input.detach(result.opened.attachmentId);
+      }
+      ipc.initializingCount = 0;
+      await checkIdle();
+      await daemon.close();
+      expect(runner.closed).toBe(true);
+    } finally { resume.resolve(); ipc.initializingCount = 0; }
+  }
+});
 
 it.each([
   { source: 'tui' as const, body: 'Which goal should handle this event?', text: 'Use the export goal' },

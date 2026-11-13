@@ -1,4 +1,5 @@
 import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitCommand.js';
+import { EpicEventSchema, PatrolEventSchema } from './epicEvent.js';
 import { z } from 'zod/v4';
 import { ConversationActivitySchema, ConversationTextSchema, ConversationToolEventSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
@@ -52,6 +53,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
+  EpicEventSchema,
   WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
@@ -63,7 +65,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('goal_registered'), ...repositoryGoal }).strict(),
   z.object({ kind: z.literal('goal_resumed'), ...repositoryGoal, origin: GoalExecutionOriginSchema.optional() }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
-  z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
+  PatrolEventSchema,
 ]);
 const acceptedEvent = z.object({ eventId: id, requestId: id, conversationId: id,
   source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']), occurredAt: z.iso.datetime(), event,
@@ -86,6 +88,7 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('publish_epic_events'), workspaceId: z.uuid(), epicId: z.uuid(), reason: z.string().trim().min(1) }).strict(),
   WaitCommandInputSchema.extend({ kind: z.literal('wait_command') }).strict(),
   z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
   z.object({ kind: z.literal('save_conversation'), change }).strict(),
@@ -99,6 +102,7 @@ const admission = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('epic_events_published') }).strict(),
   z.object({ kind: z.literal('wait_command_registered'), id: z.uuid() }).strict(),
   z.object({ kind: z.literal('state_saved'), version, duplicate: z.boolean() }).strict(),
   z.object({ kind: z.literal('event_accepted'), admission }).strict(),

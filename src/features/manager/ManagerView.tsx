@@ -11,6 +11,9 @@ import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
 import { formatPendingSummary } from './summaryDisplay.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
+import { ManagerEpicDialog, formatManagerEpicDetail } from './ManagerEpicDialog.js';
+import { layoutQuestionBody } from './questionBodyLayout.js';
+import { useManagerEpics } from './useManagerEpics.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
 import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
@@ -18,6 +21,7 @@ import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
+import { layoutPromptRows } from '../tui/promptLayout.js';
 import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
@@ -34,7 +38,6 @@ import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
 import { createToolActivityViewState, excludeToolActivityTranscript, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
   type ToolActivityTranscriptRange } from '../tui/toolActivityViewState.js';
-import { layoutPromptRows } from '../tui/promptLayout.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
   { command: '/verify', labelKey: 'interactive.commands.verify' }];
@@ -151,6 +154,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
   const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
   if (currentAssignment.kind === 'daemon') throw new Error('Manager view received a director assignment');
+  const epicItems = snapshot.items.flatMap((item) => item.kind === 'epic' ? [item] : []);
+  const epics = useManagerEpics(epicItems);
+  const epicsOpen = epics.navigation !== null;
+  const epicDetailLines = epics.navigation?.kind !== 'detail' || epics.selected === undefined
+    ? [] : formatManagerEpicDetail(epics.selected, lang, bodyWidth);
   const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
   const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
     if (item.kind !== 'inquiry') return [];
@@ -330,13 +338,20 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
+    epics.close();
     clearAnswer(); setAbortTarget(null); resetChoice();
     if (!selection.open(kind, display)) append(getLabel('manager.selectionEmpty.' + kind, lang));
     void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
   };
+  const openEpics = (): void => {
+    clearAnswer();
+    if (!epicsOpen) setAbortTarget(null);
+    resetChoice(); selection.close(); epics.open();
+    void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
+  };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
-  const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
-  const summaryVisible = !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
+  const conversationInput = !epicsOpen && answerTarget === null && selection.selection === null && abortTarget === null;
+  const summaryVisible = !epicsOpen && !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
   const startupRepositoryDirectory = assignment.startupRepositoryDirectory ?? cwd;
@@ -360,6 +375,37 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);
   const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
   const headingWidth = Math.min(measureWidth(assignmentHeading), splitStatus ? statusWidth : availableHeadingWidth);
+  const epicTitleLines = epics.navigation === null ? [] : layoutQuestionBody(getLabel(
+    epics.navigation.kind === 'list' ? 'manager.epics.listTitle' : 'manager.epics.detailTitle', lang), bodyWidth);
+  const epicHintLines = epics.navigation === null ? [] : layoutQuestionBody(getLabel(
+    epics.navigation.kind === 'list' ? 'manager.epics.listHint' : 'manager.epics.detailHint', lang), bodyWidth);
+  const noticeMessages = [
+    ...(snapshot.connection === 'connected' ? [] : [getLabel('manager.conversation.disconnected', lang)]),
+    ...(snapshot.readStatus === 'reading' ? [getLabel('manager.conversation.reading', lang)] : []),
+    ...(snapshot.readStatus === 'incomplete' ? [getLabel('manager.conversation.incomplete', lang)] : []),
+    ...(state?.interrupted ? [getLabel('manager.conversation.interrupted', lang)] : []),
+  ];
+  const epicNoticeLines = epicsOpen ? noticeMessages.flatMap((text) => layoutQuestionBody(text, statusWidth)) : [];
+  const epicFooterLines: string[] = [];
+  if (epicsOpen) {
+    let line = '';
+    for (const item of hintItems) {
+      if (line !== '' && measureWidth(line + item) > statusWidth) {
+        epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
+        line = '';
+      }
+      line += item;
+    }
+    epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
+  }
+  // Reserve dialog/prompt borders, status/footer rows and Ink's final line break.
+  const epicChromeRows = 2 + epicTitleLines.length + epicHintLines.length + epicNoticeLines.length
+    + 1 + 2 + epicFooterLines.length + (splitStatus ? 2 : 1) + 1;
+  const minimumEpicRows = epics.navigation?.kind === 'list' ? 2 : 1;
+  const epicPromptRows = Math.max(1, Math.min(MAX_VISIBLE_ROWS,
+    epicsOpen ? layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length : MAX_VISIBLE_ROWS,
+    (rows ?? 24) - epicChromeRows - minimumEpicRows));
+  const epicPageRows = Math.max(minimumEpicRows, (rows ?? 24) - epicChromeRows - epicPromptRows);
   const toolHistory = snapshot.items.find((item) => item.kind === 'tool_history')?.history;
   const toolTurn = running != null ? JSON.stringify([running.operationId, running.generation])
     : toolHistory === undefined ? undefined : JSON.stringify([toolHistory.operationId, toolHistory.generation]);
@@ -375,7 +421,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [toolHistory, running?.operationId, running?.generation]);
   const toolGroups = toolDisplay.groups();
   const toolLabels = {
-    compact: getLabel('tui.ui.toolHistoryCompact', lang), expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+    compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
     more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
     completion: getLabel('tui.ui.toolHistoryCompletion', lang),
   };
@@ -391,7 +437,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     hintRowWidth += width;
   }
-  const toolHeight = selection.selection !== null || answerTarget !== null || abortTarget !== null || toolGroups.length === 0 ? 0
+  const toolHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null || toolGroups.length === 0 ? 0
     : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows
       - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
       - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
@@ -419,6 +465,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
+    epicsOpen, openEpics,
+    handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
     browseTools: (direction) => {
       if (toolHeight <= 0) return;
@@ -441,26 +489,28 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   return <Box flexDirection="column">
     <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
-    {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
-    {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
-    {snapshot.readStatus === 'incomplete' && <Text>{getLabel('manager.conversation.incomplete', lang)}</Text>}
-    {state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
+    {epicsOpen ? epicNoticeLines.length > 0 && <Text wrap="truncate-end">{epicNoticeLines.join('\n')}</Text>
+      : noticeMessages.map((text) => <Text key={text}>{text}</Text>)}
+    {epics.navigation !== null && <ManagerEpicDialog navigation={epics.navigation} epics={epicItems} index={epics.index}
+      detailLines={epicDetailLines} pageRows={epicPageRows} titleLines={epicTitleLines} hintLines={epicHintLines}
+      lang={lang} workspace={currentAssignment.kind === 'workspace'} />}
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
-    {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
+    {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
-    {toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
+    {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}
+      maxVisibleRows={epicsOpen ? epicPromptRows : undefined}
       completions={conversationInput ? slashCompletion.completions : []}
       completionIndex={slashCompletion.completionIndex}
       maxVisibleCompletions={3}
-      maxVisibleRows={MAX_VISIBLE_ROWS}
-      disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
-    <Box flexWrap="wrap">{hintItems.map((text) =>
-      <Box key={text} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>)}</Box>
+      disabled={epicsOpen || selection.selection !== null || abortTarget !== null || selectingSummary} />
+    {epicsOpen ? <Text dimColor wrap="truncate-end">{epicFooterLines.join('\n')}</Text> : <Box flexWrap="wrap">{hintItems.map((item) =>
+      <Box key={item} width={measureWidth(item)} flexShrink={0}><Text dimColor>{item}</Text></Box>,
+    )}</Box>}
     <Box flexDirection={splitStatus ? 'column' : 'row'} width={statusWidth}>
       <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
       <Text dimColor wrap="truncate-end">{splitStatus ? statusDetails : ` | ${statusDetails}`}</Text>
