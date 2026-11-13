@@ -287,7 +287,7 @@ If the GitHub PR head differs from the clone's starting HEAD, the effect fetches
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -2104,7 +2104,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 GitLab supports MR details, CI status acquisition, and bulk selection. When Caccia is enabled, its effect in `takt merge` and `from_pr` tasks returns `skipped` with `github_unavailable` and continues to CI on the returned head. Merged results pipelines are matched through the merge commit's second parent and the source head. Missing pipelines and pipelines for an older head do not pass CI. Selecting a merge method or constraining the head is still unsupported: `merge_pr` fails when either is supplied. Completing the CI wait does not imply a successful merge.
 
-The default `merge.workflow` is `merge-review-fix-simple`. It gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
+The default `merge.workflow` is `merge-review-fix-simple`. After AI conflict resolution, it gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. A clean sync skips this full review and proceeds to push, Caccia, and CI. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
 
 Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
 

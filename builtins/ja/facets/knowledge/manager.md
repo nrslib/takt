@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、CodeRabbit への対応、CI 待ちを担当します。競合のない同期ではフルレビューを呼ばず、AIで競合を解消した場合は初回・再同期ともレビューと修正を経てからpushします。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 

@@ -233,7 +233,7 @@ manager:
 
 `takt_merge_goal_pr` は必須の `cwd`、`goalId`、`prNumber`、`until` を受け、`merge_task: true` と `goal_id` を持つタスクを `tasks.yaml` に pending で積み、すぐにタスク名を返します。`prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）、`merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使います。同じ対象の pending / running タスクは二重に積めません。
 
-daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の取り込み、競合解消、レビューと修正、push、Caccia、CI 待ちを行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
+daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の変更を取り込み、push、Caccia、CI 待ちへ進みます。AIで競合を解消した場合は、初回・再同期ともpush前にレビューと修正を行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
 
 push 後は、元リポジトリのゴールブランチが origin の祖先なら fast-forward します。分岐していれば両方の履歴を保持して失敗結果とイベントで知らせます。チェックアウト中の作業コピーは書き換えず、追従を止めて知らせます。タスクの取り込み前と再申請の push 前にも同じ確認を行います。追従で先端が変わった場合は、その新しい SHA の受け入れ条件を確認し直して申請します。
 
