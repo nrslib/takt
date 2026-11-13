@@ -1137,6 +1137,8 @@ export const WorkflowConfigRawSchema = z.object({
   // Issue #1208: workflow-level capability-set reference (the default for every step) and the
   // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.
   capabilities: WorkflowCapabilitiesRefSchema,
+  // Opt-in: name the project's repository for `gh` / `glab` in a task that runs in a clone.
+  repository_identity: z.boolean().optional(),
   mcp_servers: McpServersSchema,
   auto_routing: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
   rate_limit_fallback: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),

@@ -222,6 +222,7 @@ export function normalizeWorkflowConfig(
     reportFormats: sections.resolvedReportFormats,
     ...(workflowWideRules === undefined ? {} : { allStepsRules: workflowWideRules }),
     steps,
+    ...(parsed.repository_identity === undefined ? {} : { repositoryIdentity: parsed.repository_identity }),
     initialStep: parsed.initial_step ?? steps[0]!.name,
     maxSteps: parsed.max_steps,
     loopMonitors,

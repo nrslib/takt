@@ -1298,23 +1298,25 @@ describe('executeWorkflow session loading', () => {
       }
     });
 
-    it('should name the project repository for a task that runs in a clone', async () => {
+    it('should resolve the project repository for a task that runs in a clone', async () => {
       const projectDir = gitRepoWithOrigin('takt-identity-project-');
       const cloneDir = createTempDir('takt-identity-clone-');
 
       await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
 
-      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      // Resolved for the run; the engine passes it on only for a workflow with repository_identity.
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({
         GH_REPO: 'github.com/owner/repo',
       });
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
     });
 
-    it('should add nothing for a task that runs in the project root', async () => {
+    it('should resolve nothing for a task that runs in the project root', async () => {
       const projectDir = gitRepoWithOrigin('takt-identity-root-');
 
       await executeWorkflow(makeConfig(), 'task', projectDir, { projectCwd: projectDir });
 
-      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({});
     });
 
     it('should keep a repository variable the caller already set', async () => {
@@ -1324,7 +1326,7 @@ describe('executeWorkflow session loading', () => {
 
       await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
 
-      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({ GH_REPO: 'mine/other' });
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.repositoryIdentityEnv).toEqual({ GH_REPO: 'mine/other' });
     });
   });
 });

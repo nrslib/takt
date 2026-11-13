@@ -266,12 +266,16 @@ describe('system workflow execution integration', () => {
     );
   }
 
-  it('childProcessEnv を system step のサービスまで渡す', async () => {
+  async function captureSystemStepChildProcessEnv(
+    workflowOverrides: Record<string, unknown>,
+    engineOverrides: Record<string, unknown>,
+  ): Promise<Readonly<Record<string, string>> | undefined> {
     const config = normalizeWorkflowConfig(
       {
         name: 'identity-wiring',
         initial_step: 'route_context',
         max_steps: 2,
+        ...workflowOverrides,
         steps: [
           {
             name: 'route_context',
@@ -287,7 +291,7 @@ describe('system workflow execution integration', () => {
 
     const engine = new WorkflowEngine(config, projectDir, 'Current task body', {
       ...createSystemEngineOptions(projectDir),
-      childProcessEnv: { GH_REPO: 'github.com/owner/repo' },
+      ...engineOverrides,
       systemStepServicesFactory: (params) => {
         received = params.childProcessEnv;
         return createDefaultSystemStepServices(params);
@@ -297,7 +301,38 @@ describe('system workflow execution integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
+    return received;
+  }
+
+  it('repository_identity を宣言したワークフローには、リポジトリ識別情報を渡す', async () => {
+    const received = await captureSystemStepChildProcessEnv(
+      { repository_identity: true },
+      { repositoryIdentityEnv: { GH_REPO: 'github.com/owner/repo' } },
+    );
+
     expect(received).toEqual({ GH_REPO: 'github.com/owner/repo' });
+  });
+
+  it('repository_identity を宣言しないワークフローには、解決済みでも渡さない', async () => {
+    const received = await captureSystemStepChildProcessEnv(
+      {},
+      { repositoryIdentityEnv: { GH_REPO: 'github.com/owner/repo' } },
+    );
+
+    expect(received).toBeUndefined();
+  });
+
+  it('宣言しないワークフローは、親から受け継いだ識別情報も落とす', async () => {
+    // A called workflow inherits the parent's snapshot; its own declaration decides.
+    const received = await captureSystemStepChildProcessEnv(
+      {},
+      {
+        repositoryIdentityEnv: { GH_REPO: 'github.com/owner/repo' },
+        childProcessEnv: { GH_REPO: 'github.com/owner/repo', TAKT_OBSERVABILITY: '{}' },
+      },
+    );
+
+    expect(received).toEqual({ TAKT_OBSERVABILITY: '{}' });
   });
 
   it('system input と structured output を経由して COMPLETE できる', async () => {

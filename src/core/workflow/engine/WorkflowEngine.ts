@@ -233,8 +233,16 @@ export class WorkflowEngine extends EventEmitter {
         autoRouting: effectiveAutoRouting,
         estimator: autoRoutingEstimator,
       });
+    // Each workflow decides for itself whether `gh` / `glab` are named (`repository_identity`), so a
+    // called workflow neither inherits the parent's choice nor loses its own.
+    const baseChildProcessEnv = omitRepositoryIdentityEnv(options.childProcessEnv);
+    const repositoryIdentityEnv = options.repositoryIdentityEnv ?? {};
+    const childProcessEnv = config.repositoryIdentity === true && Object.keys(repositoryIdentityEnv).length > 0
+      ? { ...baseChildProcessEnv, ...repositoryIdentityEnv }
+      : baseChildProcessEnv;
     this.options = {
       ...options,
+      childProcessEnv,
       ...(resumePoint === undefined ? {} : { resumePoint }),
       ...(restartPoint === undefined ? {} : { restartPoint }),
       ...(restartStartStep === undefined ? {} : { startStep: restartStartStep }),
