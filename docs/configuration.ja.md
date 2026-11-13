@@ -628,7 +628,18 @@ takt manager
 
 `TAKT_SLACK_APP_TOKEN` は `connections:write` を持つ App-Level Token、`TAKT_SLACK_BOT_TOKEN` はボット用トークンです。daemon は読み取った後に両変数を自身の環境から削除し、provider やツールの子プロセスに渡らないようにします。`takt manager`・`takt director` は必要に応じて専用の daemon を起動します。トークンや Slack 設定を変更した場合は、`takt daemon stop` で停止してから起動し直してください。
 
-daemon は仕事や Slack 接続の有無にかかわらず常駐し、`takt daemon stop` またはシグナルで停止します。Slack の設定やトークンがない場合も TUI の受付と監視を続けます。同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にします。起動・停止・診断は `~/.takt/daemon-logs/*.json` に非同期で保存します。
+Slack の受信が動いている間と `takt daemon --resident` で起動した場合は daemon が自動終了しません。`takt daemon stop` または SIGTERM などのシグナルで停止します。Slack の設定やトークンがあるだけでは常駐せず、受信が実際に動いている必要があります。
+
+通常起動では Slack の受信が動いておらず、次のものがすべてなくなると自動終了します。
+
+- TUI の接続と会話接続の初期化処理
+- 処理待ち・実行中のイベント、未完了の待機要求とその結果の配送
+- 対象プロジェクトの未完了のゴール（`status` が `completed` ではなく、`executionStatus` が `aborted` でもないもの）
+- inbox の JSON イベント、`pending`・`running` のタスク、未配送の問い合わせ回答
+
+プロジェクトの確認処理が終わってから条件を再確認します。ゴールを読み取れず終了を確認できない場合も動き続けます。Slack の設定やトークンがなくても、daemon の起動中は TUI と監視を利用できます。常駐起動の使い方は [CLI リファレンス](./cli-reference.ja.md#manager実験的)を参照してください。
+
+同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にします。起動・停止・診断は `~/.takt/daemon-logs/*.json` に非同期で保存します。
 
 ### 会話と問い合わせへの回答
 

@@ -206,7 +206,7 @@ export async function startDaemon(options: {
     resolveSlack(slack);
     options.signal.throwIfAborted();
     waitCommandCheck = startWatchLoop(5000, () => waitCommands.check(), reportDaemonError);
-    const idle = (): boolean => !stopping && !slack?.listening && input.attachmentCount === 0
+    const idle = (): boolean => !stopping && options.owner.resident !== true && !slack?.listening && input.attachmentCount === 0
       && ipc?.initializingCount === 0 && !dispatcher.hasPendingEvents && !waitCommands.hasWork;
     // 起動元が接続する猶予は旧 daemon と同じ500msにする。
     const idleAfter = Date.now() + 500;
@@ -224,7 +224,7 @@ export async function startDaemon(options: {
   } finally { finishStartup(); options.signal.removeEventListener('abort', stopDuringStartup); }
 }
 
-export async function runDaemon(): Promise<void> {
+export async function runDaemon(resident = false): Promise<void> {
   const directory = await resolveDaemonConfigDirectory(process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt'));
   const io = { signal: new AbortController().signal, timeoutMs: 5000 };
   const identity = await readProcessOwner(process.pid, io);
@@ -233,8 +233,13 @@ export async function runDaemon(): Promise<void> {
   if (content === undefined) throw new Error('Missing package metadata');
   const metadata = JSON.parse(content.toString('utf8')) as { version: string };
   const owner: DaemonOwner = { pid: process.pid, identity: { startTime: identity.startTime }, version: metadata.version,
-    cliPath: fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url)) };
-  if (!await registerDaemonOwner(directory, owner, io)) return;
+    cliPath: fileURLToPath(new URL('../../app/daemon/index.js', import.meta.url)), ...(resident ? { resident: true } : {}) };
+  if (!await registerDaemonOwner(directory, owner, io)) {
+    if (resident) {
+      throw new Error('A daemon is already running; resident startup was not performed. Run "takt daemon stop", then start it with "takt daemon --resident".');
+    }
+    return;
+  }
   const appToken = process.env.TAKT_SLACK_APP_TOKEN;
   const botToken = process.env.TAKT_SLACK_BOT_TOKEN;
   delete process.env.TAKT_SLACK_APP_TOKEN;

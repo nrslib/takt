@@ -16,7 +16,9 @@ vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssig
 vi.mock('node:net', () => ({ createConnection: doubles.connect }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.ensure }));
 vi.mock('../features/manager/tuiConversationPort.js', () => ({ createTuiConversationPort: () => ({ resolve: doubles.resolve }) }));
-vi.mock('../infra/daemon/owner.js', () => ({ readDaemonOwner: () => doubles.owner, isDaemonOwnerRunning: () => true }));
+vi.mock('../infra/daemon/owner.js', async (original) => ({
+  ...await original<typeof import('../infra/daemon/owner.js')>(), readDaemonOwner: () => doubles.owner, isDaemonOwnerRunning: () => true,
+}));
 vi.mock('../infra/daemon/ipcEndpoint.js', async (original) => ({
   ...await original<typeof import('../infra/daemon/ipcEndpoint.js')>(), resolveDaemonConfigDirectory: () => '/config',
   readDaemonIpcState: () => ({ protocolVersion: 1, endpoint: '/test.sock', capability: 'a'.repeat(64), owner: doubles.owner }),

@@ -27,7 +27,8 @@ const doubles = vi.hoisted(() => ({
 vi.mock('node:child_process', async (original) => ({
   ...await original<typeof import('node:child_process')>(), spawn: doubles.spawn,
 }));
-vi.mock('../infra/daemon/owner.js', () => ({
+vi.mock('../infra/daemon/owner.js', async (original) => ({
+  ...await original<typeof import('../infra/daemon/owner.js')>(),
   readDaemonOwner: doubles.readOwner, isDaemonOwnerRunning: () => true, removeDaemonOwner: vi.fn(),
 }));
 vi.mock('../features/daemon/conversationReadiness.js', () => ({ connectConversationIpc: doubles.ready }));

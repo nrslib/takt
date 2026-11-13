@@ -60,9 +60,10 @@ function parseMergeArgument(value: string): number | string {
 program
   .command('daemon')
   .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
-  .action(async () => {
+  .option('--resident', 'Keep the daemon running without work or TUI connections', false)
+  .action(async (options: { resident: boolean }) => {
     const { runDaemonForeground } = await import('../../features/daemon/lifecycle.js');
-    await runDaemonForeground();
+    await runDaemonForeground(options.resident);
   })
   .command('stop')
   .description('Stop the manager daemon')
