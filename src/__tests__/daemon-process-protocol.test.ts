@@ -18,6 +18,18 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('roundtrips tool identities, batched completions and results larger than the intermediate text limit', () => {
+    const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
+    const toolId = 'provider-tool-'.repeat(30);
+    for (const event of [
+      { type: 'tool_use', data: { id: toolId, tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity },
+      { type: 'tool_output', data: { id: toolId, tool: 'Read', output: 'stream' }, toolActivity },
+      { type: 'tool_result', data: { completedToolIds: [toolId, 'second'], content: '日'.repeat(MAX_PROCESS_PROGRESS_BYTES), isError: true }, toolActivity },
+    ]) {
+      const message = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool_event', eventId: 'event', event } };
+      expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    }
+  });
   it.each(['human', 'manager', undefined] as const)('preserves resumed origin %s through inbox, storage and IPC', (origin) => {
     const saved = ManagerEventSchema.parse({ kind: 'resumed', goalId: '650e8400-e29b-41d4-a716-446655440000',
       createdAt: '2026-11-10T00:00:00Z', ...(origin === undefined ? {} : { origin }) });

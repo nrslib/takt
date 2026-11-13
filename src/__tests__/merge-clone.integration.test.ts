@@ -1422,7 +1422,7 @@ describe('Merge PR persistent clone ownership', () => {
       new TaskStore(project).update((current) => ({ tasks: current.tasks.map((item) => item.name === task.name
         ? { ...item, status: 'completed', started_at: new Date().toISOString(), completed_at: new Date().toISOString(), completion: { success: true, interrupted: false, branch: 'task-result', sha: taskSha } } : item) }));
       expect(await integrateGoalTask(project, goal.id, task.name, taskSha, undefined,
-        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'en')).toMatchObject({ status: 'merged' });
+        { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true }, 'en', false)).toMatchObject({ status: 'merged' });
       const integrated = git(project, 'rev-parse', 'feature/pr');
       expect(git(project, 'merge-base', remoteHead, integrated)).toBe(remoteHead);
       expect(git(project, 'merge-base', taskSha, integrated)).toBe(taskSha);

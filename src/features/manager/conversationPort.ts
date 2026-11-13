@@ -6,6 +6,7 @@ import type { ManagerAssignment } from './startupResolution.js';
 import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
+import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -31,6 +32,7 @@ export interface ConversationState {
 export type SnapshotValue =
   | EpicSnapshot
   | { kind: 'state'; state: ConversationState }
+  | { kind: 'tool_history'; history: ToolActivityTurnState }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
@@ -56,6 +58,7 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'tool_history'; history: ToolActivityTurnState }
   | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
   | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }

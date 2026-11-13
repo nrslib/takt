@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { accepted, deferred, harness, input, MemoryEventStore, ControlledTurnRunner, turnState } from './helpers/controlledDaemon.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
-import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
+import type { TurnIdentity, TurnResult, TurnOutcome } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { MAX_PROCESS_PENDING_REQUESTS, parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
 import { conversationId } from '../infra/conversations/identity.js';
@@ -10,6 +10,7 @@ import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import type { EventStore } from '../core/daemon/ports.js';
 import type { ConversationProgress } from '../shared/types/conversation-activity.js';
+import { ToolHistoryPersistenceError } from '../core/daemon/toolHistoryPersistenceError.js';
 
 const interrupt = (turn: TurnIdentity) => ({ kind: 'interrupt' as const, ...turn });
 
@@ -35,6 +36,66 @@ const interruptedEvents: TurnEvent[] = [
 ];
 
 describe('event driven daemon dispatcher', () => {
+  it.each(['completed', 'failed', 'interrupted', 'deferred'] as const)('waits for history persistence failure before saving a %s outcome and retains its change', async (kind) => {
+    const h = await harness(); await h.dispatcher.accept(input('history-failure', 'conversation', 'other'));
+    const active = await h.runner.started(1);
+    const entered = deferred<void>(); const release = deferred<void>();
+    h.owner.progress = vi.fn(async () => { entered.resolve(); await release.promise; throw new ToolHistoryPersistenceError(new Error('disk')); });
+    const progress = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: { kind: 'tool_event', eventId: 'result',
+      event: { type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } } } });
+    await entered.promise;
+    const change = { operationId: active.turn.operationId, expectedVersion: 0,
+      session: { provider: 'mock', model: null, sessionId: 'acquired-session' } };
+    const outcome: TurnOutcome = kind === 'completed' ? { kind, result: { kind: 'reply', message: 'done' }, change }
+      : kind === 'deferred' ? { kind } : { kind, message: 'original-outcome', change };
+    let resultSaveFailed = false;
+    h.store.beforeResult = async () => {
+      if (kind === 'completed' && !resultSaveFailed) { resultSaveFailed = true; throw new Error('Result storage unavailable'); }
+    };
+    const finish = h.runner.finish(active, outcome);
+    try {
+      expect(h.store.saveResult).not.toHaveBeenCalled();
+      release.resolve(); await Promise.all([progress, finish]);
+      if (kind === 'completed') {
+        await h.dispatcher.retryStorage();
+        expect(h.store.saveResult).toHaveBeenCalledTimes(2);
+        expect(h.store.saveResult.mock.calls[0]![1]).toEqual(h.store.saveResult.mock.calls[1]![1]);
+      }
+      const saved = h.store.saveResult.mock.calls[0]![1];
+      expect(saved.outcome).toMatchObject({ kind: kind === 'completed' ? 'failed' : kind, ...(kind === 'deferred' ? {} : { change }) });
+      if (kind !== 'completed') expect(saved.outcome).toEqual(outcome);
+      expect(h.applied.get(active.turn.operationId)).toEqual(saved);
+      expect(h.runner.calls).toHaveLength(1);
+    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
+  });
+  it('keeps tool starts and results ordered and drains their persistence before settling the turn', async () => {
+    const h = await harness(); await h.dispatcher.accept(input('history'));
+    const active = await h.runner.started(1);
+    const entered = deferred<void>(); const release = deferred<void>();
+    const observed: ConversationProgress[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      observed.push(message);
+    });
+    const context = { callId: 'call', operationId: active.turn.operationId, generation: active.turn.generation };
+    const start: ConversationProgress = { kind: 'tool_event', eventId: 'start', event: {
+      type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} }, toolActivity: context,
+    } };
+    const result: ConversationProgress = { kind: 'tool_event', eventId: 'result', event: {
+      type: 'tool_result', data: { id: 'tool', content: 'done', isError: false }, toolActivity: context,
+    } };
+    const first = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: start }); await entered.promise;
+    const second = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: result });
+    const finish = h.runner.finish(active);
+    try {
+      expect(h.owner.progress).toHaveBeenCalledTimes(1);
+      expect(h.store.saveResult).not.toHaveBeenCalled();
+      release.resolve(); await Promise.all([first, second, finish]);
+      expect(observed).toEqual([start, result]);
+      expect(h.store.records.get('history')?.state).toBe('settled');
+      expect(h.failures).not.toHaveBeenCalled();
+    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
+  });
   it('bounds ordered progress while delivery is blocked and releases capacity after delivery', async () => {
     const h = await harness();
     await h.dispatcher.accept(input('bounded-text'));

@@ -7,6 +7,7 @@ import { interpolateMcpEnv, McpSectionSchema } from '../infra/config/runtime-pro
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
 import { CODEX_SPAWN_OPTIONS, type CodexSpawnEnvironment } from '../infra/codex/types.js';
+import { withToolActivityCall } from '../shared/tool-activity/stream.js';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -23,6 +24,7 @@ let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
 let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
 let projectDirectory: string;
+let startThreadId: string | undefined = 'thread-1';
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -92,7 +94,7 @@ function createReconnectCommandFailureEvents(message: string, command: string): 
   ];
 }
 
-function createThread(id: string) {
+function createThread(id: string | undefined) {
   return {
     id,
     runStreamed: async (input: unknown, turnOptions?: { signal?: AbortSignal }) => {
@@ -131,7 +133,7 @@ vi.mock('@openai/codex-sdk', () => {
       async startThread(options?: Record<string, unknown>) {
         attemptOrder.push('provider');
         startThreadCalls.push(options);
-        return createThread('thread-1');
+        return createThread(startThreadId);
       }
 
       async resumeThread(threadId: string, options?: Record<string, unknown>) {
@@ -157,6 +159,7 @@ describe('CodexClient retry', () => {
     runStreamedInputs = [];
     codexConstructorCalls = [];
     attemptOrder = [];
+    startThreadId = 'thread-1';
     projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-retry-'));
     tempRoots.add(projectDirectory);
   });
@@ -705,6 +708,39 @@ describe('CodexClient retry', () => {
     expect(onActivity).toHaveBeenNthCalledWith(1, { kind: 'attempt_started' });
     expect(onActivity).toHaveBeenNthCalledWith(2, { kind: 'attempt_started' });
     expect(attemptOrder).toEqual(['activity', 'provider', 'activity', 'provider']);
+  });
+
+  it('内部 retry ごとに新しい tool activity call ID を保つ', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      { type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: 'first attempt' } },
+        { type: 'turn.failed', error: { message: CODEX_RECONNECT_FAILURE_MESSAGE } },
+      ] },
+      { type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: 'second attempt' } },
+        { type: 'item.completed', item: { id: 'item_0', type: 'command_execution', aggregated_output: 'done', exit_code: 0 } },
+        { type: 'item.completed', item: { id: 'message', type: 'agent_message', text: 'retry succeeded' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ] },
+    ];
+    const received = vi.fn();
+    const onStream = withToolActivityCall(received)!;
+
+    const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ status: 'done', content: 'retry succeeded' });
+
+    const events = received.mock.calls.map(([event]) => event as { type: string; toolActivity?: { callId: string } });
+    const uses = events.filter((event) => event.type === 'tool_use');
+    const results = events.filter((event) => event.type === 'tool_result');
+    expect(uses).toHaveLength(2);
+    expect(uses[0]!.toolActivity?.callId).toBeTruthy();
+    expect(uses[0]!.toolActivity!.callId).not.toBe(uses[1]!.toolActivity!.callId);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.toolActivity?.callId).toBe(uses[1]!.toolActivity!.callId);
   });
 
   it('config profile の内部マーカーを呼び出し単位の Codex 環境へ設定する', async () => {
@@ -1983,6 +2019,440 @@ describe('CodexClient retry', () => {
         error: expect.stringContaining('external abort'),
         failureCategory: 'external_abort',
       }),
+    });
+  });
+
+  it('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する', async () => {
+    const now = new Date();
+    const directory = path.join(
+      projectDirectory,
+      'sessions',
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    );
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
+      `${JSON.stringify({
+        timestamp: now.toISOString(),
+        ordinal: 0,
+        type: 'compacted',
+        payload: { message: '', replacement_history: [] },
+      })}\n`,
+    );
+    vi.stubEnv('CODEX_HOME', projectDirectory);
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-compacted' },
+          { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: '作業依頼を教えてください' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'verification completed' } },
+          { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 2 } },
+        ],
+      },
+    ];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+
+    const response = await new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: false,
+      abortSignal: abortController.signal,
+      childProcessEnv: { CODEX_HOME: projectDirectory, TAKT_TEST_ENV: 'preserved' },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-6-luna',
+        providerOptions: {
+          codex: { networkAccess: false, reasoningEffort: 'high' },
+        },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'verification completed',
+      sessionId: 'thread-compacted',
+    });
+    expect(runPlanIndex).toBe(2);
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toEqual([{
+      threadId: 'thread-compacted',
+      options: startThreadCalls[0],
+    }]);
+    expect(codexConstructorCalls[1]).toEqual(codexConstructorCalls[0]);
+    expect(runStreamedInputs).toHaveLength(2);
+    expect(runStreamedInputs[0]).toBe('original Phase 1 instruction');
+    expect(runStreamedInputs[1]).toContain(
+      'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
+    );
+    expect(runStreamedInputs[1]).toContain('original Phase 1 instruction');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'context_compacted',
+      data: { sessionId: 'thread-compacted' },
+    });
+    const successfulResults = onStream.mock.calls.filter(([event]) => (
+      event.type === 'result' && event.data.success
+    ));
+    expect(successfulResults).toHaveLength(1);
+    expect(successfulResults[0]?.[0]).toMatchObject({
+      data: { result: 'verification completed', success: true },
+    });
+  });
+
+  it('破棄した thread の compacted 通知で safety refusal 後の新規 thread の成功を復帰対象にしない', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-a' },
+          { type: 'compacted' },
+          { type: 'item.completed', item: { id: 'refusal', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk.' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-b' },
+          { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'new thread completed' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const onStream = vi.fn();
+
+    const pending = new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: false,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-test',
+        providerOptions: { codex: { networkAccess: false } },
+        permissionMode: 'readonly',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const response = await pending;
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'new thread completed',
+      sessionId: 'thread-b',
+    });
+    expect(runPlanIndex).toBe(2);
+    expect(startThreadCalls).toHaveLength(2);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'result' && event.data.success
+    ))).toEqual([[
+      {
+        type: 'result',
+        data: { result: 'new thread completed', sessionId: 'thread-b', success: true },
+      },
+    ]]);
+  });
+
+  it('safety refusal 後の新規 thread も個別に compaction 復帰し transport と rollout の重複検出で再復帰しない', async () => {
+    vi.useFakeTimers();
+    const now = new Date();
+    const directory = path.join(
+      projectDirectory,
+      'sessions',
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    );
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-b.jsonl'),
+      `${JSON.stringify({
+        timestamp: now.toISOString(),
+        ordinal: 0,
+        type: 'compacted',
+        payload: { message: '', replacement_history: [] },
+      })}\n`,
+    );
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-a' },
+          { type: 'compacted' },
+          { type: 'item.completed', item: { id: 'refusal', type: 'agent_message', text: 'This request was flagged for possible cybersecurity risk.' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-b' },
+          { type: 'compacted' },
+          { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: 'new thread lost instruction' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'new thread recovered' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const onStream = vi.fn();
+
+    const pending = new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: false,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-test',
+        providerOptions: { codex: { networkAccess: false } },
+        permissionMode: 'readonly',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const response = await pending;
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'new thread recovered',
+      sessionId: 'thread-b',
+    });
+    expect(runPlanIndex).toBe(3);
+    expect(startThreadCalls).toHaveLength(2);
+    expect(resumeThreadCalls).toEqual([{
+      threadId: 'thread-b',
+      options: startThreadCalls[1],
+    }]);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'context_compacted'
+    ))).toEqual([
+      [{ type: 'context_compacted', data: { sessionId: 'thread-a' } }],
+      [{ type: 'context_compacted', data: { sessionId: 'thread-b' } }],
+    ]);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'result' && event.data.success
+    ))).toEqual([[
+      {
+        type: 'result',
+        data: { result: 'new thread recovered', sessionId: 'thread-b', success: true },
+      },
+    ]]);
+  });
+
+  it('同一 thread の transient retry では compacted 通知を保持して復帰する', async () => {
+    vi.useFakeTimers();
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'compacted' },
+          { type: 'turn.failed', error: { message: 'Selected model is at capacity.' } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: 'lost instruction' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'same thread recovered' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+    ];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const onStream = vi.fn();
+
+    const pending = new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      sessionId: 'thread-a',
+      edit: false,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-test',
+        providerOptions: { codex: { networkAccess: false } },
+        permissionMode: 'readonly',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const response = await pending;
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'same thread recovered',
+      sessionId: 'thread-a',
+    });
+    expect(runPlanIndex).toBe(3);
+    expect(startThreadCalls).toHaveLength(0);
+    expect(resumeThreadCalls).toHaveLength(3);
+    expect(resumeThreadCalls.every((call) => call.threadId === 'thread-a')).toBe(true);
+    expect(onStream.mock.calls.filter(([event]) => (
+      event.type === 'result' && event.data.success
+    ))).toEqual([[
+      {
+        type: 'result',
+        data: { result: 'same thread recovered', sessionId: 'thread-a', success: true },
+      },
+    ]]);
+  });
+
+  it('resume 前の rollout 観測失敗でも同一 session の正常応答を返す', async () => {
+    const codexHomeFile = path.join(projectDirectory, 'codex-home-file');
+    fs.writeFileSync(codexHomeFile, 'not a directory');
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'resume completed' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const response = await new CodexClient().call('coder', 'prompt', {
+      cwd: projectDirectory,
+      sessionId: 'saved-session',
+      childProcessEnv: { CODEX_HOME: codexHomeFile },
+      onStream,
+    });
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'resume completed',
+      sessionId: 'saved-session',
+    });
+    expect(runPlanIndex).toBe(1);
+    expect(resumeThreadCalls).toEqual([{
+      threadId: 'saved-session',
+      options: expect.objectContaining({ workingDirectory: projectDirectory }),
+    }]);
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: { result: 'resume completed', sessionId: 'saved-session', success: true },
+    });
+  });
+
+  it('rollout 末尾の不完全な JSON を未検出として扱い完了済みの応答を返す', async () => {
+    const now = new Date();
+    const directory = path.join(
+      projectDirectory,
+      'sessions',
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    );
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-malformed.jsonl'),
+      '{"type":',
+    );
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'thread.started', thread_id: 'thread-malformed' },
+        { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'completed normally' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+    const onStream = vi.fn();
+
+    const response = await new CodexClient().call('coder', 'prompt', {
+      cwd: projectDirectory,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      onStream,
+    });
+
+    expect(response).toMatchObject({
+      status: 'done',
+      content: 'completed normally',
+      sessionId: 'thread-malformed',
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: { result: 'completed normally', sessionId: 'thread-malformed', success: true },
+    });
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'context_compacted')).toHaveLength(0);
+  });
+
+  it('session ID がない compaction 復帰は失敗応答と result event を返し新規 thread を開始しない', async () => {
+    startThreadId = undefined;
+    runPlans = [{
+      type: 'events',
+      events: [
+        { type: 'compacted' },
+        { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: 'lost instruction' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+    const { AgentRunner } = await import('../agents/runner.js');
+    const onStream = vi.fn();
+
+    const response = await new AgentRunner().run(undefined, 'original Phase 1 instruction', {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: false,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      onStream,
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-test',
+        providerOptions: { codex: { networkAccess: false } },
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(response).toMatchObject({
+      persona: 'default',
+      status: 'error',
+      error: expect.any(String),
+      failureCategory: 'provider_error',
+    });
+    expect(response.sessionId).toBeUndefined();
+    expect(response.timestamp).toBeInstanceOf(Date);
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(runPlanIndex).toBe(1);
+    const resultEvents = onStream.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === 'result');
+    expect(resultEvents).toHaveLength(1);
+    expect(resultEvents[0]).toMatchObject({
+      type: 'result',
+      data: {
+        success: false,
+        sessionId: 'unknown',
+        error: response.error,
+        failureCategory: 'provider_error',
+      },
     });
   });
 });

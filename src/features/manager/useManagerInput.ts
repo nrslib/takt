@@ -13,7 +13,7 @@ export const MAKE_GOAL_COMMAND = '/make-goal';
 export function useManagerInput({
   exiting, active, registering, savingAnswer, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
-  openMenu, slashCompletion, epicsOpen, openEpics, handleEpicInput,
+  openMenu, slashCompletion, epicsOpen, openEpics, handleEpicInput, browseTools,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
@@ -40,6 +40,7 @@ export function useManagerInput({
   openEpics: () => void;
   handleEpicInput: (key: Key) => void;
   slashCompletion: ReturnType<typeof useSlashCompletion>;
+  browseTools: (direction: 'toggle' | 'previous' | 'next') => void;
 }): void {
   const { abortTarget } = abortConfirmation;
   const { answerTarget } = questionAnswer;
@@ -87,6 +88,10 @@ export function useManagerInput({
       return;
     }
     if (questionAnswer.handleNavigation(key, editorRef)) {
+      return;
+    }
+    if (abortTarget === null && (key.ctrl && input === 't' || key.pageUp || key.pageDown)) {
+      browseTools(key.ctrl ? 'toggle' : key.pageUp ? 'previous' : 'next');
       return;
     }
     if (active.current && key.escape) {

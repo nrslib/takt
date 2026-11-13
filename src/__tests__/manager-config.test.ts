@@ -28,8 +28,24 @@ it.each(['default', null, 1, [''], [' '], [{}], [{ '': 'empty' }], [{ ' ': 'blan
     }
   },
 );
-it('defaults to automatic execution and requires approval for main merges', () => {
-  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, mainMerge: 'approve' });
+it('defaults to automatic execution, goal worktree cleanup, and approval for main merges', () => {
+  expect(resolveManagerConfig('/project')).toMatchObject({ permission: 'auto', autoRun: true, preserveGoalWorktree: false, mainMerge: 'approve' });
+});
+it.each([true, false])('accepts preserve_goal_worktree=%s at both scopes', (preserve_goal_worktree) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { preserve_goal_worktree } }).manager?.preserve_goal_worktree).toBe(preserve_goal_worktree);
+  }
+});
+it.each([null, 'true', 1])('rejects invalid preserve_goal_worktree=%j at both scopes', (preserve_goal_worktree) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { preserve_goal_worktree } }).success).toBe(false);
+  }
+});
+it('resolves project goal worktree preservation before the global setting', () => {
+  doubles.global.mockReturnValue({ manager: { preserveGoalWorktree: true } });
+  expect(resolveManagerConfig('/project').preserveGoalWorktree).toBe(true);
+  doubles.project.mockReturnValue({ manager: { preserveGoalWorktree: false } });
+  expect(resolveManagerConfig('/project').preserveGoalWorktree).toBe(false);
 });
 it.each([
   { project: {}, global: {}, expected: 'auto' },
@@ -204,10 +220,10 @@ it('resolves director Slack from the already loaded global configuration', () =>
 it('serializes manager patrol configuration while leaving director patrol disabled', async () => {
   const { serializeGlobalConfig } = await import('../infra/config/global/globalConfigSerializer.js');
   const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
-  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, patrolInterval: 1800 } });
+  const serialized = serializeGlobalConfig({ language: 'en', autoFetch: true, director: { slack }, manager: { autoRun: false, preserveGoalWorktree: true, patrolInterval: 1800 } });
   const parsed = GlobalConfigSchema.parse(serialized);
   expect(parsed.director).toEqual({ slack: { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] } });
-  expect(parsed.manager).toMatchObject({ auto_run: false });
+  expect(parsed.manager).toMatchObject({ auto_run: false, preserve_goal_worktree: true });
   expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
   expect(parsed.director).not.toHaveProperty('patrol_interval');
 });

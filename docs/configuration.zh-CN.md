@@ -206,6 +206,7 @@ assistant:
 | `ignore_exceed` | boolean | `false` | 配置 `takt run` 和 `takt watch` 的迭代上限绕过 |
 | `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
+| `manager.preserve_goal_worktree` | boolean | `false` | manager 取入 goal 任务成果后保留 worktree 及 run 记录，参阅[Goal 任务 worktree 保留](#goal-任务-worktree-保留)。 |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
@@ -493,6 +494,17 @@ workflow_system_commands:
 大多数配置 key 都可以通过 `TAKT_` 加上大写、下划线连接的 key 路径覆盖：`logging.debug` 变成 `TAKT_LOGGING_DEBUG`，`telemetry.routing_decisions` 变成 `TAKT_TELEMETRY_ROUTING_DECISIONS`。常见例子包括 `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS` 和 `TAKT_OBSERVABILITY_ENABLED`。环境变量优先于对应文件值，并在拥有该 key 的配置层解析。
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
+
+## Goal 任务 worktree 保留
+
+在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中设置 `manager.preserve_goal_worktree: true`，即可在 manager 通过 `takt_merge_goal_task` 成功取入 goal 任务成果后保留 worktree。项目值优先于全局值。无论审查过的成果此前已经取入，还是本次操作执行新的 merge，都适用此设置。
+
+```yaml
+manager:
+  preserve_goal_worktree: true
+```
+
+worktree、clone metadata，以及 worktree 内 `.takt/runs` 下的 reports 和 logs 都会保留。completed 任务记录也照常保留，不会自动删除任务历史。默认 `false` 维持原有 worktree 和 clone metadata cleanup 以及 `cleanupWarning` 行为。此设置不改变普通 `completeTask`、List Tasks 中的手动 merge 或 delete、PR merge 任务及未取入任务的行为。
 
 ## manager 的任务 workflow
 

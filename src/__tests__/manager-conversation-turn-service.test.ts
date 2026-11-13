@@ -66,6 +66,27 @@ function humanMessage(text: string): TurnEvent {
   return { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'human', id: 'test' } };
 }
 
+it('uses the daemon turn identity for tool events while preserving call and provider tool identities', async () => {
+  const f = fixture();
+  const event = { type: 'tool_use' as const, data: { id: 'provider-tool', tool: 'Read', input: { file_path: 'a.ts' } },
+    toolActivity: { callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 } };
+  f.execute.mockImplementationOnce(async (input) => {
+    input.onToolEvent!(event);
+    input.onToolEvent!({ type: 'tool_result', data: { completedToolIds: ['provider-tool'], content: 'done', isError: false },
+      toolActivity: event.toolActivity });
+    return { message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined };
+  });
+  expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed' });
+  const tools = f.io.progress.mock.calls.map(([message]) => message).filter((message) => message.kind === 'tool_event');
+  expect(tools).toHaveLength(2);
+  expect(new Set(tools.map((message) => message.eventId)).size).toBe(2);
+  for (const message of tools) expect(message.event.toolActivity).toEqual({
+    callId: 'provider-call', operationId: f.input.turn.operationId, generation: f.input.turn.generation,
+  });
+  expect(tools[1]!.event.data).toMatchObject({ completedToolIds: ['provider-tool'] });
+  expect(event.toolActivity).toEqual({ callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 });
+});
+
 function conversationFixture() {
   const f = fixture();
   let state = structuredClone(f.input.state);

@@ -24,6 +24,25 @@ function fixture(mode = true) {
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(runFormalSpecVerification).mockResolvedValue(verification); });
 afterEach(() => { vi.restoreAllMocks(); });
+it('forwards generation and interpretation tools with distinct call identities while retaining readonly permissions', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'same', tool: 'Read', input: { file_path: 'spec.qnt' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'same', content: 'spec-result', isError: false } });
+    return { ...success, content: 'generated specification', structuredOutput: { message: 'verified', summary: null } };
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(f.call).toHaveBeenCalledTimes(2);
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events.map((event) => event.type)).toEqual(['tool_use', 'tool_result', 'tool_use', 'tool_result']);
+  expect(events[0].toolActivity.callId).toBe(events[1].toolActivity.callId);
+  expect(events[2].toolActivity.callId).toBe(events[3].toolActivity.callId);
+  expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
+  for (const [, options] of f.call.mock.calls) expect(options).toMatchObject({
+    permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+  });
+});
 it.each([
   { ending: 'done', cancelled: false }, { ending: 'throw', cancelled: false }, { ending: 'error', cancelled: false },
   { ending: 'done', cancelled: true }, { ending: 'throw', cancelled: true }, { ending: 'error', cancelled: true },

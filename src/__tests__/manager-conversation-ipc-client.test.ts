@@ -7,6 +7,7 @@ import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { conversationTransferFrames, encodeConversationFrame } from '../features/daemon/conversationFrames.js';
 import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
 import type { ConversationReadMetadata } from '../features/manager/conversationTransferReceiver.js';
+import { ToolActivityHistory } from '../shared/tool-activity/history.js';
 
 const doubles = vi.hoisted(() => ({ connect: vi.fn(), ensure: vi.fn(), resolve: vi.fn(), owner: {
   pid: 1234, identity: { startTime: 'incarnation-one' }, version: 'test', cliPath: '/cli.js',
@@ -111,12 +112,208 @@ function readResponse(target: { request: Request; socket: FakeSocket }, read: Co
 
 async function sendOutput(output: Exclude<PortOutput, { kind: 'snapshot' }>, stateSequence: number) {
   const operationId = 'operationId' in output ? output.operationId : output.kind === 'running' || output.kind === 'pending'
-    ? output.state.running?.operationId ?? null : null;
+    ? output.state.running?.operationId ?? null : output.kind === 'tool_history' ? output.history.operationId : null;
   for await (const { frame } of conversationTransferFrames(record.id,
     { transferId: randomUUID(), revision: 4, stateSequence, operationId }, 'output', (async function* () { yield output; })())) {
     sockets.at(-1)!.emit('data', encodeConversationFrame(frame));
   }
 }
+
+it.each(['running entry', 'removal', 'omission'].flatMap((snapshotItem) => [false, true].map((beforeRead) => ({ snapshotItem, beforeRead }))))(
+  'keeps a live completion across an older snapshot ($snapshotItem, completion before response: $beforeRead) without duplicate output', async ({ snapshotItem, beforeRead }) => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read);
+  for (const bytes of initial.wire) reads[0]!.socket.emit('data', bytes);
+  await connecting;
+  const operationId = randomUUID();
+  const state = { ...initial.state, running: { kind: 'turn', operationId, generation: 1 } };
+  await sendOutput({ kind: 'running', state }, 2);
+  const history = new ToolActivityHistory(() => 1000);
+  const toolActivity = { callId: 'call', operationId, generation: 1 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity });
+  const running = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  await sendOutput({ kind: 'tool_history', history: running }, 3);
+  const refreshing = value.refresh();
+  await vi.waitFor(() => expect(reads).toHaveLength(2));
+  const read = { ...initial.read, mode: snapshotItem === 'omission' ? 'initial' as const : 'delta' as const,
+    transferId: randomUUID(), operationId, stateSequence: 3 };
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state };
+    if (snapshotItem === 'running entry') yield { kind: 'tool_history', history: running };
+    else if (snapshotItem === 'removal') yield { kind: 'remove', key: 'tool_history' };
+  })())) wire.push(encodeConversationFrame(frame));
+  if (!beforeRead) {
+    readResponse(reads[1]!, read); await refreshing;
+    reads[1]!.socket.emit('data', wire[0]!);
+  }
+  history.apply({ type: 'tool_result', data: { id: 'tool', content: 'completed', isError: false }, toolActivity });
+  const completed = { ...running, eventIds: ['start', 'result'], history: history.snapshot() };
+  const output = vi.fn(); value.onOutput(output);
+  await sendOutput({ kind: 'tool_history', history: completed }, 4);
+  if (beforeRead) { readResponse(reads[1]!, read); await refreshing; }
+  for (const bytes of wire.slice(beforeRead ? 0 : 1)) reads[1]!.socket.emit('data', bytes);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: completed });
+  await sendOutput({ kind: 'tool_history', history: running }, 5);
+  await sendOutput({ kind: 'tool_history', history: completed }, 6);
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: completed });
+  expect(value.getSnapshot().connection).toBe('connected');
+});
+
+it('holds a newer live tool history until the matching running state arrives', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const previousId = randomUUID();
+  const nextId = randomUUID();
+  await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: previousId, generation: 1 } } }, 2);
+  const history = new ToolActivityHistory();
+  const context = { callId: 'call', operationId: nextId, generation: 2 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'next.ts' } }, toolActivity: context });
+  const current = { operationId: nextId, generation: 2, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const output = vi.fn(); value.onOutput(output);
+
+  await sendOutput({ kind: 'tool_history', history: current }, 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toBeUndefined();
+  expect(output).not.toHaveBeenCalled();
+
+  await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId: nextId, generation: 2 } } }, 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(value.getSnapshot().state?.running).toEqual({ kind: 'turn', operationId: nextId, generation: 2 });
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: current });
+});
+
+it('applies a newer live tool history immediately when it matches the running turn', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const operationId = randomUUID();
+  const runningState = { ...initial.state, running: { kind: 'turn', operationId, generation: 1 } };
+  await sendOutput({ kind: 'running', state: runningState }, 2);
+  const history = new ToolActivityHistory();
+  const context = { callId: 'call', operationId, generation: 1 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'current.ts' } }, toolActivity: context });
+  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const output = vi.fn(); value.onOutput(output);
+
+  await sendOutput({ kind: 'tool_history', history: current }, 3);
+
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: current });
+});
+
+it('does not publish snapshot work items when a live history update arrives mid-transfer', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+
+  const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
+  const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };
+  const nextItem = { kind: 'display_event' as const, event: { id: 'partial-event', message: 'snapshot-only-work' } };
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield nextItem;
+  })())) wire.push(encodeConversationFrame(frame));
+  readResponse(reads[1]!, read); await refreshing;
+  for (const bytes of wire.slice(0, -1)) reads[1]!.socket.emit('data', bytes);
+
+  const history = new ToolActivityHistory();
+  const operationId = randomUUID();
+  const context = { callId: 'call', operationId, generation: 1 };
+  history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'ready.ts' } }, toolActivity: context });
+  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  await sendOutput({ kind: 'tool_history', history: current }, 1);
+
+  expect(value.getSnapshot().items).not.toContainEqual(nextItem);
+  expect(value.getSnapshot().items).toContainEqual({ kind: 'tool_history', history: current });
+
+  reads[1]!.socket.emit('data', wire.at(-1)!);
+  expect(value.getSnapshot().items).toContainEqual(nextItem);
+});
+
+it.each(['live', 'snapshot'] as const)('accepts current %s history after restoring a persisted turn with a larger generation and rejects its late replay', async (delivery) => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  const saved = (operationId: string, generation: number, content: string) => {
+    const source = new ToolActivityHistory(() => 1000);
+    const toolActivity = { callId: 'call', operationId, generation };
+    source.apply({ type: 'tool_use', data: { id: 'reused-tool', tool: 'Read', input: {} }, toolActivity });
+    source.apply({ type: 'tool_result', data: { id: 'reused-tool', content, isError: false }, toolActivity });
+    return { operationId, generation, finished: true, eventIds: ['start', 'result'], history: source.snapshot() };
+  };
+  const previous = saved(randomUUID(), 2, 'previous-result');
+  const current = saved(randomUUID(), 1, 'current-result');
+  readResponse(reads[0]!, initial.read);
+  for await (const { frame } of conversationTransferFrames(record.id, initial.read, 'snapshot', (async function* () {
+    yield { kind: 'state', state: initial.state }; yield { kind: 'tool_history', history: previous };
+  })())) reads[0]!.socket.emit('data', encodeConversationFrame(frame));
+  await connecting;
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: previous });
+  const output = vi.fn(); value.onOutput(output);
+  if (delivery === 'live') {
+    await sendOutput({ kind: 'tool_history', history: current }, 2);
+    await sendOutput({ kind: 'pending', state: initial.state }, 2);
+  }
+  else {
+    const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
+    const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };
+    readResponse(reads[1]!, read); await refreshing;
+    for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+      yield { kind: 'tool_history', history: current };
+    })())) reads[1]!.socket.emit('data', encodeConversationFrame(frame));
+  }
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  const notifications = output.mock.calls.length;
+  expect(notifications).toBe(delivery === 'live' ? 1 : 0);
+  await sendOutput({ kind: 'tool_history', history: previous }, 1);
+  await sendOutput({ kind: 'tool_history', history: current }, 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(output).toHaveBeenCalledTimes(notifications);
+});
+
+it.each(['before item', 'before completion'] as const)('does not restore an older turn after a tool-free turn finishes %s', async (boundary) => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  const operationId = randomUUID();
+  const source = new ToolActivityHistory(() => 1000);
+  const toolActivity = { callId: 'call', operationId, generation: 1 };
+  source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} }, toolActivity });
+  source.apply({ type: 'tool_result', data: { id: 'tool', content: 'older-result', isError: false }, toolActivity });
+  const history = { operationId, generation: 1, finished: true, eventIds: ['start', 'result'], history: source.snapshot() };
+  readResponse(reads[0]!, initial.read);
+  for await (const { frame } of conversationTransferFrames(record.id, initial.read, 'snapshot', (async function* () {
+    yield { kind: 'state', state: initial.state };
+  })())) reads[0]!.socket.emit('data', encodeConversationFrame(frame));
+  await connecting;
+  expect(value.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+  const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
+  const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state: initial.state }; yield { kind: 'tool_history', history };
+  })())) wire.push(encodeConversationFrame(frame));
+  readResponse(reads[1]!, read); await refreshing;
+  const end = wire.pop()!;
+  if (boundary === 'before completion') for (const bytes of wire) reads[1]!.socket.emit('data', bytes);
+  const next = { ...initial.state, running: { kind: 'turn', operationId: randomUUID(), generation: 2 } };
+  await sendOutput({ kind: 'running', state: next }, 3);
+  await sendOutput({ kind: 'pending', state: { ...next, running: null } }, 4);
+  expect(value.getSnapshot().state?.running).toBeNull();
+  expect(value.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+  if (boundary === 'before item') for (const bytes of wire) reads[1]!.socket.emit('data', bytes);
+  reads[1]!.socket.emit('data', end);
+  expect(value.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+  expect(value.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+});
 
 it('holds only the latest early activity until both the running operation and generation match', async () => {
   const value = client(); await value.connect();

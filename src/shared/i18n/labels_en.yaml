@@ -356,6 +356,11 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    toolHistoryCompact: "Tools: Ctrl+T to expand · PageUp/PageDown to scroll"
+    toolHistoryExpanded: "Tools: Ctrl+T to collapse · PageUp/PageDown to scroll"
+    toolHistoryMore: "[truncated; more]"
+    toolHistoryEnd: "[end]"
+    toolHistoryCompletion: "completion"
     extendedThinking: "Reasoning..."
     responding: "Responding"
     selectTask: "Selecting a task..."

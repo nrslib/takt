@@ -70,7 +70,7 @@ describe('goal tell operation', () => {
     vi.spyOn(liveIntervention, 'resolveTellableRunningTask').mockImplementation(() => target);
     vi.spyOn(liveIntervention, 'issueTellableRunningTask').mockImplementation(async () => ({ instructionId: 7, target }));
     vi.spyOn(goalNotifications, 'resolveManagerNotificationOptions').mockReturnValue({
-      mainMerge: 'approve', webhookUrl: undefined,
+      mainMerge: 'approve', preserveGoalWorktree: false, webhookUrl: undefined,
       policy: { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true },
     });
     vi.spyOn(goalNotifications, 'sendSavedGoalNotifications').mockResolvedValue();

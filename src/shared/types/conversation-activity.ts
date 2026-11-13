@@ -1,4 +1,6 @@
 import { z } from 'zod/v4';
+import { ToolActivityEventSchema } from '../tool-activity/schema.js';
+import type { ToolActivityEvent } from '../tool-activity/types.js';
 
 export const MAX_TOOL_DESCRIPTION_LENGTH = 256;
 export const MAX_CONVERSATION_TEXT_BYTES = 16 * 1024;
@@ -18,4 +20,11 @@ export const ConversationTextSchema = z.object({ kind: z.literal('turn_text'),
 }).strict();
 export type ConversationText = z.infer<typeof ConversationTextSchema>;
 export type ConversationActivity = z.infer<typeof ConversationActivitySchema>;
-export type ConversationProgress = string | ConversationActivity | ConversationText;
+export const ConversationToolEventSchema = z.object({ kind: z.literal('tool_event'),
+  eventId: z.string().min(1).max(128), event: ToolActivityEventSchema }).strict();
+export interface ConversationToolEvent {
+  kind: 'tool_event';
+  eventId: string;
+  event: ToolActivityEvent;
+}
+export type ConversationProgress = string | ConversationActivity | ConversationText | ConversationToolEvent;

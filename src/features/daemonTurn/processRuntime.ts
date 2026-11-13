@@ -41,6 +41,7 @@ export function createTurnProcessRuntime(input: {
   let sendingActivity = false;
   let activityUnavailable = false;
   let progressUnavailable = false;
+  let historyFailure: Error | undefined;
   const progressQueue: Array<{ turn: TurnIdentity; message: ConversationProgress; signal: AbortSignal }> = [];
   let flushingProgress = false;
   let progressCompletion = Promise.resolve();
@@ -80,17 +81,22 @@ export function createTurnProcessRuntime(input: {
   };
   const flushProgress = async (): Promise<void> => {
     flushingProgress = true;
+    let sendingHistory = false;
     try {
       while (progressQueue.length > 0) {
         const pending = progressQueue[0]!;
+        sendingHistory = typeof pending.message !== 'string' && pending.message.kind === 'tool_event';
         try {
           if (!pending.signal.aborted) await send({ ...envelope(), kind: 'turn_progress', turn: pending.turn, message: pending.message });
         } finally {
           progressQueue.shift();
         }
       }
-    } catch {
-      // 途中表示の送信失敗は、実行結果の確定に影響させない。
+    } catch (cause) {
+      if (sendingHistory || progressQueue.some(({ message }) => typeof message !== 'string' && message.kind === 'tool_event')) {
+        historyFailure = new Error('Tool history delivery failed', { cause });
+      }
+      // 会話の途中本文は欠落を許すが、履歴の欠落は失敗として確定する。
       progressUnavailable = true;
       progressQueue.length = 0;
     } finally { flushingProgress = false; }
@@ -154,6 +160,7 @@ export function createTurnProcessRuntime(input: {
           active = current;
           activityUnavailable = false;
           progressUnavailable = false;
+          historyFailure = undefined;
           progressCompletion = Promise.resolve();
           current.completion = Promise.resolve().then(async () => {
             let outcome: TurnOutcome;
@@ -161,16 +168,31 @@ export function createTurnProcessRuntime(input: {
               outcome = await business!.execute(message.input, { signal: controller.signal,
                 request: (value) => request(current.turn, value),
                 progress: (value) => {
-                  if (controller.signal.aborted || current.outcome !== undefined || progressUnavailable) return;
-                  if (typeof value !== 'string' && value.kind !== 'turn_text') {
+                  if (controller.signal.aborted || current.outcome !== undefined) return;
+                  const toolEvent = typeof value !== 'string' && value.kind === 'tool_event';
+                  if (progressUnavailable) {
+                    if (toolEvent) {
+                      historyFailure = new Error('Tool history delivery unavailable');
+                      throw historyFailure;
+                    }
+                    return;
+                  }
+                  if (typeof value !== 'string' && value.kind !== 'turn_text' && value.kind !== 'tool_event') {
                     if (activityUnavailable) return;
                     pendingActivity = { turn: current.turn, activity: value };
                     if (!sendingActivity) void flushActivity();
                     return;
                   }
                   const message = typeof value === 'string' ? truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value
+                    : value.kind === 'tool_event' ? value
                     : { kind: value.kind, message: truncateUtf8(value.message, MAX_PROCESS_PROGRESS_BYTES).value };
-                  if (progressQueue.length >= MAX_PROCESS_PENDING_REQUESTS) {
+                  if (progressQueue.length >= MAX_PROCESS_PENDING_REQUESTS
+                    || Buffer.byteLength(JSON.stringify(message)) + progressQueue.reduce((bytes, pending) =>
+                      bytes + Buffer.byteLength(JSON.stringify(pending.message)), 0) > MAX_PROCESS_SEND_BYTES) {
+                    if (toolEvent) {
+                      historyFailure = new Error('Tool history delivery capacity exceeded');
+                      throw historyFailure;
+                    }
                     progressUnavailable = true;
                     return;
                   }
@@ -183,6 +205,9 @@ export function createTurnProcessRuntime(input: {
               outcome = controller.signal.aborted ? { kind: 'interrupted' } : { kind: 'failed', message: 'Turn execution failed' };
             }
             await progressCompletion;
+            if (historyFailure !== undefined && !controller.signal.aborted) outcome = {
+              kind: 'failed', message: historyFailure.message, ...(outcome.change === undefined ? {} : { change: outcome.change }),
+            };
             if (controller.signal.aborted && outcome.kind !== 'interrupted') outcome = { kind: 'interrupted' };
             current.outcome = outcome;
             pendingActivity = undefined;

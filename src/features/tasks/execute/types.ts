@@ -1,3 +1,4 @@
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 /**
  * Execution module type definitions
  */
@@ -227,6 +228,7 @@ export interface InteractiveMetadata {
 
 /** Options for workflow execution */
 export interface WorkflowExecutionOptions extends PrMergeOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
   /** System command permission resolved for this run, including the configuration source. */
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Header prefix for display */
@@ -354,6 +356,7 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions extends PrMergeOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
   /** System command permission resolved before changing the project checkout. */
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Goal ownership enables the terminal details used by the manager. */

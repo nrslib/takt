@@ -244,6 +244,44 @@ describe('non-interactive filtered deletion with real task resources', () => {
     expect(names(project)).toEqual([]);
   });
 
+  it('deletes a worktree-disabled task while preserving its shared branch and working tree changes', async () => {
+    const trackedFile = join(project, 'tracked.txt');
+    writeFileSync(trackedFile, 'committed content\n');
+    git(project, ['add', 'tracked.txt']);
+    git(project, ['commit', '-m', 'tracked fixture']);
+    git(project, ['switch', '-c', 'develop']);
+    writeFileSync(join(project, 'develop-only.txt'), 'develop work\n');
+    git(project, ['add', 'develop-only.txt']);
+    git(project, ['commit', '-m', 'develop work']);
+    git(project, ['switch', 'main']);
+    const developSha = git(project, ['rev-parse', 'refs/heads/develop']);
+    writeFileSync(trackedFile, 'uncommitted tracked change\n');
+    const untrackedFile = join(project, 'untracked.txt');
+    writeFileSync(untrackedFile, 'untracked content\n');
+    saveRecords(project, [record('shared-branch-task', 'failed', {
+      branch: 'develop', base_branch: 'develop', worktree: false,
+    })]);
+
+    await listTasksNonInteractive(project, { enabled: true, action: 'delete', status: ['failed'], yes: true });
+
+    expect(git(project, ['rev-parse', 'refs/heads/develop'])).toBe(developSha);
+    expect(readFileSync(trackedFile, 'utf8')).toBe('uncommitted tracked change\n');
+    expect(readFileSync(untrackedFile, 'utf8')).toBe('untracked content\n');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('deletes a worktree-disabled task when its recorded branch is checked out', async () => {
+    const mainSha = git(project, ['rev-parse', 'refs/heads/main']);
+    saveRecords(project, [record('current-branch-task', 'failed', {
+      branch: 'main', base_branch: 'main', worktree: false,
+    })]);
+
+    await listTasksNonInteractive(project, { enabled: true, action: 'delete', status: ['failed'], yes: true });
+
+    expect(git(project, ['rev-parse', 'refs/heads/main'])).toBe(mainSha);
+    expect(names(project)).toEqual([]);
+  });
+
   it('removes a merge task clone and record while retaining its root branch', async () => {
     const clone = join(project, '.takt', 'worktrees', 'merge-pr');
     mkdirSync(dirname(clone), { recursive: true });

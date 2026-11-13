@@ -12,7 +12,7 @@ function fixture() {
   hooks.input.mockClear(); hooks.paste.mockClear();
   const options: Parameters<typeof useManagerInput>[0] = {
     exiting: { current: false }, active: { current: true }, registering: { current: false }, savingAnswer: { current: null }, editorRef: { current: createEditorState('answer') },
-    edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), contentWidth: 80, canApprove: true,
+    edit: vi.fn(), submit: vi.fn(), abortTurn: vi.fn(), onExit: vi.fn(), browseTools: vi.fn(), contentWidth: 80, canApprove: true,
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
@@ -27,6 +27,22 @@ function fixture() {
     return hooks.input.mock.calls.at(-1)![0] as (input: string, key: Key) => void;
   } };
 }
+it('routes history controls without changing the draft, completion selection or active turn', () => {
+  const f = fixture(); const input = f.bind();
+  f.options.editorRef.current = { ...createEditorState('日本語の下書き'), cursor: 3 };
+  const editor = structuredClone(f.options.editorRef.current);
+  input('t', { ...key, ctrl: true });
+  input('', { ...key, pageDown: true });
+  input('', { ...key, pageUp: true });
+  expect(vi.mocked(f.options.browseTools).mock.calls).toEqual([['toggle'], ['next'], ['previous']]);
+  expect(f.options.editorRef.current).toEqual(editor);
+  expect(f.options.edit).not.toHaveBeenCalled();
+  expect(f.options.submit).not.toHaveBeenCalled();
+  expect(f.options.abortTurn).not.toHaveBeenCalled();
+  expect(f.options.slashCompletion.reset).not.toHaveBeenCalled();
+  input('', { ...key, escape: true });
+  expect(f.options.abortTurn).toHaveBeenCalledOnce();
+});
 it('accepts and edits an inquiry answer while a model turn is active', () => {
   const f = fixture();
   f.options.questionAnswer.answerTarget = { pending: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/repo' },

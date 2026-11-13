@@ -12,7 +12,7 @@ import { resolveManagerNotificationOptions, sendSavedGoalNotifications, sendSave
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 beforeEach(() => {
   vi.resetAllMocks();
-  doubles.config.mockReturnValue({ notifications: policy, mainMerge: 'approve' });
+  doubles.config.mockReturnValue({ notifications: policy, mainMerge: 'approve', preserveGoalWorktree: false });
   doubles.webhook.mockReturnValue('https://example.test/secret');
   doubles.language.mockReturnValue('ja');
 });
@@ -63,7 +63,7 @@ it.each(['disabled', 'no webhook'] as const)('skips standalone notification deli
 });
 
 it('resolves notification switches and webhook once at the operation boundary', () => {
-  expect(resolveManagerNotificationOptions('/project')).toEqual({ policy, mainMerge: 'approve', webhookUrl: 'https://example.test/secret' });
+  expect(resolveManagerNotificationOptions('/project')).toEqual({ policy, mainMerge: 'approve', preserveGoalWorktree: false, webhookUrl: 'https://example.test/secret' });
   expect(doubles.config).toHaveBeenCalledExactlyOnceWith('/project');
   expect(doubles.webhook).toHaveBeenCalledOnce();
 });

@@ -72,6 +72,7 @@ export async function showDiffAndPromptActionForTask(
 ): Promise<ListAction | null> {
   const branch = resolveTargetBranch(target);
   const instruction = resolveTargetInstruction(target);
+  const keepsProjectChanges = 'kind' in target && target.data?.worktree === false;
 
   header(branch);
   if (instruction) {
@@ -89,7 +90,13 @@ export async function showDiffAndPromptActionForTask(
     { label: 'Pull from remote', value: 'pull' as ListAction, description: 'Pull latest changes from remote origin (fast-forward only)' },
     { label: 'Try merge', value: 'try' as ListAction, description: 'Squash merge (stage changes without commit)' },
     { label: 'Merge & cleanup', value: 'merge' as ListAction, description: 'Merge and delete branch' },
-    { label: 'Delete', value: 'delete' as ListAction, description: 'Discard changes, delete branch' },
+    {
+      label: 'Delete',
+      value: 'delete' as ListAction,
+      description: keepsProjectChanges
+        ? 'Remove task; keep uncommitted changes and branch'
+        : 'Discard changes, delete branch',
+    },
   ];
 
   return await selectOption<ListAction>(

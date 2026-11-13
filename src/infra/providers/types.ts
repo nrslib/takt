@@ -90,6 +90,8 @@ export interface ProviderCompactSessionOptions {
 
 export interface ProviderAgent {
   call(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
+  /** Resume the same provider session once after a Phase 1 context_compacted event. */
+  recoverFromCompaction?(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
 }
 
 export interface Provider {

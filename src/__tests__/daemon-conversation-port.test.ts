@@ -6,6 +6,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import type { DaemonIngress } from '../core/daemon/ports.js';
 import type { ConversationSnapshot } from '../core/daemon/messages.js';
 import type { Admission } from '../core/daemon/events.js';
+import { ToolActivityHistory } from '../shared/tool-activity/history.js';
 
 function gate<T>() {
   let resolve!: (value: T) => void;
@@ -47,6 +48,31 @@ it('admits messages while an earlier save is paused and permits snapshot and int
   expect(f.ingress.accept).toHaveBeenNthCalledWith(1, expect.objectContaining({ requestId: 'first', source: 'tui', event: {
     kind: 'human_command', command: { kind: 'message', text: 'first' }, speaker: f.selected.speaker,
     agentOverrides: { provider: 'codex', model: 'selected-model' } } }));
+});
+
+it.each(['tui', 'slack'] as const)('exposes tool history through live output and snapshots only to TUI attachments (port: %s)', async (port) => {
+  const f = await fixture(); f.opened.read.cancel();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  const source = new ToolActivityHistory();
+  source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'private-tool-input' } },
+    toolActivity: { callId: 'call', operationId: snapshot.operationId!, generation: snapshot.generation! } });
+  const history = { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false,
+    eventIds: ['start'], history: source.snapshot() };
+  vi.mocked(f.ingress.snapshot).mockImplementation(async () => ({ ...snapshot, items: (async function* () {
+    yield { kind: 'tool_history' as const, history };
+  })() }));
+  const delivery = { deliver: vi.fn(async () => ({ kind: 'delivered' as const })) };
+  const opened = await f.port.open({ ...f.selected, binding: { ...f.selected.binding, port } }, delivery);
+  const items = [];
+  for await (const item of opened.read.items) items.push(item);
+  opened.read.complete();
+  expect(items.filter((item) => item.kind === 'tool_history')).toEqual(port === 'tui' ? [{ kind: 'tool_history', history }] : []);
+  const output = { kind: 'tool_history' as const, history };
+  const version = { revision: 3, stateSequence: 6, operationId: history.operationId };
+  await f.port.deliver(f.selected.conversationId, output, version);
+  if (port === 'tui') expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
+  else expect(delivery.deliver).not.toHaveBeenCalled();
+  f.port.close();
 });
 
 it('delivers activity only to TUI attachments of the same conversation', async () => {

@@ -3,6 +3,7 @@ import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { epicEventId, epicEvents } from './epicEvents.js';
 import { join } from 'node:path';
 import { eventGoalReference } from '../../core/daemon/events.js';
+import { ToolHistoryPersistenceError } from '../../core/daemon/toolHistoryPersistenceError.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import type { ConversationOwner } from '../../core/daemon/ports.js';
@@ -23,6 +24,7 @@ export class DaemonConversations implements ConversationOwner {
   private readonly deliveries = new Set<Promise<void>>();
   private readonly interrupted = new Set<string>();
   private readonly running = new Map<string, NonNullable<ConversationState['running']>>();
+  private readonly historyOperations = new Map<string, Promise<void>>();
 
   constructor(readonly store: ConversationStateStore, readonly routing: DaemonRouting,
     readonly notifications: DaemonNotifications,
@@ -41,6 +43,18 @@ export class DaemonConversations implements ConversationOwner {
     const stateSequence = (this.sequences.get(id) ?? 0) + 1;
     this.sequences.set(id, stateSequence);
     return { revision, stateSequence, operationId };
+  }
+
+  private orderedHistory<T>(id: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.historyOperations.get(id) ?? Promise.resolve();
+    const result = previous.then(action);
+    // 失敗は呼出側へ返す。後続の読取・保存は失敗した操作の終了後にも実行できる。
+    const completed = result.then(() => {}, () => {});
+    this.historyOperations.set(id, completed);
+    void completed.then(() => {
+      if (this.historyOperations.get(id) === completed) this.historyOperations.delete(id);
+    });
+    return result;
   }
 
   send(id: string, output: PortOutput, version: OutputVersion): void {
@@ -66,26 +80,32 @@ export class DaemonConversations implements ConversationOwner {
   }
 
   async apply(result: TurnResult): Promise<void> {
-    await this.store.apply(result);
-    this.running.delete(result.conversationId);
-    const current = await this.store.read(result.conversationId);
-    if (current === undefined) throw new Error('Missing result conversation');
-    const event = result.event.event;
-    if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
-      if (current.state.assignment.kind !== 'workspace' || current.state.assignment.workspaceId !== event.workspaceId
-        || !await this.routing.permits(current.state.assignment, result.conversationId)) throw new Error('Epic event outside assignment');
-      const epic = await new DaemonEpicFiles(this.routing.directory).get(event.workspaceId, event.epicId);
-      const id = epicEventId(event);
-      if (result.outcome.kind === 'completed' && epicEvents(epic).some((candidate) => candidate.eventId === id)) {
-        const run = epic.verificationRuns.find((entry) => entry.id === event.runId)!;
-        try {
-          await this.notifications.save({ id, conversationId: result.conversationId,
-            message: `Epic ${epic.id} revision ${event.revision}: ${event.kind === 'epic_completed' ? 'completed' : `verification ${run.result!.outcome}`} (${event.runId})` }, new AbortController().signal);
-        } catch (error) { this.onError(error); }
+    const { history, current, version } = await this.orderedHistory(result.conversationId, async () => {
+      await this.store.apply(result);
+      const history = await this.store.updateToolHistory({
+        conversationId: result.conversationId, operationId: result.operationId, generation: result.generation,
+      }, null, new AbortController().signal);
+      this.running.delete(result.conversationId);
+      const current = await this.store.read(result.conversationId);
+      if (current === undefined) throw new Error('Missing result conversation');
+      const event = result.event.event;
+      if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
+        if (current.state.assignment.kind !== 'workspace' || current.state.assignment.workspaceId !== event.workspaceId
+          || !await this.routing.permits(current.state.assignment, result.conversationId)) throw new Error('Epic event outside assignment');
+        const epic = await new DaemonEpicFiles(this.routing.directory).get(event.workspaceId, event.epicId);
+        const id = epicEventId(event);
+        if (result.outcome.kind === 'completed' && epicEvents(epic).some((candidate) => candidate.eventId === id)) {
+          const run = epic.verificationRuns.find((entry) => entry.id === event.runId)!;
+          try {
+            await this.notifications.save({ id, conversationId: result.conversationId,
+              message: `Epic ${epic.id} revision ${event.revision}: ${event.kind === 'epic_completed' ? 'completed' : `verification ${run.result!.outcome}`} (${event.runId})` }, new AbortController().signal);
+          } catch (error) { this.onError(error); }
+        }
       }
-    }
-    if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
-    else this.interrupted.delete(result.conversationId);
+      if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
+      else this.interrupted.delete(result.conversationId);
+      return { history, current, version: this.version(result.conversationId, current.state.revision, result.operationId) };
+    });
     if (result.outcome.kind === 'failed' && current.state.assignment.kind !== 'daemon') {
       try {
         const reference = eventGoalReference(result.event.event);
@@ -101,7 +121,9 @@ export class DaemonConversations implements ConversationOwner {
         }
       } catch (error) { this.onError(error); }
     }
-    const version = this.version(result.conversationId, current.state.revision, result.operationId);
+    if (history !== undefined) {
+      this.send(result.conversationId, { kind: 'tool_history', history }, version);
+    }
     const outcome = result.outcome;
     this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,
       revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
@@ -124,6 +146,25 @@ export class DaemonConversations implements ConversationOwner {
   }
 
   async progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void> {
+    if (typeof message !== 'string' && message.kind === 'tool_event') {
+      const saved = await this.orderedHistory(turn.conversationId, async () => {
+        const running = this.running.get(turn.conversationId);
+        if (signal.aborted || running?.operationId !== turn.operationId || running.generation !== turn.generation) return;
+        try {
+          const history = await this.store.updateToolHistory(turn, message, signal);
+          const current = await this.store.read(turn.conversationId);
+          if (current === undefined) throw new Error('Missing progress conversation');
+          return history === undefined ? undefined : { history, version: this.version(turn.conversationId, current.state.revision, turn.operationId) };
+        } catch (error) {
+          if (!signal.aborted || error !== signal.reason) throw new ToolHistoryPersistenceError(error);
+          return undefined;
+        }
+      });
+      if (saved !== undefined && !signal.aborted) {
+        await this.deliver(turn.conversationId, { kind: 'tool_history', history: saved.history }, saved.version, signal);
+      }
+      return;
+    }
     const version = this.version(turn.conversationId, 0, turn.operationId);
     const current = await this.store.read(turn.conversationId);
     if (signal.aborted) return;
@@ -151,20 +192,28 @@ export class DaemonConversations implements ConversationOwner {
   }
 
   async snapshot(id: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>> {
-    // 読取中に確定した変更より、古いファイルの読取へ新しい順序を付けない。
-    const version = this.version(id, 0, null);
-    const current = await this.store.read(id);
-    if (current === undefined) throw new Error('Unknown conversation');
-    version.revision = current.state.revision;
-    const running = this.running.get(id);
+    const { current, running, savedHistory, version, interrupted } = await this.orderedHistory(id, async () => {
+      const current = await this.store.read(id);
+      if (current === undefined) throw new Error('Unknown conversation');
+      const savedHistory = await this.store.readToolHistory(id);
+      const running = this.running.get(id);
+      return { current, savedHistory, running: running === undefined ? undefined : { ...running },
+        interrupted: this.interrupted.has(id), version: this.version(id, current.state.revision, null) };
+    });
+    const history = savedHistory === undefined || running !== undefined
+      && (running.operationId !== savedHistory.operationId || running.generation !== savedHistory.generation) ? undefined
+      : { ...savedHistory, finished: savedHistory.finished || running === undefined,
+        history: { ...savedHistory.history, entries: savedHistory.history.entries.filter((entry) =>
+          entry.status !== 'running' || running !== undefined && !savedHistory.finished) } };
     const state: ConversationState = { conversationId: id, assignment: current.state.assignment, revision: current.state.revision,
-      pending: current.state.pending, approval: current.state.approval, running: running === undefined ? null : { ...running }, interrupted: this.interrupted.has(id) };
+      pending: current.state.pending, approval: current.state.approval, running: running === undefined ? null : running, interrupted };
     const { routing, notifications, displayFiles } = this;
     let cancelled = false;
     return { ...version, transferId: randomUUID(), conversationId: id, mode: 'initial', turnState: current.state,
       items: (async function* (): AsyncGenerator<SnapshotItem & { recordedAt?: string }> {
         if (cancelled) return;
         yield { kind: 'state', state };
+        if (history !== undefined && history.history.entries.length > 0) yield { kind: 'tool_history', history };
         if (current.state.assignment.kind !== 'daemon') {
           yield* conversationProjection(routing, displayFiles, current.state.assignment, () => cancelled);
         } else {

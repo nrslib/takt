@@ -7,10 +7,10 @@ import { getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/sl
 import { escapeSlackMentions } from '../../shared/utils/slackText.js';
 
 export function resolveManagerNotificationOptions(cwd: string): {
-  policy: GoalNotificationPolicy; webhookUrl: string | undefined; mainMerge: 'auto' | 'approve';
+  policy: GoalNotificationPolicy; webhookUrl: string | undefined; mainMerge: 'auto' | 'approve'; preserveGoalWorktree: boolean;
 } {
   const config = resolveManagerConfig(cwd);
-  return { policy: config.notifications, mainMerge: config.mainMerge, webhookUrl: getSlackWebhookUrl() };
+  return { policy: config.notifications, mainMerge: config.mainMerge, preserveGoalWorktree: config.preserveGoalWorktree, webhookUrl: getSlackWebhookUrl() };
 }
 
 export async function sendSavedStandaloneQuestionNotification(cwd: string, question: GoalQuestion): Promise<void> {
