@@ -1565,7 +1565,7 @@ describe('workflow results across resume', () => {
     } finally { warning.mockRestore(); }
   });
 
-  it.each(['ja', 'en'] as const)('%s merge-prepare resumes at review with saved identify context', async (language) => {
+  it.each(['ja', 'en'] as const)('%s merge-prepare resumes at review after AI conflict resolution with saved identify context', async (language) => {
     const config = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', 'merge-prepare.yaml'), project)!;
     const child = normalizeWorkflowConfig({
       name: 'mock-review', subworkflow: { callable: true }, initial_step: 'review', max_steps: 2,
@@ -1578,7 +1578,7 @@ describe('workflow results across resume', () => {
     }));
     const executeEffect = vi.fn<SystemStepServices['executeEffect']>(async (effect) => ({
       success: true,
-      ...(effect.type === 'sync_with_root' ? { resyncCount: 0, resyncLimit: 2 } : {}),
+      ...(effect.type === 'sync_with_root' ? { success: false, conflicted: true, resyncCount: 0, resyncLimit: 2 } : {}),
       ...(effect.type === 'caccia' ? { outcome: 'success', headSha: 'reviewed-head' } : {}),
     }));
     const options = {
@@ -1588,8 +1588,10 @@ describe('workflow results across resume', () => {
     const original = createEngine(config, options);
     await original.runSingleIteration();
     await original.runSingleIteration();
+    await original.runSingleIteration();
     const checkpoint = original.getResumePoint()!;
-    checkpoint.stack = [buildWorkflowResumePointEntry(config, 'review', 'workflow_call', 1, undefined, 1)];
+    expect(checkpoint.stack).toEqual([expect.objectContaining({ step: 'review', kind: 'workflow_call', call_instance: 1 })]);
+    expect(runAgent).not.toHaveBeenCalled();
     const resumed = createEngine(config, {
       ...options, startStep: 'review', reportDirName: 'resumed',
       resumeSource: { sourceRunSlug: 'original', resumeMode: 'requeue' },
@@ -1604,7 +1606,9 @@ describe('workflow results across resume', () => {
     expect(state.status, JSON.stringify({ abort: aborted.mock.calls, outputs: [...state.stepOutputs.values()] })).toBe('completed');
     expect(state.systemContexts.get('identify')).toEqual({ pr: expect.objectContaining({ number: 100 }) });
     expect(resolveSystemInput).toHaveBeenCalledTimes(2);
-    expect(executeEffect.mock.calls.map(([effect]) => effect.type)).toEqual(['sync_with_root', 'commit_and_push', 'caccia', 'comment_pr']);
-    for (const call of executeEffect.mock.calls.slice(1)) expect(call[1]).toMatchObject({ pr: 100 });
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(executeEffect.mock.calls.map(([effect]) => effect.type))
+      .toEqual(['sync_with_root', 'resolve_conflicts_with_ai', 'commit_and_push', 'caccia', 'comment_pr']);
+    for (const call of executeEffect.mock.calls) expect(call[1]).toMatchObject({ pr: 100 });
   });
 });

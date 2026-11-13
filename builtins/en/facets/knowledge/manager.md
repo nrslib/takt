@@ -14,7 +14,7 @@ Pausing holds execution and subsequent events; aborting is terminal. Resuming al
 
 Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together, including awaiting_merge goals with a linked merge task that is pending or running. Goals only waiting for a human merge are excluded from patrols and handled by the PR watcher.
 
-The default PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. In a custom merge.prepare_workflow or merge.workflow, processing including review and CI waiting follows its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
+The default PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, CodeRabbit feedback, and waiting for CI. A clean sync skips the full review; after AI conflict resolution, both initial synchronization and resynchronization go through review and fixes before push. In a custom merge.prepare_workflow or merge.workflow, processing including review and CI waiting follows its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
 
 manager.main_merge is resolved from project configuration. Both approve and auto create PRs. approve finishes preparation with until: prepare and waits for a person to merge. auto treats the person's setting as a continuing instruction to integrate and uses until: merge to finish preparation and merge.
 
