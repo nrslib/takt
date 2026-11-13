@@ -43,11 +43,17 @@ export class SnapshotChanges {
   private baseline: ReadonlyMap<string, string> | undefined;
   private active: object | undefined;
 
+  /**
+   * 前回の読込からの差分を作る。ツール履歴は差分配信で追いつくので、内容を比べずに次のように扱う。
+   * toolHistory を指定した読込（初回と、差分の起点を取り直すとき）では必ず送り、指定しない読込では送らず消しもしない。
+   * ただし完了した読込がまだない（initial を返す）ときは、受け手が手元の項目を作り直すので指定に関係なく送る。
+   */
   read(metadata: Pick<SnapshotRead, 'transferId' | 'conversationId' | 'revision' | 'stateSequence' | 'operationId'>,
-    source: AsyncIterable<SnapshotValue>): SnapshotRead {
+    source: AsyncIterable<SnapshotValue>, toolHistory: boolean): SnapshotRead {
     const token = {};
     this.active = token;
     const baseline = this.baseline;
+    const sendToolHistory = toolHistory || baseline === undefined;
     const hashes = new Map<string, string>();
     let exhausted = false;
     return {
@@ -56,10 +62,19 @@ export class SnapshotChanges {
         for await (const item of source) {
           const key = snapshotItemKey(item);
           if (hashes.has(key)) throw new Error('Repeated snapshot item');
+          if (item.kind === 'tool_history') {
+            if (!sendToolHistory) continue;
+            const { operationId, generation, finished, history } = item.history;
+            hashes.set(key, JSON.stringify([operationId, generation, history.sequence, finished]));
+            yield item;
+            continue;
+          }
           const hash = createHash('sha256').update(JSON.stringify(item)).digest('hex');
           hashes.set(key, hash);
           if (baseline?.get(key) !== hash) yield item;
         }
+        const previousToolHistory = baseline?.get('tool_history');
+        if (!sendToolHistory && previousToolHistory !== undefined) hashes.set('tool_history', previousToolHistory);
         if (baseline !== undefined) {
           for (const key of baseline.keys()) if (!hashes.has(key)) yield { kind: 'remove', key };
         }

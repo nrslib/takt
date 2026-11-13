@@ -96,7 +96,29 @@ describe('tool activity presentation', () => {
   });
 
   it.each([
+    '[main 1a2b3c4] fix: keep tool history',
+    '[1/3] Building\n[2/3] Linking',
+    '[vitest] running 3 files',
+    '{not json}',
+  ])('should display finished output that starts with a bracket but is not JSON as text: %s', (result) => {
+    const value = entry({ result });
+    for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
+      expect(page.text).toBe(result);
+    }
+  });
+
+  it('should hold back unparsable bracketed output while the tool is still running', () => {
+    expect(projectToolActivity(entry({ status: 'running', result: undefined, output: '{"stdout":"partial' })).result.text)
+      .toBe('[structured output omitted]');
+  });
+
+  it.each([
     { tool: 'Bash', input: { command: 'npm test' }, action: 'Ran', expected: 'npm test' },
+    { tool: 'WebFetch', input: { url: 'https://example.com/a', prompt: 'summarize' }, action: 'WebFetch', expected: 'https://example.com/a' },
+    { tool: 'Task', input: { description: 'investigate history', prompt: 'long prompt' }, action: 'Task', expected: 'investigate history' },
+    { tool: 'Skill', input: { skill: 'coding' }, action: 'Skill', expected: 'coding' },
+    { tool: 'Custom', input: { attempts: 3 }, action: 'Custom', expected: '3' },
+    { tool: 'Custom', input: { api_key: 'secret123' }, action: 'Custom', expected: '[REDACTED]' },
     { tool: 'Read', input: { file_path: '日本語.ts' }, action: 'Read', expected: '日本語.ts' },
     { tool: 'Grep', input: { pattern: 'target.*' }, action: 'Used Grep', expected: 'target.*' },
     { tool: 'Edit', input: { file_path: 'file.ts', old_string: 'private edit body' }, action: 'Edit', expected: 'file.ts' },
@@ -112,16 +134,6 @@ describe('tool activity presentation', () => {
     const value = projectToolActivity(entry({ result: 'one\ntwo\nthree\nfour' }));
     expect(value.result.text.split('\n')).toEqual(['one', 'two', 'three']);
     expect(value.result).toMatchObject({ truncated: true, hasMore: true });
-  });
-
-  it('should mark saved output and result truncation in every result presentation', () => {
-    const forOutput = entry({ result: '', output: 'partial output', outputTruncated: true });
-    const forResult = entry({ result: 'partial result', resultTruncated: true });
-    for (const value of [forOutput, forResult]) {
-      for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
-        expect(page.text).toBe('[output truncated]\n' + (value.result || value.output));
-      }
-    }
   });
 
   it('should group the same read operation across provider spellings while retaining both paths', () => {

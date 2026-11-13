@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
+import { applyToolActivityTurnUpdate } from '../shared/tool-activity/history.js';
+import type { ToolActivityEntry, ToolActivityTurnState, ToolActivityTurnUpdate } from '../shared/tool-activity/types.js';
+import * as resultUtils from '../shared/tool-activity/result.js';
+import * as textUtils from '../shared/utils/text.js';
 
 describe('tool activity display', () => {
   it.each(['compact', 'expanded', 'silent'] as const)('should protect normalized secrets through split input, reads and flush in %s mode', (mode) => {
@@ -70,6 +74,84 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '] ready\n' } });
     display.handle({ type: 'tool_result', data: { id: 'a', content: '[REDACTED] ready\n', isError: false } });
     expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ [REDACTED] ready']);
+  });
+
+  it('should apply streamed history updates in place and show the same history as a display restored from the merged state', () => {
+    const turn = { operationId: 'turn', generation: 1 };
+    const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
+      input: { command: 'make' }, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
+    const lines = Array.from({ length: 50 }, (_, index) => `line-${index}\n`);
+    const updates: ToolActivityTurnUpdate[] = [{ ...turn, previousSequence: 0, sequence: 1, entries: [started] },
+      ...lines.map((text, index) => ({ ...turn, previousSequence: index + 1, sequence: index + 2, entries: [], output: { key: '1', text } }))];
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    let state: ToolActivityTurnState | undefined;
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      for (const update of updates) {
+        expect(display.applyUpdate(update)).toBe(true);
+        state = applyToolActivityTurnUpdate(state, update);
+      }
+      for (const [value] of clone.mock.calls) expect(JSON.stringify(value)).not.toContain('line-');
+    } finally {
+      clone.mockRestore();
+    }
+    const expectSameAsRestored = (): void => {
+      const restored = new ToolActivityDisplay('silent', false, vi.fn(), false);
+      restored.restore(state!.history);
+      expect(display.groups()).toEqual(restored.groups());
+      expect(display.detail('1', 0)).toEqual(restored.detail('1', 0));
+    };
+    expect(display.history.get('1')?.output).toBe(lines.join(''));
+    expectSameAsRestored();
+
+    const completion: ToolActivityTurnUpdate = { ...turn, previousSequence: 51, sequence: 52, entries: [{ ...started, output: lines.join(''),
+      result: 'built', status: 'success', completedAt: 2000, completionSequence: 52 }] };
+    expect(display.applyUpdate({ ...completion, previousSequence: 50 })).toBe(false);
+    expect(display.applyUpdate(completion)).toBe(true);
+    state = applyToolActivityTurnUpdate(state, completion);
+    expect(display.groups()[0]!.entries[0]!).toMatchObject({ status: 'success', result: { text: 'built' } });
+    expectSameAsRestored();
+  });
+
+
+  it.each([
+    { name: 'text', first: 'ready\n', chunk: `${'x'.repeat(1023)}\n`, shown: true },
+    { name: 'structured', first: '{"stdout":"', chunk: 'x'.repeat(1024), shown: false },
+  ])('should process only the appended part of running $name output on each update and render', ({ first, chunk, shown }) => {
+    const turn = { operationId: 'turn', generation: 1 };
+    const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
+      input: { command: 'make' }, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.applyUpdate({ ...turn, previousSequence: 0, sequence: 1, entries: [started] });
+    const chunks = [first, ...Array.from({ length: 300 }, () => chunk)];
+    const stripAnsi = vi.spyOn(textUtils, 'stripAnsi');
+    const stablePrefix = vi.spyOn(resultUtils, 'stableToolResultPrefix');
+    const parse = vi.spyOn(JSON, 'parse');
+    const maxLength = (calls: unknown[][]): number => Math.max(0, ...calls.map(([value]) => String(value).length));
+    try {
+      for (const [index, text] of chunks.entries()) {
+        expect(display.applyUpdate({ ...turn, previousSequence: index + 1, sequence: index + 2, entries: [], output: { key: '1', text } })).toBe(true);
+        expect(maxLength(stripAnsi.mock.calls)).toBeLessThanOrEqual(chunk.length);
+        expect(maxLength(stablePrefix.mock.calls)).toBeLessThanOrEqual(chunk.length);
+        expect(parse).not.toHaveBeenCalled();
+        stripAnsi.mockClear();
+        stablePrefix.mockClear();
+        display.groups();
+        expect(maxLength(stablePrefix.mock.calls)).toBeLessThanOrEqual(chunk.length);
+        stablePrefix.mockClear();
+        stripAnsi.mockClear();
+        parse.mockClear();
+      }
+    } finally {
+      stripAnsi.mockRestore();
+      stablePrefix.mockRestore();
+      parse.mockRestore();
+    }
+    const restored = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    restored.restore(display.history.snapshot());
+    expect(display.detail('1', 0)).toEqual(restored.detail('1', 0));
+    expect(display.detail('1', 0).result.text.startsWith(shown ? 'ready\nxxx' : '')).toBe(true);
+    if (!shown) expect(display.detail('1', 0).result.text).toBe('');
   });
 
   it('should restore completed results without output and keep partial running secrets private', () => {
@@ -194,6 +276,52 @@ describe('tool activity display', () => {
     }
   });
 
+  describe('output of more than 10,000 characters arriving at once for a tool whose input has a secret candidate', () => {
+    const input = { command: 'make', token: 'secret123' };
+    const lines = Array.from({ length: 1500 }, (_, index) => `line-${index}\n`).join('');
+
+    it.each(['update', 'restore'] as const)('should show the running output read through %s instead of only the redaction marker', (path) => {
+      const turn = { operationId: 'turn', generation: 1 };
+      const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
+        input, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
+      const source = new ToolActivityDisplay('silent', false, vi.fn(), false);
+      source.applyUpdate({ ...turn, previousSequence: 0, sequence: 1, entries: [started] });
+      source.applyUpdate({ ...turn, previousSequence: 1, sequence: 2, entries: [], output: { key: '1', text: lines } });
+      const display = path === 'update' ? source : new ToolActivityDisplay('silent', false, vi.fn(), false);
+      if (path === 'restore') display.restore(source.history.snapshot());
+
+      const text = display.detail('1', 0).result.text;
+
+      expect(text.startsWith('line-0\nline-1\n')).toBe(true);
+      expect(text).not.toContain('[REDACTED]');
+    });
+
+    it('should print the compact stream instead of only the redaction marker', () => {
+      const output: string[] = [];
+      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input } });
+
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: lines } });
+
+      expect(output).toContain('  │ line-0');
+      expect(output.join('\n')).not.toContain('[REDACTED]');
+    });
+
+    it('should print output held until completion instead of only the redaction marker', () => {
+      const held = Array.from({ length: 1500 }, (_, index) => `[build] line-${index}\n`).join('');
+      const output: string[] = [];
+      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input } });
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: held } });
+      expect(output).toEqual([]);
+
+      display.handle({ type: 'tool_result', data: { id: 'a', content: held, isError: false } });
+
+      expect(output).toContain('  │ [build] line-0');
+      expect(output.join('\n')).not.toContain('[REDACTED]');
+    });
+  });
+
   it('should include completed secret fields when projecting buffered structured output', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
@@ -212,7 +340,7 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: {} } });
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '{"stdout":' } });
     display.flush();
-    expect(output).toContain('  │ [structured output omitted]');
+    expect(output).toEqual([]);
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '"ready"}' } });
     display.flush();
     display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"ready"}', isError: false } });
@@ -444,6 +572,37 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_result', data: { id: 'a', content: 'first-line\nsecond-line', isError: false } });
     expect(output.join('\n').match(/first-line/g)).toHaveLength(1);
     expect(output.join('\n')).toContain('second-line');
+  });
+
+  it('should show multi-line output starting with a bracket after completion the same way as ordinary text', () => {
+    const render = (text: string): string[] => {
+      const output: string[] = [];
+      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'make' } } });
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: text } });
+      display.handle({ type: 'tool_result', data: { id: 'a', content: text, isError: false } });
+      return output;
+    };
+    const bracketed = render('[1/3] Building\n[2/3] Linking\n[3/3] Done');
+    const ordinary = render('1/3 Building\n2/3 Linking\n3/3 Done');
+
+    expect(bracketed).toEqual(['  Bash output:', '  │ [1/3] Building', '  │ [2/3] Linking', '  │ [3/3] Done', '  ✓ Bash']);
+    expect(bracketed.map((line) => line.replace(/\[(\d)\/3\] /u, '$1/3 '))).toEqual(ordinary);
+  });
+
+  it('should name the failed tool in quiet compact mode', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', true, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash\x1b[2J', input: { command: 'npm test' } } });
+    display.handle({ type: 'tool_result', data: { id: 'a', content: 'exit 1', isError: true } });
+    expect(output).toEqual(['  ✗ Bash: exit 1']);
+  });
+
+  it('should show the start time of an expanded tool as a local clock time', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'npm test' } } });
+    expect(output[0]).toMatch(/^\[tool\] Bash Ran npm test \[running @\d{2}:\d{2}:\d{2}\]$/u);
   });
 
   it('should keep isError authoritative when successful content contains the word Error', () => {

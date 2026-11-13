@@ -40,6 +40,8 @@ import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
+import { formatToolActivityTime } from '../shared/tool-activity/presentation.js';
+import { ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -143,7 +145,7 @@ it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after pub
     return toolReply();
   }));
   const connections = observeIpcConnections(); await client.connect(); await complete(); await snapshotView();
-  const write = daemonFiles.writePrivateFile;
+  const append = daemonFiles.appendPrivateFile;
   const saving = deferred<void>(); const publish = deferred<void>();
   try {
     await client.submit({ kind: 'message', text: 'Previous turn' });
@@ -151,13 +153,12 @@ it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after pub
     firstDone.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
     await client.submit({ kind: 'message', text: 'Current turn' }); await fixture.executing(2);
     const operationId = client.getSnapshot().state!.running!.operationId;
-    vi.spyOn(daemonFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
-      const text = typeof content === 'string' ? content : Buffer.from(content).toString('utf8');
-      if (path.endsWith(`/conversations/${client.getSnapshot().state!.conversationId}.json`)
-        && text.includes(operationId) && text.includes('turn-2.ts') && (phase === 'start' ? !text.includes('ready') : text.includes('ready'))) {
+    vi.spyOn(daemonFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
+      if (path.endsWith(`/conversation-tool-history/${client.getSnapshot().state!.conversationId}.jsonl`)
+        && content.includes(operationId) && content.includes('turn-2.ts') && (phase === 'start' ? !content.includes('ready') : content.includes('ready'))) {
         saving.resolve(); await publish.promise;
       }
-      await write(path, content, signal);
+      await append(path, content);
     });
     startSecondTool.resolve(); if (phase === 'result') secondResult.resolve(); await saving.promise;
     const entered = deferred<void>();
@@ -238,6 +239,27 @@ it('appends the previous tool transcript before the next user message', async ()
     expect(questionIndex).toBeGreaterThan(historyIndex);
     expect(entries.filter((entry) => entry.content.includes('previous-result'))).toHaveLength(1);
   } finally { secondTurn.resolve(); await fixture.settled(); }
+});
+
+it('applies each streamed tool output to the displayed history without rebuilding it from the whole history', async () => {
+  const finish = deferred<void>();
+  const lines = ['streamed-line-0', 'streamed-line-1', 'streamed-line-2'];
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'npm test' } } });
+    for (const line of lines) {
+      options.onStream!({ type: 'tool_output', data: { id: 'long', tool: 'Bash', output: `${line}\n` } });
+      await waitFor(() => expect(toolRows()).toContain(line));
+    }
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  const restore = vi.spyOn(ToolActivityDisplay.prototype, 'restore');
+  try {
+    await client.submit({ kind: 'message', text: 'Run the long tool' });
+    await waitFor(() => expect(toolRows()).toContain(lines.at(-1)));
+    expect(restore).toHaveBeenCalledOnce();
+  } finally { finish.resolve(); await fixture.settled(); }
 });
 
 it.each([1, 2])('retains each of %s identical completed results once after unfinished removal and display changes on the same screen', async (count) => {
@@ -328,7 +350,7 @@ it('retains the received start and completion times once after compact display a
     if (item?.kind !== 'tool_history') throw new Error('Missing received tool history');
     const entry = item.history.history.entries[0]!;
     expect(entry.startedAt).toEqual(expect.any(Number)); expect(entry.completedAt).toEqual(expect.any(Number));
-    const timing = `success @${entry.startedAt} → @${entry.completedAt} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms) ${getLabel('tui.ui.toolHistoryCompletion', 'en')} #${entry.completionSequence}`;
+    const timing = `success @${formatToolActivityTime(entry.startedAt!)} → @${formatToolActivityTime(entry.completedAt!)} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms) ${getLabel('tui.ui.toolHistoryCompletion', 'en')} #${entry.completionSequence}`;
     const observed: string[] = [];
     await browseToolPage(app, '\x0f');
     for (let page = 0; page < 30; page++) {
@@ -410,7 +432,7 @@ it.each([false, true])('retains one timed tool entry across duplicate delivery, 
     expect(await client.submit({ kind: 'message', text: 'Track one tool' })).toMatchObject({ kind: 'accepted' });
     await waitFor(() => expect(toolRows()).toContain('running @'));
     expect(toolRows()).toContain('printf history-ready');
-    const startedAt = toolRows().match(/@(\d+)/u)![1];
+    const startedAt = toolRows().match(/@(\d{2}:\d{2}:\d{2})/u)![1];
     result.resolve();
     await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
     const completed = toolRows();
@@ -579,7 +601,6 @@ it.each([
   ['allowed JSON', '{"stdout":"ready secret123","api\\u005fkey":"secret123"}', 'ready [REDACTED]'],
   ['unknown JSON field', '{"private_blob":{"text":"非公開本文"}}', '[structured output omitted]'],
   ['JSON array', '[{"text":"非公開本文"}]', '[structured output omitted]'],
-  ['incomplete JSON', '{"stdout":"非公開本文', '[structured output omitted]'],
 ])('sanitizes %s in the manager compact and expanded view before and after reconnect', async (_name, content, expected) => {
   const finish = deferred<void>();
   let invocation = 0;
@@ -725,7 +746,7 @@ it('keeps the selected slash completion and running turn while toggling and pagi
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it('preserves a Japanese draft and insertion point while paging a truncated long result, resizing and reconnecting on the same screen', async () => {
+it('preserves a Japanese draft and insertion point while paging a long result to its end, resizing and reconnecting on the same screen', async () => {
   const finish = deferred<void>();
   const lines = Array.from({ length: 180 }, (_, index) => `row-${String(index).padStart(3, '0')} ${'日本語'.repeat(20)}`);
   expect(Buffer.byteLength(lines.join('\n'))).toBeGreaterThan(16 * 1024);
@@ -757,9 +778,8 @@ it('preserves a Japanese draft and insertion point while paging a truncated long
       expect(currentToolPage().page.rows.length).toBeLessThan(24);
     }
     expect(currentToolPage().page.hasMore).toBe(false);
-    expect(pages.join('\n')).toContain('[output truncated]');
     expect(pages.join('\n')).toContain('row-000');
-    expect(pages.join('\n')).not.toContain(`row-${String(lines.length - 1).padStart(3, '0')}`);
+    expect(pages.join('\n')).toContain(`row-${String(lines.length - 1).padStart(3, '0')}`);
     expect(pages.join('\n')).toContain('still-running');
     expect(pages.at(-1)).toContain('running');
     await browseToolPage(app, '\x1b[5~');

@@ -11,8 +11,21 @@ export interface ToolActivityTurnState {
   operationId: string;
   generation: number;
   finished: boolean;
-  eventIds: string[];
   history: ToolActivityHistoryState;
+}
+
+/**
+ * 1 件のツールイベントで変わった entry。previousSequence の状態に適用すると sequence の状態になる。
+ * entries を置き換えた後、output があればその entry の出力へ text を追記する。
+ */
+export interface ToolActivityTurnUpdate {
+  operationId: string;
+  generation: number;
+  previousSequence: number;
+  sequence: number;
+  entries: ToolActivityEntry[];
+  /** 実行中の entry の出力に追記する、秘密値をマスク済みの確定したテキスト。 */
+  output?: { key: string; text: string };
 }
 
 export type ToolActivityStatus = 'running' | 'success' | 'failure';
@@ -24,9 +37,7 @@ export interface ToolActivityEntry {
   tool: string;
   input: Record<string, unknown>;
   output: string;
-  outputTruncated?: boolean;
   result?: string;
-  resultTruncated?: boolean;
   status: ToolActivityStatus;
   association: 'matched' | 'unmatched';
   startedAt?: number;

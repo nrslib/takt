@@ -8,6 +8,7 @@ import { conversationTransferFrames, encodeConversationFrame } from '../features
 import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
 import type { ConversationReadMetadata } from '../features/manager/conversationTransferReceiver.js';
 import { ToolActivityHistory } from '../shared/tool-activity/history.js';
+import type { ToolActivityEvent, ToolActivityTurnUpdate } from '../shared/tool-activity/types.js';
 
 const doubles = vi.hoisted(() => ({ connect: vi.fn(), ensure: vi.fn(), resolve: vi.fn(), owner: {
   pid: 1234, identity: { startTime: 'incarnation-one' }, version: 'test', cliPath: '/cli.js',
@@ -112,7 +113,8 @@ function readResponse(target: { request: Request; socket: FakeSocket }, read: Co
 
 async function sendOutput(output: Exclude<PortOutput, { kind: 'snapshot' }>, stateSequence: number) {
   const operationId = 'operationId' in output ? output.operationId : output.kind === 'running' || output.kind === 'pending'
-    ? output.state.running?.operationId ?? null : output.kind === 'tool_history' ? output.history.operationId : null;
+    ? output.state.running?.operationId ?? null : output.kind === 'tool_history' ? output.history.operationId
+      : output.kind === 'tool_history_update' ? output.update.operationId : null;
   for await (const { frame } of conversationTransferFrames(record.id,
     { transferId: randomUUID(), revision: 4, stateSequence, operationId }, 'output', (async function* () { yield output; })())) {
     sockets.at(-1)!.emit('data', encodeConversationFrame(frame));
@@ -133,7 +135,7 @@ it.each(['running entry', 'removal', 'omission'].flatMap((snapshotItem) => [fals
   const history = new ToolActivityHistory(() => 1000);
   const toolActivity = { callId: 'call', operationId, generation: 1 };
   history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity });
-  const running = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const running = { operationId, generation: 1, finished: false, history: history.snapshot() };
   await sendOutput({ kind: 'tool_history', history: running }, 3);
   const refreshing = value.refresh();
   await vi.waitFor(() => expect(reads).toHaveLength(2));
@@ -150,7 +152,7 @@ it.each(['running entry', 'removal', 'omission'].flatMap((snapshotItem) => [fals
     reads[1]!.socket.emit('data', wire[0]!);
   }
   history.apply({ type: 'tool_result', data: { id: 'tool', content: 'completed', isError: false }, toolActivity });
-  const completed = { ...running, eventIds: ['start', 'result'], history: history.snapshot() };
+  const completed = { ...running, history: history.snapshot() };
   const output = vi.fn(); value.onOutput(output);
   await sendOutput({ kind: 'tool_history', history: completed }, 4);
   if (beforeRead) { readResponse(reads[1]!, read); await refreshing; }
@@ -174,7 +176,7 @@ it('holds a newer live tool history until the matching running state arrives', a
   const history = new ToolActivityHistory();
   const context = { callId: 'call', operationId: nextId, generation: 2 };
   history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'next.ts' } }, toolActivity: context });
-  const current = { operationId: nextId, generation: 2, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const current = { operationId: nextId, generation: 2, finished: false, history: history.snapshot() };
   const output = vi.fn(); value.onOutput(output);
 
   await sendOutput({ kind: 'tool_history', history: current }, 3);
@@ -199,13 +201,84 @@ it('applies a newer live tool history immediately when it matches the running tu
   const history = new ToolActivityHistory();
   const context = { callId: 'call', operationId, generation: 1 };
   history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'current.ts' } }, toolActivity: context });
-  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const current = { operationId, generation: 1, finished: false, history: history.snapshot() };
   const output = vi.fn(); value.onOutput(output);
 
   await sendOutput({ kind: 'tool_history', history: current }, 3);
 
   expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
   expect(output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history: current });
+});
+
+function toolUpdates(operationId: string) {
+  const source = new ToolActivityHistory(() => 1000);
+  const toolActivity = { callId: 'call', operationId, generation: 1 };
+  return {
+    source, toolActivity,
+    apply(event: Omit<ToolActivityEvent, 'toolActivity'>): ToolActivityTurnUpdate {
+      const previousSequence = source.currentSequence;
+      const full = { ...event, toolActivity } as ToolActivityEvent;
+      const entries = source.apply(full);
+      const update = { operationId, generation: 1, previousSequence, sequence: source.currentSequence };
+      return full.type === 'tool_output' ? { ...update, entries: [], output: { key: entries[0]!.key, text: full.data.output } }
+        : { ...update, entries };
+    },
+    state() { return { operationId, generation: 1, finished: false, history: source.snapshot() }; },
+  };
+}
+
+it('merges live tool history updates into the current turn and publishes each applied update', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+  const operationId = randomUUID();
+  await sendOutput({ kind: 'running', state: { ...initial.state, running: { kind: 'turn', operationId, generation: 1 } } }, 2);
+  const tools = toolUpdates(operationId);
+  const output = vi.fn(); value.onOutput(output);
+
+  const updates = [
+    tools.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'make' } } }),
+    tools.apply({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'building ' } }),
+    tools.apply({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'objects' } }),
+  ];
+  for (const [index, update] of updates.entries()) await sendOutput({ kind: 'tool_history_update', update }, index + 3);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history'))
+    .toMatchObject({ history: { history: { entries: [{ status: 'running', output: 'building objects' }] } } });
+  const result = tools.apply({ type: 'tool_result', data: { id: 'tool', content: 'built', isError: false } });
+  await sendOutput({ kind: 'tool_history_update', update: result }, 6);
+
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history'))
+    .toEqual({ kind: 'tool_history', history: { ...tools.state(), history: tools.source.snapshot() } });
+  expect(output.mock.calls.map(([value]) => value)).toEqual([...updates, result].map((update) => ({ kind: 'tool_history_update', update })));
+  expect(reads).toHaveLength(1);
+});
+
+it('reads a snapshot when an update arrives without its base and applies the update after the snapshot', async () => {
+  const reads = controlReads('open'); const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
+  const operationId = randomUUID();
+  const state = { ...initial.state, running: { kind: 'turn', operationId, generation: 1 } };
+  await sendOutput({ kind: 'running', state }, 2);
+  const tools = toolUpdates(operationId);
+  tools.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'make' } } });
+  const base = tools.state();
+
+  await sendOutput({ kind: 'tool_history_update', update: tools.apply({ type: 'tool_result', data: { id: 'tool', content: 'built', isError: false } }) }, 4);
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history')).toBeUndefined();
+  await vi.waitFor(() => expect(reads).toHaveLength(2));
+  expect(reads[1]!.request.params.toolHistory).toBe(true);
+  const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), operationId, stateSequence: 3 };
+  readResponse(reads[1]!, read);
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state }; yield { kind: 'tool_history', history: base };
+  })())) reads[1]!.socket.emit('data', encodeConversationFrame(frame));
+
+  expect(value.getSnapshot().items.find((item) => item.kind === 'tool_history'))
+    .toEqual({ kind: 'tool_history', history: { ...base, history: tools.source.snapshot() } });
+  expect(value.getSnapshot().connection).toBe('connected');
 });
 
 it('does not publish snapshot work items when a live history update arrives mid-transfer', async () => {
@@ -215,8 +288,10 @@ it('does not publish snapshot work items when a live history update arrives mid-
   readResponse(reads[0]!, initial.read); reads[0]!.socket.emit('data', Buffer.concat(initial.wire)); await connecting;
 
   const refreshing = value.refresh(); await vi.waitFor(() => expect(reads).toHaveLength(2));
+  // 差分で追いつけている間の再取得では、ツール履歴の送り直しを求めない。
+  expect(reads[1]!.request.params.toolHistory).toBe(false);
   const read = { ...initial.read, mode: 'delta' as const, transferId: randomUUID(), stateSequence: 2 };
-  const nextItem = { kind: 'display_event' as const, event: { id: 'partial-event', message: 'snapshot-only-work' } };
+  const nextItem ={ kind: 'display_event' as const, event: { id: 'partial-event', message: 'snapshot-only-work' } };
   const wire: Buffer[] = [];
   for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
     yield nextItem;
@@ -228,7 +303,7 @@ it('does not publish snapshot work items when a live history update arrives mid-
   const operationId = randomUUID();
   const context = { callId: 'call', operationId, generation: 1 };
   history.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'ready.ts' } }, toolActivity: context });
-  const current = { operationId, generation: 1, finished: false, eventIds: ['start'], history: history.snapshot() };
+  const current = { operationId, generation: 1, finished: false, history: history.snapshot() };
   await sendOutput({ kind: 'tool_history', history: current }, 1);
 
   expect(value.getSnapshot().items).not.toContainEqual(nextItem);
@@ -247,7 +322,7 @@ it.each(['live', 'snapshot'] as const)('accepts current %s history after restori
     const toolActivity = { callId: 'call', operationId, generation };
     source.apply({ type: 'tool_use', data: { id: 'reused-tool', tool: 'Read', input: {} }, toolActivity });
     source.apply({ type: 'tool_result', data: { id: 'reused-tool', content, isError: false }, toolActivity });
-    return { operationId, generation, finished: true, eventIds: ['start', 'result'], history: source.snapshot() };
+    return { operationId, generation, finished: true, history: source.snapshot() };
   };
   const previous = saved(randomUUID(), 2, 'previous-result');
   const current = saved(randomUUID(), 1, 'current-result');
@@ -288,7 +363,7 @@ it.each(['before item', 'before completion'] as const)('does not restore an olde
   const toolActivity = { callId: 'call', operationId, generation: 1 };
   source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} }, toolActivity });
   source.apply({ type: 'tool_result', data: { id: 'tool', content: 'older-result', isError: false }, toolActivity });
-  const history = { operationId, generation: 1, finished: true, eventIds: ['start', 'result'], history: source.snapshot() };
+  const history = { operationId, generation: 1, finished: true, history: source.snapshot() };
   readResponse(reads[0]!, initial.read);
   for await (const { frame } of conversationTransferFrames(record.id, initial.read, 'snapshot', (async function* () {
     yield { kind: 'state', state: initial.state };

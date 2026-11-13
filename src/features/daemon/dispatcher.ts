@@ -6,12 +6,13 @@ import type {
   DaemonStateOwner, EventStore, StoredEvent, TurnRunner,
 } from '../../core/daemon/ports.js';
 import type { DaemonStateRequest, DaemonStateReply } from '../../core/daemon/processProtocol.js';
-import { MAX_PROCESS_PENDING_REQUESTS } from '../../core/daemon/processProtocol.js';
+import { MAX_PROCESS_PENDING_PROGRESS } from '../../core/daemon/processProtocol.js';
 import { effect, reply, type DispatcherEffect, type DispatcherNotice, type Reply } from './dispatcherMailbox.js';
 import { createTurnQueues } from './turnQueues.js';
 import { conversationId } from '../../infra/conversations/identity.js';
-import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
+import { isToolHistoryProgress, type ConversationProgress } from '../../shared/types/conversation-activity.js';
 import { ToolHistoryPersistenceError } from '../../core/daemon/toolHistoryPersistenceError.js';
+import { DroppedToolOutputs } from '../../shared/tool-activity/droppedOutputs.js';
 
 export interface DispatcherDependencies {
   store: EventStore;
@@ -38,6 +39,7 @@ interface ActiveTurn {
   launchPending: boolean;
   requests: Map<number, Reply<DaemonStateReply>>;
   progress: Map<number, { reply: Reply<void>; message: ConversationProgress; ordered: boolean }>;
+  droppedOutputs: DroppedToolOutputs;
   phase: 'starting' | 'reading' | 'running' | 'settling';
   result?: TurnResult;
   save: 'waiting' | 'saving' | 'failed';
@@ -379,7 +381,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
 
   private newTurn(event: AcceptedEvent, turn: TurnIdentity): ActiveTurn {
     return { event, turn, abort: new AbortController(), requestAbort: new AbortController(), interruption: undefined, launchPending: false,
-      requests: new Map(), progress: new Map(), phase: 'starting', save: 'waiting', saveAttempt: 0 };
+      requests: new Map(), progress: new Map(), droppedOutputs: new DroppedToolOutputs(), phase: 'starting', save: 'waiting', saveAttempt: 0 };
   }
 
   private schedule(effects: DispatcherEffect[]): void {
@@ -441,13 +443,17 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
     } else {
       const id = ++this.nextId;
       const waiting = [...active.progress.values()].some((pending) => pending.ordered);
-      const ordered = waiting || typeof message.message !== 'string'
-        && (message.message.kind === 'turn_text' || message.message.kind === 'tool_event');
-      if (ordered && active.progress.size >= MAX_PROCESS_PENDING_REQUESTS) {
-        response.reject(new Error('Turn progress capacity exceeded'));
+      const progress = message.message;
+      const ordered = waiting || typeof progress !== 'string' && (progress.kind === 'turn_text' || progress.kind === 'tool_event');
+      // 配送が詰まっている間は途中表示だけを間引き、ターンも子プロセスも止めない。ツールの開始・完了は常に受け付ける。
+      const afterDropped = active.droppedOutputs.follows(progress);
+      if (afterDropped || ordered && !isToolHistoryProgress(progress)
+        && [...active.progress.values()].filter((pending) => !isToolHistoryProgress(pending.message)).length >= MAX_PROCESS_PENDING_PROGRESS) {
+        active.droppedOutputs.record(progress);
+        response.resolve();
         return;
       }
-      active.progress.set(id, { reply: response, message: message.message, ordered });
+      active.progress.set(id, { reply: response, message: progress, ordered });
       if (!waiting) this.deliverProgress(active, effects, id);
     }
   }

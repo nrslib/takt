@@ -8,11 +8,22 @@ import {
 import { collectSensitiveStringValues } from './sensitive-value.js';
 
 const MAX_PENDING_SENSITIVE_TEXT_LENGTH = 10_000;
+// 保留が上限を超えると以後の出力をすべて伏せるので、まとめて届いた大きな追記は上限より十分小さく分けて渡す。
+const STREAM_WRITE_CHARS = 4096;
 
 export interface SensitiveTextStreamRedactor {
   write(text: string, source: unknown): string;
   flushAvailable(source: unknown): string;
   flush(source: unknown): string;
+}
+
+/** 長さに関係なく、追記を redactor へ分けて渡し、確定した部分をまとめて返す。 */
+export function writeSensitiveTextInChunks(redactor: SensitiveTextStreamRedactor, text: string, source: unknown): string {
+  let written = '';
+  for (let offset = 0; offset < text.length; offset += STREAM_WRITE_CHARS) {
+    written += redactor.write(text.slice(offset, offset + STREAM_WRITE_CHARS), source);
+  }
+  return written;
 }
 
 export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor {

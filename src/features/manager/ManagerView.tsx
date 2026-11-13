@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
 import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
@@ -30,10 +30,10 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
-import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
-import { createToolActivityViewState, excludeToolActivityTranscript, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
-  type ToolActivityTranscriptRange } from '../tui/toolActivityViewState.js';
+import { ToolActivityDisplayStore, toolTurnKey } from './toolActivityDisplayStore.js';
+import { createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from '../tui/toolActivityViewState.js';
+import { useToolActivityTranscript } from '../tui/useToolActivityTranscript.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
@@ -47,6 +47,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   onExit: () => void; initialDiagnostics: readonly string[];
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
+  const { display: toolDisplay } = useSyncExternalStore(toolDisplays.subscribe, toolDisplays.getSnapshot);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
@@ -58,8 +60,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
   const [toolView, setToolView] = useState(createToolActivityViewState);
-  const displayedTools = useRef<{ turn: string | undefined; rows: ToolActivityTranscriptRange[]; committed: ToolActivityTranscriptRange[] }>(
-    { turn: undefined, rows: [], committed: [] });
   const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
@@ -279,10 +279,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (!summaryRequest) {
-      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
-      if (content !== '') append(content);
-      displayedTools.current.committed = mergeToolActivityTranscript(displayedTools.current.committed, displayedTools.current.rows);
-      displayedTools.current.rows = [];
+      commitToolTranscript();
       append(text, 'user');
     }
     else setSummarizing(true);
@@ -361,18 +358,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
   const headingWidth = Math.min(measureWidth(assignmentHeading), splitStatus ? statusWidth : availableHeadingWidth);
   const toolHistory = snapshot.items.find((item) => item.kind === 'tool_history')?.history;
-  const toolTurn = running != null ? JSON.stringify([running.operationId, running.generation])
-    : toolHistory === undefined ? undefined : JSON.stringify([toolHistory.operationId, toolHistory.generation]);
+  const toolTurn = running != null ? toolTurnKey(running) : toolHistory === undefined ? undefined : toolTurnKey(toolHistory);
   const currentToolView = toolViewTurn.current === toolTurn ? toolView : createToolActivityViewState();
-  const toolDisplay = useMemo(() => {
-    const display = new ToolActivityDisplay('silent', false, () => {}, false);
-    if (toolHistory !== undefined && (running == null
-      || toolHistory.operationId === running.operationId && toolHistory.generation === running.generation)) {
-      display.restore({ ...toolHistory.history, entries: toolHistory.history.entries.filter((entry) =>
-        entry.status !== 'running' || !toolHistory.finished && running != null) });
-    }
-    return display;
-  }, [toolHistory, running?.operationId, running?.generation]);
   const toolGroups = toolDisplay.groups();
   const toolLabels = {
     compact: getLabel('tui.ui.toolHistoryCompact', lang), expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
@@ -398,16 +385,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, columns ?? 80,
     Math.max(0, toolHeight - 1), toolLabels);
   useEffect(() => {
-    if (displayedTools.current.turn !== toolTurn) {
-      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
-      if (content !== '') append(content);
-      displayedTools.current = { turn: toolTurn, rows: [], committed: [] };
-      toolViewTurn.current = toolTurn;
-      setToolView(createToolActivityViewState());
-    }
-    displayedTools.current.rows = mergeToolActivityTranscript(displayedTools.current.rows,
-      excludeToolActivityTranscript(toolPage.transcript ?? [], displayedTools.current.committed));
-  }, [toolTurn, toolPage]);
+    if (toolViewTurn.current === toolTurn) return;
+    toolViewTurn.current = toolTurn;
+    setToolView(createToolActivityViewState());
+  }, [toolTurn]);
+  const commitToolTranscript = useToolActivityTranscript(toolTurn, toolPage.transcript, append);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,

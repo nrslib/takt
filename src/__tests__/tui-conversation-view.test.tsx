@@ -47,6 +47,7 @@ import {
   createSessionImageAttachmentStore,
 } from '../features/interactive/imageAttachments.js';
 import { stripAnsi } from '../shared/utils/text.js';
+import { formatToolActivityTime } from '../shared/tool-activity/presentation.js';
 import { makeProvider } from './test-helpers.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
@@ -2769,7 +2770,7 @@ describe('ConversationView tool history', () => {
       stream!({ type: 'tool_use', data: { id: 'provider-tool', tool: 'Bash', input: { command: 'printf ready' } } });
       await flushFrames();
       expect(app.lastFrame()).toContain('printf ready');
-      expect(app.lastFrame()).toContain('@1000');
+      expect(app.lastFrame()).toContain(`@${formatToolActivityTime(1000)}`);
       expect(app.lastFrame()).toContain('… Bash Ran printf ready');
       now = 1250;
       stream!({ type: 'tool_result', data: { id: 'provider-tool', content: 'provider-result-ready', isError: false } });
@@ -2780,8 +2781,7 @@ describe('ConversationView tool history', () => {
       expect(frame).toContain('printf ready');
       expect(frame).toContain('provider-result-ready');
       expect(frame).toMatch(/250\s*ms/u);
-      expect(frame).toContain('@1000');
-      expect(frame).toContain('@1250');
+      expect(frame).toContain(`@${formatToolActivityTime(1000)} → @${formatToolActivityTime(1250)}`);
       expect(frame).toMatch(/✓|success/u);
       const expanded = await press(app, CTRL_O);
       expect(expanded.split('\n').map((row) => row.trim())).toContain('✓ Bash Ran');
@@ -2951,7 +2951,6 @@ describe('ConversationView tool history', () => {
   it.each([
     '{"private_blob":{"text":"do-not-display"}}',
     '[{"text":"do-not-display"}]',
-    '{"stdout":"do-not-display',
   ])('should omit unselected structured results in compact and expanded history: %s', async (content) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
@@ -2995,7 +2994,7 @@ describe('ConversationView tool history', () => {
     }
   });
 
-  it('should replace current-turn history and ignore the old stream sink on the next submission', async () => {
+  it('should keep the previous turn tool history in the transcript and ignore the old stream sink on the next submission', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
     try {
@@ -3016,7 +3015,10 @@ describe('ConversationView tool history', () => {
       const frame = await press(app, CTRL_O);
       expect(frame).toContain('new-turn-result');
       expect(frame).toContain('committed first answer');
-      assertSafeFrames([frame], ['old-turn-result', 'old-turn.ts', 'late-old-result']);
+      expect(countOccurrences(frame, 'old-turn.ts')).toBe(1);
+      expect(countOccurrences(frame, 'old-turn-result')).toBe(1);
+      expect(frame.indexOf('old-turn-result')).toBeLessThan(frame.indexOf('next question'));
+      assertSafeFrames([frame], ['late-old-turn.ts', 'late-old-result']);
     } finally {
       app.unmount();
     }

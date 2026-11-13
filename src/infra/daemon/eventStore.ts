@@ -7,12 +7,11 @@ import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, isRetiredWatchEvent, storedStandaloneInboxAnswer, TurnResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
-import { ensurePrivateDirectory, hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { ensurePrivateDirectory, hasCode, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
 import { FileAsyncLock } from './lock.js';
 import { ConversationStateStore } from './conversationStateStore.js';
 import { DaemonPersistedFiles } from './persistedFiles.js';
 
-const MAX_RECORD_BYTES = 16 * 1024 * 1024;
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
@@ -40,7 +39,7 @@ export class FileEventStore implements EventStore {
   }
 
   private async read(path: string): Promise<EventRecord> {
-    const content = await readPrivateFile(path, MAX_RECORD_BYTES);
+    const content = await readEntirePrivateFile(path);
     if (content === undefined) throw new Error(`Missing stored event: ${path}`);
     const input: unknown = JSON.parse(content.toString('utf8'));
     const record = EventRecordSchema.parse(input);
@@ -101,9 +100,7 @@ export class FileEventStore implements EventStore {
   }
 
   private async write(record: EventRecord): Promise<void> {
-    const content = JSON.stringify(EventRecordWriteSchema.parse(record));
-    if (Buffer.byteLength(content) > MAX_RECORD_BYTES) throw new Error('Stored event exceeds capacity');
-    await writePrivateFile(this.path(record.event.eventId), content);
+    await writePrivateFile(this.path(record.event.eventId), JSON.stringify(EventRecordWriteSchema.parse(record)));
   }
 
   async accept(input: AcceptedEvent): ReturnType<EventStore['accept']> {

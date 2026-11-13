@@ -13,7 +13,8 @@ import type { ConversationCommand, ConversationOpen, ConversationPort, Conversat
 import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from './snapshotChanges.js';
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
-import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import type { ToolActivityTurnState, ToolActivityTurnUpdate } from '../../shared/tool-activity/types.js';
+import { applyToolActivityTurnUpdate } from '../../shared/tool-activity/history.js';
 
 const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal('response'), requestId: z.string(),
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
@@ -55,6 +56,7 @@ export class ConversationIpcClient {
   private toolHistorySequence = -1;
   private currentStateSequence = -1;
   private pendingToolHistories = new Map<string, PendingToolHistory>();
+  private pendingToolUpdates: Array<{ update: ToolActivityTurnUpdate; version: OutputVersion }> = [];
   private toolTurnBoundary: { operationId: string; generation: number | undefined; stateSequence: number } | undefined;
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
 
@@ -105,7 +107,8 @@ export class ConversationIpcClient {
   refresh(): Promise<void> {
     if (this.read !== undefined) return this.read.response ?? Promise.resolve();
     if (this.attachmentId === undefined || this.view.connection !== 'connected') return Promise.reject(new Error('Conversation is disconnected'));
-    return this.requestRead('snapshot', { attachmentId: this.attachmentId }, (value) => {
+    // ツール履歴は差分配信で追いつくので、起点のない差分が残っているときだけ全体を受け取り直す。
+    return this.requestRead('snapshot', { attachmentId: this.attachmentId, toolHistory: this.pendingToolUpdates.length > 0 }, (value) => {
       const result = z.object({ read: ConversationReadMetadataSchema }).strict().parse(value);
       this.receiver!.expectRead(result.read);
     });
@@ -186,7 +189,8 @@ export class ConversationIpcClient {
       this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
       this.removed.delete('tool_history');
     }
-    if (current !== undefined && JSON.stringify(history) === JSON.stringify(current)) return false;
+    // 同じターンの同じ sequence は同じ内容なので、全体を比べずに変化なしとする。
+    if (sameTurn && history.history.sequence === current.history.sequence && history.finished === current.finished) return false;
     const item = { kind: 'tool_history' as const, history };
     if (live) {
       this.committedItems.set('tool_history', item);
@@ -194,6 +198,46 @@ export class ConversationIpcClient {
     }
     this.readItems.set('tool_history', item);
     return true;
+  }
+
+  /**
+   * 差分を、同じターンの手元の最新状態（確定済み、実行中表示待ち、読込中の snapshot）に順に適用し、適用した差分を出力する。
+   * 起点が手元にない差分は残し、snapshot の読込後に再度適用する。
+   */
+  private applyToolUpdates(): boolean {
+    let changed = false;
+    while (this.pendingToolUpdates.length > 0) {
+      const { update, version } = this.pendingToolUpdates[0]!;
+      const known = [this.committedItems.get('tool_history'), this.readItems.get('tool_history')]
+        .flatMap((item) => item?.kind === 'tool_history' ? [item.history] : [])
+        .concat([...this.pendingToolHistories.values()].map((pending) => pending.history))
+        .filter((history) => history.operationId === update.operationId && history.generation === update.generation)
+        .sort((left, right) => right.history.sequence - left.history.sequence)[0];
+      if (known !== undefined && (known.finished || known.history.sequence >= update.sequence)) {
+        this.pendingToolUpdates.shift();
+        continue;
+      }
+      const history = applyToolActivityTurnUpdate(known, update);
+      if (history === undefined) break;
+      this.pendingToolUpdates.shift();
+      if (!this.acceptToolHistory(history, version, true)) continue;
+      changed = true;
+      // 表示側は差分だけを手元の表示へ適用する。起点が合わない表示は、更新後の履歴全体から作り直す。
+      for (const listener of this.outputs) listener({ kind: 'tool_history_update', update });
+    }
+    if (changed) this.view = { ...this.view, items: orderSnapshotItems(this.committedItems) };
+    return changed;
+  }
+
+  private receiveToolUpdate(update: ToolActivityTurnUpdate, version: OutputVersion): void {
+    const head = this.pendingToolUpdates[0]?.update;
+    // daemon は差分を順に送るため、別のターンの差分が届いたら、それより前のターンの未適用分は使われない。
+    if (head !== undefined && (head.operationId !== update.operationId || head.generation !== update.generation)) this.pendingToolUpdates = [];
+    this.pendingToolUpdates.push({ update, version });
+    if (this.applyToolUpdates()) this.update({});
+    if (this.pendingToolUpdates.length > 0 && this.read === undefined && this.view.connection === 'connected') {
+      void this.refresh().catch((error: Error) => this.update({ error: error.message }));
+    }
   }
 
   private applyPendingToolHistories(): void {
@@ -247,6 +291,7 @@ export class ConversationIpcClient {
               const current = this.committedItems.get('tool_history');
               if (current !== undefined) this.readItems.set('tool_history', current);
             }
+            this.applyToolUpdates();
             return;
           }
           const key = snapshotItemKey(item);
@@ -257,6 +302,10 @@ export class ConversationIpcClient {
           if (key !== 'tool_history' || this.toolHistorySequence <= version.stateSequence) this.removed.add(key);
         },
         output: (output, version) => {
+          if (output.kind === 'tool_history_update') {
+            this.receiveToolUpdate(output.update, version);
+            return;
+          }
           if (output.kind === 'tool_history') {
             if (!this.acceptToolHistory(output.history, version, true)) return;
             this.update({ items: orderSnapshotItems(this.committedItems) });
@@ -295,6 +344,7 @@ export class ConversationIpcClient {
               this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
               this.committedItems = next;
               this.items = new Map(next);
+              this.applyToolUpdates();
             }
             this.read.transferId = undefined;
             if (this.read.response === undefined) this.read = undefined;
@@ -316,6 +366,7 @@ export class ConversationIpcClient {
     this.toolHistorySequence = -1;
     this.currentStateSequence = -1;
     this.pendingToolHistories.clear();
+    this.pendingToolUpdates = [];
     this.toolTurnBoundary = undefined;
     this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {

@@ -7,7 +7,7 @@ import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssign
 import { GoalQuestionSchema, GoalRecordObjectSchema, GoalSchema } from '../../infra/goals/schema.js';
 import type { ConversationState, OutputVersion, PortOutput, SnapshotValue, SnapshotMode } from './conversationPort.js';
 import { snapshotItemKey } from './snapshotChanges.js';
-import { ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
+import { ToolActivityTurnStateSchema, ToolActivityTurnUpdateSchema } from '../../shared/tool-activity/schema.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
 
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -66,6 +66,7 @@ const operationResultSchema = z.discriminatedUnion('kind', [
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema }).strict(),
+  z.object({ kind: z.literal('tool_history_update'), update: ToolActivityTurnUpdateSchema }).strict(),
   ConversationTextSchema.extend({ operationId: z.uuid(), generation: sequence }).strict(),
   z.object({ kind: z.literal('activity'), operationId: z.uuid(), generation: sequence,
     activity: ConversationActivitySchema }).strict(),
@@ -238,7 +239,9 @@ export class ConversationTransferReceiver {
         const parsed = outputItemSchema.parse(item);
         if (parsed.kind === 'pending' || parsed.kind === 'running') this.applyState(parsed.state, transfer.metadata);
         else {
-          if (parsed.kind === 'tool_history' && parsed.history.operationId !== transfer.metadata.operationId) {
+          const toolOperation = parsed.kind === 'tool_history' ? parsed.history.operationId
+            : parsed.kind === 'tool_history_update' ? parsed.update.operationId : undefined;
+          if (toolOperation !== undefined && toolOperation !== transfer.metadata.operationId) {
             throw new Error('Tool history operation mismatch');
           }
           if ('operationId' in parsed && parsed.operationId !== transfer.metadata.operationId) throw new Error('Output operation mismatch');

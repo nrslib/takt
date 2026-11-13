@@ -268,7 +268,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           }
           case 'snapshot': {
             cancelRead();
-            const read = await service.snapshot(request.params.attachmentId);
+            const read = await service.snapshot(request.params.attachmentId, { toolHistory: request.params.toolHistory === true });
             await response({ read: snapshotMetadata(read) });
             beginRead(read);
             break;

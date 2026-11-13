@@ -1,6 +1,6 @@
 import stringWidth from 'string-width';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
-import { COMPACT_RESULT_LINES } from '../../shared/tool-activity/presentation.js';
+import { COMPACT_RESULT_LINES, formatToolActivityTime } from '../../shared/tool-activity/presentation.js';
 import type { ToolActivityGroup, ToolActivityProjection } from '../../shared/tool-activity/types.js';
 import type { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 
@@ -42,15 +42,17 @@ export interface ToolActivityTranscriptRange {
 export function mergeToolActivityTranscript(
   previous: readonly ToolActivityTranscriptRange[], incoming: readonly ToolActivityTranscriptRange[],
 ): ToolActivityTranscriptRange[] {
-  const fields = new Map<string, ToolActivityTranscriptRange[]>();
-  for (const range of [...previous, ...incoming]) {
-    const ranges = fields.get(range.key) ?? [];
-    ranges.push(range);
-    fields.set(range.key, ranges);
+  const fields = new Map<string, { range: ToolActivityTranscriptRange; incoming: boolean }[]>();
+  for (const [ranges, isIncoming] of [[previous, false], [incoming, true]] as const) {
+    for (const range of ranges) {
+      const values = fields.get(range.key) ?? [];
+      values.push({ range, incoming: isIncoming });
+      fields.set(range.key, values);
+    }
   }
   return [...fields.values()].flatMap((ranges) => {
     const merged: ToolActivityTranscriptRange[] = [];
-    for (const range of ranges.sort((left, right) => left.offset - right.offset)) {
+    for (const { range, incoming: isIncoming } of ranges.sort((left, right) => left.range.offset - right.range.offset)) {
       const last = merged.at(-1);
       if (last === undefined || last.offset + last.text.length < range.offset) merged.push({ ...range });
       else {
@@ -59,7 +61,13 @@ export function mergeToolActivityTranscript(
         if (end > previousEnd) {
           last.text += range.text.slice(previousEnd - range.offset);
           last.omitted = range.omitted;
-        } else if (end === previousEnd) last.omitted &&= range.omitted;
+        } else if (end === previousEnd) {
+          const overlap = last.text.slice(range.offset - last.offset);
+          if (isIncoming && overlap !== range.text) {
+            last.text = last.text.slice(0, range.offset - last.offset) + range.text;
+            last.omitted = range.omitted;
+          } else last.omitted &&= range.omitted;
+        }
       }
     }
     return merged;
@@ -256,8 +264,8 @@ export function toolActivityViewPage(
       }
       case 'time': {
         const timing = [entry.status,
-          ...(entry.startedAt === undefined ? [] : [`@${entry.startedAt}`]),
-          ...(entry.completedAt === undefined ? [] : [`→ @${entry.completedAt}`]),
+          ...(entry.startedAt === undefined ? [] : [`@${formatToolActivityTime(entry.startedAt)}`]),
+          ...(entry.completedAt === undefined ? [] : [`→ @${formatToolActivityTime(entry.completedAt)}`]),
           ...(entry.durationMs === undefined ? [] : [`(${entry.durationMs} ms)`]),
           ...(entry.completionSequence === undefined ? [] : [`${labels.completion} #${entry.completionSequence}`]),
         ].join(' ');

@@ -31,7 +31,7 @@ it('transfers saved tool history and rejects mismatched operation, duplicate key
   const source = new ToolActivityHistory(() => 1000);
   source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} },
     toolActivity: { callId: 'call', operationId, generation: 1 } });
-  const history = { operationId, generation: 1, finished: false, eventIds: ['event'], history: source.snapshot() };
+  const history = { operationId, generation: 1, finished: false, history: source.snapshot() };
   const f = fixture();
   for (const frame of await f.frames(f.metadata(4, 1, operationId), [{ kind: 'tool_history', history }], 'output')) f.receiver.receive(frame);
   expect(f.observer.output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history', history }, expect.anything());
@@ -40,10 +40,30 @@ it('transfers saved tool history and rejects mismatched operation, duplicate key
     { ...history, finished: true },
     { ...history, generation: 2 },
     { ...history, history: { ...history.history, entries: [...history.history.entries, ...history.history.entries] } },
-    { ...history, eventIds: ['event', 'event'] },
   ]) {
     const f = fixture();
     const frames = await f.frames(f.metadata(4, 1, operationId), [{ kind: 'tool_history', history: invalid }], 'output');
+    expect(() => { for (const frame of frames) f.receiver.receive(frame); }).toThrow();
+    expect(f.observer.output).not.toHaveBeenCalled();
+  }
+});
+
+it('transfers a tool history update and rejects one for another operation, another generation or an older sequence', async () => {
+  const operationId = randomUUID();
+  const source = new ToolActivityHistory(() => 1000);
+  const entries = source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} },
+    toolActivity: { callId: 'call', operationId, generation: 1 } });
+  const update = { operationId, generation: 1, previousSequence: 0, sequence: 1, entries };
+  const f = fixture();
+  for (const frame of await f.frames(f.metadata(4, 1, operationId), [{ kind: 'tool_history_update', update }], 'output')) f.receiver.receive(frame);
+  expect(f.observer.output).toHaveBeenCalledExactlyOnceWith({ kind: 'tool_history_update', update }, expect.anything());
+  for (const invalid of [
+    { ...update, operationId: randomUUID() },
+    { ...update, generation: 2 },
+    { ...update, previousSequence: 1 },
+  ]) {
+    const f = fixture();
+    const frames = await f.frames(f.metadata(4, 1, operationId), [{ kind: 'tool_history_update', update: invalid }], 'output');
     expect(() => { for (const frame of frames) f.receiver.receive(frame); }).toThrow();
     expect(f.observer.output).not.toHaveBeenCalled();
   }
@@ -308,7 +328,7 @@ it('requires a goal objective in a snapshot inquiry before publishing it to the 
 
 function changeRead(changes: SnapshotChanges, values: SnapshotValue[]) {
   return changes.read({ transferId: randomUUID(), conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null },
-    (async function* () { yield* values; })());
+    (async function* () { yield* values; })(), false);
 }
 async function consumeChanges(read: ReturnType<typeof changeRead>) {
   const values = [];
@@ -332,6 +352,23 @@ it('sends only changed values and removed keys after explicit completion and per
   expect(await consumeChanges(delta)).toEqual([changed, { kind: 'remove', key: snapshotItemKey(second) }]);
   delta.complete();
   expect(await consumeChanges(changeRead(changes, [changed]))).toEqual([]);
+});
+it('sends tool history on an unrequested read that replaces the first read before it completes', async () => {
+  const changes = new SnapshotChanges();
+  const operationId = randomUUID();
+  const source = new ToolActivityHistory(() => 1000);
+  source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: {} }, toolActivity: { callId: 'call', operationId, generation: 1 } });
+  const tools: SnapshotValue = { kind: 'tool_history', history: { operationId, generation: 1, finished: false, history: source.snapshot() } };
+  const opened = changes.read({ transferId: randomUUID(), conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null },
+    (async function* () { yield tools; })(), true);
+
+  const replacement = changeRead(changes, [tools]);
+  opened.complete();
+
+  expect(replacement.mode).toBe('initial');
+  expect(await consumeChanges(replacement)).toEqual([tools]);
+  replacement.complete();
+  expect(await consumeChanges(changeRead(changes, [tools]))).toEqual([]);
 });
 it.each(['unconsumed', 'cancelled', 'replaced'] as const)('does not commit an %s read or a late completion', async (failure) => {
   const changes = new SnapshotChanges();

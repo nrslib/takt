@@ -21,7 +21,8 @@ export function createDaemonConversationInput(options: {
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): Promise<SnapshotRead & Pick<ConversationSnapshot, 'generation'>> => {
+  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number },
+    toolHistory: boolean): Promise<SnapshotRead & Pick<ConversationSnapshot, 'generation'>> => {
     const snapshot = await options.ingress.snapshot(id);
     if (snapshot.conversationId !== id) { snapshot.cancel(); throw new ConversationError('invalid_assignment'); }
     const screen = screenSnapshot(snapshot);
@@ -29,8 +30,9 @@ export function createDaemonConversationInput(options: {
     const projected = attachment.changes.read(screen, (async function* () {
       try {
         for await (const item of screen.items) {
-          if (item.kind === 'tool_history' && attachment.input.binding.port !== 'tui') continue;
           if (item.kind === 'remove') throw new Error('Conversation owner must provide a complete projection');
+          // ツール履歴を表示するのは TUI だけ。
+          if (item.kind === 'tool_history' && attachment.input.binding.port !== 'tui') continue;
           if (item.kind === 'display_event') {
             if (attachment.input.assignment.kind !== 'daemon' && item.recordedAt !== undefined && Date.parse(item.recordedAt) < attachment.startedAt) continue;
             yield { kind: 'display_event' as const, event: item.event };
@@ -38,7 +40,7 @@ export function createDaemonConversationInput(options: {
         }
         exhausted = true;
       } finally { if (!exhausted) screen.cancel(); }
-    })());
+    })(), toolHistory);
     return { ...projected, generation: snapshot.generation, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
       cancel() { projected.cancel(); screen.cancel(); } };
   };
@@ -74,7 +76,7 @@ export function createDaemonConversationInput(options: {
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
       const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve(), pendingDeliveries: 0,
         activitySequence: undefined as number | undefined };
-      const snapshot = await read(request.conversationId, attachment);
+      const snapshot = await read(request.conversationId, attachment, true);
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
       attachments.set(attachmentId, attachment);
@@ -134,10 +136,10 @@ export function createDaemonConversationInput(options: {
         return { kind: 'error', code: codes[admission.reason], message: `Event rejected: ${admission.reason}` };
       } finally { finishValidation(); }
     },
-    async snapshot(attachmentId) {
+    async snapshot(attachmentId, request) {
       const attachment = attached(attachmentId);
       if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== attachment.input.conversationId) throw new ConversationError('invalid_assignment');
-      return replayActivityAfterRead(attachmentId, await read(attachment.input.conversationId, attachment));
+      return replayActivityAfterRead(attachmentId, await read(attachment.input.conversationId, attachment, request?.toolHistory === true));
     },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };
@@ -161,7 +163,7 @@ export function createDaemonConversationInput(options: {
       const recipients = [...attachments.values()].filter(({ input }) => input.conversationId === id);
       if (output.kind === 'snapshot') {
         output.read.cancel();
-        await Promise.all(recipients.map(async (attachment) => attachment.delivery.deliver(id, { kind: 'snapshot', read: await read(id, attachment) }, version)));
+        await Promise.all(recipients.map(async (attachment) => attachment.delivery.deliver(id, { kind: 'snapshot', read: await read(id, attachment, false) }, version)));
         return;
       }
       if ((output.kind === 'pending' || output.kind === 'running') && output.state.running !== null) {
@@ -174,7 +176,7 @@ export function createDaemonConversationInput(options: {
       const value = output;
       await Promise.all(recipients.map(async (attachment) => {
         if (signal?.aborted) return;
-        if (value.kind === 'tool_history' && attachment.input.binding.port !== 'tui') return;
+        if ((value.kind === 'tool_history' || value.kind === 'tool_history_update') && attachment.input.binding.port !== 'tui') return;
         if (value.kind === 'turn_text') {
           if (attachment.input.binding.port === 'tui') await attachment.delivery.deliver(id, value, version, signal);
           return;
