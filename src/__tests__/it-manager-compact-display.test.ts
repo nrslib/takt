@@ -36,6 +36,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { EpicSnapshotSchema } from '../infra/epics/projection.js';
 import { epicView } from '../infra/epics/state.js';
 import { epicRecord, epicWorkspaceId } from './helpers/epic-fixtures.js';
+import { ToolActivityHistory } from '../shared/tool-activity/history.js';
 
 vi.mock('../features/tui/PromptInput.js', async (original) => {
   const actual = await original<typeof import('../features/tui/PromptInput.js')>();
@@ -138,6 +139,122 @@ describe('manager summary transcript and terminal height', () => {
       },
     };
   }
+
+  function historyClient(): ManagerClientDouble {
+    const history = new ToolActivityHistory();
+    const operationId = 'history-guidance';
+    const toolActivity = { callId: 'history-call', operationId, generation: 1 };
+    for (let index = 0; index < 12; index++) {
+      history.apply({ type: 'tool_use', toolActivity, data: { id: `tool-${index}`,
+        tool: index % 2 === 0 ? 'Bash' : 'Read', input: index % 2 === 0
+          ? { command: `command-${index}` } : { file_path: `file-${index}.ts` } } });
+      history.apply({ type: 'tool_result', toolActivity,
+        data: { id: `tool-${index}`, content: `result-${index}`, isError: false } });
+    }
+    return new ManagerClientDouble({ items: [{ kind: 'tool_history', history: {
+      operationId, generation: 1, finished: true, eventIds: [], history: history.snapshot(),
+    } }] });
+  }
+
+  it.each(['ja', 'en'] as const)('shows Ctrl+T history guidance and keeps Ctrl+O for Epics in %s', async (lang) => {
+    const context = mountTerminal(lang, null, 160, historyClient());
+    try {
+      const hint = async () => (await context.viewport()).split('\n').find((row) => /Tools:|ツール履歴:/u.test(row));
+      await waitFor(async () => {
+        expect(await hint()).toContain('Ctrl+T');
+        expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+      });
+      context.stdin.write('\x14');
+      await waitFor(async () => {
+        expect(await hint()).toContain('Ctrl+T');
+        expect(await hint()).toContain(lang === 'ja' ? '折りたたみ' : 'collapse');
+      });
+      context.stdin.write('\x14');
+      await waitFor(async () => expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand'));
+      context.stdin.write('\x0f');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
+      expect(context.client.submit).not.toHaveBeenCalled();
+    } finally { context.dispose(); }
+  });
+
+  it.each(['ja', 'en'] as const)('renders each proposal hint separator once before and during work in %s', async (lang) => {
+    const context = mountTerminal(lang, makeSummary(4), 200);
+    try {
+      for (const busy of [false, true]) {
+        if (busy) context.client.change({ state: { ...context.client.getSnapshot().state!, running: {
+          operationId: 'busy', kind: 'turn', generation: 1, startedAt: Date.now(),
+        } } });
+        const expected = getLabel(busy ? 'manager.summaryInputHintWorking' : 'manager.summaryInputHint', lang);
+        await waitFor(async () => {
+          const rows = (await context.viewport()).split('\n');
+          const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+          expect(promptEnd).toBeGreaterThan(-1);
+          expect(rows[promptEnd + 1]).toBe(expected);
+        });
+      }
+    } finally { context.dispose(); }
+  });
+
+  it('reflows guidance and reserves one fewer history row when resized from 89 to 88 columns', async () => {
+    const context = mountTerminal('en', null, 89, historyClient());
+    const inspect = async (hintRows: number) => {
+      const rows = (await context.viewport()).split('\n');
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      expect(promptEnd).toBeGreaterThan(-1);
+      const hints = rows.slice(promptEnd + 1, promptEnd + 1 + hintRows);
+      expect(hints.join('  ')).toBe(getLabel('manager.inputHint', 'en'));
+      expect(rows[promptEnd + 1 + hintRows]).toContain('Ongoing 0');
+      const start = rows.findIndex((row) => row.startsWith('✓ Bash'));
+      const end = rows.findIndex((row) => row.includes('Tools:'));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return end - start;
+    };
+    try {
+      await waitFor(async () => { await inspect(1); });
+      const wideRows = await inspect(1);
+      context.resize(24, 88);
+      await waitFor(async () => expect(await inspect(2)).toBe(wideRows - 1));
+      context.resize(24, 89);
+      await waitFor(async () => expect(await inspect(1)).toBe(wideRows));
+    } finally { context.dispose(); }
+  });
+
+  it.each(['list', 'detail'] as const)('keeps the Epic %s body and footer inside the viewport across the guidance wrap boundary', async (view) => {
+    const epic = { ...epicRecord(), verificationProcedure: { version: 1,
+      steps: Array.from({ length: 40 }, (_, index) => `Boundary step ${index}`) } };
+    const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: epicWorkspaceId, name: 'Boundary workspace',
+      repositoryDirectories: [summaryRepository] };
+    const client = new ManagerClientDouble({ items: [{ kind: 'assignment', assignment },
+      ...Array.from({ length: 12 }, (_, index) => EpicSnapshotSchema.parse({ kind: 'epic',
+        epic: epicView({ ...epic, id: randomUUID(), objective: `Boundary epic ${index}` }), memberProgress: [], recovery: [] }))] });
+    const context = mountTerminal('en', null, 89, client);
+    const inspect = async (hintRows: number) => {
+      const viewport = await context.viewport();
+      const rows = viewport.split('\n');
+      expect(viewport).toContain(getLabel(`manager.epics.${view}Title`, 'en'));
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      expect(promptEnd).toBeGreaterThan(-1);
+      expect(rows.slice(promptEnd + 1, promptEnd + 1 + hintRows).join('  ')).toBe(getLabel('manager.inputHint', 'en'));
+      expect(rows[promptEnd + 1 + hintRows]).toContain('Ongoing 0');
+      expect(boxes(viewport)).toHaveLength(2);
+      return contentRows(boxes(viewport)[0]).length;
+    };
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write('\x1b[200~draft 1\ndraft 2\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('draft 1\ndraft 2'));
+      context.stdin.write('\x0f');
+      await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', 'en')));
+      if (view === 'detail') context.stdin.write(ENTER);
+      await waitFor(async () => { await inspect(1); });
+      const wideRows = await inspect(1);
+      context.resize(24, 88);
+      await waitFor(async () => expect(await inspect(2)).toBe(wideRows - (view === 'list' ? 2 : 1)));
+      context.resize(24, 89);
+      await waitFor(async () => expect(await inspect(1)).toBe(wideRows));
+    } finally { context.dispose(); }
+  });
 
   it.each([['en', 1], ['en', 6], ['ja', 6]] as const)('keeps Epic detail pages inside the 80 by 24 viewport in %s with a %i-row draft', async (lang, draftRows) => {
     const epic = { ...epicRecord(), objective: 'Epic viewport objective',

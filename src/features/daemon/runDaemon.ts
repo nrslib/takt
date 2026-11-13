@@ -215,8 +215,10 @@ export async function startDaemon(options: {
     const idleAfter = Date.now() + 500;
     idleCheck = startWatchLoop(500, async () => {
       if (Date.now() < idleAfter || !idle()) return;
+      const attachmentGeneration = input.attachmentGeneration;
       await watchers?.drain();
-      if (!await watchSource.hasWork(files) && idle()) void close().catch(reportDaemonError);
+      // 確認中に接続が成立すると、切断済みでも保存内容が変わっている可能性がある。
+      if (!await watchSource.hasWork(files) && idle() && input.attachmentGeneration === attachmentGeneration) void close().catch(reportDaemonError);
     }, reportDaemonError);
     return { dispatcher, input, conversations, watchers, stopped, close };
   } catch (error) {

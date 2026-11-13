@@ -389,13 +389,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const epicFooterLines: string[] = [];
   if (epicsOpen) {
     let line = '';
-    for (const [index, item] of hintItems.entries()) {
-      const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
-      if (line !== '' && measureWidth(line + text) > statusWidth) {
+    for (const item of hintItems) {
+      if (line !== '' && measureWidth(line + item) > statusWidth) {
         epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
         line = '';
       }
-      line += text;
+      line += item;
     }
     epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
   }
@@ -422,7 +421,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [toolHistory, running?.operationId, running?.generation]);
   const toolGroups = toolDisplay.groups();
   const toolLabels = {
-    compact: getLabel('tui.ui.toolHistoryCompact', lang), expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+    compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
     more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
     completion: getLabel('tui.ui.toolHistoryCompletion', lang),
   };
@@ -509,10 +508,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       completionIndex={slashCompletion.completionIndex}
       maxVisibleCompletions={3}
       disabled={epicsOpen || selection.selection !== null || abortTarget !== null || selectingSummary} />
-    {epicsOpen ? <Text dimColor wrap="truncate-end">{epicFooterLines.join('\n')}</Text> : <Box flexWrap="wrap">{hintItems.map((item, index) => {
-      const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
-      return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
-    })}</Box>}
+    {epicsOpen ? <Text dimColor wrap="truncate-end">{epicFooterLines.join('\n')}</Text> : <Box flexWrap="wrap">{hintItems.map((item) =>
+      <Box key={item} width={measureWidth(item)} flexShrink={0}><Text dimColor>{item}</Text></Box>,
+    )}</Box>}
     <Box flexDirection={splitStatus ? 'column' : 'row'} width={statusWidth}>
       <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
       <Text dimColor wrap="truncate-end">{splitStatus ? statusDetails : ` | ${statusDetails}`}</Text>

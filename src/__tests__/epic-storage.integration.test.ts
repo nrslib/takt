@@ -13,6 +13,9 @@ import { ConversationStateStore } from '../infra/daemon/conversationStateStore.j
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { createDaemonStateRequests } from '../features/daemon/stateRequests.js';
 import { conversationId } from '../infra/conversations/identity.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
+import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
+import { ControlledTurnRunner, accepted } from './helpers/controlledDaemon.js';
 import type { DaemonIngress } from '../core/daemon/ports.js';
 import {
   epicId, epicRecord, epicVerificationResult, epicWorkspaceId, secondGoalId,
@@ -114,13 +117,17 @@ describe('workspace Epic storage', () => {
       const notificationError = new Error('Notification storage unavailable');
       vi.spyOn(notifications, 'save').mockRejectedValueOnce(notificationError);
       const send = vi.spyOn(conversations, 'send');
-      for (const event of events) {
+      for (const [index, event] of events.entries()) {
         const result = { ...turn, event: { ...event, operationId: turn.operationId, acceptedSequence: 1, lane: 'other' as const },
           outcome: { kind: 'completed' as const, result: { kind: 'notice' as const, message: '' } } };
+        if (index === 0) {
+          await expect(conversations.apply(result)).rejects.toBe(notificationError);
+          expect(send).not.toHaveBeenCalled();
+        }
         await conversations.apply(result);
         await conversations.apply(result);
       }
-      expect(errors).toHaveBeenCalledWith(notificationError);
+      expect(errors).not.toHaveBeenCalled();
       expect(send.mock.calls.slice(0, 2).map(([, output]) => output.kind)).toEqual(['pending', 'result']);
       const saved = [];
       for await (const notice of notifications.iterate()) saved.push(notice);
@@ -128,6 +135,73 @@ describe('workspace Epic storage', () => {
       expect(saved.every((notice) => notice.conversationId === turn.conversationId)).toBe(true);
     } finally { await conversations.close(); }
     expect(await store.get(epicId)).toEqual(record);
+  });
+
+  it.each([
+    ['epic_verification_result', false], ['epic_completed', false],
+    ['epic_verification_result', true], ['epic_completed', true],
+  ] as const)('recovers failed %s notification storage with restart=%s without executing the turn again', async (kind, restart) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: 'Notification recovery', repositoryDirectories: [] });
+    const record = { ...completedRecord(undefined), workspaceId: workspace.id };
+    const epics = new EpicStore(configDirectory, workspace.id);
+    await epics.create(record);
+    const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
+    const id = conversationId(owner);
+    const event = epicEvents(record).find(({ event }) => event.kind === kind)!;
+    const create = async () => {
+      const notifications = new DaemonNotifications(configDirectory);
+      const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
+        notifications, async () => {}, vi.fn());
+      await conversations.ensure(owner);
+      const store = new FileEventStore(configDirectory);
+      const runner = new ControlledTurnRunner();
+      const failures = vi.fn();
+      const dispatcher = await createDaemonDispatcher({ store, conversations, runner,
+        stateRequests: createDaemonStateRequests({ conversations, ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: () => [] }),
+        resources: { close: () => conversations.close() }, limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: failures });
+      runner.bus = dispatcher;
+      return { dispatcher, store, runner, failures, notifications };
+    };
+    let context = await create();
+    try {
+      const failure = new Error('Notification storage unavailable');
+      vi.spyOn(context.notifications, 'save').mockRejectedValueOnce(failure);
+      const admission = await context.dispatcher.accept(event);
+      accepted(admission);
+      const call = await context.runner.started(1);
+      await context.runner.finish(call, { kind: 'completed', result: { kind: 'notice', message: '' } });
+      await context.dispatcher.drain();
+      expect(context.failures).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ phase: 'settle', error: failure }));
+      expect(context.runner.committed).toEqual([]);
+      const pending = [];
+      for await (const stored of (await context.store.restore()).pending) pending.push(stored);
+      expect(pending).toEqual([expect.objectContaining({ state: 'settling', event: call.input.event })]);
+      const unsaved = [];
+      for await (const notice of context.notifications.iterate()) unsaved.push(notice);
+      expect(unsaved).toEqual([]);
+      if (restart) {
+        await expect(context.dispatcher.control({ kind: 'stop' })).rejects.toBeInstanceOf(AggregateError);
+        context = await create();
+        await context.dispatcher.drain();
+      } else await context.dispatcher.retryStorage();
+      expect(context.runner.calls).toHaveLength(restart ? 0 : 1);
+      expect(context.runner.committed).toEqual([expect.objectContaining(call.turn)]);
+      const settled = await context.store.accept(call.input.event);
+      expect(settled).toMatchObject({ kind: 'duplicate', state: 'settled' });
+      expect(await context.dispatcher.accept(event)).toEqual(admission);
+      await context.dispatcher.drain();
+      expect(context.runner.calls).toHaveLength(restart ? 0 : 1);
+      const saved = [];
+      for await (const notice of context.notifications.iterate()) saved.push(notice);
+      expect(saved).toEqual([{ id: event.eventId, conversationId: id, message: expect.stringContaining(kind === 'epic_completed' ? 'completed' : 'verification succeeded') }]);
+      const snapshot = await context.dispatcher.snapshot(id);
+      const displayed = [];
+      try {
+        for await (const item of snapshot.items) if (item.kind === 'display_event') displayed.push(item.event);
+      } finally { snapshot.complete(); }
+      expect(displayed).toEqual(saved.map(({ id, message }) => ({ id, message })));
+      expect(await epics.get(epicId)).toEqual(record);
+    } finally { await context.dispatcher.control({ kind: 'stop' }); }
   });
 
   it('keeps records from different workspaces separate', async () => {

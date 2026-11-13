@@ -356,8 +356,8 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
-    toolHistoryCompact: "ツール履歴: Ctrl+T で展開 · PageUp/PageDown で移動"
-    toolHistoryExpanded: "ツール履歴: Ctrl+T で折りたたみ · PageUp/PageDown で移動"
+    toolHistoryCompact: "ツール履歴: Ctrl+O で展開 · PageUp/PageDown で移動"
+    toolHistoryExpanded: "ツール履歴: Ctrl+O で折りたたみ · PageUp/PageDown で移動"
     toolHistoryMore: "[出力を省略・続きあり]"
     toolHistoryEnd: "[末尾]"
     toolHistoryCompletion: "完了受信順"
@@ -491,6 +491,8 @@ manager:
   assignmentHeadingMultiple: "担当: {name} ほか {count} 件"
   counts: "進行中 {goals} ／ マージ待ち {awaiting} ／ 未回答 {questions}"
   inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O Epic  ^C 終了"
+  toolHistoryCompact: "ツール履歴: Ctrl+T で展開 · PageUp/PageDown で移動"
+  toolHistoryExpanded: "ツール履歴: Ctrl+T で折りたたみ · PageUp/PageDown で移動"
   epics:
     listTitle: "Epic 一覧"
     detailTitle: "Epic 詳細"

@@ -159,6 +159,7 @@
     "src/__tests__/daemon-reachability.integration.test.ts",
     "src/__tests__/daemon-retired-watch-events.integration.test.ts",
     "src/__tests__/daemon-slack-ports.test.ts",
+    "src/__tests__/daemon-startup.integration.test.ts",
     "src/__tests__/daemon-storage.integration.test.ts",
     "src/__tests__/daemon-turn-legacy-events.test.ts",
     "src/__tests__/daemon-turn-process-host.test.ts",

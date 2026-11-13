@@ -44,7 +44,8 @@ describe('Epic persisted state watcher', () => {
     doubles.get.mockResolvedValue(epicView(epic));
     const event = epicEvents(epic).at(-1)!;
     const id = conversationId({ kind: 'workspace', workspaceId: epic.workspaceId });
-    const store = { apply: vi.fn(), read: vi.fn(async () => ({ state: { assignment: { kind: 'workspace', workspaceId: epic.workspaceId }, revision: 0, pending: null, approval: null } })) };
+    const store = { apply: vi.fn(), updateToolHistory: vi.fn(async () => undefined),
+      read: vi.fn(async () => ({ state: { assignment: { kind: 'workspace', workspaceId: epic.workspaceId }, revision: 0, pending: null, approval: null } })) };
     const routing = { directory: '/config', permits: vi.fn(async () => true) };
     const save = vi.fn(async () => true);
     const outputs: PortOutput[] = [];

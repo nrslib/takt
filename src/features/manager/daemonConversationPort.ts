@@ -16,6 +16,7 @@ export function createDaemonConversationInput(options: {
   const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number; activitySequence: number | undefined }>();
   const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
   let accepting = true;
+  let attachmentGeneration = 0;
   const attached = (id: string) => {
     const attachment = attachments.get(id);
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
@@ -78,6 +79,7 @@ export function createDaemonConversationInput(options: {
       if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
       const attachmentId = randomUUID();
       attachments.set(attachmentId, attachment);
+      attachmentGeneration++;
       return { attachmentId, read: replayActivityAfterRead(attachmentId, snapshot) };
     },
     async submit(request) {
@@ -143,6 +145,7 @@ export function createDaemonConversationInput(options: {
   };
   return { ...input,
     get attachmentCount() { return attachments.size; },
+    get attachmentGeneration() { return attachmentGeneration; },
     connectedPorts(id: string): string[] {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },
