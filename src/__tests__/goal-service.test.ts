@@ -1,6 +1,6 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoal, registerReservedGoal } from '../infra/goals/service.js';
+import { createGoal, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
 import { saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
@@ -106,6 +106,32 @@ describe('Goal registration service', () => {
     await expect(createGoal(request())).rejects.toThrow();
     expect(doubles.removeBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(await createGoal(request())).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+  });
+
+  it('reports a saved goal or matching branch as a registration artifact', async () => {
+    doubles.find.mockReturnValue(goalRecord());
+    expect(await hasGoalRegistrationArtifacts(cwd, goalRecord().id)).toBe(true);
+    expect(doubles.refs).not.toHaveBeenCalled();
+
+    doubles.find.mockReturnValue(undefined);
+    doubles.refs.mockResolvedValueOnce({ output: Buffer.from(`refs/heads/takt/20261112T0000-goal-${goalRecord().id.slice(0, 8)}\n`), truncated: false, code: 0 });
+    expect(await hasGoalRegistrationArtifacts(cwd, goalRecord().id)).toBe(true);
+  });
+
+  it('reports no registration artifacts only after confirming there is no goal or matching branch', async () => {
+    doubles.find.mockReturnValue(undefined);
+    doubles.refs.mockResolvedValueOnce({ output: Buffer.alloc(0), truncated: false, code: 0 });
+
+    expect(await hasGoalRegistrationArtifacts(cwd, goalRecord().id)).toBe(false);
+    expect(doubles.refs).toHaveBeenCalledWith(cwd,
+      ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${goalRecord().id.slice(0, 8)}`], 1024, undefined);
+  });
+
+  it('keeps a reservation when its branch list is truncated and artifacts cannot be ruled out', async () => {
+    doubles.find.mockReturnValue(undefined);
+    doubles.refs.mockResolvedValueOnce({ output: Buffer.alloc(1024), truncated: true, code: 0 });
+
+    expect(await hasGoalRegistrationArtifacts(cwd, goalRecord().id)).toBe(true);
   });
 
   it.each(['references', 'project', 'branch'] as const)('stops registration aborted during %s preparation before any branch, goal or event', async (boundary) => {

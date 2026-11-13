@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoalBranch, prepareGoalBranch, removeGoalBranch } from '../infra/goals/git.js';
+import { createGoalBranch, prepareGoalBranch, removeGoalBranch, validateGoalBranchReferences } from '../infra/goals/git.js';
 import type { GoalGitOutput } from '../infra/goals/git-command.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -246,6 +246,17 @@ describe('Goal Git registration', () => {
     expect(doubles.config).not.toHaveBeenCalled();
     expect(doubles.detect).not.toHaveBeenCalled();
     expect(doubles.exec).toHaveBeenCalledWith('git', ['rev-parse', '--verify', 'refs/heads/develop^{commit}'], expect.any(Object));
+  });
+
+  it.each([
+    { start: 'origin/main', integration: undefined },
+    { start: undefined, integration: 'origin/main' },
+  ])('requires explicit proposal branches to resolve as local branches: $start / $integration', ({ start, integration }) => {
+    expect(() => validateGoalBranchReferences('/project', start, integration))
+      .toThrow('Unable to resolve local branch "origin/main" to a commit');
+    expect(doubles.exec).toHaveBeenLastCalledWith('git', ['rev-parse', '--verify', 'refs/heads/origin/main^{commit}'], expect.any(Object));
+    expect(doubles.fetch).not.toHaveBeenCalled();
+    expect(doubles.run).not.toHaveBeenCalled();
   });
 
   it('rejects a configured integration branch without a local commit', async () => {

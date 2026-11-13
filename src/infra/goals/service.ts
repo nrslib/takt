@@ -1,5 +1,5 @@
 import { createGoalBranch, prepareGoalBranch, removeGoalBranch } from './git.js';
-import { GoalCreateInputSchema, GoalSchema, type Goal, type GoalCreateInput } from './schema.js';
+import { GoalCreateInputSchema, GoalIdSchema, GoalSchema, type Goal, type GoalCreateInput } from './schema.js';
 import { GoalStore } from './store.js';
 import { readManagerEvents, saveManagerEvent } from './events.js';
 import { runGoalGit } from './git-command.js';
@@ -38,6 +38,17 @@ export class GoalRegistrationRecoveryError extends Error {
   readonly code = 'registration_recovery';
 }
 
+async function hasGoalRegistrationBranch(cwd: string, id: string, signal: AbortSignal | undefined): Promise<boolean> {
+  const refs = await runGoalGit(cwd, ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${id.slice(0, 8)}`], 1024, signal);
+  return refs.truncated || refs.output.length > 0;
+}
+
+export async function hasGoalRegistrationArtifacts(cwd: string, id: string): Promise<boolean> {
+  GoalIdSchema.parse(id);
+  if (new GoalStore(cwd).find(id) !== undefined) return true;
+  return hasGoalRegistrationBranch(cwd, id, undefined);
+}
+
 export async function registerReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
   input = GoalCreateInputSchema.parse(input);
@@ -60,9 +71,8 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     }
     return existing;
   }
-  const refs = await runGoalGit(input.cwd, ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${input.id.slice(0, 8)}`], 1024, signal);
   signal?.throwIfAborted();
-  if (refs.truncated || refs.output.length > 0) {
+  if (await hasGoalRegistrationBranch(input.cwd, input.id, signal)) {
     throw new GoalRegistrationRecoveryError('A branch for this reservation requires explicit reconciliation');
   }
   return createGoal(input, signal);

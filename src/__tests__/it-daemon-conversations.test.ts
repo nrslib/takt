@@ -14,16 +14,31 @@ import { managerDaemonFixture, submitManagerText, waitForManager, type ManagerTu
 import { concurrentTuiFixture } from './helpers/concurrent-tui-ipc.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
+import { randomUUID } from 'node:crypto';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 
 async function waitForQueuedMessage(tui: ManagerTuiProcess): Promise<void> {
   const message = getLabel('manager.conversation.queued', 'en', { count: '1' }).replace(/\s+/gu, '');
   await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, '')).toContain(message), { timeout: 30000 });
+}
+
+async function waitForManagerNormalized(tui: ManagerTuiProcess, text: string): Promise<void> {
+  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, ' ')).toContain(text), { timeout: 30000 });
+}
+
+function addRemoteTrackingMain(repository: string): void {
+  const commit = execFileSync('git', ['rev-parse', 'refs/heads/main'], { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim();
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', commit], { cwd: repository, stdio: 'pipe' });
+  expect(execFileSync('git', ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'],
+    { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe(commit);
+  expect(execFileSync('git', ['for-each-ref', '--format=%(refname)', 'refs/heads/origin/main'],
+    { cwd: repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe('');
 }
 
 it('keeps make-goal instructions hidden on both connected manager screens', async () => {
@@ -241,6 +256,101 @@ it('reopens the same conversation and approves its restored summary with Up and 
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'request', pid: second.child.pid,
       command: 'approve_summary', revision: saved.pending!.revision }));
     await second.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('rejects an invalid branch proposal without saving it, then accepts a message and /make-goal', async () => {
+  const fixture = managerDaemonFixture('en');
+  const saved = conversationRecord(fixture.repository);
+  addRemoteTrackingMain(fixture.repository);
+  fixture.setResponses([
+    { message: 'The proposal uses an unavailable local branch.', summary: { ...fixture.summary, startBranch: 'origin/main' } },
+    { message: 'The conversation can continue.', summary: null },
+    { message: 'A fresh proposal is ready.', summary: fixture.summary },
+  ]);
+  fixture.release();
+  const conversations = new ConversationStateStore(fixture.directory);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'Discuss your goal');
+    await submitManagerText(tui, 'Prepare a CSV export');
+    await waitForManager(tui, 'Unable to resolve local branch');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, 'Continue after the rejected proposal');
+    await waitForManager(tui, 'The conversation can continue.');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, '/make-goal');
+    await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: { summary: fixture.summary }, approval: null, running: null }), { timeout: 30000 });
+    const observations = fixture.readObservations();
+    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(1);
+    const submissions = observations.filter(({ event }) => event === 'submit_result');
+    expect(submissions.map(({ command }) => command)).toEqual(['message', 'message', 'message']);
+    expect(submissions.map(({ kind }) => kind)).toEqual(['accepted', 'accepted', 'accepted']);
+    expect(await tui.frame()).not.toContain(getLabel('manager.conversation.registration_recovery', 'en'));
+    expect((await new GoalStore(fixture.repository).list()).goals).toEqual([]);
+    await tui.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('releases a persisted same-revision reservation and accepts dismissal, messages, and /make-goal', async () => {
+  const fixture = managerDaemonFixture('en');
+  const saved = conversationRecord(fixture.repository);
+  addRemoteTrackingMain(fixture.repository);
+  const originalPending = saved.pending!;
+  saved.pending = { ...originalPending, summary: { ...originalPending.summary, startBranch: 'origin/main' } };
+  const goalId = randomUUID();
+  saved.approval = { state: 'reserved', revision: originalPending.revision, goalId, repositoryDirectory: fixture.repository };
+  writeLegacyConversation(fixture.directory, saved);
+  fixture.setResponses([
+    { message: 'The conversation has recovered.', summary: null },
+    { message: 'A fresh proposal is ready.', summary: fixture.summary },
+  ]);
+  fixture.release();
+  const conversations = new ConversationStateStore(fixture.directory);
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, originalPending.summary.objective);
+    await tui.approveSummary(originalPending.revision);
+    await waitForManagerNormalized(tui, 'Unable to resolve local branch "origin/main" to a commit');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record).toMatchObject({
+      revision: originalPending.revision,
+      pending: { revision: originalPending.revision, summary: { startBranch: 'origin/main' } },
+      approval: null,
+      running: null,
+    }), { timeout: 30000 });
+    expect((await conversations.read(saved.id))?.state.version).toBeGreaterThan(0);
+    expect(execFileSync('git', ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${goalId.slice(0, 8)}`],
+      { cwd: fixture.repository, encoding: 'utf8', stdio: 'pipe' }).trim()).toBe('');
+
+    await tui.ready(null);
+    tui.key('\x1b');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+    expect(fixture.readObservations().filter(({ event, command, kind }) => event === 'submit_result'
+      && command === 'dismiss_summary').map(({ kind }) => kind)).toEqual(['accepted']);
+
+    await submitManagerText(tui, 'Continue after clearing the reservation');
+    await waitForManager(tui, 'The conversation has recovered.');
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
+
+    await submitManagerText(tui, '/make-goal');
+    await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
+      .toMatchObject({ pending: { summary: fixture.summary }, approval: null, running: null }), { timeout: 30000 });
+    const observations = fixture.readObservations();
+    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(1);
+    const submissions = observations.filter(({ event }) => event === 'submit_result');
+    expect(submissions.map(({ command }) => command)).toEqual(['approve_summary', 'dismiss_summary', 'message', 'message']);
+    expect(submissions.map(({ kind }) => kind)).toEqual(['accepted', 'accepted', 'accepted', 'accepted']);
+    expect(await tui.frame()).not.toContain(getLabel('manager.conversation.registration_recovery', 'en'));
+    await tui.exit();
   } finally { await fixture.cleanup(); }
 });
 
