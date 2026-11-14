@@ -243,7 +243,7 @@ assistant:
 | `auto_fetch` | boolean | `false` | 创建 clone 前 fetch remote |
 | `base_branch` | string | - | 创建 clone 的基分支，默认 remote 默认分支 |
 | `workflow_categories_file` | string | - | 分类文件路径，默认 overlay 使用 `workflow-categories.yaml` |
-| `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | VCS provider |
+| `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | VCS provider。根据 `origin` 的主机名自动检测（见 [clone 中的仓库标识](#clone-中的仓库标识)）；其他主机请显式设置 |
 | `takt_providers` | object | - | TAKT 内部 provider 覆盖（`assistant` 也作为 Report fallback provider） |
 | `telemetry` | object | `{ routing_decisions: false }` | 仅本地的路由决策记录，默认关闭 |
 | `analytics` | object | disabled | 仅本地的 analytics 收集 |
@@ -427,7 +427,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true`（来自全局/默认值） | 项目级覆盖，添加 Alloy/Quint 指导并要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`，未设置的字段回退到全局或默认值。`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。项目值优先于全局值。提示回答仅在当前会话中生效，恢复会话时重新解析。ACP 和非 TTY 不提问，使用配置的默认答案。Gherkin 指导仅适用于开发和实现任务。已弃用的 `assistant.gherkin` 会警告后忽略，不转换、不持久化，也不修改配置文件。 manager 也使用此设置且不会询问：`true`/`"Y/n"` 包含两种记法，`false`/`"y/N"` 则不包含。TUI 和 Slack 的 manager 对话也支持 `/verify`。 |
 | `provider_options` | object | - | provider 专属选项 |
 | `provider_profiles` | object | - | provider 专属权限 profile |
-| `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider |
+| `vcs_provider` | `"github"` \| `"gitlab"` | 自动检测 | 覆盖全局 VCS provider 和自动检测 |
 | `takt_providers` | object | - | TAKT 内部 provider 覆盖 |
 | `workflow_mcp_servers` | object | - | MCP transport 策略覆盖 |
 | `workflow_arpeggio` | object | - | Arpeggio 自定义代码策略覆盖 |
@@ -488,6 +488,18 @@ workflow_system_commands:
 独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。
 
 当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
+
+## clone 中的仓库标识
+
+`worktree: true` 的任务在没有 `origin` remote 的 clone 中运行，因此 `gh` 和 `glab` 无法从 git remote 确定仓库。声明了 [`repository_identity: true`](workflows.zh-CN.md#repository_identity) 的 workflow，TAKT 会读取项目根目录的 `origin`，并为该 workflow 的 agent 步骤、命令质量门禁和 system `command` 输入提供仓库。没有该声明则不提供，因此不操作仓库的 workflow 保持原样：
+
+- GitHub：`GH_REPO=HOST/OWNER/REPO`。由于 gh 的默认主机不一定是 `github.com`，主机（包括 `github.com`）总是会写明。仅供 ssh 使用的主机 `ssh.github.com` 和 `altssh.gitlab.com` 分别按 `github.com` 和 `gitlab.com` 处理。设置了 `GH_ENTERPRISE_TOKEN` 或 `GITHUB_ENTERPRISE_TOKEN` 时，仅当 `GH_HOST` 指向同一主机才写明 GitHub Enterprise Server 的主机，以免该 token 被指向调用方未为其配置的主机。
+- GitLab：`GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`，其中 scheme 取自 origin（`http` 保持 `http`，ssh 的 origin 为 `https`）。设置了 `GITLAB_TOKEN`、`GITLAB_ACCESS_TOKEN` 或 `OAUTH_TOKEN` 时，仅当 `GITLAB_HOST`（或 `GITLAB_URI` / `GL_HOST`）指向相同的 scheme、主机和实际端口（`http` 为 80，`https` 为 443；不带 scheme 的值按 `https` 处理）才添加，以免 TAKT 指定与 token 所配置的主机不同的主机。这只比较环境变量：glab 的协议和 API 主机由它自身的配置（`api_protocol`、`api_host`）决定，而不是这些变量中的 scheme，TAKT 无法看到该配置。
+- 仓库始终是项目根目录的 `origin`，主机必须是普通的 DNS 名称（或带方括号的 IPv6 地址），其他情况会被忽略。如果 `origin` 是 fork，并且用 `gh repo set-default` 把 `gh` 指向了上游仓库，TAKT 不会读取该选择（`remote.<name>.gh-resolved`），而会指定 fork：请自行设置 `GH_REPO`，该值会原样传递。
+
+已经设置的变量不会被覆盖。不会添加 remote 或凭据，也不会使用 URL 中的用户名或 token。未声明 `repository_identity` 的 workflow、在项目根目录运行的任务、`origin` 不存在或无法识别、provider 未知时，不添加任何变量。system `command` 输入在没有 `HOME` 的环境中运行，其中的 `gh` / `glab` 仍需自行认证。
+
+provider 优先使用 `vcs_provider`（项目覆盖全局），否则根据 `origin` 主机名检测：`github.com` 和 `gitlab.com`、`ghe.com` 的子域名（GitHub），然后是以 `.` 分隔的标签中恰好有 `github` 或 `gitlab` 之一的主机名，例如 `github.example.com`、`gitlab.example.com`。同时包含两者或都不包含的主机名（如 `ghe.corp.example`）以及 `github.com-work` 这类 ssh 别名不会被检测，请设置 `vcs_provider`。TAKT 在其他需要区分 GitHub 与 GitLab 的地方也使用同样的检测。
 
 ## 环境变量覆盖
 

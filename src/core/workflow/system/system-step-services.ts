@@ -127,6 +127,8 @@ export interface SystemStepServicesOptions extends PrMergeOptions {
   readonly cwd: string;
   readonly contextDirectory?: string;
   readonly projectCwd: string;
+  /** Snapshot for child processes; only repository identity reaches `command` inputs. */
+  readonly childProcessEnv?: Readonly<Record<string, string>>;
   readonly task: string;
   readonly taskContext?: SystemStepTaskContext;
   readonly runtimeState?: SystemStepRuntimeState;

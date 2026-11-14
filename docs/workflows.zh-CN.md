@@ -852,6 +852,17 @@ steps:
     capabilities: [edit, enable-skills]
 ```
 
+### `repository_identity`
+
+`repository_identity: true` 会在 clone 中运行的任务（`worktree: true`）里为 `gh` 和 `glab` 提供项目仓库，因为 clone 中没有可读的 `origin` remote。TAKT 会把 `GH_REPO` 或 `GITLAB_REPO` 传给该 workflow 的 agent 步骤、命令质量门禁和 system `command` 输入；不会添加 remote 或凭据。
+
+```yaml
+repository_identity: true
+```
+
+默认关闭，因此不操作仓库的 workflow 不会收到任何变量。每个 workflow 自行决定：被调用的 workflow 既不继承调用方的声明，也不会失去自己的声明。在项目根目录运行的任务不提供，已经自行设置的变量不会被覆盖。变量、主机规则以及 GitHub / GitLab 检测见 [clone 中的仓库标识](configuration.zh-CN.md#clone-中的仓库标识)。
+
+
 ### `workflow_config.runtime`
 
 在 workflow 执行前准备运行环境。builtin `node`/`gradle` preset 始终允许；自定义脚本需要 `workflow_runtime_prepare.custom_scripts: true`：

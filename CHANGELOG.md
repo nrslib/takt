@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A workflow can declare `repository_identity: true` to name the project's repository for `gh` and `glab` in a task that runs in a clone (`worktree: true`), where they cannot find it from git remotes because the clone has no `origin`. TAKT then reads the project root's `origin` and passes `GH_REPO` or `GITLAB_REPO` to that workflow's agent steps, command quality gates, and system `command` inputs, without adding a remote or a credential and without overriding a variable you set. It is off by default, and each workflow decides for itself: a called workflow neither inherits the caller's declaration nor loses its own. `GITLAB_REPO` is skipped while a GitLab token is set in the environment unless `GITLAB_HOST` names the same host, and a GitHub Enterprise Server host is skipped while an Enterprise token is set unless `GH_HOST` names it. See [`repository_identity`](docs/workflows.md#repository_identity) and [Repository identity in clones](docs/configuration.md#repository-identity-in-clones).
+
+### Changed
+
+- GitHub / GitLab auto-detection also recognises subdomains of `ghe.com` and self-hosted hostnames with exactly one label equal to `github` or `gitlab`, such as `github.example.com` or `gitlab.example.com`. `vcs_provider` still takes precedence; hostnames with both labels or neither stay undetected.
+
 ### Fixed
 
 - Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone. Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.

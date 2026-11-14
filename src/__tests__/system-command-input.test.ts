@@ -51,6 +51,17 @@ describe('command system input adapter', () => {
     expect(doubles.run.mock.calls[0]?.[0].env).not.toHaveProperty('TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE');
   });
 
+  it('passes only repository identity from childProcessEnv to the command', async () => {
+    await resolveCommandInput(input, {
+      ...options,
+      childProcessEnv: { GH_REPO: 'owner/repo', TAKT_OBSERVABILITY: '{"enabled":true}' },
+    }, state());
+
+    const env = doubles.run.mock.calls[0]?.[0].env;
+    expect(env).toHaveProperty('GH_REPO', 'owner/repo');
+    expect(env).not.toHaveProperty('TAKT_OBSERVABILITY');
+  });
+
   it.each([
     { exitCode: 0, timedOut: false, expected: true },
     { exitCode: 1, timedOut: false, expected: false },

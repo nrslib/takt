@@ -85,6 +85,18 @@ describe('getRemoteHostname — hostname extraction (indirect extractHostname te
   });
 });
 
+describe('getRemoteHostname uses the same parser as the repository identity', () => {
+  it.each([
+    ['github.com:owner/repo.git', 'github.com'],
+    ['git@ssh.github.com:owner/repo.git', 'github.com'],
+    ['ssh://git@altssh.gitlab.com:443/group/project.git', 'gitlab.com'],
+  ])('%s -> %s', (url, expected) => {
+    mockExecFileSync.mockReturnValue(`${url}\n`);
+
+    expect(getRemoteHostname('/project')).toBe(expected);
+  });
+});
+
 describe('getRemoteHostname', () => {
   it('cwd を git コマンドのオプションとして渡す', () => {
     // Given
@@ -229,6 +241,14 @@ describe('detectVcsProvider', () => {
       // Then
       expect(result).toBeUndefined();
     });
+
+    it('ホスト名のラベルが github / gitlab のセルフホストは検出する', () => {
+      mockExecFileSync.mockReturnValue('git@github.company.com:org/repo.git\n');
+      expect(detectVcsProvider()).toBe('github');
+
+      mockExecFileSync.mockReturnValue('https://gitlab.company.com/org/repo.git\n');
+      expect(detectVcsProvider()).toBe('gitlab');
+    });
   });
 
   describe('エラーケース', () => {
@@ -334,8 +354,8 @@ describe('detectVcsProvider', () => {
       // When
       const result = detectVcsProvider('/tmp/worktree');
 
-      // Then: セルフホストは undefined
-      expect(result).toBeUndefined();
+      // Then: ホスト名のラベル gitlab で検出する
+      expect(result).toBe('gitlab');
       expect(mockExecFileSync).toHaveBeenNthCalledWith(
         1, 'git', ['remote', 'get-url', 'origin'], expect.objectContaining({ cwd: '/tmp/worktree' }),
       );

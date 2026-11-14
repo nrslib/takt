@@ -593,6 +593,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,
+    childProcessEnv: params.options.childProcessEnv,
     getCwd: params.getCwd,
     getContextDirectory: () => params.getRunPaths().contextAbs,
     createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(
