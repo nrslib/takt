@@ -9,7 +9,7 @@
  * エージェント自身がコミットするワークフロー、ベンチのチェックポイント
  * コミット、worktree クローンの自動コミット後の再レビューで発生する。
  * - base コミット..HEAD のコミット済み変更
- * - HEAD と working tree の差分（削除を含む）
+ * - index の staged 差分と working tree の unstaged 差分（削除を含む）
  * - untracked ファイル（ignored を除く）
  *
  * この作業ツリー計算はレビュー対象の一貫した範囲を決めるために共有する。
@@ -46,7 +46,9 @@ import { resolveMergeBase } from '../../infra/task/branchBaseCandidateResolver.j
 import { resolveBranchEntryPointFromReflog } from '../../infra/task/branchEntryPointResolver.js';
 import { detectDefaultBranch } from '../../infra/task/branchList.js';
 import { getCurrentBranch } from '../../infra/task/git.js';
+import { buildReviewGitEnvironment } from '../../infra/task/review-git-environment.js';
 import type { PullRequestContext } from './pr-context.js';
+import { excludeReviewCheckpointPaths } from './review-checkpoint.js';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -96,6 +98,8 @@ export type TaskReviewScope =
 
 export interface TaskReviewScopeInput {
   readonly cwd: string;
+  /** Only this run's checkpoint output is excluded, not other reports or runs. */
+  readonly reportDir?: string;
   /** 境界で一度だけ解決した base。 */
   readonly baseRange: ReviewScopeBaseRange;
   /** PR 由来の実行のみ設定される。PR の累積差分と未コミット変更・未追跡を対象とする。 */
@@ -107,10 +111,11 @@ export interface TaskReviewScopeInput {
   readonly untracked?: readonly string[];
 }
 
-function runGit(cwd: string, args: string[]): Buffer {
+function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv): Buffer {
   return execFileSync('git', args, {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env,
     maxBuffer: GIT_MAX_BUFFER,
   });
 }
@@ -119,9 +124,9 @@ function runGit(cwd: string, args: string[]): Buffer {
  * git の終了コードを返す。spawn 失敗（git 未インストール等）は述語へ潰さず送出する。
  * 「コマンドを実行できなかった」と「git が false を返した」は別の事実である。
  */
-function gitExitStatus(cwd: string, args: string[]): number {
+function gitExitStatus(cwd: string, args: string[], env: NodeJS.ProcessEnv): number {
   try {
-    runGit(cwd, args);
+    runGit(cwd, args, env);
     return 0;
   } catch (cause) {
     const status = (cause as { status?: unknown }).status;
@@ -135,13 +140,32 @@ function gitExitStatus(cwd: string, args: string[]): number {
 function isExistingDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
-  } catch {
-    return false;
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw cause;
   }
 }
 
-function refExists(cwd: string, ref: string): boolean {
-  const status = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', ref]);
+function isGitRepository(cwd: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    runGit(cwd, ['rev-parse', '--git-dir'], env);
+    return true;
+  } catch (cause) {
+    const error = cause as { status?: unknown; stderr?: Buffer | string };
+    const diagnostic = error.stderr?.toString().trim();
+    // Git uses exit 128 for both discovery failure and operational errors.
+    // Only its C-locale discovery diagnostics mean that review may run without Git.
+    if (error.status === 128 && (diagnostic === 'fatal: not a git repository (or any of the parent directories): .git'
+      || /^fatal: not a git repository \(or any parent up to mount point [^\n]+\)\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.$/.test(diagnostic ?? ''))) {
+      return false;
+    }
+    throw cause;
+  }
+}
+
+function refExists(cwd: string, ref: string, env: NodeJS.ProcessEnv): boolean {
+  const status = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', ref], env);
   if (status === 0) {
     return true;
   }
@@ -194,8 +218,8 @@ type AncestryCheck = 'ancestor' | 'not_ancestor' | 'undetermined';
  * base の絞り込みは最適化であり、ここで実行を止める価値はない。
  * base 解決全体の fail-fast（ref 検証・HEAD 検証）はそのまま維持している。
  */
-function checkAncestry(cwd: string, ancestor: string, descendant: string): AncestryCheck {
-  const status = gitExitStatus(cwd, ['merge-base', '--is-ancestor', ancestor, descendant]);
+function checkAncestry(cwd: string, ancestor: string, descendant: string, env: NodeJS.ProcessEnv): AncestryCheck {
+  const status = gitExitStatus(cwd, ['merge-base', '--is-ancestor', ancestor, descendant], env);
   if (status === 0) {
     return 'ancestor';
   }
@@ -209,8 +233,8 @@ function checkAncestry(cwd: string, ancestor: string, descendant: string): Ances
  * 祖先関係が無い場合と判定不能な場合は、HEAD との共通祖先であることが
  * 保証されている merge-base を採る。
  */
-function pickNarrowerBase(cwd: string, reflogBase: string, mergeBase: string): string {
-  return checkAncestry(cwd, mergeBase, reflogBase) === 'ancestor' ? reflogBase : mergeBase;
+function pickNarrowerBase(cwd: string, reflogBase: string, mergeBase: string, env: NodeJS.ProcessEnv): string {
+  return checkAncestry(cwd, mergeBase, reflogBase, env) === 'ancestor' ? reflogBase : mergeBase;
 }
 
 /**
@@ -224,22 +248,24 @@ function resolveBaseRefCandidate(
   cwd: string,
   branch: string,
   defaultBranch: string,
+  env: NodeJS.ProcessEnv,
 ): string | undefined {
   const candidates = [toPullRequestBaseRef(branch), toCloneBaseRef(branch), defaultBranch];
-  return candidates.find((ref) => refExists(cwd, ref));
+  return candidates.find((ref) => refExists(cwd, ref, env));
 }
 
 function resolveMergeBaseCommit(
   cwd: string,
   branch: string,
   defaultBranch: string,
+  env: NodeJS.ProcessEnv,
 ): string | undefined {
-  const baseRef = resolveBaseRefCandidate(cwd, branch, defaultBranch);
+  const baseRef = resolveBaseRefCandidate(cwd, branch, defaultBranch, env);
   if (baseRef === undefined) {
     return undefined;
   }
   try {
-    const commit = resolveMergeBase(cwd, baseRef, branch);
+    const commit = resolveMergeBase(cwd, baseRef, branch, env);
     return commit.length === 0 ? undefined : commit;
   } catch (cause) {
     // 共通祖先が無い（履歴が独立している）と merge-base は非ゼロ終了する。
@@ -262,10 +288,11 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
   if (!isExistingDirectory(cwd)) {
     return { kind: 'not_a_git_repository' };
   }
-  if (gitExitStatus(cwd, ['rev-parse', '--git-dir']) !== 0) {
+  const env = buildReviewGitEnvironment(cwd);
+  if (!isGitRepository(cwd, env)) {
     return { kind: 'not_a_git_repository' };
   }
-  const headStatus = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const headStatus = gitExitStatus(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], env);
   if (headStatus === MISSING_REF_EXIT_STATUS) {
     return { kind: 'no_commits' };
   }
@@ -273,20 +300,20 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
     throw new Error(`git rev-parse --verify HEAD failed with exit status ${headStatus}`);
   }
 
-  const branch = getCurrentBranch(cwd);
+  const branch = getCurrentBranch(cwd, env);
   if (branch === DETACHED_HEAD_BRANCH) {
     return { kind: 'unresolved', reason: 'HEAD is detached' };
   }
 
-  const defaultBranch = detectDefaultBranch(cwd);
+  const defaultBranch = detectDefaultBranch(cwd, env);
   if (branch === defaultBranch) {
     return { kind: 'base_branch_head' };
   }
 
-  const mergeBase = resolveMergeBaseCommit(cwd, branch, defaultBranch);
-  const reflogBase = resolveBranchEntryPointFromReflog(cwd, branch)?.baseCommit;
+  const mergeBase = resolveMergeBaseCommit(cwd, branch, defaultBranch, env);
+  const reflogBase = resolveBranchEntryPointFromReflog(cwd, branch, env)?.baseCommit;
   if (mergeBase !== undefined && reflogBase !== undefined) {
-    return { kind: 'branch_base', baseCommit: pickNarrowerBase(cwd, reflogBase, mergeBase) };
+    return { kind: 'branch_base', baseCommit: pickNarrowerBase(cwd, reflogBase, mergeBase, env) };
   }
   if (mergeBase !== undefined) {
     return { kind: 'branch_base', baseCommit: mergeBase };
@@ -300,38 +327,40 @@ export function resolveReviewScopeBaseRange(cwd: string): ReviewScopeBaseRange {
   };
 }
 
-function readUntrackedPaths(cwd: string): string[] {
+function readUntrackedPaths(cwd: string, env: NodeJS.ProcessEnv): string[] {
   return parseNulPaths(
-    runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+    runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'], env),
     'git ls-files --others',
   );
 }
 
 function collectUncommittedPaths(
   cwd: string,
-  baseRange: ReviewScopeBaseRange,
   untracked: readonly string[],
+  env: NodeJS.ProcessEnv,
 ): string[] {
-  if (baseRange.kind === 'no_commits') {
-    return sortedUnique(untracked);
-  }
-
-  const workingTree = parseNulPaths(
-    runGit(cwd, ['diff', '--name-only', '-z', 'HEAD', '--']),
-    'git diff --name-only HEAD',
+  // --cached also works before the first commit, comparing with the empty tree.
+  const staged = parseNulPaths(
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--cached', '--name-only', '-z', '--'], env),
+    'git diff --cached --name-only',
   );
-  return sortedUnique([...workingTree, ...untracked]);
+  const unstaged = parseNulPaths(
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', '--'], env),
+    'git diff --name-only',
+  );
+  return sortedUnique([...staged, ...unstaged, ...untracked]);
 }
 
 function collectWorkingTreePaths(
   cwd: string,
   baseRange: ReviewScopeBaseRange,
   untracked: readonly string[],
+  env: NodeJS.ProcessEnv,
 ): string[] {
-  const workingTree = collectUncommittedPaths(cwd, baseRange, untracked);
+  const workingTree = collectUncommittedPaths(cwd, untracked, env);
   const committed = baseRange.kind === 'branch_base'
     ? parseNulPaths(
-      runGit(cwd, ['diff', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--']),
+      runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--'], env),
       'git diff --name-only <base> HEAD',
     )
     : [];
@@ -342,27 +371,34 @@ function collectWorkingTreePaths(
 function resolvePullRequestBaseBranchRef(
   cwd: string,
   branch: string,
+  env: NodeJS.ProcessEnv,
 ): string | undefined {
   const candidates = [toRemoteTrackingBranchRef(branch), toLocalBranchRef(branch)];
-  return candidates.find((ref) => refExists(cwd, ref));
+  return candidates.find((ref) => refExists(cwd, ref, env));
 }
 
 function materializedDiffRange(
   cwd: string,
   prContext: PullRequestContext,
+  env: NodeJS.ProcessEnv,
 ): ReviewScopeDiffRange | undefined {
   // --skip-git では detached HEAD や別名ブランチにコミットした修正も対象にする。
-  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBaseBranchRef(cwd, prContext.baseBranch);
+  const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBaseBranchRef(cwd, prContext.baseBranch, env);
   const headDiffRef = prContext.headDiffRef ?? 'HEAD';
   if (baseDiffRef === undefined) {
     return undefined;
   }
-  if (!refExists(cwd, baseDiffRef) || !refExists(cwd, headDiffRef)) {
+  if (prContext.baseDiffRef !== undefined) {
+    // Recorded PR refs are required inputs, not optional discovery candidates.
+    for (const ref of [baseDiffRef, headDiffRef]) {
+      runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], env);
+    }
+  } else if (!refExists(cwd, baseDiffRef, env) || !refExists(cwd, headDiffRef, env)) {
     return undefined;
   }
   return {
     baseDiffRef,
-    headDiffRef: getCurrentBranch(cwd) === prContext.headBranch ? 'HEAD' : headDiffRef,
+    headDiffRef: getCurrentBranch(cwd, env) === prContext.headBranch ? 'HEAD' : headDiffRef,
   };
 }
 
@@ -375,18 +411,21 @@ function collectPullRequestScope(
   prContext: PullRequestContext,
   baseRange: ReviewScopeBaseRange,
   workingTreePaths: readonly string[],
+  env: NodeJS.ProcessEnv,
 ): TaskReviewScope {
-  const diffRange = materializedDiffRange(cwd, prContext);
+  const diffRange = materializedDiffRange(cwd, prContext, env);
   const pullRequestPaths = diffRange === undefined
     ? []
     : parseNulPaths(
       runGit(cwd, [
         'diff',
+        '--no-ext-diff',
+        '--no-textconv',
         '--name-only',
         '-z',
         `${diffRange.baseDiffRef}...${diffRange.headDiffRef}`,
         '--',
-      ]),
+      ], env),
       'git diff --name-only <base>...<head>',
     );
 
@@ -408,12 +447,16 @@ export function collectTaskReviewScope(input: TaskReviewScopeInput): TaskReviewS
   if (input.baseRange.kind === 'not_a_git_repository') {
     return { kind: 'not_a_git_repository' };
   }
-  const untracked = input.untracked ?? readUntrackedPaths(input.cwd);
+  const env = buildReviewGitEnvironment(input.cwd);
+  const excludeOutputs = (paths: readonly string[]): string[] => input.reportDir === undefined
+    ? [...paths] : excludeReviewCheckpointPaths(paths, input.cwd, input.reportDir);
+  const untracked = excludeOutputs(input.untracked ?? readUntrackedPaths(input.cwd, env));
   if (input.prContext !== undefined) {
-    const workingTreePaths = collectUncommittedPaths(input.cwd, input.baseRange, untracked);
-    return collectPullRequestScope(input.cwd, input.prContext, input.baseRange, workingTreePaths);
+    const workingTreePaths = excludeOutputs(collectUncommittedPaths(input.cwd, untracked, env));
+    const scope = collectPullRequestScope(input.cwd, input.prContext, input.baseRange, workingTreePaths, env);
+    return scope.kind === 'collected' ? { ...scope, paths: excludeOutputs(scope.paths) } : scope;
   }
-  const workingTreePaths = collectWorkingTreePaths(input.cwd, input.baseRange, untracked);
+  const workingTreePaths = excludeOutputs(collectWorkingTreePaths(input.cwd, input.baseRange, untracked, env));
   return {
     kind: 'collected',
     paths: workingTreePaths,
@@ -441,6 +484,7 @@ function isStableBaseRange(baseRange: ReviewScopeBaseRange): boolean {
 export function createTaskReviewScopeResolver(deps: {
   readonly getCwd: () => string;
   readonly getPrContext: () => PullRequestContext | undefined;
+  readonly getReportDir?: () => string;
 }): () => TaskReviewScope {
   const stableBaseRangeByCwd = new Map<string, ReviewScopeBaseRange>();
   return () => {
@@ -454,6 +498,7 @@ export function createTaskReviewScopeResolver(deps: {
     return collectTaskReviewScope({
       cwd,
       baseRange,
+      reportDir: deps.getReportDir?.(),
       ...(prContext === undefined ? {} : { prContext }),
     });
   };

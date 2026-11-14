@@ -870,6 +870,7 @@ export class ParallelRunner {
                   attemptInstruction,
                   {
                     ...agentCallOptions,
+                    reviewCheckpointInstruction: phase1Instruction,
                     sessionId,
                     onPromptResolved,
                   },
@@ -1027,7 +1028,7 @@ export class ParallelRunner {
                         executableSubStep,
                         subPm,
                         attemptInstruction,
-                        { ...agentCallOptions, sessionId: attemptSessionId, onPromptResolved },
+                        { ...agentCallOptions, reviewCheckpointInstruction: instruction, sessionId: attemptSessionId, onPromptResolved },
                         false,
                       )
                     ),

@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collectTaskReviewScope,
   createTaskReviewScopeResolver,
@@ -468,19 +468,10 @@ describe('pull request derived scope', () => {
     expect(scope.source.kind).toBe('pull_request');
   });
 
-  it('drops the diff range when the recorded refs no longer exist', () => {
+  it('rejects a missing recorded PR ref instead of silently dropping the diff range', () => {
     git(repo, 'update-ref', '-d', baseRef);
 
-    const scope = collectWithPr(true);
-
-    expect(scope.kind).toBe('collected');
-    if (scope.kind !== 'collected') return;
-    expect(scope.source).toEqual({
-      kind: 'pull_request',
-      prNumber: 42,
-      includesWorkingTree: false,
-      baseRange: { kind: 'base_branch_head' },
-    });
+    expect(() => collectWithPr(true)).toThrow();
   });
 });
 
@@ -499,6 +490,19 @@ describe('createTaskReviewScopeResolver', () => {
 
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  it.each(['config', 'ownership', 'executable'] as const)('propagates Git %s errors through the scope resolver', (failure) => {
+    const resolve = createTaskReviewScopeResolver({ getCwd: () => repo, getPrContext: () => undefined });
+    try {
+      vi.stubEnv('GIT_CONFIG_GLOBAL', devNull);
+      vi.stubEnv('GIT_CONFIG_SYSTEM', devNull);
+      if (failure === 'config') writeFileSync(join(repo, '.git', 'config'), '[invalid\n');
+      else if (failure === 'ownership') vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', '1');
+      else vi.stubEnv('PATH', join(repo, 'no-executables'));
+
+      expect(() => resolve()).toThrow();
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('keeps the resolved base across calls while re-reading the working tree', () => {

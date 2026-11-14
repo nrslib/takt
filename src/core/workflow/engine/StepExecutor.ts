@@ -2055,6 +2055,7 @@ export class StepExecutor {
                     attemptInstruction,
                     {
                       ...agentOptions,
+                      reviewCheckpointInstruction: phase1Instruction,
                       sessionId,
                       onPromptResolved,
                     },
@@ -2365,7 +2366,7 @@ export class StepExecutor {
                 execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
                   executableStep.persona,
                   attemptInstruction,
-                  { ...agentOptions, sessionId: attemptSessionId, onPromptResolved },
+                  { ...agentOptions, reviewCheckpointInstruction: retryInstruction, sessionId: attemptSessionId, onPromptResolved },
                 ),
                 onPhaseStart: this.deps.onPhaseStart,
                 onPhaseComplete: this.deps.onPhaseComplete,

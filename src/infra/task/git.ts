@@ -21,9 +21,10 @@ export interface StageAndCommitOptions {
   allowGitFilters?: boolean;
 }
 
-export function getCurrentBranch(cwd: string): string {
+export function getCurrentBranch(cwd: string, env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
+    env,
     encoding: 'utf-8',
     stdio: 'pipe',
   }).trim();

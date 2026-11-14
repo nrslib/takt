@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
+import type { AgentSessionEvent, CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
 import { DebugLogger } from '../shared/utils/debug.js';
+import { runAgent } from '../agents/runner.js';
 
 type MockResolvedPaths = {
   [Kind in 'extensions' | 'skills' | 'prompts' | 'themes']: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
@@ -609,6 +610,75 @@ export default function registerLifecycleTool(pi) {
       mode: 'print',
       onError: expect.any(Function),
     }));
+  });
+
+  it.each(
+    (['threshold', 'overflow', 'manual', undefined] as const).flatMap((reason) =>
+      ([true, false, undefined] as const).flatMap((willRetry) =>
+        (['success', 'missing-result', 'aborted', 'error'] as const).map((outcome) => ({ reason, willRetry, outcome })))),
+  )('notifies TAKT only for successful automatic compaction without SDK continuation ($reason, willRetry=$willRetry, $outcome)', async ({ reason, willRetry, outcome }) => {
+    mocks.resetTransient();
+    const prompt = mocks.session.prompt.getMockImplementation()!;
+    mocks.session.prompt.mockImplementationOnce(async (...args) => {
+      await prompt(...args);
+      // Missing reason/willRetry probes an unclassified runtime event, not a valid SDK event.
+      type CompactionEnd = Extract<AgentSessionEvent, { type: 'compaction_end' }>;
+      mocks.emit({
+        type: 'compaction_end',
+        ...(reason === undefined ? {} : { reason }),
+        ...(willRetry === undefined ? {} : { willRetry }),
+        aborted: outcome === 'aborted',
+        errorMessage: outcome === 'error' ? 'failed summary' : undefined,
+        result: outcome === 'missing-result' ? undefined : { summary: 'earlier context', firstKeptEntryId: 'entry-1', tokensBefore: 120000 },
+      } satisfies Omit<CompactionEnd, 'reason' | 'willRetry'> & Partial<Pick<CompactionEnd, 'reason' | 'willRetry'>>);
+    });
+    const sessions: string[] = [];
+    const result = await callPi('reviewer', 'review', {
+      ...sessionOptions('compaction-event-matrix'),
+      permissionMode: 'readonly',
+      onStream: (event) => { if (event.type === 'context_compacted') sessions.push(event.data.sessionId!); },
+    });
+    const notified = (reason === 'threshold' || reason === 'overflow') && willRetry === false && outcome === 'success';
+    expect(result.status).toBe('done');
+    expect(sessions).toEqual(notified ? [result.sessionId] : []);
+  });
+
+  it.each([
+    { reason: 'overflow', willRetry: true, promptCalls: 1 },
+    { reason: 'overflow', willRetry: false, promptCalls: 2 },
+    { reason: 'threshold', willRetry: false, promptCalls: 2 },
+  ] as const)('coordinates runner replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
+    mocks.resetTransient();
+    const prompt = mocks.session.prompt.getMockImplementation()!;
+    const sdkContinue = vi.fn(async () => {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'SDK continued review' } });
+      mocks.emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } });
+    });
+    mocks.session.prompt.mockImplementationOnce(async (...args) => {
+      mocks.emit({
+        type: 'compaction_end', reason, willRetry, aborted: false,
+        result: { summary: 'earlier context', firstKeptEntryId: 'entry-1', tokensBefore: 120000 },
+      } satisfies AgentSessionEvent);
+      // Pi's post-run loop continues inside prompt(), before its promise resolves.
+      if (willRetry) await sdkContinue();
+      else await prompt(...args);
+    });
+    const sessionIds: string[] = [];
+    const { model, ...options } = sessionOptions(`runner-compaction-${reason}-${willRetry}`);
+    const result = await runAgent(undefined, 'Review the remaining call path', {
+      ...options,
+      executionPhase: 1,
+      edit: false,
+      resolvedExecution: { provider: 'pi', model, providerOptions: undefined, permissionMode: 'readonly' },
+      onStream: (event) => { if (event.type === 'init') sessionIds.push(event.data.sessionId!); },
+    });
+    expect(result.status).toBe('done');
+    expect(result.content).toBe(willRetry ? 'SDK continued review' : 'hello from pi');
+    expect(sdkContinue).toHaveBeenCalledTimes(willRetry ? 1 : 0);
+    expect(mocks.session.prompt).toHaveBeenCalledTimes(promptCalls);
+    expect(mocks.session.prompt.mock.calls.map(([instruction]) => instruction)).toEqual(Array(promptCalls).fill('Review the remaining call path'));
+    expect(sessionIds).toEqual(Array(promptCalls).fill(result.sessionId));
+    expect(mocks.createAgentSession).toHaveBeenCalledOnce();
   });
 
   it('invalidates extension runtime when SDK session creation fails', async () => {

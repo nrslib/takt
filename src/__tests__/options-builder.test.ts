@@ -34,6 +34,7 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
+  readonly reviewScope?: import('../core/workflow/review-scope.js').TaskReviewScope;
   readonly openCodeExternalDirectories?: readonly string[];
 }
 
@@ -75,7 +76,7 @@ function createBuilder(
       ? undefined
       : () => [...currentWorkflowStack],
     () => 'Original workflow task',
-    undefined,
+    phaseContextSources.reviewScope === undefined ? undefined : () => phaseContextSources.reviewScope!,
     failureDir === undefined ? undefined : () => failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
@@ -86,6 +87,21 @@ function createBuilder(
     phaseContextSources.openCodeExternalDirectories,
   );
 }
+
+describe('automatic review checkpoints', () => {
+  it('enables only the affected review workflow and keeps its reviewers readonly despite a full profile', () => {
+    const scope = { kind: 'collected' as const, paths: ['src/input.ts'], source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } } };
+    const step = createStep({ name: 'coding-review', edit: false });
+    const builder = createBuilder(step, { workflowName: 'takt-development-review' }, undefined, { reviewScope: scope });
+    expect(builder.buildAgentOptions(step)).toMatchObject({
+      reviewCheckpoint: { task: 'Original workflow task', reviewer: step.name, scope },
+      permissionMode: 'readonly', edit: false,
+    });
+    expect(builder.buildAgentOptions(step).permissionResolution).toBeUndefined();
+    expect(createBuilder(step, { workflowName: 'independent-review' }, undefined, { reviewScope: scope }).buildAgentOptions(step).reviewCheckpoint).toBeUndefined();
+    expect(builder.buildAgentOptions(createStep({ name: 'implement' })).reviewCheckpoint).toBeUndefined();
+  });
+});
 
 describe('OptionsBuilder.buildBaseOptions', () => {
   beforeEach(() => {

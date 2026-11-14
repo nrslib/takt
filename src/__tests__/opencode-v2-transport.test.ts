@@ -316,6 +316,20 @@ describe('OpenCode v2 events and configuration', () => {
     expect(event('session.tool.success', { content: [{ type: 'text', text: '/work' }], metadata: {} })).toMatchObject({ properties: { part: { state: { status: 'completed', output: '/work' } } } });
   });
 
+  it.each([
+    { type: 'session.compaction.ended', reason: 'auto', notified: true },
+    { type: 'session.compaction.ended', reason: 'manual', notified: false },
+    { type: 'session.compaction.started', reason: 'auto', notified: false },
+    { type: 'session.compaction.failed', reason: 'auto', notified: false },
+  ] as const)('translates only completed automatic compaction ($type, $reason)', ({ type, reason, notified }) => {
+    const translated = v2EventTranslator()({ id: 'event-1', created: 0, durable: { aggregateID: 'session-1', seq: 1, version: 1 },
+      type, data: { sessionID: 'session-1', reason, text: 'summary', error: { type: 'error', message: 'failed summary' } },
+    } as V2Event);
+    expect(translated).toEqual(notified
+      ? { type: 'session.compacted', properties: { sessionID: 'session-1', reason: 'auto' } }
+      : undefined);
+  });
+
   it('preserves all MCP OAuth options including the callback port and redirect URI without enabling codemode', () => {
     const config = buildV2ServerConfig('p/m', undefined, '/plugin', {
       remote: {

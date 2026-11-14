@@ -1871,6 +1871,16 @@ export class OpenCodeAttemptRunner {
         continue;
       }
 
+      if (sseEvent.type === 'session.compacted') {
+        const properties = sseEvent.properties as { sessionID?: string; reason?: string };
+        // Only the v2 automatic-completion notification carries a verified reason.
+        // A v1 session.compacted event cannot distinguish manual compaction.
+        if (properties.sessionID === activeSessionId && properties.reason === 'auto') {
+          options.onStream?.({ type: 'context_compacted', data: { sessionId: activeSessionId } });
+        }
+        continue;
+      }
+
       if (sseEvent.type === 'session.status') {
         const statusProps = sseEvent.properties as {
           sessionID?: string;

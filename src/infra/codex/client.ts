@@ -411,6 +411,8 @@ export class CodexClient {
       return errorResponse;
     }
 
+    // Codex exposes no verified compaction cause. Reinjection intentionally includes
+    // confirmed compacted events/rollout records after explicit new_context, not only automatic compaction.
     const compactedThreadIds = new Set<string | undefined>();
     const signalCompaction = (sessionId: string | undefined): void => {
       if (compactedThreadIds.has(sessionId)) return;

@@ -151,6 +151,7 @@ function emitResult(
   error: string | undefined,
   sessionId: string | undefined,
   failureCategory?: AgentFailureCategory,
+  partialOutput?: string,
 ): void {
   options.onStream?.({
     type: 'result',
@@ -160,6 +161,7 @@ function emitResult(
       error,
       sessionId: sessionId ?? '',
       failureCategory,
+      ...(partialOutput === undefined ? {} : { partialOutput }),
     },
   });
 }
@@ -213,11 +215,12 @@ export class DevinClient {
       // completed step. `cancelled` is handled above.
       if (outcome.stopReason !== 'end_turn') {
         const stopError = `devin returned incomplete output (stop reason: ${outcome.stopReason})`;
-        emitResult(options, content, false, stopError, sessionId, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+        emitResult(options, content, false, stopError, sessionId, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, content);
         return {
           persona: agentType,
           status: 'error',
           content,
+          partialOutput: content,
           error: stopError,
           failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
           timestamp: new Date(),

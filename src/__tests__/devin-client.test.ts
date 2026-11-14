@@ -1124,6 +1124,7 @@ describe('callDevin', () => {
 
     expect(result.status).toBe('error');
     expect(result.error).toContain('Session not found');
+    expect(result.partialOutput).toBeUndefined();
   });
 
   it('Given empty assistant output, When called, Then returns an error response', async () => {
@@ -1133,6 +1134,7 @@ describe('callDevin', () => {
 
     expect(result.status).toBe('error');
     expect(result.error).toBe('devin returned empty output');
+    expect(result.partialOutput).toBeUndefined();
   });
 
   it.each(['max_tokens', 'max_turn_requests', 'refusal'] as const)(
@@ -1145,12 +1147,17 @@ describe('callDevin', () => {
         ],
       });
 
-      const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+      const onStream = vi.fn();
+      const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
 
       expect(result.status).toBe('error');
       expect(result.error).toBe(`devin returned incomplete output (stop reason: ${stopReason})`);
       expect(result.content).toBe('partial answer');
+      expect(result.partialOutput).toBe('partial answer');
       expect(result.failureCategory).toBe('provider_error');
+      expect(onStream).toHaveBeenCalledWith({ type: 'result', data: expect.objectContaining({
+        success: false, result: 'partial answer', partialOutput: 'partial answer', error: result.error,
+      }) });
     },
   );
 

@@ -38,6 +38,7 @@ import {
 } from '../infra/providers/mcp/index.js';
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
+import { startReviewCheckpoint } from '../infra/review-checkpoint/session.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
@@ -215,6 +216,7 @@ export class AgentRunner {
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
       executionPhase: options.executionPhase,
+      checkpointRecoveryInstruction: options.checkpointRecoveryInstruction,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -241,10 +243,20 @@ export class AgentRunner {
     agent: ProviderAgent,
     task: string,
     options: ProviderCallOptions,
+    recorder: RunAgentOptions['reviewCheckpointRecorder'],
   ): Promise<AgentResponse> {
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined) {
-      return agent.call(task, options);
+      const observedOptions = recorder === undefined ? options : {
+        ...options,
+        onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder.observe(event);
+          options.onStream?.(event);
+        },
+      };
+      const response = await agent.call(task, observedOptions);
+      recorder?.finish(response);
+      return response;
     }
 
     const maxCompactionRecoveries = 3;
@@ -256,6 +268,8 @@ export class AgentRunner {
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder?.observe(event);
+          // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
           if (event.type === 'context_compacted') {
             compactionDetected = true;
             compactionSessionId = event.data.sessionId;
@@ -273,7 +287,8 @@ export class AgentRunner {
       };
       const response = recoveryCount === 0
         ? await agent.call(task, callOptions)
-        : await recoverFromCompaction.call(agent, task, callOptions);
+        : await recoverFromCompaction.call(agent, options.checkpointRecoveryInstruction?.() ?? task, callOptions);
+      recorder?.finish(response);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
@@ -403,7 +418,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -464,7 +479,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
       }
 
       if (options.personaPath) {
@@ -483,7 +498,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
       }
 
       if (personaSpec) {
@@ -507,7 +522,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -523,7 +538,7 @@ export class AgentRunner {
         : { name: personaName };
       const agent = setupAgent(agentSetup);
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -623,5 +638,19 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   // Provider dispatch is an attempt boundary even when the provider emits no stream events.
   options.onActivity?.();
-  return defaultRunner.run(personaSpec, task, options);
+  if (options.executionPhase !== 1 || options.reviewCheckpoint === undefined) {
+    return defaultRunner.run(personaSpec, task, options);
+  }
+  const originalInstruction = options.reviewCheckpointInstruction ?? task;
+  const checkpoint = await startReviewCheckpoint(options.cwd, options.reviewCheckpoint, originalInstruction, options.language ?? 'en');
+  try {
+    return await defaultRunner.run(personaSpec, checkpoint.instruction(task), {
+      ...options,
+      bypassPermissions: false,
+      reviewCheckpointRecorder: checkpoint,
+      checkpointRecoveryInstruction: () => checkpoint.instruction(),
+    });
+  } finally {
+    checkpoint.flush();
+  }
 }

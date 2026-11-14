@@ -1710,7 +1710,16 @@ function createPiClient(modules: PiModules['modules']): PiClient {
     event: AgentSessionEvent,
     options: PiCallOptions,
     state: PiTurnState,
+    sessionId: string,
   ): void {
+    if (event.type === 'compaction_end') {
+      const automatic = event.reason === 'threshold' || event.reason === 'overflow';
+      // Pi continues retrying turns inside prompt(); TAKT must not replay them again.
+      if (automatic && event.willRetry === false && event.result !== undefined && !event.aborted && event.errorMessage === undefined) {
+        options.onStream?.({ type: 'context_compacted', data: { sessionId } });
+      }
+      return;
+    }
     if (event.type === 'message_update') {
       const update = event.assistantMessageEvent;
       if (update.type === 'text_delta') {
@@ -1848,7 +1857,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
           partialToolOutput: new Map(),
         };
         const initialMessageCount = session.messages.length;
-        const unsubscribe = session.subscribe((event) => handlePiEvent(event, options, state));
+        const unsubscribe = session.subscribe((event) => handlePiEvent(event, options, state, activeSessionId));
         let rejectPromptAbort: ((error: unknown) => void) | undefined;
         let abortCleanup: Promise<void> | undefined;
         let abortStarted = false;

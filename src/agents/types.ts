@@ -60,6 +60,13 @@ export interface RunAgentOptions {
   internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
+  reviewCheckpoint?: import('../core/workflow/review-checkpoint.js').ReviewCheckpointContext;
+  /** Stable Phase 1 request across empty continuations within one recovery controller. */
+  reviewCheckpointInstruction?: string;
+  /** Runner-local recovery input, rebuilt after each compaction from persisted progress. */
+  checkpointRecoveryInstruction?: () => string;
+  /** Runner-local capture of each provider attempt, including suppressed compaction results. */
+  reviewCheckpointRecorder?: import('../infra/review-checkpoint/session.js').ReviewCheckpointRecorder;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**

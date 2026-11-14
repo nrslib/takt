@@ -30,6 +30,7 @@ import {
   providerSupportsAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
 import { reportPhaseEventTools } from '../report-phase-tools.js';
+import { usesReviewCheckpoint } from '../review-checkpoint.js';
 import type {
   ProviderActivityCallback,
   ProviderType,
@@ -720,12 +721,29 @@ export class OptionsBuilder {
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
+    const reviewScope = usesReviewCheckpoint(this.getWorkflowName(), step.name)
+      ? this.getReviewScope?.() : undefined;
+    const checkpoint = reviewScope?.kind === 'collected' && this.getTask !== undefined
+      ? {
+          reviewCheckpoint: {
+            reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
+            task: this.getTask(),
+            reviewer: step.name,
+            definition: JSON.stringify(step),
+            scope: reviewScope,
+          },
+          permissionMode: 'readonly' as const,
+          permissionResolution: undefined,
+          edit: false,
+        }
+      : {};
 
     const mcpServers = this.resolveMcpServersForStep(step, resolvedProvider);
     const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
 
     return {
       ...baseOptions,
+      ...checkpoint,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession
         ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel, mcpServerIdentity }))

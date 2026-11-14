@@ -2022,7 +2022,7 @@ describe('CodexClient retry', () => {
     });
   });
 
-  it('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する', async () => {
+  it.each([false, true])('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する (explicit new_context=%s)', async (explicitNewContext) => {
     const now = new Date();
     const directory = path.join(
       projectDirectory,
@@ -2032,14 +2032,23 @@ describe('CodexClient retry', () => {
       String(now.getDate()).padStart(2, '0'),
     );
     fs.mkdirSync(directory, { recursive: true });
-    fs.writeFileSync(
-      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
-      `${JSON.stringify({
+    const records = [
+      ...(explicitNewContext ? [{
         timestamp: now.toISOString(),
-        ordinal: 0,
+        ordinal: 27,
+        type: 'response_item',
+        payload: { type: 'function_call', name: 'new_context', arguments: '{}', call_id: 'call-context' },
+      }] : []),
+      {
+        timestamp: now.toISOString(),
+        ordinal: 31,
         type: 'compacted',
         payload: { message: '', replacement_history: [] },
-      })}\n`,
+      },
+    ];
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
+      records.map((record) => JSON.stringify(record)).join('\n') + '\n',
     );
     vi.stubEnv('CODEX_HOME', projectDirectory);
     runPlans = [
