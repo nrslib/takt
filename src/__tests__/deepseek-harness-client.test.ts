@@ -518,7 +518,7 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
         'pi-ai',
         'package.json',
       )),
-      piAiVersion: '1.5.0',
+      piAiVersion: '1.5.2',
     });
     expect(api.requests).toHaveLength(1);
     expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
