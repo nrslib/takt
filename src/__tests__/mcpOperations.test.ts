@@ -3,6 +3,7 @@ import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOpe
 import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
 import * as goalGit from '../infra/goals/git-command.js';
+import * as repositoryDirectory from '../infra/task/repositoryDirectory.js';
 import * as runMeta from '../core/workflow/run/run-meta.js';
 import { listGoalsInputSchema, type EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -697,7 +698,10 @@ describe('MCP create goal operation', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.spyOn(repositoryDirectory, 'resolveGitRepositoryDirectory').mockResolvedValue(input.cwd);
   });
+
+  afterEach(() => { vi.restoreAllMocks(); });
 
   it('returns the saved goal summary and forwards the input and signal to the service', async () => {
     const controller = new AbortController();
@@ -709,6 +713,26 @@ describe('MCP create goal operation', () => {
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalWriteSummary(goal) });
     expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('forwards the Git root instead of a subdirectory to the service', async () => {
+    const controller = new AbortController();
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub' }, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(repositoryDirectory.resolveGitRepositoryDirectory).toHaveBeenCalledWith('/repo/sub');
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('rejects a non-Git directory without calling the creation service', async () => {
+    vi.mocked(repositoryDirectory.resolveGitRepositoryDirectory).mockRejectedValue(new Error('Not a Git repository'));
+
+    const result = await createTaktGoal(input, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
   });
 
   it('converts service failures to sanitized MCP errors', async () => {
