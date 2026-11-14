@@ -230,8 +230,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               io.progress(getLabel('manager.conversation.assignment_changed', language));
             }
             let pending: PendingSummary | null = null;
-            if (output.summary !== null) {
-              if (!human || assignment.kind === 'daemon') throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && (!human || assignment.kind === 'daemon')) throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && human && command.requestProposal === true && !verify && assignment.kind !== 'daemon') {
               const { repositoryDirectory: requested, ...summary } = output.summary;
               const target = requested ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
               if (target === undefined) throw new ConversationError('invalid_assignment');

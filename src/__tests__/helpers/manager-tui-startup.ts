@@ -116,7 +116,7 @@ it('accepts /ma with Tab without sending, then executes /make-goal on Enter', as
   });
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write('\r');
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true }]));
 });
 
 it.each(['/xyz', 'こんにちは', '説明 /ma', '> /ma', '`/ma`', '~~~\n/ma\n~~~'])('keeps %j as a draft without slash candidates', async (text) => {

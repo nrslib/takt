@@ -480,7 +480,7 @@ describe('manager summary transcript and terminal height', () => {
       await waitFor(() => expect(prompt().text).toBe('/make-goal'));
       context.stdin.write(ENTER);
       await waitFor(() => expect(context.client.commands()).toEqual([
-        { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false },
+        { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false, requestProposal: true },
       ]));
       context.client.proposal(next, 5);
       await waitFor(() => expect(prompt().disabled).toBe(true));

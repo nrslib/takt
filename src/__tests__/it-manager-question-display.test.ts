@@ -74,6 +74,9 @@ let app: ReturnType<typeof render> | undefined;
 let session: ManagerServiceClient | undefined;
 
 beforeEach(() => {
+  // ink-testing-library の stdout には rows がなく、未指定だと再描画ごとに同期 tput が走る。
+  vi.stubEnv('COLUMNS', '100');
+  vi.stubEnv('LINES', '24');
   vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (directory) => realpathSync(directory));
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
@@ -92,6 +95,7 @@ afterEach(async () => {
   try { await session?.dispose(); }
   finally {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     session = undefined;
     invalidateGlobalConfigCache();
     invalidateResolvedConfigCache(cwd);
@@ -435,7 +439,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   const summary = { objective: 'Export data', outOfScope: [], acceptanceCriteria: ['Output saved'], constraints: [] };
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
-  await send('Prepare export');
+  await send('/make-goal');
   await vi.waitFor(() => expect(app!.lastFrame()).toContain('Proposed goal'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });

@@ -95,14 +95,15 @@ it('executes provider calls in a conversation child and saves its result in the 
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'provider_complete', agent: 'manager', pid: expect.any(Number),
     })), { timeout: 10000 });
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
+    expect(await tui.frame()).not.toContain(fixture.summary.objective);
     const calls = fixture.readObservations().filter(({ event }) => event === 'provider_start');
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
     expect(calls.every(({ pid }) => pid !== owner.pid && pid !== tui.child.pid)).toBe(true);
     expect(calls.filter(({ agent }) => agent === 'manager')).toHaveLength(1);
     expect(calls.filter(({ agent }) => agent === 'director')).toEqual([]);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: null, running: null }), { timeout: 30000 });
     const writes = fixture.readObservations().filter(({ event }) => event === 'write');
     expect(writes.some(({ pid, running }) => pid === owner.pid && !running)).toBe(true);
     expect(writes.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
@@ -218,7 +219,7 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
     await tui.exit();
     expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) });
     fixture.release();
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: null, turn: null }), { timeout: 30000 });
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager', pid: expect.any(Number) }));
   } finally { await fixture.cleanup(); }
 });
@@ -229,7 +230,7 @@ it('reopens the same conversation and approves its restored summary with Up and 
   try {
     const first = await fixture.start(fixture.repository, undefined);
     await waitForManager(first, 'Discuss your goal');
-    await submitManagerText(first, 'Remember this proposal');
+    await submitManagerText(first, '/make-goal');
     await waitForManager(first, fixture.summary.objective);
     await vi.waitFor(async () => expect((await fixture.state())?.pending?.summary).toEqual(fixture.summary), { timeout: 30000 });
     const saved = (await fixture.state())!;
@@ -273,7 +274,7 @@ it('rejects an invalid branch proposal without saving it, then accepts a message
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
-    await submitManagerText(tui, 'Prepare a CSV export');
+    await submitManagerText(tui, '/make-goal');
     await waitForManager(tui, 'Unable to resolve local branch');
     await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
       .toMatchObject({ pending: null, approval: null, running: null }), { timeout: 30000 });
@@ -288,7 +289,7 @@ it('rejects an invalid branch proposal without saving it, then accepts a message
     await vi.waitFor(async () => expect((await conversations.read(saved.id))?.record)
       .toMatchObject({ pending: { summary: fixture.summary }, approval: null, running: null }), { timeout: 30000 });
     const observations = fixture.readObservations();
-    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(1);
+    expect(observations.filter(({ event, summaryRequest }) => event === 'provider_start' && summaryRequest)).toHaveLength(2);
     const submissions = observations.filter(({ event }) => event === 'submit_result');
     expect(submissions.map(({ command }) => command)).toEqual(['message', 'message', 'message']);
     expect(submissions.map(({ kind }) => kind)).toEqual(['accepted', 'accepted', 'accepted']);
@@ -468,8 +469,8 @@ it('opens the same conversation after daemon stop and restart and accepts a new 
     expect((await fixture.state())).toMatchObject({ id: before.id, running: null,
       interruptedMessage: 'This turn will be interrupted' });
     await submitManagerText(second, 'A new request after restart');
-    await waitForManager(second, fixture.summary.objective);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: { summary: fixture.summary },
+    await waitForManager(second, 'The daemon completed this request.');
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: null,
       running: null, interruptedMessage: null }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === second.child.pid)
       .filter(({ command }) => command === 'message')).toHaveLength(1);
@@ -511,7 +512,7 @@ it('accepts a busy TUI message and executes it after the active turn completes',
     await submitManagerText(tui, 'The queued request');
     await waitForQueuedMessage(tui);
     fixture.release();
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
     await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2));
     await tui.exit();
@@ -569,7 +570,7 @@ it('passes CLI provider and model overrides to the turn process even when the co
     const tui = await fixture.start(fixture.repository, 'selected-manager-model');
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Use my selected model');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     const owner = (await readDaemonOwner(fixture.directory))!;
     expect(owner).toBeDefined();
     const calls = fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager');
@@ -639,7 +640,7 @@ it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounte
     const opened = (await observer.request('open', selected)).result!;
     await observer.items(opened.read.transferId);
     expect((await observer.request('submit', { attachmentId: opened.attachmentId, speaker: selected.speaker,
-      command: { kind: 'message', text: 'Replace the restored proposal' } })).result?.kind).toBe('accepted');
+      command: { kind: 'message', text: 'Replace the restored proposal', requestProposal: true } })).result?.kind).toBe('accepted');
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expectProposalFrame(await tui.frame(), true), { timeout: 30000 });
     await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ revision: 5, running: null, approval: null,
@@ -710,7 +711,7 @@ it('reauthenticates and restores the proposal on the same mounted screen after a
     }, { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'message' && pid === tui.child.pid)).toEqual([]);
     tui.key('\r');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'message' && pid === tui.child.pid)).toHaveLength(1);
     await tui.exit(); await second.exit();
   } finally { await fixture.cleanup(); }
@@ -769,7 +770,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     fixture.release();
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'A new turn after Escape');
-    await waitForManager(tui, fixture.summary.objective);
+    await waitForManager(tui, 'The daemon completed this request.');
     expect((await fixture.state())?.interruptedMessage).toBeNull();
     await tui.exit();
   } finally { await fixture.cleanup(); }

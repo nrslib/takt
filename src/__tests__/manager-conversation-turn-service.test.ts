@@ -66,8 +66,9 @@ function fixture() {
   return { service, execute, resolve, request, controller, io, input };
 }
 
-function humanMessage(text: string): TurnEvent {
-  return { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'human', id: 'test' } };
+function humanMessage(text: string, requestProposal?: boolean): TurnEvent {
+  return { kind: 'human_command', command: { kind: 'message', text,
+    ...(requestProposal === undefined ? {} : { requestProposal }) }, speaker: { namespace: 'human', id: 'test' } };
 }
 
 it('uses the daemon turn identity for tool events while preserving call and provider tool identities', async () => {
@@ -464,6 +465,43 @@ it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { pr
       ...(outcome.change.proposal === undefined ? {} : outcome.change.proposal) };
   }
 });
+it.each([
+  { text: 'We agree on the goal' },
+  { text: getLabel('manager.goSummaryRequest', 'ja') },
+  { text: getLabel('manager.goSummaryRequest', 'en') },
+  { text: '/make-goal' },
+  { text: 'Prepare a proposal', requestProposal: false },
+])('ignores unsolicited summaries for ordinary input $text', async ({ text, requestProposal }) => {
+  const f = conversationFixture();
+  f.execute.mockResolvedValueOnce({ message: 'Use /make-goal', sessionId: 'next', assignment: undefined,
+    summary: { objective: 'unexpected', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] } });
+
+  expect(await f.run(humanMessage(text, requestProposal))).toMatchObject({ kind: 'completed', result: { kind: 'reply', message: 'Use /make-goal' } });
+
+  expect(f.state()).toMatchObject({ pending: null, approval: null, session: { sessionId: 'next' } });
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).not.toHaveProperty('requestProposal');
+  expect(doubles.validateBranches).not.toHaveBeenCalled();
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it('saves an explicitly requested proposal and registers it only after approval', async () => {
+  const f = conversationFixture();
+  const summary = { objective: 'requested goal', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] };
+  f.execute.mockResolvedValueOnce({ message: 'proposal ready', sessionId: 'next', assignment: undefined, summary });
+
+  expect(await f.run(humanMessage('localized instruction can change', true))).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+
+  expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ requestProposal: true });
+  const pending = f.state().pending!;
+  expect(pending).toEqual({ revision: f.state().revision, repositoryDirectory: '/repository', summary });
+  expect(doubles.register).not.toHaveBeenCalled();
+  doubles.register.mockResolvedValue({ ...goalRecord(), ...summary });
+  expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'approve_summary', revision: pending.revision } })).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
+  expect(doubles.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(summary), expect.any(AbortSignal));
+  expect(f.state()).toMatchObject({ pending: null, approval: { state: 'registered', revision: pending.revision } });
+});
+
 it('saves approval reservation before registering a goal and uses the returned state version for completion', async () => {
   const f = fixture(); const confirmation = deferred<void>(); const requested = deferred<DaemonStateRequest>();
   const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] };
@@ -497,6 +535,7 @@ it('rejects a proposal whose requested start branch cannot resolve locally', asy
   const f = fixture();
   const summary = { objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [], startBranch: 'origin/main' };
   f.execute.mockResolvedValue({ message: 'proposal', summary, sessionId: 'session-after', assignment: undefined });
+  f.input.event.event = humanMessage('create proposal', true);
   doubles.validateBranches.mockImplementation((_cwd: string, startBranch: string | undefined) => {
     if (startBranch === 'origin/main') throw new Error('Unable to resolve local branch "origin/main" to a commit');
   });
@@ -612,7 +651,7 @@ it('keeps the reservation and reports reconciliation failure when registration a
   f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {
     objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
   } });
-  await f.run(humanMessage('prepare a goal'));
+  await f.run(humanMessage('prepare a goal', true));
   const pending = f.state().pending;
   if (pending === null) throw new Error('Expected a pending proposal');
   f.request.mockClear();
