@@ -190,7 +190,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Socket } from 'node:net';
 import { ConversationStateStore } from ${JSON.stringify(built('infra/daemon/conversationStateStore.js'))};
 import { MockProvider } from ${JSON.stringify(built('infra/providers/mock.js'))};
-import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
 const save = ConversationStateStore.prototype.write;
 ConversationStateStore.prototype.write = async function(stored, signal) {
@@ -205,7 +204,7 @@ MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
     record({ event: 'provider_start', agent: config.name, model: options.model,
-      summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
+      summaryRequest: prompt.includes('"requestProposal":true') });
     const deadline = Date.now() + 60000;
     const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';
     if (showActivity) options.onStream?.({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });

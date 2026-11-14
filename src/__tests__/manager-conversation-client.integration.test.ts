@@ -1575,6 +1575,32 @@ it('connects to the current daemon when the previous daemon stops during assignm
   }
 });
 
+it('continues ordinary TUI consultation without saving or displaying an unsolicited summary', async () => {
+  const summary = { objective: 'Unsolicited proposal', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] };
+  const generate = vi.fn(async (_input: ManagerTurnInput) => ({ message: 'Use /make-goal', summary, sessionId: 'session', assignment }));
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
+  const registration = vi.spyOn(goalService, 'registerReservedGoal');
+  await client.connect(); await complete();
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  await waitFor(() => expect(app.lastFrame()).toContain('CSV出力'));
+  const submissions = vi.spyOn(client, 'submit');
+
+  app.stdin.write('\x1b[200~We have agreed\x1b[201~');
+  await waitFor(() => expect(app.lastFrame()).toContain('❯ We have agreed'));
+  app.stdin.write('\r');
+  await waitFor(() => expect(submissions).toHaveBeenCalledWith({ kind: 'message', text: 'We have agreed' }, expect.any(Function)));
+  await submissions.mock.results.at(-1)!.value;
+  await fixture.settled();
+
+  await waitFor(() => expect(app.lastFrame()).toContain('Use /make-goal'));
+  expect(app.lastFrame()).not.toContain(summary.objective);
+  expect(client.getSnapshot().state).toMatchObject({ pending: null, approval: null, running: null });
+  const record = conversationRecord(repository);
+  expect((await new ConversationStateStore(directory).read(record.id))?.record).toMatchObject({ pending: null, approval: null });
+  expect((await new GoalStore(repository).list()).goals).toEqual([]);
+  expect(registration).not.toHaveBeenCalled();
+});
+
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const outputs: unknown[] = []; client.onOutput((output) => outputs.push(output));
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
@@ -1593,7 +1619,7 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   }
   app.stdin.write('\r');
   await waitFor(() => expect(submissions.mock.calls.map(([command]) => command)).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
   ]));
   await expect(submissions.mock.results[0]!.value).resolves.toMatchObject({ kind: 'accepted' });
   await fixture.settled();
@@ -1809,7 +1835,7 @@ it.each([
     const other = await open(selected, { deliver: async () => ({ kind: 'delivered' }) });
     await other.read.items[Symbol.asyncIterator]().return?.();
     await service.submit({ attachmentId: other.attachmentId, requestId: randomUUID(), speaker: selected.speaker,
-      command: { kind: 'message', text: 'Produce the next proposal' } });
+      command: { kind: 'message', text: 'Produce the next proposal', requestProposal: true } });
     await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending, running: null }));
     expect(client.getSnapshot().state?.pending?.revision).toBe(4);
     vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {

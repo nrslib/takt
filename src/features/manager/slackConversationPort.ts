@@ -245,7 +245,7 @@ export function createSlackConversationPort(options: {
       if (binding === undefined) {
         const makeGoal = text.trim() === '/make-goal';
         await submitCommand(endpoint, { kind: 'message', text: makeGoal ? getLabel('manager.goSummaryRequest', options.language) : text,
-          ...(makeGoal ? { display: false } : {}) }, makeGoal, undefined, requestId);
+          ...(makeGoal ? { display: false, requestProposal: true } : {}) }, makeGoal, undefined, requestId);
         return;
       }
       const current = await loadInquiry(endpoint, binding.target, binding.questionId);

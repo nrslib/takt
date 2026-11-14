@@ -143,7 +143,7 @@ it.each(['ja', 'en'] as const)('creates a proposal from a conversation with /mak
   await typeAndSubmit(context, '/make-goal');
   await waitFor(() => expect(context.client.commands()).toEqual([
     { kind: 'message', text: 'Export the current data' },
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false, requestProposal: true },
   ]));
   await showProposal(context, summaryA, 5);
   await finish(context, 'Proposal ready');
@@ -172,7 +172,7 @@ it.each(['typed', 'Tab completion', 'pasted'] as const)('regenerates a displayed
     context.app.stdin.write(ENTER);
   }
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
   ]));
   await showProposal(context, summaryB, 5);
   await finish(context, 'Replacement ready');
@@ -248,7 +248,7 @@ it.each(['ja', 'en'] as const)('sends the summary instruction but displays only 
   });
   await typeAndSubmit(context, '/make-goal');
   await waitFor(() => {
-    expect(client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false }]);
+    expect(client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false, requestProposal: true }]);
     expect(app.lastFrame()).toContain(getLabel('manager.summaryWorking', lang));
     expect(app.lastFrame()).not.toContain(getLabel('manager.goSummaryRequest', lang));
   });

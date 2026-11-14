@@ -11,7 +11,7 @@ import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js'
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string; display?: boolean }
+  | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
