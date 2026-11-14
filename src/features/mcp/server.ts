@@ -11,6 +11,7 @@ import {
   getWorkflowInputSchema,
   getGoalInputSchema,
   enqueueTaskInputSchema,
+  createGoalInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
   cleanupTasksInputSchema,
@@ -42,7 +43,7 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
-import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { createTaktGoal, enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
 import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
@@ -395,6 +396,15 @@ export function createTaktMcpServer(
         inputSchema: enqueueTaskInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Task enqueue failed', (deps) => enqueueTaktTask(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_create_goal',
+      {
+        title: 'Create TAKT goal',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd an absolute path. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        inputSchema: createGoalInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
   }
 

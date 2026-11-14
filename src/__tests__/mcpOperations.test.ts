@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
 import * as goalGit from '../infra/goals/git-command.js';
 import * as runMeta from '../core/workflow/run/run-meta.js';
 import { listGoalsInputSchema, type EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import { goalId, goalRecord } from './helpers/goal-fixtures.js';
-import { goalSummary } from '../features/mcp/goalResponse.js';
+import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import { goalSummary, goalWriteSummary } from '../features/mcp/goalResponse.js';
 import { MCP_RESPONSE_MAX_BYTES, responseBytes } from '../features/mcp/response.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalCreateInput } from '../infra/goals/schema.js';
 
 const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({
@@ -21,6 +22,12 @@ vi.mock('../infra/goals/store.js', () => ({
     }
     get = goalDoubles.get;
   },
+}));
+
+const goalServiceDoubles = vi.hoisted(() => ({ createGoal: vi.fn() }));
+vi.mock('../infra/goals/service.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/service.js')>(),
+  createGoal: goalServiceDoubles.createGoal,
 }));
 
 function invalidGoalErrors(count: number) {
@@ -682,5 +689,36 @@ describe('MCP enqueue operation', () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe('Task enqueue failed: permission denied');
+  });
+});
+
+describe('MCP create goal operation', () => {
+  const input: GoalCreateInput = { cwd: '/repo', id: goalId, ...goalInput() };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('returns the saved goal summary and forwards the input and signal to the service', async () => {
+    const controller = new AbortController();
+    const goal = goalRecord();
+    goalServiceDoubles.createGoal.mockResolvedValue(goal);
+
+    const result = await createTaktGoal(input, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalWriteSummary(goal) });
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('converts service failures to sanitized MCP errors', async () => {
+    goalServiceDoubles.createGoal.mockRejectedValue(
+      new Error("EACCES: permission denied, open '/Users/reviewer/secret/.takt/goals/goal.json'"),
+    );
+
+    const result = await createTaktGoal(input, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toBe('Goal creation failed: permission denied');
   });
 });
