@@ -5,11 +5,6 @@ export const CLAUDE_EDIT_TOOL_NAMES = new Set([
   'patch',
 ]);
 
-const CLAUDE_UNSAFE_WITHOUT_EDIT_TOOL_NAMES = new Set([
-  ...CLAUDE_EDIT_TOOL_NAMES,
-  'bash',
-]);
-
 function getClaudeAllowedToolCanonicalName(tool: string): string {
   const trimmed = tool.trim();
   const argsStart = trimmed.indexOf('(');
@@ -47,6 +42,6 @@ export function splitClaudeAllowedToolSpecs(tool: string): string[] {
 
 export function keepsAllowedToolWithoutEdit(tool: string): boolean {
   return splitClaudeAllowedToolSpecs(tool).every(
-    (spec) => !CLAUDE_UNSAFE_WITHOUT_EDIT_TOOL_NAMES.has(getClaudeAllowedToolCanonicalName(spec)),
+    (spec) => !CLAUDE_EDIT_TOOL_NAMES.has(getClaudeAllowedToolCanonicalName(spec)),
   );
 }

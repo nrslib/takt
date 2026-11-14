@@ -230,7 +230,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options).toEqual(expect.objectContaining({
       resolvedProvider: 'pi',
-      allowedTools: ['read', 'grep', 'find', 'ls', 'codemode'],
+      allowedTools: ['read', 'grep', 'find', 'ls', 'bash', 'codemode'],
     }));
   });
 

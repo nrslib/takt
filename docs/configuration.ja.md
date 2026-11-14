@@ -1402,7 +1402,7 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 
 | モード | 説明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
 |--------|------|--------|-------|----------|----|-----------------|--------------|---------|----------|-----------|
-| `readonly` | 読み取り専用、ファイル変更不可 | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` | `ask` ACP session mode + 生成 `--config` の deny ルール（`exec`、`edit`、`Write(**)`、`mcp__*`） |
+| `readonly` | シェルを含むツールの利用可否と、シェル経由の書き込みを防ぐ仕組みは provider ごとに異なります。各 provider の列を参照してください | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `bash`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | フラグなし | `--trust-tools=read,grep` | `ask` ACP session mode + 生成 `--config` の deny ルール（`exec`、`edit`、`Write(**)`、`mcp__*`） |
 | `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成 `--config` の allow ルール（`exec`、`edit`、`Write(**)`） |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode。permission 要求には `allow_once` で応答 |
 
@@ -1414,7 +1414,7 @@ Devin は print モードではなく `devin acp`（stdio 上の Agent Client Pr
 
 生成する `--config` が置き換えるのは Devin のユーザーレベル config のみです。リポジトリ内のプロジェクトレベル `.devin/config.json`（および `.devin/config.local.json`）は Devin でより優先され、その `permissions.allow` ルールは Devin が TAKT に permission を要求する前に tool call を事前承認します。実測では、`edit` モードまたは permission mode 未設定時に、リポジトリの `.devin/config.json` に `allow: ["exec", ...]` があると TAKT が拒否するはずの shell コマンドが実行されました。`readonly` と `strict-readonly` は影響を受けません（ACP `ask` モードは write/exec tool を公開しないため）。また、TAKT が発行するルールについては TAKT の `deny` ルールがプロジェクトの `allow` ルールに優先します。信頼できないリポジトリで `edit` モードの Devin step を実行する前に、そのリポジトリの `.devin/config.json` を確認してください。
 
-Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
+Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。Pi の `readonly` と `edit` はどちらも `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
 ### 設定方法
 
