@@ -131,10 +131,10 @@ describe('Pi builtin override integration', () => {
         toolInfos(setup, allTools),
         [path.resolve(setup.cwd, setup.extensionPath)],
       );
-      expect(activeTools).toEqual(['read', 'grep', 'find', 'ls']);
+      expect(activeTools).toEqual(['read', 'grep', 'find', 'ls', 'bash']);
 
       setup.session.setActiveToolsByName(activeTools);
-      expect(setup.session.getActiveToolNames()).toEqual(['read', 'grep', 'find', 'ls']);
+      expect(setup.session.getActiveToolNames()).toEqual(['read', 'bash', 'grep', 'find', 'ls']);
 
       const readTool = setup.session.state.tools.find((tool) => tool.name === 'read');
       expect(readTool).toBeDefined();
@@ -160,10 +160,10 @@ describe('Pi builtin override integration', () => {
       expect(allTools.filter((tool) => tool.name === 'read')).toHaveLength(1);
 
       const activeTools = resolvePiActiveTools('readonly', undefined, toolInfos(setup, allTools), []);
-      expect(activeTools).toEqual(['grep', 'find', 'ls']);
+      expect(activeTools).toEqual(['grep', 'find', 'ls', 'bash']);
 
       setup.session.setActiveToolsByName(activeTools);
-      expect(setup.session.getActiveToolNames()).toEqual(['grep', 'find', 'ls']);
+      expect(setup.session.getActiveToolNames()).toEqual(['bash', 'grep', 'find', 'ls']);
     } finally {
       disposeOverrideSession(setup);
     }
@@ -269,7 +269,7 @@ describe('Pi builtin override through the TAKT client', () => {
     allowedTools?: string[];
     expected: string[];
   }> = [
-    { label: 'readonly', mode: 'readonly', expected: ['read', 'grep', 'find', 'ls', 'codemode'] },
+    { label: 'readonly', mode: 'readonly', expected: ['read', 'bash', 'grep', 'find', 'ls', 'codemode'] },
     { label: 'readonly allowlist', mode: 'readonly', allowedTools: ['Read'], expected: ['read'] },
     { label: 'edit allowlist', mode: 'edit', allowedTools: ['Read'], expected: ['read'] },
     { label: 'unset-mode allowlist', mode: undefined, allowedTools: ['read'], expected: ['read'] },

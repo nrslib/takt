@@ -991,7 +991,7 @@ promotion は並列サブ step ではサポートされません。
 
 workflow YAML では provider と model を指定できません。runtime profile と routing は `runtime.yaml` から解決され、CLI/env override も引き続き利用できます。削除されたフィールドを workflow に書くと、ロード境界で `runtime.yaml` への移行先を示す設定エラーになります。
 
-実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
+実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からファイル編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`(` より前の canonical tool 名で判定します。`Edit`、`Write`、`Apply_Patch`、`Patch` は除去しますが、`Bash` と `Bash(...)` は残します。OpenCode も `edit`、`write` などの編集系 tool を除去し、`bash` は残します。Pi の `edit: false` と `readonly` mode の既定ツールには `bash` が含まれ、`edit` と `write` は含まれません。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
 
