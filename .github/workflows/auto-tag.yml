@@ -55,8 +55,10 @@ jobs:
 
       - name: Determine npm tag
         id: npm-tag
+        env:
+          RELEASE_TAG: ${{ needs.tag.outputs.tag }}
         run: |
-          VERSION="${{ needs.tag.outputs.tag }}"
+          VERSION="$RELEASE_TAG"
           VERSION="${VERSION#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if echo "$VERSION" | grep -qE '(alpha|beta|rc|next)'; then
@@ -74,7 +76,7 @@ jobs:
         if: steps.npm-tag.outputs.tag == 'latest'
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
-          VERSION="${{ steps.npm-tag.outputs.version }}"
+          VERSION="$RELEASE_VERSION"
 
           for attempt in 1 2 3; do
             if npm dist-tag add "${PACKAGE_NAME}@${VERSION}" next; then
@@ -88,6 +90,7 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.npm-tag.outputs.version }}
 
       - name: Verify dist-tags
         run: |
