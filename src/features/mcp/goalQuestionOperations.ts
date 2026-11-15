@@ -80,7 +80,11 @@ export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, dep
     const saved = await store.update(parsed.goalId,
       (goal) => answerGoalQuestion(goal, parsed.questionId, parsed.answer, 'mcp'));
     const answer = saved.questions!.find((savedQuestion) => savedQuestion.id === parsed.questionId)!.answer!;
-    saveManagerEvent(parsed.cwd, { kind: 'answer', goalId: parsed.goalId, questionId: parsed.questionId, answer });
+    try {
+      saveManagerEvent(parsed.cwd, { kind: 'answer', goalId: parsed.goalId, questionId: parsed.questionId, answer });
+    } catch (eventError) {
+      throw new Error(`The answer was saved, but the manager event could not be recorded: ${eventError instanceof Error ? eventError.message : String(eventError)}`);
+    }
     return jsonResult({ questionId: parsed.questionId, answer });
   } catch (error) { return errorResult('Goal question answer failed', error); }
 }

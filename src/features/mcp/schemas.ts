@@ -135,9 +135,9 @@ export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
 export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
-  questionId: z.uuid(), answer: GoalAnswerInputSchema,
+  questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
 });
-export type AnswerGoalQuestionInput = z.infer<typeof answerGoalQuestionInputSchema>;
+export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();

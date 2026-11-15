@@ -45,7 +45,7 @@ export const GoalAnswerSchema = GoalAnswerInputSchema.extend({
     ctx.addIssue({ code: 'custom', path: ['scope'], message: 'Only allowed approvals have a scope' });
   }
 }).transform((answer) => answer.decision === 'allow' ? { ...answer, scope: answer.scope ?? 'once' as const } : answer);
-export type GoalAnswerInput = z.input<z.ZodObject<typeof goalAnswerFields>>;
+export type GoalAnswerInput = z.input<typeof GoalAnswerInputSchema>;
 export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
   operation: GoalOperationInputSchema.extend({ argsDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),

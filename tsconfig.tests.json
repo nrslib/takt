@@ -297,6 +297,7 @@
     "src/__tests__/goal-merge-git.test.ts",
     "src/__tests__/goal-pull-request-status.test.ts",
     "src/__tests__/goal-pull-request.test.ts",
+    "src/__tests__/goal-question-answer.test.ts",
     "src/__tests__/goal-question-operations.test.ts",
     "src/__tests__/goal-questions-notifications.test.ts",
     "src/__tests__/goal-read-operations.test.ts",
