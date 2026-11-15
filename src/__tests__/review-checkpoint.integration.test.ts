@@ -122,7 +122,7 @@ describe('review work logs across provider attempts', () => {
     const extra = 'Inspect the additional retry boundary';
     const instruction = `Review the changes\n\n${repeated}\n\nCheck the retry path\n\n${repeated}`;
     const task = sameTask ? instruction : `${repeated}\n\n${extra}\n\n${extra}`;
-    const expected = sameTask ? instruction : `${instruction}\n\n${extra}`;
+    const expected = sameTask ? instruction : `${instruction}\n\n${extra}\n\n${extra}`;
     const reportDir = storageAvailable ? context.reportDir : join(cwd, 'unavailable-reports');
     if (!storageAvailable) {
       const target = join(root, 'redirected');
@@ -162,7 +162,7 @@ describe('review work logs across provider attempts', () => {
       if (storageAvailable) expect(prompt.startsWith(`${expected}\n\n`)).toBe(true);
       else expect(prompt).toBe(expected);
       expect(prompt.split(repeated)).toHaveLength(3);
-      expect(prompt.split(extra)).toHaveLength(sameTask ? 1 : 2);
+      expect(prompt.split(extra)).toHaveLength(sameTask ? 1 : 3);
     }
     if (storageAvailable) {
       expect(checkpointData(prompts[1]!)).toContain(progress);
@@ -614,6 +614,7 @@ describe('review work logs across provider attempts', () => {
     }, cwd);
     const prompts: string[] = [];
     const gapReasons: string[] = [];
+    const judgePrompts: Array<{ prompt: string; reviewerCall: number; delivered: string[] }> = [];
     const recoverFromCompaction = vi.fn(async (_prompt: string, callOptions: ProviderCallOptions) => {
       leaveNote(callOptions, laterProgress);
       return response('error');
@@ -621,6 +622,13 @@ describe('review work logs across provider attempts', () => {
     provider(({ name }) => ({
       call: async (prompt, callOptions) => {
         if (name === 'review-completion-judge') {
+          judgePrompts.push({
+            prompt,
+            reviewerCall: prompts.length,
+            delivered: store.read().instructions
+              .filter(({ state }) => state === 'deliveredNextStep' || state === 'deliveredSameSession')
+              .map(({ content }) => content),
+          });
           if (prompts.length >= emptyRetryCall || (duringRetry && restartCalls.includes(prompts.length))) {
             return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
           }
@@ -653,6 +661,26 @@ describe('review work logs across provider attempts', () => {
       expect((await engine.run()).status).toBe('completed');
       expect(prompts).toHaveLength(emptyRetryCall + 2);
       expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      expect(judgePrompts.map(({ reviewerCall }) => reviewerCall)).toEqual(
+        duringRetry ? [1, 2, 3, 4, 5, 6, 7, 8, 11] : [3, 4, 7],
+      );
+      for (const { prompt, reviewerCall, delivered } of judgePrompts) {
+        // Retry episodes finish before a pending intervention restarts the parallel step.
+        const deliveredCount = restartCalls.filter((call) => call < reviewerCall).length;
+        expect(delivered, `delivery after reviewer call ${reviewerCall}`)
+          .toEqual(interventions.slice(0, deliveredCount));
+        const match = prompt.match(/"review_requirements": ("(?:[^"\\]|\\.)*")/);
+        expect(match).not.toBeNull();
+        const requirements = JSON.parse(match![1]!) as string;
+        expect(requirements.split(instruction)).toHaveLength(2);
+        for (const intervention of interventions) {
+          const expectedLength = delivered.includes(intervention) ? 2 : 1;
+          expect(requirements.split(intervention), `judge after reviewer call ${reviewerCall}: ${intervention}`)
+            .toHaveLength(expectedLength);
+          expect(prompts[reviewerCall - 1]!.split(intervention), `reviewer call ${reviewerCall}: ${intervention}`)
+            .toHaveLength(expectedLength);
+        }
+      }
       for (const [index, restartCall] of restartCalls.entries()) {
         const prompt = prompts[restartCall]!;
         for (const request of [instruction, ...interventions.slice(0, index + 1), ...(duringRetry ? [retryInstruction] : [])]) {

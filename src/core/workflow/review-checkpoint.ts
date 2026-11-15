@@ -26,13 +26,12 @@ export function excludeReviewCheckpointScope(scope: TaskReviewScope, repositoryR
 }
 
 export function composeReviewRecoveryInstruction(recoveryBase: string, task: string): string {
-  const seenBlocks = new Set(recoveryBase.split('\n\n').map((block) => block.trim()));
+  const baseBlocks = new Set(recoveryBase.split('\n\n').map((block) => block.trim()));
   const additionalBlocks: string[] = [];
   for (const candidate of task.split('\n\n')) {
     const block = candidate.trim();
-    if (block.length > 0 && !seenBlocks.has(block)) {
-      additionalBlocks.push(block);
-      seenBlocks.add(block);
+    if (block.length > 0 && !baseBlocks.has(block)) {
+      additionalBlocks.push(candidate);
     }
   }
   return [recoveryBase, ...additionalBlocks].filter((block) => block.length > 0).join('\n\n');

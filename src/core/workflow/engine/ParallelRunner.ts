@@ -952,6 +952,9 @@ export class ParallelRunner {
             }
           },
         });
+        if (liveDeliveryCommitter !== undefined) {
+          await liveDeliveryCommitter.settle();
+        }
         let subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
@@ -1015,17 +1018,20 @@ export class ParallelRunner {
           let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
           const completion = await this.deps.stepExecutor.completeReviewerResponse({
             step: executableSubStep,
-            originalInstruction: phase1Instruction,
+            originalInstruction: subInstruction.text,
+            getReviewRequirementsInstruction: () => phase1Instruction,
             initialResponse: subResponse,
             executeRetry: async (instruction, sessionId) => {
+              // Completion retry prefixes this attempt's original instruction; retain only its retry suffix across restarts.
+              const retrySuffix = instruction.slice(subInstruction.text.length);
               if (reviewRequest !== undefined) {
-                // Completion retry prefixes this attempt's original instruction; retain only its retry suffix across restarts.
                 reviewRequest.retryInstruction = composeReviewRecoveryInstruction(
-                  reviewRequest.retryInstruction, instruction.slice(phase1Instruction.length),
+                  reviewRequest.retryInstruction, retrySuffix,
                 );
               }
-              const retryRecoveryInstruction = reviewRequest === undefined ? instruction
-                : composeReviewRecoveryInstruction(phase1Instruction, reviewRequest.retryInstruction);
+              const retryRecoveryInstruction = composeReviewRecoveryInstruction(
+                phase1Instruction, reviewRequest === undefined ? retrySuffix : reviewRequest.retryInstruction,
+              );
               const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
               const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
                 const existing = observedAttempts.get(attempt.sequence);

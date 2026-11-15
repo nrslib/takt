@@ -346,6 +346,7 @@ export class StepExecutor {
   async completeReviewerResponse(input: {
     readonly step: AgentWorkflowStep;
     readonly originalInstruction: string;
+    readonly getReviewRequirementsInstruction: () => string;
     readonly initialResponse: AgentResponse;
     readonly executeRetry: (
       instruction: string,
@@ -367,9 +368,6 @@ export class StepExecutor {
     const language = this.deps.getLanguage() ?? 'en';
     const assignment = workflowMeta.context?.assignment;
     const phase1Context = assignment === undefined ? undefined : renderPhaseContext(assignment, 1, language).trimStart();
-    const reviewRequirements = phase1Context !== undefined
-      ? stripPhaseContext(input.originalInstruction, phase1Context)
-      : input.originalInstruction;
     const priorJudgeGapPaths = new Set<string>();
     const result = await runCompletionRetryEpisode({
       config,
@@ -401,6 +399,10 @@ export class StepExecutor {
         }
       },
       judge: async (reviewResponse, attemptIndex) => {
+        const requirementsInstruction = input.getReviewRequirementsInstruction();
+        const reviewRequirements = phase1Context !== undefined
+          ? stripPhaseContext(requirementsInstruction, phase1Context)
+          : requirementsInstruction;
         const judgeStep = buildCompletionRetryJudgeStep({
           reviewerStepName: input.step.name,
           internalAgentSeats: this.deps.internalAgentSeats,
@@ -2358,6 +2360,9 @@ export class StepExecutor {
       const completion = await this.completeReviewerResponse({
         step: executableStep,
         originalInstruction: instructionWithoutLiveIntervention,
+        getReviewRequirementsInstruction: () => this.appendLiveInterventionInstruction(
+          instructionWithoutLiveIntervention, undefined,
+        ),
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
           reviewRecoveryInstruction = composeReviewRecoveryInstruction(reviewRecoveryInstruction, retryInstruction);
