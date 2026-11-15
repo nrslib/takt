@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
@@ -89,6 +90,35 @@ function createBuilder(
 }
 
 describe('automatic review checkpoints', () => {
+  it.each(['coding-review', 'ai-antipattern-review', 'architecture-review', 'security-review', 'testing-review'])(
+    'enables isolated checkpoints for Team Leader parts of %s only in the review workflow', (reviewer) => {
+      const scope = { kind: 'collected' as const, paths: ['src/input.ts'], source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } } };
+      const parent = { name: reviewer, personaDisplayName: 'Reviewer', instruction: 'review', teamLeader: { maxConcurrency: 2, timeoutMs: 10_000 } };
+      const builder = createBuilder(parent, { workflowName: 'takt-development-review' }, undefined, { reviewScope: scope });
+      const parts = ['part-1', 'part-2'].map((id) => createPartStep(parent, { id, title: id, instruction: `Review ${id}` }));
+
+      for (const part of parts) {
+        expect(builder.buildAgentOptions(part)).toMatchObject({
+          reviewCheckpoint: {
+            reportDir: '/project/.takt/runs/sample/reports', task: 'Original workflow task',
+            reviewer: part.name, definition: JSON.stringify(part), scope,
+          },
+          permissionMode: 'readonly', edit: false,
+        });
+        expect(createBuilder(part, { workflowName: 'independent-review' }, undefined, { reviewScope: scope })
+          .buildAgentOptions(part).reviewCheckpoint).toBeUndefined();
+      }
+      const unrelated = [
+        createStep({ name: `${reviewer}.part-1` }),
+        createPartStep({ ...parent, name: `custom.${reviewer}` }, { id: 'part-1', title: 'Other', instruction: 'Other review' }),
+        createStep({ name: `${reviewer}.monitor`, internalPromptContext: { kind: 'loop_monitor', ownerStepName: reviewer } }),
+      ];
+      for (const step of unrelated) {
+        expect(builder.buildAgentOptions(step).reviewCheckpoint).toBeUndefined();
+      }
+    },
+  );
+
   it('enables only the affected review workflow and keeps its reviewers readonly despite a full profile', () => {
     const scope = { kind: 'collected' as const, paths: ['src/input.ts'], source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } } };
     const step = createStep({ name: 'coding-review', edit: false });

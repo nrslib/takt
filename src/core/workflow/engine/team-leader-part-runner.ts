@@ -46,6 +46,7 @@ export interface TeamLeaderPartExecutionOptions {
     abortSignal: AbortSignal,
   ) => Promise<CompanionStepRuntime | undefined>;
   readonly completeCompanionReview?: (input: {
+    readonly phase1Instruction: string;
     readonly partStep: NormalAgentWorkflowStep;
     readonly initialResponse: AgentResponse;
     readonly agentOptions: RunAgentOptions;
@@ -219,6 +220,7 @@ export async function runTeamLeaderPart(
       && activeCompanionRuntime !== undefined
       && executionOptions?.completeCompanionReview !== undefined
       ? await executionOptions.completeCompanionReview({
+          phase1Instruction: partInstruction,
           partStep,
           initialResponse,
           agentOptions: options,

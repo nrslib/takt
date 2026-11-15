@@ -350,6 +350,152 @@ describe('review work logs across provider attempts', () => {
     expect((await ReviewCheckpointStore.create(cwd, context, originalInstruction)).read()).toContain(progress);
   });
 
+  it.each(['single', 'loop'] as const)('retains the original Phase 1 instruction and work log on companion %s follow-up compaction', async (fixPolicy) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const instruction = 'Review the original validation and retry boundaries';
+    const finding = 'Check the remaining retry lower bound';
+    const workflow = {
+      ...normalizeWorkflowConfig({
+        name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+        steps: [{ name: 'coding-review', edit: false, session: 'continue', instruction,
+          companion: ['reviewer'], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }, cwd),
+      companions: { reviewer: { name: 'reviewer', description: 'Review coverage', instruction: 'Check review coverage', intervalMs: 60_000 } },
+    };
+    const prompts: string[] = [];
+    let companionCalls = 0;
+    const recoverFromCompaction = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => response('done'));
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'reviewer') {
+          return { ...response('done'), structuredOutput: {
+            findings: companionCalls++ === 0 ? [{ severity: 'must_fix', file: 'input.ts', line: 1, finding }] : [],
+            notes: null,
+          } };
+        }
+        prompts.push(prompt);
+        leaveNote(callOptions, prompts.length === 1 ? progress : laterProgress);
+        if (prompts.length === 2) {
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `companion-${fixPolicy}`,
+      companionEnabled: true, companionReviewMode: 'completion', companionFixPolicy: fixPolicy,
+      companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
+      companionDiffReader: {
+        readBaselineSha: async () => 'baseline',
+        readDiff: async () => ({ status: 'ok', snapshot: {
+          digest: 'review-input', changedLines: 1, content: '+validation review', changedFiles: ['input.ts'],
+          fileFingerprints: { 'input.ts': 'file-1' }, hunkFingerprints: { 'input.ts:1-1': 'hunk-1' },
+          omittedBytes: 0, truncated: false,
+        } }),
+      },
+    });
+    try {
+      const state = await engine.run();
+      expect(state.status).toBe('completed');
+      expect(state.companion).toEqual({ completionSettled: true, followUpRounds: 1 });
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]!.split(finding)).toHaveLength(2);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      const [recoveryPrompt, recoveryOptions] = recoverFromCompaction.mock.calls[0]!;
+      expect(recoveryPrompt.split(instruction)).toHaveLength(2);
+      expect(recoveryPrompt.split(finding)).toHaveLength(2);
+      expect(checkpointData(recoveryPrompt)).toContain(progress);
+      expect(checkpointData(recoveryPrompt)).toContain(laterProgress);
+      expect(recoveryOptions.sessionId).toBe('thread');
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each(['single', 'loop'] as const)('restores each Team Leader part instruction and isolated work log during companion %s follow-up compaction', async (fixPolicy) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    mkdirSync(join(cwd, 'personas'));
+    writeFileSync(join(cwd, 'personas/leader.md'), '# Team Leader\nDecompose the review.\n');
+    writeFileSync(join(cwd, 'personas/worker.md'), '# Reviewer\nReview the assigned boundary.\n');
+    const parts = ['validation', 'retry'].map((id) => ({ id, title: id, instruction: `Review the ${id} boundary in input.ts` }));
+    const workflow = {
+      ...normalizeWorkflowConfig({
+        name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+        steps: [{ name: 'coding-review', edit: false, instruction: 'Review the assigned task',
+          team_leader: { persona: './personas/leader.md', part_persona: './personas/worker.md', max_concurrency: 1 },
+          companion: ['reviewer'], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }, cwd),
+      companions: { reviewer: { name: 'reviewer', description: 'Review coverage', instruction: 'Check review coverage', intervalMs: 60_000 } },
+    };
+    let leaderCalls = 0;
+    const partPrompts = new Map<string, string[]>();
+    const reviewedParts = new Set<string>();
+    const recoverFromCompaction = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => response('done'));
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'leader') {
+          return { ...response('done'), structuredOutput: leaderCalls++ === 0
+            ? { parts } : { done: true, reasoning: 'Review complete', cancelPartIds: [], parts: [] } };
+        }
+        if (name === 'reviewer') {
+          const part = parts.find(({ id }) => prompt.includes(`"label":"step_name","value":"coding-review.${id}"`));
+          const needsFollowUp = part !== undefined && !reviewedParts.has(part.id);
+          if (part !== undefined) reviewedParts.add(part.id);
+          return { ...response('done'), structuredOutput: {
+            findings: needsFollowUp ? [{ severity: 'must_fix', file: 'input.ts', line: 1, finding: `Check remaining ${part.id} coverage` }] : [],
+            notes: null,
+          } };
+        }
+        expect(name).toBe('worker');
+        const part = parts.find(({ id, instruction }) => callOptions.sessionId === `thread-${id}` || prompt.includes(instruction));
+        expect(part).toBeDefined();
+        const id = part!.id;
+        const prompts = partPrompts.get(id) ?? [];
+        prompts.push(prompt);
+        partPrompts.set(id, prompts);
+        expect(callOptions.permissionMode).toBe('readonly');
+        expect(callOptions.edit).toBe(false);
+        leaveNote(callOptions, `Checked ${id} ${prompts.length === 1 ? 'initial' : 'follow-up'} evidence`);
+        if (prompts.length === 2) {
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: `thread-${id}` } });
+        }
+        return { ...response('done'), sessionId: `thread-${id}` };
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation and retry', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `team-companion-${fixPolicy}`,
+      companionEnabled: true, companionReviewMode: 'completion', companionFixPolicy: fixPolicy,
+      companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
+      companionDiffReader: {
+        readBaselineSha: async () => 'baseline',
+        readDiff: async () => ({ status: 'ok', snapshot: {
+          digest: 'review-input', changedLines: 1, content: '+validation review', changedFiles: ['input.ts'],
+          fileFingerprints: { 'input.ts': 'file-1' }, hunkFingerprints: { 'input.ts:1-1': 'hunk-1' },
+          omittedBytes: 0, truncated: false,
+        } }),
+      },
+    });
+    try {
+      const state = await engine.run();
+      expect(state.status, state.lastOutput?.content).toBe('completed');
+      expect(recoverFromCompaction).toHaveBeenCalledTimes(parts.length);
+      for (const part of parts) {
+        expect(partPrompts.get(part.id)).toHaveLength(2);
+        const recovery = recoverFromCompaction.mock.calls.find(([, callOptions]) => callOptions.sessionId === `thread-${part.id}`);
+        expect(recovery).toBeDefined();
+        const [prompt] = recovery!;
+        expect(prompt.split(part.instruction)).toHaveLength(2);
+        expect(prompt.split(`Check remaining ${part.id} coverage`)).toHaveLength(2);
+        const log = checkpointData(prompt);
+        expect(log).toContain(`Checked ${part.id} initial evidence`);
+        expect(log).toContain(`Checked ${part.id} follow-up evidence`);
+        for (const other of parts.filter(({ id }) => id !== part.id)) {
+          expect(log).not.toContain(`Checked ${other.id}`);
+        }
+      }
+    } finally { engine.removeAllListeners(); }
+  });
+
   it('retains the original work log, Phase 1 instruction and live intervention through compaction', async () => {
     writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
     const store = new LiveInterventionFileStore(cwd, 'live-checkpoint');
@@ -873,6 +1019,33 @@ describe('review work logs across provider attempts', () => {
     expect(await runAgent(undefined, originalInstruction, { ...options, reviewCheckpoint: { ...context, reportDir } })).toMatchObject({ status: 'done' });
 
     expect(call).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+
+  it.each([
+    { sessionId: undefined, sameInstruction: false },
+    { sessionId: 'thread', sameInstruction: false },
+    { sessionId: undefined, sameInstruction: true },
+    { sessionId: 'thread', sameInstruction: true },
+  ])('preserves review instructions without checkpoint storage (session=$sessionId, same=$sameInstruction)', async ({ sessionId, sameInstruction }) => {
+    const target = join(root, 'redirected');
+    mkdirSync(target);
+    const reportDir = join(cwd, 'reports');
+    symlinkSync(target, reportDir, 'dir');
+    const task = sameInstruction ? originalInstruction : 'Also review the remaining retry boundary';
+    const call = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => response('done'));
+    provider(() => ({ call }));
+
+    const result = await runAgent(undefined, task, {
+      ...options, reviewCheckpoint: { ...context, reportDir }, reviewCheckpointInstruction: originalInstruction, sessionId,
+    });
+
+    expect(result.status).toBe('done');
+    expect(call).toHaveBeenCalledOnce();
+    const [prompt, callOptions] = call.mock.calls[0]!;
+    expect(prompt).toBe(sessionId === undefined && !sameInstruction ? `${originalInstruction}\n\n${task}` : task);
+    expect(callOptions.sessionId).toBe(sessionId);
+    expect(callOptions.permissionMode).toBe('readonly');
     expect(fs.readdirSync(target)).toEqual([]);
   });
 

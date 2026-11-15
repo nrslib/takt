@@ -374,6 +374,28 @@ describe('pull request derived scope', () => {
     });
   });
 
+  it.each([undefined, 'refs/takt/pr-head/another-checkout'])('keeps committed PR changes on the head branch when the recorded head ref is %s', (recordedHeadRef) => {
+    git(repo, 'checkout', '--quiet', 'feature');
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    commitAll(repo, 'commit review fix');
+    const context = recordedHeadRef === undefined
+      ? prContext(false) : { ...prContext(true), headDiffRef: recordedHeadRef };
+
+    const scope = collectTaskReviewScope({
+      cwd: repo,
+      baseRange: resolveReviewScopeBaseRange(repo),
+      prContext: createPullRequestContext(context),
+    });
+
+    expect(scope).toMatchObject({
+      paths: ['committed-fix.ts', 'pr-change.ts'],
+      source: {
+        diffRange: { baseDiffRef: recordedHeadRef === undefined ? 'refs/heads/main' : baseRef, headDiffRef: 'HEAD' },
+        includesWorkingTree: false,
+      },
+    });
+  });
+
   it('uses the explicit PR head ref and excludes committed changes on another branch', () => {
     git(repo, 'checkout', '--quiet', '-b', 'other');
     writeFileSync(join(repo, 'other-only.ts'), 'export const otherOnly = 1;\n');

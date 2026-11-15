@@ -721,7 +721,7 @@ export class OptionsBuilder {
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
-    const reviewScope = usesReviewCheckpoint(this.getWorkflowName(), step.name)
+    const reviewScope = usesReviewCheckpoint(this.getWorkflowName(), step)
       ? this.getReviewScope?.() : undefined;
     const checkpoint = reviewScope?.kind === 'collected' && this.getTask !== undefined
       ? {

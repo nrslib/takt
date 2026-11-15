@@ -678,6 +678,7 @@ export class StepExecutor {
   }
 
   async completeCompanionReview(input: {
+    readonly phase1Instruction: string;
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -756,7 +757,7 @@ export class StepExecutor {
                 execute: (instruction, sessionId, onPromptResolved) => executeAgent(
                   input.executableStep.persona,
                   instruction,
-                  { ...attempt.options, sessionId, onPromptResolved },
+                  { ...attempt.options, reviewCheckpointInstruction: input.phase1Instruction, sessionId, onPromptResolved },
                 ),
                 onPhaseStart: (...args) => {
                   promptResolvedAttempts.add(phaseAttempt.sequence);
@@ -2295,6 +2296,7 @@ export class StepExecutor {
 
     let companionSingleFixSettled = false;
     response = await this.completeCompanionReview({
+      phase1Instruction,
       eventStep: step,
       executableStep,
       state,
@@ -2424,6 +2426,7 @@ export class StepExecutor {
             return normalizedAfterLiveIntervention.response;
           }
           return this.completeCompanionReview({
+            phase1Instruction,
             eventStep: step,
             executableStep,
             state,

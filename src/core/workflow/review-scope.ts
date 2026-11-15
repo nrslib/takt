@@ -368,18 +368,19 @@ function materializedDiffRange(
 ): ReviewScopeDiffRange | undefined {
   // --skip-git では detached HEAD や別名ブランチにコミットした修正も対象にする。
   const baseDiffRef = prContext.baseDiffRef ?? resolvePullRequestBaseBranchRef(cwd, prContext.baseBranch, env);
-  const headDiffRef = prContext.headDiffRef ?? 'HEAD';
+  const effectiveHeadDiffRef = getCurrentBranch(cwd, env) === prContext.headBranch
+    ? 'HEAD' : prContext.headDiffRef ?? 'HEAD';
   if (baseDiffRef === undefined) {
     return undefined;
   }
   // PR context can originate in another checkout; its refs need not exist here.
   // Do not substitute a different range when the recorded range is unavailable.
-  if (!refExists(cwd, `${baseDiffRef}^{commit}`, env) || !refExists(cwd, `${headDiffRef}^{commit}`, env)) {
+  if (!refExists(cwd, `${baseDiffRef}^{commit}`, env) || !refExists(cwd, `${effectiveHeadDiffRef}^{commit}`, env)) {
     return undefined;
   }
   return {
     baseDiffRef,
-    headDiffRef: getCurrentBranch(cwd, env) === prContext.headBranch ? 'HEAD' : headDiffRef,
+    headDiffRef: effectiveHeadDiffRef,
   };
 }
 

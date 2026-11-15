@@ -1494,6 +1494,7 @@ export class TeamLeaderRunner {
           );
         },
         completeCompanionReview: async ({
+          phase1Instruction,
           partStep,
           initialResponse,
           agentOptions,
@@ -1508,6 +1509,7 @@ export class TeamLeaderRunner {
             initialResponse.providerUsage,
           );
           return this.deps.stepExecutor.completeCompanionReview({
+            phase1Instruction,
             eventStep: partStep,
             executableStep: partStep,
             state: partCompanionState,

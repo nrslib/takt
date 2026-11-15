@@ -643,6 +643,10 @@ export async function runAgent(
     return defaultRunner.run(personaSpec, task, options);
   }
   const originalInstruction = options.reviewCheckpointInstruction ?? task;
+  // Identity stays on the original request; a compacted or fresh session also
+  // needs the current attempt's instructions (for example, a live intervention).
+  const recoveryInstruction = originalInstruction === task
+    ? originalInstruction : `${originalInstruction}\n\n${task}`;
   let checkpoint: Awaited<ReturnType<typeof startReviewCheckpoint>>;
   try {
     checkpoint = await startReviewCheckpoint(options.cwd, options.reviewCheckpoint, originalInstruction, options.language ?? 'en');
@@ -651,12 +655,8 @@ export async function runAgent(
     // Unsupported inputs disable reuse, not the review. Operational failures
     // still propagate rather than silently discarding evidence.
     log.warn('Review checkpoint unavailable', { reason: error.message });
-    return defaultRunner.run(personaSpec, task, { ...options, bypassPermissions: false });
+    return defaultRunner.run(personaSpec, options.sessionId === undefined ? recoveryInstruction : task, { ...options, bypassPermissions: false });
   }
-  // Identity stays on the original request; a compacted or fresh session also
-  // needs the current attempt's instructions (for example, a live intervention).
-  const recoveryInstruction = originalInstruction === task
-    ? originalInstruction : `${originalInstruction}\n\n${task}`;
   try {
     return await defaultRunner.run(personaSpec, checkpoint.instruction(options.sessionId === undefined ? recoveryInstruction : task), {
       ...options,
