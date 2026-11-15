@@ -1,6 +1,8 @@
 import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { join, parse, relative, resolve, sep } from 'node:path';
 
+export class UnsafePrivateArtifactPathError extends Error {}
+
 export interface DirectoryIdentity {
   path: string;
   stat: Stats;
@@ -60,11 +62,11 @@ export function assertSafePath(targetPath: string, targetIsDirectory: boolean): 
   const { trustedRoot, rejectTrustedRootSymlink } = boundary;
   const rootLinkStat = lstatSync(trustedRoot);
   if (rejectTrustedRootSymlink && rootLinkStat.isSymbolicLink()) {
-    throw new Error(`Private artifact trusted root is a symlink: ${trustedRoot}`);
+    throw new UnsafePrivateArtifactPathError(`Private artifact trusted root is a symlink: ${trustedRoot}`);
   }
   const rootStat = statSync(trustedRoot);
   if (!rootStat.isDirectory()) {
-    throw new Error(`Private artifact trusted root is not a directory: ${trustedRoot}`);
+    throw new UnsafePrivateArtifactPathError(`Private artifact trusted root is not a directory: ${trustedRoot}`);
   }
 
   let current = trustedRoot;
@@ -73,14 +75,14 @@ export function assertSafePath(targetPath: string, targetIsDirectory: boolean): 
     const stat = lstatOrUndefined(current);
     if (stat === undefined) continue;
     if (stat.isSymbolicLink()) {
-      throw new Error(`Private artifact path contains a symlink: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path contains a symlink: ${current}`);
     }
     const isTarget = current === targetPath;
     if ((!isTarget || targetIsDirectory) && !stat.isDirectory()) {
-      throw new Error(`Private artifact path contains a non-directory: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path contains a non-directory: ${current}`);
     }
     if (isTarget && !targetIsDirectory && !stat.isFile()) {
-      throw new Error(`Private artifact path is not a regular file: ${current}`);
+      throw new UnsafePrivateArtifactPathError(`Private artifact path is not a regular file: ${current}`);
     }
   }
 }

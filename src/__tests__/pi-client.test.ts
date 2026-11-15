@@ -647,7 +647,7 @@ export default function registerLifecycleTool(pi) {
     { reason: 'overflow', willRetry: true, promptCalls: 1 },
     { reason: 'overflow', willRetry: false, promptCalls: 2 },
     { reason: 'threshold', willRetry: false, promptCalls: 2 },
-  ] as const)('coordinates runner replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
+  ] as const)('coordinates checkpoint review replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
     mocks.resetTransient();
     const prompt = mocks.session.prompt.getMockImplementation()!;
     const sdkContinue = vi.fn(async () => {
@@ -670,6 +670,7 @@ export default function registerLifecycleTool(pi) {
       executionPhase: 1,
       edit: false,
       resolvedExecution: { provider: 'pi', model, providerOptions: undefined, permissionMode: 'readonly' },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
       onStream: (event) => { if (event.type === 'init') sessionIds.push(event.data.sessionId!); },
     });
     expect(result.status).toBe('done');

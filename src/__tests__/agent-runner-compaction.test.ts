@@ -50,6 +50,7 @@ function makeRunOptions(overrides: Partial<RunAgentOptions> = {}): RunAgentOptio
     abortSignal: new AbortController().signal,
     childProcessEnv: { TAKT_TEST_ENV: 'preserved' },
     edit: false,
+    reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     resolvedExecution: {
       provider: 'codex',
       model: 'gpt-test',
@@ -149,6 +150,27 @@ describe('AgentRunner compaction recovery', () => {
       type: 'result',
       data: { result: 'unchanged', sessionId: 'current-thread', success: true },
     });
+  });
+
+  it('does not resend a completed ordinary task after compaction without a checkpoint recorder', async () => {
+    const onStream = vi.fn();
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const result = { type: 'result', data: { result: 'completed', sessionId: 'current-thread', success: true } } as const;
+    const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.(result);
+      return makeResponse('completed', 'current-thread');
+    });
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction }));
+
+    const response = await new AgentRunner().run(undefined, 'ordinary task', makeRunOptions({
+      onStream, reviewCheckpointRecorder: undefined,
+    }));
+
+    expect(response).toMatchObject({ status: 'done', content: 'completed' });
+    expect(call).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(onStream).toHaveBeenCalledWith(result);
   });
 
   it('does not invoke recovery without a provider compaction event', async () => {

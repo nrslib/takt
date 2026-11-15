@@ -2222,6 +2222,7 @@ export class StepExecutor {
               attemptInstruction,
               {
                 ...agentOptions,
+                reviewCheckpointInstruction: phase1Instruction,
                 sessionId,
                 onPromptResolved,
                 ...(sameSessionCommitter === undefined

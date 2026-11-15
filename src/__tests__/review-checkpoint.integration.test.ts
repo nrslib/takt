@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import * as childProcess from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, statSync, existsSync, mkdirSync, symlinkSync, chmodSync } from 'node:fs';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { runAgent } from '../agents/runner.js';
-import { ReviewCheckpointStore } from '../infra/review-checkpoint/store.js';
+import { ReviewCheckpointStore, ReviewCheckpointUnavailableError } from '../infra/review-checkpoint/store.js';
 import { startReviewCheckpoint } from '../infra/review-checkpoint/session.js';
 import { REPORT_INTERNAL_NAMESPACE } from '../core/models/reserved-report-names.js';
 import type { ReviewCheckpointContext } from '../core/workflow/review-checkpoint.js';
@@ -22,9 +23,11 @@ import { createDynamicParallelSelectionSnapshot } from '../core/workflow/dynamic
 import { fileURLToPath } from 'node:url';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { collectTaskReviewScope, createTaskReviewScopeResolver, resolveReviewScopeBaseRange } from '../core/workflow/review-scope.js';
 
 vi.mock('node:fs', { spy: true });
+vi.mock('node:child_process', { spy: true });
 
 const { providerMock, clientMock } = vi.hoisted(() => ({ providerMock: vi.fn(), clientMock: vi.fn() }));
 vi.mock('../infra/codex/index.js', () => ({ callCodex: clientMock, callCodexCustom: clientMock }));
@@ -308,6 +311,90 @@ describe('review work logs across provider attempts', () => {
     expect(calls).toBe(3);
   });
 
+  it('keeps the current attempt instruction with the stable review request on compaction and fresh recovery', async () => {
+    const intervention = 'Also review the retry boundary after validation';
+    (await ReviewCheckpointStore.create(cwd, context, originalInstruction)).save(progress);
+    let calls = 0;
+    provider(() => ({
+      call: async (prompt, callOptions) => {
+        expect(prompt.split(intervention)).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain(progress);
+        if (calls++ === 0) {
+          expect(callOptions.sessionId).toBe('thread');
+          expect(prompt.startsWith(intervention)).toBe(true);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        } else {
+          expect(callOptions.sessionId).toBeUndefined();
+          expect(prompt.split(originalInstruction)).toHaveLength(2);
+        }
+        return response('done');
+      },
+      recoverFromCompaction: async (prompt) => {
+        expect(prompt.split(originalInstruction)).toHaveLength(2);
+        expect(prompt.split(intervention)).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain(progress);
+        return response('error');
+      },
+    }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: intervention, initialSessionId: 'thread', discardSession: vi.fn(),
+      execute: (attempt) => runAgent(undefined, attempt.instruction, {
+        ...options, reviewCheckpointInstruction: originalInstruction, sessionId: attempt.sessionId,
+      }),
+    });
+
+    expect(result.finalAttempt.reason).toBe('provider_error_fresh');
+    expect(result.response.status).toBe('done');
+    expect(calls).toBe(2);
+    expect((await ReviewCheckpointStore.create(cwd, context, originalInstruction)).read()).toContain(progress);
+  });
+
+  it('retains the original work log, Phase 1 instruction and live intervention through compaction', async () => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const store = new LiveInterventionFileStore(cwd, 'live-checkpoint');
+    const instruction = 'Review the entire original validation boundary';
+    const intervention = 'Also check the retry boundary';
+    const workflow = normalizeWorkflowConfig({
+      name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+      steps: [{ name: 'coding-review', edit: false, session: 'continue', instruction,
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, cwd);
+    let calls = 0;
+    const sessions: Array<string | undefined> = [];
+    provider(() => ({
+      call: async (prompt, callOptions) => {
+        sessions.push(callOptions.sessionId);
+        if (calls++ === 0) {
+          leaveNote(callOptions);
+          await store.issue(intervention);
+        } else {
+          expect(prompt.split(intervention)).toHaveLength(2);
+          expect(checkpointData(prompt)).toContain(progress);
+          leaveNote(callOptions, laterProgress);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        return response('done');
+      },
+      recoverFromCompaction: async (prompt, callOptions) => {
+        sessions.push(callOptions.sessionId);
+        expect(prompt.split(instruction)).toHaveLength(2);
+        expect(prompt.split(intervention)).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain(laterProgress);
+        return response('done');
+      },
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'live-checkpoint', liveIntervention: store,
+    });
+    try {
+      expect((await engine.run()).status).toBe('completed');
+      expect(calls).toBe(2);
+      expect(sessions).toEqual([undefined, 'thread', 'thread']);
+      expect(store.read()).toMatchObject({ pending: 0, deliveredSameSession: 1 });
+    } finally { engine.removeAllListeners(); }
+  });
+
   it.each([
     { mode: 'normal', followUpSession: 'follow-up-thread' },
     { mode: 'parallel', followUpSession: 'follow-up-thread' },
@@ -476,15 +563,20 @@ describe('review work logs across provider attempts', () => {
     expect(readFileSync(store.path, 'utf8')).toBe(progress);
   });
 
-  it.each(['committed', 'unborn'] as const)('invalidates %s logs after alternate-index blob changes with unchanged paths and worktree', async (state) => {
+  it.each([
+    { state: 'committed', relativeIndex: false }, { state: 'unborn', relativeIndex: false },
+    { state: 'committed', relativeIndex: true }, { state: 'unborn', relativeIndex: true },
+  ] as const)('invalidates $state logs after alternate-index blob changes (relative from subdirectory=$relativeIndex)', async ({ state, relativeIndex }) => {
     if (state === 'unborn') initializeUnbornRepository();
+    const callerCwd = relativeIndex ? join(cwd, 'app') : cwd;
+    mkdirSync(callerCwd, { recursive: true });
     const index = join(root, 'alternate-index');
     const originalIndex = join(cwd, '.git', 'index');
     const originalIndexBytes = existsSync(originalIndex) ? readFileSync(originalIndex) : undefined;
     const worktreeBytes = readFileSync(join(cwd, 'input.ts'));
-    const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    const git = (...args: string[]) => execFileSync('git', args, { cwd, env: { ...process.env, GIT_INDEX_FILE: index }, encoding: 'utf8' }).trim();
     try {
-      vi.stubEnv('GIT_INDEX_FILE', index);
+      vi.stubEnv('GIT_INDEX_FILE', relativeIndex ? relative(callerCwd, index) : index);
       git('read-tree', state === 'committed' ? 'HEAD' : '--empty');
       const stage = (text: string) => {
         const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd, input: text, encoding: 'utf8' }).trim();
@@ -492,7 +584,7 @@ describe('review work logs across provider attempts', () => {
       };
       stage('alternate staged version one\n');
       const getScope = createTaskReviewScopeResolver({
-        getCwd: () => cwd, getReportDir: () => context.reportDir,
+        getCwd: () => callerCwd, getReportDir: () => context.reportDir,
         getPrContext: () => state === 'unborn' ? undefined : {
           source: 'pr_review', prNumber: 1, baseBranch: 'main', headBranch: 'other',
           baseBranchSource: 'pull_request', baseDiffRef: 'HEAD', headDiffRef: 'HEAD',
@@ -501,9 +593,9 @@ describe('review work logs across provider attempts', () => {
       const scope = getScope();
       expect(scope).toMatchObject({ kind: 'collected', paths: ['input.ts'] });
       const localContext = { ...context, scope };
-      const store = await ReviewCheckpointStore.create(cwd, localContext, originalInstruction);
+      const store = await ReviewCheckpointStore.create(callerCwd, localContext, originalInstruction);
       store.save(progress);
-      expect((await ReviewCheckpointStore.create(cwd, localContext, originalInstruction)).read()).toBe(progress);
+      expect((await ReviewCheckpointStore.create(callerCwd, localContext, originalInstruction)).read()).toBe(progress);
 
       stage('alternate staged version two\n');
 
@@ -512,11 +604,11 @@ describe('review work logs across provider attempts', () => {
       expect(existsSync(originalIndex) ? readFileSync(originalIndex) : undefined).toEqual(originalIndexBytes);
       expect(store.read()).toBeUndefined();
       expect(() => store.save(laterProgress)).toThrow();
-      const current = await ReviewCheckpointStore.create(cwd, { ...context, scope: getScope() }, originalInstruction);
+      const current = await ReviewCheckpointStore.create(callerCwd, { ...context, scope: getScope() }, originalInstruction);
       expect(current.target.revision).not.toBe(store.target.revision);
       expect(current.read()).toBeUndefined();
       current.save(laterProgress);
-      expect((await ReviewCheckpointStore.create(cwd, localContext, originalInstruction)).read()).toBe(laterProgress);
+      expect((await ReviewCheckpointStore.create(callerCwd, localContext, originalInstruction)).read()).toBe(laterProgress);
       expect(readFileSync(store.path, 'utf8')).toBe(progress);
     } finally { vi.unstubAllEnvs(); }
   });
@@ -710,7 +802,10 @@ describe('review work logs across provider attempts', () => {
     expect(() => store.read()).toThrow();
     expect(() => store.save(laterProgress)).toThrow();
     await expect(ReviewCheckpointStore.create(cwd, localContext, originalInstruction)).rejects.toThrow();
-    expect(() => getScope()).toThrow();
+    expect(getScope()).toMatchObject({ kind: 'collected', source: { kind: 'pull_request', prNumber: 1 } });
+    const currentScope = getScope();
+    if (currentScope.kind !== 'collected' || currentScope.source.kind !== 'pull_request') throw new Error('Expected PR scope');
+    expect(currentScope.source.diffRange).toBeUndefined();
     expect(readFileSync(store.path, 'utf8')).toBe(progress);
   });
 
@@ -723,6 +818,191 @@ describe('review work logs across provider attempts', () => {
       other.save('Other reviewer notes');
     }
     expect(store.read()).toBe(progress);
+  });
+
+  it('uses repository-relative scope and fingerprint inputs from a subdirectory and excludes its own tracked and untracked outputs', async () => {
+    const subdirectory = join(cwd, 'app');
+    const reportDir = join(subdirectory, 'run[1]', 'reports');
+    const directory = join(reportDir, REPORT_INTERNAL_NAMESPACE, 'review-checkpoints');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'history.log'), 'history');
+    writeFileSync(join(subdirectory, 'tracked.ts'), 'initial');
+    execFileSync('git', ['add', '.'], { cwd });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'subdirectory fixture'], { cwd });
+    writeFileSync(join(subdirectory, 'tracked.ts'), 'changed');
+    writeFileSync(join(subdirectory, 'untracked.ts'), 'new');
+    writeFileSync(join(cwd, 'outside.ts'), 'root input');
+    try {
+      vi.stubEnv('GIT_INDEX_FILE', '../.git/index');
+      const getScope = createTaskReviewScopeResolver({ getCwd: () => subdirectory, getPrContext: () => undefined, getReportDir: () => reportDir });
+      const scope = getScope();
+      expect(scope).toMatchObject({ paths: ['app/tracked.ts', 'app/untracked.ts', 'outside.ts'] });
+      const localContext = { ...context, reportDir, scope };
+      const store = await ReviewCheckpointStore.create(subdirectory, localContext, originalInstruction);
+      store.save(progress);
+      writeFileSync(join(directory, 'history.log'), 'updated');
+      expect(getScope()).toEqual(scope);
+      expect((await ReviewCheckpointStore.create(subdirectory, { ...localContext, scope: getScope() }, originalInstruction)).read()).toBe(progress);
+      execFileSync('git', ['add', directory], { cwd: subdirectory, env: { ...process.env, GIT_INDEX_FILE: join(cwd, '.git', 'index') } });
+      expect(store.read()).toBe(progress);
+      writeFileSync(join(subdirectory, 'untracked.ts'), 'edited');
+      expect(store.read()).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(['inside repository', 'outside repository'].flatMap((destination) =>
+    ['.takt', 'report directory', 'ancestor above .takt'].map((placement) => ({ destination, placement })),
+  ))('reviews once without checkpoint output through a $placement symlink to $destination', async ({ destination, placement }) => {
+    const target = join(destination === 'inside repository' ? cwd : root, 'redirected');
+    mkdirSync(target);
+    const artifactRoot = placement === 'ancestor above .takt' ? join(cwd, 'artifact-root') : cwd;
+    const reportDir = join(artifactRoot, '.takt', 'runs', 'run', 'reports');
+    const link = placement === '.takt' ? join(cwd, '.takt')
+      : placement === 'report directory' ? reportDir : artifactRoot;
+    mkdirSync(join(link, '..'), { recursive: true });
+    symlinkSync(target, link, 'dir');
+    const call = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
+      expect(prompt).toBe(originalInstruction);
+      expect(callOptions.permissionMode).toBe('readonly');
+      expect(callOptions.edit).toBe(false);
+      leaveNote(callOptions);
+      return response('done');
+    });
+    provider(() => ({ call }));
+
+    expect(await runAgent(undefined, originalInstruction, { ...options, reviewCheckpoint: { ...context, reportDir } })).toMatchObject({ status: 'done' });
+
+    expect(call).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+
+  it.each(['read', 'save', 'append'] as const)('rechecks checkpoint ancestors and file symlinks before %s', async (operation) => {
+    const store = await ReviewCheckpointStore.create(cwd, context, originalInstruction);
+    store.save(progress);
+    const target = join(root, 'outside');
+    mkdirSync(target);
+    const marker = join(target, 'marker.log');
+    writeFileSync(marker, 'untouched');
+    // A leaf symlink must neither expose its contents nor receive new notes.
+    rmSync(store.path);
+    symlinkSync(marker, store.path);
+    expect(() => store[operation](laterProgress)).toThrow(ReviewCheckpointUnavailableError);
+    expect(readFileSync(marker, 'utf8')).toBe('untouched');
+    // The same store must also reject a parent that becomes a symlink.
+    rmSync(context.reportDir, { recursive: true });
+    symlinkSync(target, context.reportDir, 'dir');
+    expect(() => store[operation](laterProgress)).toThrow(ReviewCheckpointUnavailableError);
+    expect(fs.readdirSync(target)).toEqual(['marker.log']);
+    expect(readFileSync(marker, 'utf8')).toBe('untouched');
+  });
+
+  it('finishes the provider review without further checkpoint access when an ancestor becomes a symlink', async () => {
+    const target = join(root, 'outside');
+    mkdirSync(target);
+    const call = vi.fn(async (_prompt: string, callOptions: ProviderCallOptions) => {
+      rmSync(context.reportDir, { recursive: true });
+      symlinkSync(target, context.reportDir, 'dir');
+      leaveNote(callOptions);
+      leaveNote(callOptions, laterProgress);
+      return response('done');
+    });
+    provider(() => ({ call }));
+
+    expect(await runAgent(undefined, originalInstruction, options)).toMatchObject({ status: 'done' });
+
+    expect(call).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+
+  it('drops checkpoint recovery instructions if the path becomes unsafe before reading', async () => {
+    const session = await startReviewCheckpoint(cwd, context, originalInstruction, 'en');
+    const target = join(root, 'outside');
+    mkdirSync(target);
+    rmSync(context.reportDir, { recursive: true });
+    symlinkSync(target, context.reportDir, 'dir');
+
+    expect(session.instruction()).toBe(originalInstruction);
+    session.observe({ type: 'text', data: { text: `${progress}\n` } });
+    session.finish(response('done'));
+    session.flush();
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+
+  it.each(['create', 'read', 'save'] as const)('propagates checkpoint path I/O errors during %s instead of disabling reuse', async (operation) => {
+    const store = await ReviewCheckpointStore.create(cwd, context, originalInstruction);
+    const failure = Object.assign(new Error('filesystem denied access'), { code: 'EACCES' });
+    const { lstatSync: original } = await vi.importActual<typeof fs>('node:fs');
+    const reportDir = fs.realpathSync(context.reportDir);
+    const spy = vi.spyOn(fs, 'lstatSync').mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
+      if (args[0] === reportDir) throw failure;
+      return original(...args);
+    });
+    try {
+      if (operation === 'create') {
+        await expect(ReviewCheckpointStore.create(cwd, context, originalInstruction)).rejects.toBe(failure);
+      } else {
+        expect(() => store[operation](progress)).toThrow(failure);
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  it('reviews an untracked nested repository without a checkpoint or automatic resend', async () => {
+    const nested = join(cwd, 'nested');
+    execFileSync('git', ['init', '-q', nested]);
+    writeFileSync(join(nested, 'file.ts'), 'nested input');
+    execFileSync('git', ['add', '.'], { cwd: nested });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'nested'], { cwd: nested });
+    expect(execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd, encoding: 'utf8' })).toContain('nested/');
+    const call = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
+      expect(prompt).toBe(originalInstruction);
+      callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+      return response('done');
+    });
+    const recoverFromCompaction = vi.fn();
+    provider(() => ({ call, recoverFromCompaction }));
+    expect(await runAgent(undefined, originalInstruction, options)).toMatchObject({ status: 'done' });
+    expect(call).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['working tree', 'pull request'] as const)('includes dirty submodules in %s scope without reusing logs or invoking child clean filters', async (source) => {
+    const nested = join(cwd, 'nested');
+    execFileSync('git', ['init', '-q', nested]);
+    writeFileSync(join(nested, 'child.ts'), 'initial child');
+    writeFileSync(join(nested, '.gitattributes'), 'child.ts filter=child\n');
+    execFileSync('git', ['add', '.'], { cwd: nested });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'child'], { cwd: nested });
+    const oid = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: nested, encoding: 'utf8' }).trim();
+    writeFileSync(join(cwd, '.gitmodules'), '[submodule "nested"]\npath = nested\nurl = ./nested\nignore = none\n');
+    execFileSync('git', ['add', '.gitmodules'], { cwd });
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${oid},nested`], { cwd });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'submodule fixture'], { cwd });
+    const marker = join(root, 'child-filter-executed');
+    const helper = join(root, 'child-filter.sh');
+    writeFileSync(helper, `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\ncat\n`);
+    execFileSync('git', ['config', 'filter.child.clean', `sh ${JSON.stringify(helper)}`], { cwd: nested });
+    const call = vi.fn(async (prompt: string) => {
+      expect(prompt).toBe(originalInstruction);
+      return { ...response('done'), content: progress };
+    });
+    provider(() => ({ call }));
+    for (const content of ['first dirty version', 'second dirty version with different bytes']) {
+      writeFileSync(join(nested, 'child.ts'), content);
+      expect(execFileSync('git', ['ls-files', '--stage', '-z', '--', 'nested'], { cwd, encoding: 'utf8' })).toBe(`160000 ${oid} 0\tnested\0`);
+      expect(execFileSync('git', ['diff', '--ignore-submodules=dirty', '--name-only', '--'], { cwd, encoding: 'utf8' })).toBe('');
+      const scope = collectTaskReviewScope({
+        cwd, baseRange: resolveReviewScopeBaseRange(cwd), reportDir: context.reportDir,
+        ...(source === 'pull request' ? { prContext: {
+          source: 'pr_review' as const, prNumber: 1, baseBranch: 'main', headBranch: 'other',
+          baseBranchSource: 'pull_request' as const, baseDiffRef: 'HEAD', headDiffRef: 'HEAD',
+        } } : {}),
+      });
+      expect(scope).toMatchObject({ kind: 'collected', paths: ['nested'] });
+      if (source === 'pull request') expect(scope).toMatchObject({ source: { includesWorkingTree: true } });
+      expect(await runAgent(undefined, originalInstruction, { ...options, reviewCheckpoint: { ...context, scope } })).toMatchObject({ status: 'done' });
+    }
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it('does not invalidate its own log when the run directory is not gitignored', async () => {
@@ -788,6 +1068,62 @@ describe('review work logs across provider attempts', () => {
     expect(() => store.save(laterProgress)).toThrow();
   });
 
+  it('rejects non-UTF-8 untracked Git path bytes that collide with a valid filename after scope collection', async () => {
+    const validName = 'collision-\uFFFD.ts';
+    writeFileSync(join(cwd, validName), 'valid file');
+    const scope = collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) });
+    const localContext = { ...context, scope };
+    const store = await ReviewCheckpointStore.create(cwd, localContext, originalInstruction);
+    store.save(progress);
+    const rawName = Buffer.concat([Buffer.from('collision-'), Buffer.from([0xff]), Buffer.from('.ts')]);
+    const rawPath = Buffer.concat([Buffer.from(`${cwd}/`), rawName]);
+    expect(rawName.toString('utf8')).toBe(validName);
+
+    // macOS filesystems and Windows cannot represent this filename. Inject only
+    // the raw Git inventory there; Linux exercises the actual filename bytes.
+    const { execFileSync: original } = await vi.importActual<typeof childProcess>('node:child_process');
+    const inventorySpy = process.platform === 'linux' ? undefined
+      : vi.spyOn(childProcess, 'execFileSync').mockImplementation((file, args, commandOptions) => {
+        const output = original(file, args, commandOptions);
+        return file === 'git' && args.includes('--others')
+          ? Buffer.concat([output as Buffer, rawName, Buffer.from([0])]) : output;
+      });
+    try {
+      for (const content of ['initial invalid-path contents', 'changed invalid-path contents']) {
+        if (process.platform === 'linux') writeFileSync(rawPath, content);
+        const inventory = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd });
+        expect(inventory.includes(Buffer.concat([rawName, Buffer.from([0])]))).toBe(true);
+        expect(inventory.includes(Buffer.from(`${validName}\0`))).toBe(true);
+
+        await expect(ReviewCheckpointStore.create(cwd, localContext, originalInstruction).then(() => undefined)).rejects.toThrow();
+        expect(() => store.read()).toThrow();
+        expect(() => store.save(laterProgress)).toThrow();
+        expect(() => store.append(laterProgress)).toThrow();
+        expect(readFileSync(store.path, 'utf8')).toBe(progress);
+        expect(readFileSync(join(cwd, validName), 'utf8')).toBe('valid file');
+      }
+    } finally { inventorySpy?.mockRestore(); }
+  });
+
+  it.each([
+    'ordinary path.ts', '日本語.ts', 'replacement-\uFFFD.ts',
+    ...(process.platform === 'win32' ? [] : ['line\nbreak\tpath.ts']),
+  ])('preserves reversible untracked path %j through scope and checkpoint validation', async (name) => {
+    writeFileSync(join(cwd, name), 'initial');
+    const scope = collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) });
+    expect(scope).toMatchObject({ paths: [name] });
+    const localContext = { ...context, scope };
+    const store = await ReviewCheckpointStore.create(cwd, localContext, originalInstruction);
+    store.save(progress);
+    expect((await ReviewCheckpointStore.create(cwd, localContext, originalInstruction)).read()).toBe(progress);
+
+    writeFileSync(join(cwd, name), 'changed');
+
+    expect(store.read()).toBeUndefined();
+    expect(() => store.save(laterProgress)).toThrow();
+    expect(readFileSync(store.path, 'utf8')).toBe(progress);
+  });
+
   it.each(['type', 'mode', 'entry boundary'] as const)('invalidates an untracked fingerprint when its %s changes despite matching concatenated bytes', async (change) => {
     const file = join(cwd, 'a');
     writeFileSync(file, change === 'entry boundary' ? 'x\0b\0y' : 'input.ts');
@@ -810,13 +1146,13 @@ describe('review work logs across provider attempts', () => {
 
   it.each(['success', 'git failure', 'read failure'] as const)('removes private diff spools after %s', async (outcome) => {
     writeFileSync(join(cwd, 'input.ts'), 'changed input\n');
-    if (outcome === 'git failure') writeFileSync(join(cwd, '.git', 'index'), 'invalid index');
     const { mkdtempSync: makeDirectory } = await vi.importActual<typeof fs>('node:fs');
     const directories: string[] = [];
     const directorySpy = vi.spyOn(fs, 'mkdtempSync').mockImplementation((...args: Parameters<typeof fs.mkdtempSync>) => {
       const directory = makeDirectory(...args);
       expect(typeof directory).toBe('string');
       directories.push(directory as string);
+      if (outcome === 'git failure') writeFileSync(join(cwd, '.git', 'index'), 'invalid index');
       if (process.platform !== 'win32') expect(statSync(directory).mode & 0o777).toBe(0o700);
       return directory;
     });
@@ -1034,12 +1370,13 @@ describe('review work logs across provider attempts', () => {
     const marker = join(root, 'helper-executed');
     const helper = join(root, 'unsafe-helper.sh');
     writeFileSync(helper, `#!/bin/sh\nprintf helper > ${JSON.stringify(marker)}\nprintf converted\n`);
-    writeFileSync(join(cwd, '.gitattributes'), 'input.ts filter=checkpoint diff=checkpoint\n');
-    execFileSync('git', ['add', '.gitattributes'], { cwd });
-    for (const name of ['filter.checkpoint.clean', 'core.fsmonitor', 'diff.external', 'diff.checkpoint.textconv']) {
+    writeFileSync(join(cwd, '.gitattributes'), 'input.ts filter=checkpoint diff=checkpoint\ncase-Foo.ts filter=Foo\ncase-foo.ts filter=foo\n');
+    for (const file of ['case-Foo.ts', 'case-foo.ts']) writeFileSync(join(cwd, file), 'initial input\n');
+    execFileSync('git', ['add', '.gitattributes', 'case-Foo.ts', 'case-foo.ts'], { cwd });
+    for (const name of ['filter.checkpoint.clean', 'filter.Foo.clean', 'filter.foo.clean', 'core.fsmonitor', 'diff.external', 'diff.checkpoint.textconv']) {
       execFileSync('git', ['config', name, `sh ${JSON.stringify(helper)}`], { cwd });
     }
-    writeFileSync(join(cwd, 'input.ts'), 'modified input\n');
+    for (const file of ['input.ts', 'case-Foo.ts', 'case-foo.ts']) writeFileSync(join(cwd, file), 'modified input\n');
     const scope = createTaskReviewScopeResolver({ getCwd: () => cwd, getPrContext: () => undefined })();
     expect(scope).toMatchObject({ paths: expect.arrayContaining(['input.ts']) });
     const store = await ReviewCheckpointStore.create(cwd, { ...context, scope }, originalInstruction);

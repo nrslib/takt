@@ -10,7 +10,7 @@
  * base ブランチ上で PR をレビューする構成へ「変更 0 件」を注入しないこと。
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,6 +87,22 @@ describe('collectTaskReviewScope', () => {
     unlinkSync(join(repo, 'untouched.ts'));
 
     expect(collectedPaths(repo)).toEqual(['added.ts', 'base.ts', 'untouched.ts']);
+  });
+
+  it('uses the caller-relative alternate index for staged-only changes from a subdirectory', () => {
+    const callerCwd = join(repo, 'app');
+    mkdirSync(callerCwd);
+    try {
+      vi.stubEnv('GIT_INDEX_FILE', join(repo, '.git', 'review-index'));
+      git(repo, 'read-tree', 'HEAD');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 2;\n');
+      git(callerCwd, 'add', '../base.ts');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 1;\n');
+      vi.stubEnv('GIT_INDEX_FILE', '../.git/review-index');
+
+      expect(collectedPaths(callerCwd)).toEqual(['base.ts']);
+    } finally { vi.unstubAllEnvs(); }
+    expect(collectedPaths(repo)).toEqual([]);
   });
 
   it('collects committed changes on a task branch when the working tree is clean', () => {
@@ -468,10 +484,18 @@ describe('pull request derived scope', () => {
     expect(scope.source.kind).toBe('pull_request');
   });
 
-  it('rejects a missing recorded PR ref instead of silently dropping the diff range', () => {
+  it('preserves PR context and local changes without substituting a range when a recorded ref is unavailable', () => {
     git(repo, 'update-ref', '-d', baseRef);
+    writeFileSync(join(repo, 'local-fix.ts'), 'export const fix = 1;\n');
 
-    expect(() => collectWithPr(true)).toThrow();
+    expect(collectWithPr(true)).toEqual({
+      kind: 'collected',
+      paths: ['local-fix.ts'],
+      source: {
+        kind: 'pull_request', prNumber: 42, includesWorkingTree: true,
+        baseRange: { kind: 'base_branch_head' },
+      },
+    });
   });
 });
 

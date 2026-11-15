@@ -30,7 +30,8 @@ export function createGitEnvironment(preserveIndex: boolean): NodeJS.ProcessEnv 
 
 export function parseFilterConfigNames(stdout: string): string[] {
   const names = stdout.trim().split('\n').filter(Boolean);
-  return [...new Map(names.map(name => [name.toLowerCase(), name])).values()];
+  // Git normalizes section/variable names, but filter subsections are case-sensitive.
+  return [...new Set(names)];
 }
 
 export function configureSafeGitEnvironment(
@@ -39,7 +40,7 @@ export function configureSafeGitEnvironment(
 ): NodeJS.ProcessEnv {
   const entries: Array<readonly [string, string]> = [];
   if (!options.allowGitHooks) entries.push(['core.hooksPath', devNull]);
-  if (options.review) entries.push(['core.fsmonitor', 'false'], ['submodule.recurse', 'false']);
+  if (options.review) entries.push(['core.fsmonitor', 'false'], ['submodule.recurse', 'false'], ['diff.ignoreSubmodules', 'dirty']);
   entries.push(...options.filterNames.map(name => [name, name.toLowerCase().endsWith('.required') ? 'false' : ''] as const));
   if (entries.length === 0) return environment;
   environment.GIT_CONFIG_COUNT = String(entries.length);

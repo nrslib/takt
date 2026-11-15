@@ -61,7 +61,7 @@ export interface RunAgentOptions {
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
   reviewCheckpoint?: import('../core/workflow/review-checkpoint.js').ReviewCheckpointContext;
-  /** Stable Phase 1 request across empty continuations within one recovery controller. */
+  /** Stable Phase 1 request for checkpoint identity across continuations and live interventions. */
   reviewCheckpointInstruction?: string;
   /** Runner-local recovery input, rebuilt after each compaction from persisted progress. */
   checkpointRecoveryInstruction?: () => string;

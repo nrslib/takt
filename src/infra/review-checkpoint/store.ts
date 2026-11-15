@@ -5,11 +5,27 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { excludeReviewCheckpointPaths, excludeReviewCheckpointScope, reviewCheckpointDirectory, type ReviewCheckpointContext } from '../../core/workflow/review-checkpoint.js';
 import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
+import { parseGitNulPaths } from '../../shared/utils/gitNulPaths.js';
+import { artifactBoundary, assertSafePath, UnsafePrivateArtifactPathError } from '../../shared/utils/private-path-identity.js';
 import { buildReviewGitEnvironment } from '../task/review-git-environment.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 export const REVIEW_LOG_MAX_CHARS = 32 * 1024;
 const TRUNCATED = '[Earlier work log omitted; this is not complete coverage.]\n';
+
+export class ReviewCheckpointUnavailableError extends Error {}
+
+function assertCheckpointPath(path: string, isDirectory: boolean): void {
+  try {
+    // Unlike other private artifacts, checkpoint outputs must not follow even
+    // ancestors above .takt: their lexical paths also define Git exclusions.
+    assertSafePath(artifactBoundary(path).trustedRoot, true);
+    assertSafePath(path, isDirectory);
+  } catch (error) {
+    if (!(error instanceof UnsafePrivateArtifactPathError)) throw error;
+    throw new ReviewCheckpointUnavailableError('Review checkpoint path is unsafe', { cause: error });
+  }
+}
 
 function digest(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
@@ -41,7 +57,7 @@ function hashUntrackedFile(hash: Hash, cwd: string, path: string): void {
     hash.update(JSON.stringify([path, 'symlink', expected.mode, target.length])).update('\n').update(target);
     return;
   }
-  if (!expected.isFile()) throw new Error(`Unsupported review input type: ${path}`);
+  if (!expected.isFile()) throw new ReviewCheckpointUnavailableError('Non-regular review inputs cannot be fingerprinted safely');
   // Do not follow a replacement symlink or block if the path becomes a FIFO.
   const descriptor = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -98,7 +114,13 @@ function repositorySnapshot(cwd: string, reportDir: string, env: NodeJS.ProcessE
     base: git(['rev-parse', '--verify', '--end-of-options', `${diffRange.baseDiffRef}^{commit}`]).toString('utf8').trim(),
     head: git(['rev-parse', '--verify', '--end-of-options', `${diffRange.headDiffRef}^{commit}`]).toString('utf8').trim(),
   };
-  const hash = createHash('sha256').update('review-revision-v4\n');
+  // Inspect only the parent index. Probing child dirtiness can execute child filters,
+  // while ignoring it would let different submodule contents reuse the same log.
+  const tracked = git(['ls-files', '--stage', '-z']).toString('utf8').split('\0');
+  if (tracked.some((entry) => entry.startsWith('160000 '))) {
+    throw new ReviewCheckpointUnavailableError('Submodule contents cannot be fingerprinted without child Git inspection');
+  }
+  const hash = createHash('sha256').update('review-revision-v5\n');
   if (pullRequestOids !== undefined) hash.update(JSON.stringify(pullRequestOids)).update('\n');
   const excluded = relative(resolve(cwd), resolve(checkpointDirectory));
   const pathspec = excluded !== '..' && !excluded.startsWith(`..${sep}`) && !isAbsolute(excluded)
@@ -110,10 +132,10 @@ function repositorySnapshot(cwd: string, reportDir: string, env: NodeJS.ProcessE
   for (const kind of ['staged', 'unstaged'] as const) {
     // Safe Git disables pathspec magic; only this internal literal exclusion needs it.
     hashTrackedDiff(hash, cwd, env, [...safeArgs, '--no-literal-pathspecs',
-      'diff', '--no-ext-diff', '--no-textconv', '--binary',
+      'diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--binary',
       ...(kind === 'staged' ? ['--cached'] : []), '--', ...pathspec], kind);
   }
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']).toString('utf8').split('\0').filter(Boolean).sort();
+  const untracked = parseGitNulPaths(git(['ls-files', '--others', '--exclude-standard', '-z']), 'git ls-files --others').sort();
   const inputs = excludeReviewCheckpointPaths(untracked, cwd, reportDir);
   for (const path of inputs) hashUntrackedFile(hash, cwd, path);
   return { revision: hash.digest('hex'), pullRequestOids };
@@ -127,29 +149,37 @@ export class ReviewCheckpointStore {
 
   static async create(cwd: string, context: ReviewCheckpointContext, instruction: string): Promise<ReviewCheckpointStore> {
     const env = buildReviewGitEnvironment(cwd);
-    return new ReviewCheckpointStore(cwd, context, instruction, env);
+    const repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).replace(/\n$/, '');
+    return new ReviewCheckpointStore(cwd, repositoryRoot, context, instruction, env);
   }
 
-  private constructor(private readonly cwd: string, context: ReviewCheckpointContext, instruction: string, private readonly env: NodeJS.ProcessEnv) {
+  private constructor(cwd: string, private readonly repositoryRoot: string, context: ReviewCheckpointContext, instruction: string, private readonly env: NodeJS.ProcessEnv) {
     this.reportDir = context.reportDir;
-    this.scope = excludeReviewCheckpointScope(context.scope, cwd, context.reportDir);
+    this.scope = excludeReviewCheckpointScope(context.scope, repositoryRoot, context.reportDir);
     const directory = reviewCheckpointDirectory(context.reportDir);
-    const snapshot = repositorySnapshot(cwd, this.reportDir, env, this.scope);
+    assertCheckpointPath(directory, true);
+    const snapshot = repositorySnapshot(repositoryRoot, this.reportDir, env, this.scope);
     this.target = {
       identity: digest(JSON.stringify({ cwd: resolve(cwd), ...context, scope: this.scope, instruction, pullRequestOids: snapshot.pullRequestOids })),
       revision: snapshot.revision,
     };
+    assertCheckpointPath(directory, true);
     ensurePrivateDirectory(directory);
     this.path = join(directory, `${digest(JSON.stringify(this.target))}.log`);
+    assertCheckpointPath(this.path, false);
   }
 
   read(): string | undefined {
+    assertCheckpointPath(this.path, false);
     // An edited diff is a different review, not evidence of a stalled reviewer.
-    if (repositorySnapshot(this.cwd, this.reportDir, this.env, this.scope).revision !== this.target.revision) return undefined;
+    if (repositorySnapshot(this.repositoryRoot, this.reportDir, this.env, this.scope).revision !== this.target.revision) return undefined;
     return this.readLog();
   }
 
   private readLog(): string | undefined {
+    assertCheckpointPath(this.path, false);
     const file = readPrivateFileState(this.path);
     return 'content' in file ? file.content.toString('utf8') : undefined;
   }
@@ -165,11 +195,13 @@ export class ReviewCheckpointStore {
   }
 
   private assertCurrentTarget(): void {
-    if (repositorySnapshot(this.cwd, this.reportDir, this.env, this.scope).revision !== this.target.revision) throw new Error('Review target changed; work log was not saved');
+    assertCheckpointPath(this.path, false);
+    if (repositorySnapshot(this.repositoryRoot, this.reportDir, this.env, this.scope).revision !== this.target.revision) throw new Error('Review target changed; work log was not saved');
   }
 
   private writeLog(log: string): void {
     const sanitized = sanitizeSensitiveText(log);
+    assertCheckpointPath(this.path, false);
     writePrivateFile(this.path, sanitized.length > REVIEW_LOG_MAX_CHARS
       ? TRUNCATED + sanitized.slice(-(REVIEW_LOG_MAX_CHARS - TRUNCATED.length))
       : sanitized);

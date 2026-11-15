@@ -2087,6 +2087,7 @@ describe('CodexClient retry', () => {
         },
         permissionMode: 'readonly',
       },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     });
 
     expect(response).toMatchObject({
@@ -2156,6 +2157,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2240,6 +2242,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2312,6 +2315,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2437,6 +2441,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
     });
 
     expect(response).toMatchObject({

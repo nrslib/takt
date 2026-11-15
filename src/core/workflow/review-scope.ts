@@ -11,6 +11,7 @@
  * - base コミット..HEAD のコミット済み変更
  * - index の staged 差分と working tree の unstaged 差分（削除を含む）
  * - untracked ファイル（ignored を除く）
+ * - tracked submodule のパス（子の dirty 判定を安全に行えないため保守的に含める）
  *
  * この作業ツリー計算はレビュー対象の一貫した範囲を決めるために共有する。
  *
@@ -35,6 +36,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import type { Language } from '../models/types.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { parseGitNulPaths as parseNulPaths } from '../../shared/utils/gitNulPaths.js';
 import { escapeTemplateChars } from '#faceted-prompting';
 import {
   toCloneBaseRef,
@@ -175,38 +177,6 @@ function refExists(cwd: string, ref: string, env: NodeJS.ProcessEnv): boolean {
   throw new Error(`git rev-parse --verify ${ref} failed with exit status ${status}`);
 }
 
-/**
- * NUL 区切りパスの解析。
- * snapshot.ts の parseNulEntries とは別実装で、非 UTF-8 パスや壊れた出力に対して
- * 投げる例外型が経路ごとに異なる（あちらは ReviewScopeSnapshotError）。証拠検証側は
- * inventory 用にパスを Buffer のまま扱う必要があるため統合していない。
- */
-function parseNulPaths(output: Buffer, command: string): string[] {
-  if (output.length === 0) {
-    return [];
-  }
-  if (output[output.length - 1] !== 0) {
-    throw new Error(`${command}: NUL-terminated output is missing its final delimiter`);
-  }
-
-  const paths: string[] = [];
-  let start = 0;
-  while (start < output.length) {
-    const end = output.indexOf(0, start);
-    if (end === start) {
-      throw new Error(`${command}: NUL-terminated output contains an empty path`);
-    }
-    const raw = output.subarray(start, end);
-    const decoded = raw.toString('utf8');
-    if (!Buffer.from(decoded, 'utf8').equals(raw)) {
-      throw new Error(`${command}: repository path is not reversibly UTF-8 encoded`);
-    }
-    paths.push(decoded);
-    start = end + 1;
-  }
-  return paths;
-}
-
 function sortedUnique(paths: readonly string[]): string[] {
   return [...new Set(paths)].sort();
 }
@@ -334,6 +304,18 @@ function readUntrackedPaths(cwd: string, env: NodeJS.ProcessEnv): string[] {
   );
 }
 
+function readTrackedSubmodulePaths(cwd: string, env: NodeJS.ProcessEnv): string[] {
+  const entries = parseNulPaths(runGit(cwd, ['ls-files', '--stage', '-z'], env), 'git ls-files --stage');
+  return entries.flatMap((entry) => {
+    if (!entry.startsWith('160000 ')) return [];
+    const separator = entry.indexOf('\t');
+    if (separator === -1 || separator === entry.length - 1) {
+      throw new Error('git ls-files --stage: gitlink entry is missing its path');
+    }
+    return [entry.slice(separator + 1)];
+  });
+}
+
 function collectUncommittedPaths(
   cwd: string,
   untracked: readonly string[],
@@ -341,14 +323,16 @@ function collectUncommittedPaths(
 ): string[] {
   // --cached also works before the first commit, comparing with the empty tree.
   const staged = parseNulPaths(
-    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--cached', '--name-only', '-z', '--'], env),
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--cached', '--name-only', '-z', '--'], env),
     'git diff --cached --name-only',
   );
   const unstaged = parseNulPaths(
-    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', '--'], env),
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--name-only', '-z', '--'], env),
     'git diff --name-only',
   );
-  return sortedUnique([...staged, ...unstaged, ...untracked]);
+  // Dirty checks can run child clean filters that the parent's safe environment does not disable.
+  const submodules = readTrackedSubmodulePaths(cwd, env);
+  return sortedUnique([...staged, ...unstaged, ...untracked, ...submodules]);
 }
 
 function collectWorkingTreePaths(
@@ -360,7 +344,7 @@ function collectWorkingTreePaths(
   const workingTree = collectUncommittedPaths(cwd, untracked, env);
   const committed = baseRange.kind === 'branch_base'
     ? parseNulPaths(
-      runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--'], env),
+      runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--name-only', '-z', baseRange.baseCommit, 'HEAD', '--'], env),
       'git diff --name-only <base> HEAD',
     )
     : [];
@@ -388,12 +372,9 @@ function materializedDiffRange(
   if (baseDiffRef === undefined) {
     return undefined;
   }
-  if (prContext.baseDiffRef !== undefined) {
-    // Recorded PR refs are required inputs, not optional discovery candidates.
-    for (const ref of [baseDiffRef, headDiffRef]) {
-      runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], env);
-    }
-  } else if (!refExists(cwd, baseDiffRef, env) || !refExists(cwd, headDiffRef, env)) {
+  // PR context can originate in another checkout; its refs need not exist here.
+  // Do not substitute a different range when the recorded range is unavailable.
+  if (!refExists(cwd, `${baseDiffRef}^{commit}`, env) || !refExists(cwd, `${headDiffRef}^{commit}`, env)) {
     return undefined;
   }
   return {
@@ -421,6 +402,7 @@ function collectPullRequestScope(
         'diff',
         '--no-ext-diff',
         '--no-textconv',
+        '--ignore-submodules=dirty',
         '--name-only',
         '-z',
         `${diffRange.baseDiffRef}...${diffRange.headDiffRef}`,
@@ -448,15 +430,16 @@ export function collectTaskReviewScope(input: TaskReviewScopeInput): TaskReviewS
     return { kind: 'not_a_git_repository' };
   }
   const env = buildReviewGitEnvironment(input.cwd);
+  const repositoryRoot = runGit(input.cwd, ['rev-parse', '--show-toplevel'], env).toString('utf8').replace(/\n$/, '');
   const excludeOutputs = (paths: readonly string[]): string[] => input.reportDir === undefined
-    ? [...paths] : excludeReviewCheckpointPaths(paths, input.cwd, input.reportDir);
-  const untracked = excludeOutputs(input.untracked ?? readUntrackedPaths(input.cwd, env));
+    ? [...paths] : excludeReviewCheckpointPaths(paths, repositoryRoot, input.reportDir);
+  const untracked = excludeOutputs(input.untracked ?? readUntrackedPaths(repositoryRoot, env));
   if (input.prContext !== undefined) {
-    const workingTreePaths = excludeOutputs(collectUncommittedPaths(input.cwd, untracked, env));
-    const scope = collectPullRequestScope(input.cwd, input.prContext, input.baseRange, workingTreePaths, env);
+    const workingTreePaths = excludeOutputs(collectUncommittedPaths(repositoryRoot, untracked, env));
+    const scope = collectPullRequestScope(repositoryRoot, input.prContext, input.baseRange, workingTreePaths, env);
     return scope.kind === 'collected' ? { ...scope, paths: excludeOutputs(scope.paths) } : scope;
   }
-  const workingTreePaths = excludeOutputs(collectWorkingTreePaths(input.cwd, input.baseRange, untracked, env));
+  const workingTreePaths = excludeOutputs(collectWorkingTreePaths(repositoryRoot, input.baseRange, untracked, env));
   return {
     kind: 'collected',
     paths: workingTreePaths,
