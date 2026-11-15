@@ -12,7 +12,7 @@ import type { AskGoalQuestionInput, GetGoalQuestionInput, listGoalQuestionsInput
 import type { z } from 'zod/v4';
 import { goalValuePage, selectGoalValue } from './goalResponse.js';
 import { pagedResult } from './response.js';
-import type { GoalQuestion } from '../../infra/goals/schema.js';
+import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async ({ policy }) => {
@@ -66,6 +66,23 @@ export function withdrawTaktGoalQuestion(input: z.infer<typeof withdrawGoalQuest
   }, 'Goal question withdrawal failed', 'withdraw_question');
 }
 
+function withAnswerPublicationPending(goal: Goal, questionId: string, pending: boolean): Goal {
+  return {
+    ...goal,
+    questions: goal.questions?.map((candidate) => candidate.id === questionId
+      ? { ...candidate, answerPublicationPending: pending ? true : undefined }
+      : candidate),
+  };
+}
+
+function publishAnswer(cwd: string, goalId: string, questionId: string, answer: NonNullable<GoalQuestion['answer']>): void {
+  try {
+    saveManagerEvent(cwd, { kind: 'answer', goalId, questionId, answer });
+  } catch (eventError) {
+    throw new Error(`The answer was saved, but the manager event could not be recorded: ${eventError instanceof Error ? eventError.message : String(eventError)}. Publication is pending; retry the same call to publish it.`);
+  }
+}
+
 export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   try {
     const parsed = answerGoalQuestionInputSchema.parse(input);
@@ -77,14 +94,20 @@ export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, dep
       throw new Error('Approval inquiries are retired and cannot be answered; answer a question or operation_request instead');
     }
     signal.throwIfAborted();
-    const saved = await store.update(parsed.goalId,
-      (goal) => answerGoalQuestion(goal, parsed.questionId, parsed.answer, 'mcp'));
-    const answer = saved.questions!.find((savedQuestion) => savedQuestion.id === parsed.questionId)!.answer!;
-    try {
-      saveManagerEvent(parsed.cwd, { kind: 'answer', goalId: parsed.goalId, questionId: parsed.questionId, answer });
-    } catch (eventError) {
-      throw new Error(`The answer was saved, but the manager event could not be recorded: ${eventError instanceof Error ? eventError.message : String(eventError)}`);
+    if (question.status === 'answered' && question.answerPublicationPending === true) {
+      const stored = question.answer!;
+      if (parsed.answer.text !== stored.text || parsed.answer.report !== stored.report) {
+        throw new Error('Question is already answered with a different answer');
+      }
+      publishAnswer(parsed.cwd, parsed.goalId, parsed.questionId, stored);
+      await store.update(parsed.goalId, (goal) => withAnswerPublicationPending(goal, parsed.questionId, false));
+      return jsonResult({ questionId: parsed.questionId, answer: stored });
     }
+    const saved = await store.update(parsed.goalId,
+      (goal) => withAnswerPublicationPending(answerGoalQuestion(goal, parsed.questionId, parsed.answer, 'mcp'), parsed.questionId, true));
+    const answer = saved.questions!.find((savedQuestion) => savedQuestion.id === parsed.questionId)!.answer!;
+    publishAnswer(parsed.cwd, parsed.goalId, parsed.questionId, answer);
+    await store.update(parsed.goalId, (goal) => withAnswerPublicationPending(goal, parsed.questionId, false));
     return jsonResult({ questionId: parsed.questionId, answer });
   } catch (error) { return errorResult('Goal question answer failed', error); }
 }
