@@ -1601,7 +1601,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         workflowName: 'workflow',
         iteration: 1,
       },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction' }),
     );
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
@@ -1654,7 +1654,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         updatePersonaSession,
         undefined,
         { enabled: false, workflowName: 'workflow', iteration: 1 },
-        () => 'member instruction',
+        () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction' }),
         undefined,
         controller.signal,
       )).rejects.toBe(cancellation);
@@ -1701,7 +1701,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       vi.fn(),
       undefined,
       { enabled: true, workflowName: 'workflow', iteration: 1 },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction' }),
       undefined,
       controller.signal,
     )).rejects.toBe(cancellation);
@@ -1736,7 +1736,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       vi.fn(),
       undefined,
       { enabled: false, workflowName: 'workflow', iteration: 1 },
-      () => 'member instruction',
+      () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction' }),
       undefined,
       controller.signal,
       {
@@ -1797,7 +1797,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         vi.fn(),
         undefined,
         { enabled: false, workflowName: 'workflow', iteration: 1 },
-        () => 'member instruction',
+        () => ({ phase1Instruction: 'member instruction', instructionWithoutLiveIntervention: 'member instruction' }),
         undefined,
         undefined,
         {

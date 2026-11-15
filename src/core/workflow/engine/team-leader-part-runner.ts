@@ -47,6 +47,7 @@ export interface TeamLeaderPartExecutionOptions {
   ) => Promise<CompanionStepRuntime | undefined>;
   readonly completeCompanionReview?: (input: {
     readonly phase1Instruction: string;
+    readonly reviewRecoveryInstruction: string;
     readonly partStep: NormalAgentWorkflowStep;
     readonly initialResponse: AgentResponse;
     readonly agentOptions: RunAgentOptions;
@@ -79,7 +80,10 @@ export async function runTeamLeaderPart(
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   parallelLogger: ParallelLogger | undefined,
   observability: TeamLeaderPartObservability,
-  buildInstruction: (partStep: WorkflowStep) => string,
+  buildInstruction: (partStep: WorkflowStep) => {
+    readonly phase1Instruction: string;
+    readonly instructionWithoutLiveIntervention: string;
+  },
   runtime?: RuntimeStepResolution,
   executionAbortSignal?: AbortSignal,
   executionOptions?: TeamLeaderPartExecutionOptions,
@@ -173,7 +177,7 @@ export async function runTeamLeaderPart(
             executionLog.markDispatched(part.id);
           },
         };
-    const partInstruction = buildInstruction(partStepForExecution);
+    const { phase1Instruction: partInstruction, instructionWithoutLiveIntervention } = buildInstruction(partStepForExecution);
     const initialResponse = await runWithPhaseSpan({
       enabled: observability.enabled,
       runId: observability.runId,
@@ -221,6 +225,7 @@ export async function runTeamLeaderPart(
       && executionOptions?.completeCompanionReview !== undefined
       ? await executionOptions.completeCompanionReview({
           phase1Instruction: partInstruction,
+          reviewRecoveryInstruction: instructionWithoutLiveIntervention,
           partStep,
           initialResponse,
           agentOptions: options,

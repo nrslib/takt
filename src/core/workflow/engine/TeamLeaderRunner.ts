@@ -1470,9 +1470,12 @@ export class TeamLeaderRunner {
           runtime?.fallback,
           instructionTransaction,
         );
-        return [instruction, resolveLiveInterventionPrompt(
-          this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
-        )].filter((part) => part.length > 0).join('\n\n');
+        return {
+          instructionWithoutLiveIntervention: instruction,
+          phase1Instruction: [instruction, resolveLiveInterventionPrompt(
+            this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
+          )].filter((part) => part.length > 0).join('\n\n'),
+        };
       },
       runtime,
       executionAbortSignal,
@@ -1495,6 +1498,7 @@ export class TeamLeaderRunner {
         },
         completeCompanionReview: async ({
           phase1Instruction,
+          reviewRecoveryInstruction,
           partStep,
           initialResponse,
           agentOptions,
@@ -1510,6 +1514,7 @@ export class TeamLeaderRunner {
           );
           return this.deps.stepExecutor.completeCompanionReview({
             phase1Instruction,
+            reviewRecoveryInstruction,
             eventStep: partStep,
             executableStep: partStep,
             state: partCompanionState,

@@ -10,7 +10,7 @@ import { ReviewCheckpointStore, ReviewCheckpointUnavailableError } from '../infr
 import { startReviewCheckpoint } from '../infra/review-checkpoint/session.js';
 import { REPORT_INTERNAL_NAMESPACE } from '../core/models/reserved-report-names.js';
 import type { ReviewCheckpointContext } from '../core/workflow/review-checkpoint.js';
-import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
+import { PHASE1_EMPTY_CONTINUATION_INSTRUCTION, runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 import type { AgentResponse } from '../core/models/index.js';
 import type { Provider, ProviderCallOptions } from '../infra/providers/types.js';
 import type { RunAgentOptions } from '../agents/types.js';
@@ -113,6 +113,61 @@ describe('review work logs across provider attempts', () => {
     expect(readFileSync(store.path, 'utf8')).toContain(laterProgress);
     if (process.platform !== 'win32') expect(statSync(store.path).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(cwd, 'input.ts'), 'utf8')).toBe('export const valid = (n: number) => n > 0;\n');
+  });
+
+  it.each([true, false].flatMap((storageAvailable) =>
+    [true, false].map((sameTask) => ({ storageAvailable, sameTask })),
+  ))('preserves repeated base paragraphs through initial, compaction and fresh fallback prompts (storage=$storageAvailable, same task=$sameTask)', async ({ storageAvailable, sameTask }) => {
+    const repeated = 'Inspect the validation boundary';
+    const extra = 'Inspect the additional retry boundary';
+    const instruction = `Review the changes\n\n${repeated}\n\nCheck the retry path\n\n${repeated}`;
+    const task = sameTask ? instruction : `${repeated}\n\n${extra}\n\n${extra}`;
+    const expected = sameTask ? instruction : `${instruction}\n\n${extra}`;
+    const reportDir = storageAvailable ? context.reportDir : join(cwd, 'unavailable-reports');
+    if (!storageAvailable) {
+      const target = join(root, 'redirected');
+      mkdirSync(target);
+      symlinkSync(target, reportDir, 'dir');
+    }
+    const prompts: string[] = [];
+    provider(() => ({
+      call: async (prompt, callOptions) => {
+        prompts.push(prompt);
+        expect(callOptions.sessionId).toBeUndefined();
+        leaveNote(callOptions);
+        if (prompts.length === 1) {
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        return response('done');
+      },
+      recoverFromCompaction: async (prompt, callOptions) => {
+        prompts.push(prompt);
+        expect(callOptions.sessionId).toBe('thread');
+        return response('error');
+      },
+    }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: task, initialSessionId: undefined, discardSession: vi.fn(),
+      execute: (attempt) => runAgent(undefined, attempt.instruction, {
+        ...options, reviewCheckpoint: { ...context, reportDir },
+        reviewCheckpointInstruction: instruction, sessionId: attempt.sessionId,
+      }),
+    });
+
+    expect(result.response.status).toBe('done');
+    expect(result.finalAttempt.reason).toBe('provider_error_fresh');
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) {
+      if (storageAvailable) expect(prompt.startsWith(`${expected}\n\n`)).toBe(true);
+      else expect(prompt).toBe(expected);
+      expect(prompt.split(repeated)).toHaveLength(3);
+      expect(prompt.split(extra)).toHaveLength(sameTask ? 1 : 2);
+    }
+    if (storageAvailable) {
+      expect(checkpointData(prompts[1]!)).toContain(progress);
+      expect(checkpointData(prompts[2]!)).toContain(progress);
+    }
   });
 
   it.each([
@@ -350,10 +405,14 @@ describe('review work logs across provider attempts', () => {
     expect((await ReviewCheckpointStore.create(cwd, context, originalInstruction)).read()).toContain(progress);
   });
 
-  it.each(['single', 'loop'] as const)('retains the original Phase 1 instruction and work log on companion %s follow-up compaction', async (fixPolicy) => {
+  it.each((['single', 'loop'] as const).flatMap((fixPolicy) =>
+    ['direct', 'empty', 'live'].map((recoveryMode) => ({ fixPolicy, recoveryMode })),
+  ))('retains the original Phase 1 instruction and work log on companion $fixPolicy follow-up compaction ($recoveryMode)', async ({ fixPolicy, recoveryMode }) => {
     writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
     const instruction = 'Review the original validation and retry boundaries';
     const finding = 'Check the remaining retry lower bound';
+    const intervention = 'Inspect the follow-up intervention boundary';
+    const store = new LiveInterventionFileStore(cwd, 'companion-live-checkpoint');
     const workflow = {
       ...normalizeWorkflowConfig({
         name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
@@ -374,8 +433,10 @@ describe('review work logs across provider attempts', () => {
           } };
         }
         prompts.push(prompt);
+        if (recoveryMode === 'empty' && prompts.length === 2) return { ...response('done'), content: '' };
+        if (recoveryMode === 'live' && prompts.length === 2) await store.issue(intervention);
         leaveNote(callOptions, prompts.length === 1 ? progress : laterProgress);
-        if (prompts.length === 2) {
+        if (prompts.length === (recoveryMode === 'direct' ? 2 : 3)) {
           callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
         }
         return response('done');
@@ -383,7 +444,7 @@ describe('review work logs across provider attempts', () => {
       recoverFromCompaction,
     }));
     const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
-      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `companion-${fixPolicy}`,
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `companion-${fixPolicy}`, liveIntervention: store,
       companionEnabled: true, companionReviewMode: 'completion', companionFixPolicy: fixPolicy,
       companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
       companionDiffReader: {
@@ -399,15 +460,292 @@ describe('review work logs across provider attempts', () => {
       const state = await engine.run();
       expect(state.status).toBe('completed');
       expect(state.companion).toEqual({ completionSettled: true, followUpRounds: 1 });
-      expect(prompts).toHaveLength(2);
+      expect(prompts).toHaveLength(recoveryMode === 'direct' ? 2 : 3);
       expect(prompts[1]!.split(finding)).toHaveLength(2);
       expect(recoverFromCompaction).toHaveBeenCalledOnce();
       const [recoveryPrompt, recoveryOptions] = recoverFromCompaction.mock.calls[0]!;
       expect(recoveryPrompt.split(instruction)).toHaveLength(2);
       expect(recoveryPrompt.split(finding)).toHaveLength(2);
+      if (recoveryMode === 'live') {
+        expect(recoveryPrompt.split(intervention)).toHaveLength(2);
+        expect(store.read()).toMatchObject({ pending: 0, deliveredSameSession: 1 });
+      }
+      if (recoveryMode === 'empty') {
+        expect(prompts[2]).toContain(PHASE1_EMPTY_CONTINUATION_INSTRUCTION);
+        expect(recoveryPrompt.split(PHASE1_EMPTY_CONTINUATION_INSTRUCTION)).toHaveLength(2);
+      }
       expect(checkpointData(recoveryPrompt)).toContain(progress);
       expect(checkpointData(recoveryPrompt)).toContain(laterProgress);
       expect(recoveryOptions.sessionId).toBe('thread');
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each(['normal', 'parallel'] as const)('reuses the initial log and retains $mode completion retry instructions through empty continuation, compaction and fresh recovery', async (mode) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const instruction = 'Review the original validation boundary';
+    const retryInstruction = 'Recheck the remaining retry boundary';
+    const workflow = normalizeWorkflowConfig({
+      name: 'takt-development-review', initial_step: mode === 'normal' ? 'coding-review' : 'review', max_steps: 3,
+      steps: mode === 'normal'
+        ? [{ name: 'coding-review', edit: false, instruction,
+          completion_retry: { min_retry: 1, max_retry: 1, retry_instruction: retryInstruction },
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }]
+        : [{ name: 'review', parallel: [{ name: 'coding-review', edit: false, instruction,
+          completion_retry: { min_retry: 1, max_retry: 1, retry_instruction: retryInstruction },
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, cwd);
+    const prompts: string[] = [];
+    const recoverFromCompaction = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
+      expect(prompt.split(instruction)).toHaveLength(2);
+      expect(prompt.split(retryInstruction)).toHaveLength(2);
+      expect(prompt.split(PHASE1_EMPTY_CONTINUATION_INSTRUCTION)).toHaveLength(2);
+      expect(checkpointData(prompt)).toContain(progress);
+      leaveNote(callOptions, laterProgress);
+      return response('error');
+    });
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'review-completion-judge') {
+          return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
+        }
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          leaveNote(callOptions);
+          return response('done');
+        }
+        expect(checkpointData(prompt)).toContain(progress);
+        if (prompts.length === 2) {
+          expect(prompt.split(retryInstruction)).toHaveLength(2);
+          return { ...response('done'), content: '' };
+        }
+        if (prompts.length === 3) {
+          expect(prompt).toContain(PHASE1_EMPTY_CONTINUATION_INSTRUCTION);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+          return response('done');
+        }
+        expect(callOptions.sessionId).toBeUndefined();
+        expect(prompt.split(instruction)).toHaveLength(2);
+        expect(prompt.split(retryInstruction)).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain(laterProgress);
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'completion-checkpoint',
+    });
+    try {
+      expect((await engine.run()).status).toBe('completed');
+      expect(prompts).toHaveLength(4);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each([false, true])('reuses the initial parallel log after live restart and compaction (retry=%s)', async (duringRetry) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const store = new LiveInterventionFileStore(cwd, 'parallel-restart-checkpoint');
+    const instruction = 'Review the original parallel boundary';
+    const retryInstruction = 'Recheck the parallel completion boundary';
+    const intervention = 'Inspect the parallel restart boundary';
+    const workflow = normalizeWorkflowConfig({
+      name: 'takt-development-review', initial_step: 'review', max_steps: 3,
+      steps: [{ name: 'review', parallel: [{ name: 'coding-review', edit: false, instruction,
+        ...(duringRetry ? { completion_retry: { min_retry: 1, max_retry: 1, retry_instruction: retryInstruction } } : {}),
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, cwd);
+    const prompts: string[] = [];
+    const restartAfterCall = duringRetry ? 2 : 1;
+    const recoverFromCompaction = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
+      expect(prompt.split(instruction)).toHaveLength(2);
+      expect(prompt.split(intervention)).toHaveLength(2);
+      if (duringRetry) expect(prompt.split(retryInstruction)).toHaveLength(2);
+      expect(checkpointData(prompt)).toContain(progress);
+      expect(checkpointData(prompt)).toContain(laterProgress);
+      expect(callOptions.sessionId).toBe('thread');
+      return response('done');
+    });
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'review-completion-judge') {
+          return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
+        }
+        prompts.push(prompt);
+        leaveNote(callOptions, prompts.length === 1 ? progress : laterProgress);
+        if (prompts.length === restartAfterCall) await store.issue(intervention);
+        if (prompts.length === restartAfterCall + 1) {
+          expect(checkpointData(prompt)).toContain(progress);
+          expect(prompt.split(instruction)).toHaveLength(2);
+          expect(prompt.split(intervention)).toHaveLength(2);
+          if (duringRetry) expect(prompt.split(retryInstruction)).toHaveLength(2);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'parallel-restart-checkpoint', liveIntervention: store,
+    });
+    try {
+      expect((await engine.run()).status).toBe('completed');
+      expect(prompts).toHaveLength(duringRetry ? 4 : 2);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1 });
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each([false, true])('retains each intervention once after multiple live restarts, retry, compaction and fresh recovery (restart during retry=%s)', async (duringRetry) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const store = new LiveInterventionFileStore(cwd, 'parallel-multiple-restarts');
+    const instruction = 'Review the initial parallel validation boundary';
+    const retryInstruction = 'Recheck the remaining parallel completion boundary';
+    const interventions = ['Inspect the first restart boundary', 'Inspect the second restart boundary'];
+    const issueCalls = duringRetry ? [2, 5] : [1, 2];
+    const restartCalls = duringRetry ? [3, 6] : [1, 2];
+    const emptyRetryCall = restartCalls[1]! + 3;
+    const workflow = normalizeWorkflowConfig({
+      name: 'takt-development-review', initial_step: 'review', max_steps: 3,
+      steps: [{ name: 'review', parallel: [{ name: 'coding-review', edit: false, instruction,
+        completion_retry: { min_retry: 2, max_retry: 2, retry_instruction: retryInstruction },
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+    }, cwd);
+    const prompts: string[] = [];
+    const gapReasons: string[] = [];
+    const recoverFromCompaction = vi.fn(async (_prompt: string, callOptions: ProviderCallOptions) => {
+      leaveNote(callOptions, laterProgress);
+      return response('error');
+    });
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'review-completion-judge') {
+          if (prompts.length >= emptyRetryCall || (duringRetry && restartCalls.includes(prompts.length))) {
+            return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
+          }
+          const reason = `Unverified retry obligation after call ${prompts.length}`;
+          gapReasons.push(reason);
+          return { ...response('done'), structuredOutput: {
+            complete: false, reason: 'remaining', missing_paths: [{ path: 'input.ts', reason }],
+          } };
+        }
+        prompts.push(prompt);
+        if (prompts.length === 1) leaveNote(callOptions);
+        const interventionIndex = issueCalls.indexOf(prompts.length);
+        if (interventionIndex !== -1) await store.issue(interventions[interventionIndex]!);
+        if (prompts.length === emptyRetryCall) return { ...response('done'), content: '' };
+        if (prompts.length === emptyRetryCall + 1) {
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        if (prompts.length === emptyRetryCall + 2) {
+          expect(callOptions.sessionId).toBeUndefined();
+          expect(checkpointData(prompt)).toContain(laterProgress);
+        }
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'parallel-multiple-restarts', liveIntervention: store,
+    });
+    try {
+      expect((await engine.run()).status).toBe('completed');
+      expect(prompts).toHaveLength(emptyRetryCall + 2);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      for (const [index, restartCall] of restartCalls.entries()) {
+        const prompt = prompts[restartCall]!;
+        for (const request of [instruction, ...interventions.slice(0, index + 1), ...(duringRetry ? [retryInstruction] : [])]) {
+          expect(prompt.split(request), `restart ${index + 1}: ${request}`).toHaveLength(2);
+        }
+      }
+      const [recoveryPrompt, recoveryOptions] = recoverFromCompaction.mock.calls[0]!;
+      expect(recoveryOptions.sessionId).toBe('thread');
+      expect(prompts[emptyRetryCall]).toContain(PHASE1_EMPTY_CONTINUATION_INSTRUCTION);
+      expect(recoveryPrompt.split(PHASE1_EMPTY_CONTINUATION_INSTRUCTION)).toHaveLength(2);
+      for (const prompt of [prompts[emptyRetryCall - 1]!, recoveryPrompt, prompts[emptyRetryCall + 1]!]) {
+        expect(checkpointData(prompt)).toContain(progress);
+        for (const request of [instruction, ...interventions, retryInstruction, ...gapReasons]) {
+          expect(prompt.split(request), request).toHaveLength(2);
+        }
+      }
+      expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 2 });
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each((['retry', 'companion'] as const).flatMap((mode) =>
+    [false, true].map((initialDelivery) => ({ mode, initialDelivery })),
+  ))('retains multiple interventions once before $mode follow-up compaction and fresh recovery (initial delivery=$initialDelivery)', async ({ mode, initialDelivery }) => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const store = new LiveInterventionFileStore(cwd, `live-before-${mode}`);
+    const instruction = 'Review the initial boundary before intervention';
+    const interventions = ['Inspect the first delivered boundary', 'Inspect the second delivered boundary'];
+    if (initialDelivery) await store.issue(interventions[0]!);
+    const followUpCall = initialDelivery ? 3 : 4;
+    const followUp = 'Inspect the remaining follow-up boundary';
+    const workflow = {
+      ...normalizeWorkflowConfig({
+        name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+        steps: [{ name: 'coding-review', edit: false, instruction,
+          ...(mode === 'retry'
+            ? { completion_retry: { min_retry: 1, max_retry: 1, retry_instruction: followUp } }
+            : { companion: ['reviewer'] }),
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }, cwd),
+      companions: { reviewer: { name: 'reviewer', description: 'Review coverage', instruction: 'Check review coverage', intervalMs: 60_000 } },
+    };
+    const prompts: string[] = [];
+    let companionCalls = 0;
+    const recoverFromCompaction = vi.fn(async (_prompt: string, callOptions: ProviderCallOptions) => {
+      leaveNote(callOptions, laterProgress);
+      return response('error');
+    });
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'review-completion-judge') {
+          return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
+        }
+        if (name === 'reviewer') {
+          return { ...response('done'), structuredOutput: {
+            findings: companionCalls++ === 0 ? [{ severity: 'must_fix', file: 'input.ts', line: 1, finding: followUp }] : [], notes: null,
+          } };
+        }
+        prompts.push(prompt);
+        if (prompts.length === 1) leaveNote(callOptions);
+        const interventionIndex = initialDelivery ? prompts.length : prompts.length - 1;
+        if (interventionIndex < interventions.length) await store.issue(interventions[interventionIndex]!);
+        if (prompts.length === followUpCall) {
+          expect(prompt.split(followUp)).toHaveLength(2);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        if (prompts.length === followUpCall + 1) expect(callOptions.sessionId).toBeUndefined();
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: `live-before-${mode}`, liveIntervention: store,
+      companionEnabled: mode === 'companion', companionReviewMode: 'completion', companionFixPolicy: 'single',
+      companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
+      companionDiffReader: {
+        readBaselineSha: async () => 'baseline',
+        readDiff: async () => ({ status: 'ok', snapshot: {
+          digest: 'review-input', changedLines: 1, content: '+validation review', changedFiles: ['input.ts'],
+          fileFingerprints: { 'input.ts': 'file-1' }, hunkFingerprints: { 'input.ts:1-1': 'hunk-1' }, omittedBytes: 0, truncated: false,
+        } }),
+      },
+    });
+    try {
+      expect((await engine.run()).status).toBe('completed');
+      expect(prompts).toHaveLength(followUpCall + 1);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      expect(recoverFromCompaction.mock.calls[0]![1].sessionId).toBe('thread');
+      for (const prompt of [prompts[followUpCall - 1]!, recoverFromCompaction.mock.calls[0]![0], prompts[followUpCall]!]) {
+        for (const request of [instruction, ...interventions, followUp]) expect(prompt.split(request), request).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain(progress);
+      }
+      expect(checkpointData(prompts[followUpCall]!)).toContain(laterProgress);
+      expect(store.read()).toMatchObject({ pending: 0, deliveredSameSession: initialDelivery ? 1 : 2, deliveredNextStep: initialDelivery ? 1 : 0 });
     } finally { engine.removeAllListeners(); }
   });
 
@@ -496,6 +834,102 @@ describe('review work logs across provider attempts', () => {
     } finally { engine.removeAllListeners(); }
   });
 
+  it('uses updated live history once for companion recovery after a parallel Team Leader part completes', async () => {
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    mkdirSync(join(cwd, 'personas'));
+    writeFileSync(join(cwd, 'personas/leader.md'), '# Team Leader\nDecompose the review.\n');
+    writeFileSync(join(cwd, 'personas/worker.md'), '# Reviewer\nReview the assigned boundary.\n');
+    const store = new LiveInterventionFileStore(cwd, 'team-companion-live');
+    const interventions = ['Inspect the first team boundary', 'Inspect the second team boundary'];
+    await store.issue(interventions[0]!);
+    const retryStarted = Promise.withResolvers<void>();
+    const secondDelivered = Promise.withResolvers<void>();
+    const commitDelivery = store.commitDelivery.bind(store);
+    vi.spyOn(store, 'commitDelivery').mockImplementation(async (delivery) => {
+      await commitDelivery(delivery);
+      if (store.read().deliveredSameSession === 1) secondDelivered.resolve();
+    });
+    const parts = ['validation', 'retry'].map((id) => ({ id, title: id, instruction: `Review the ${id} boundary in input.ts` }));
+    const finding = 'Check remaining retry coverage';
+    const workflow = {
+      ...normalizeWorkflowConfig({
+        name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+        steps: [{ name: 'coding-review', edit: false, instruction: 'Review the assigned task',
+          team_leader: { persona: './personas/leader.md', part_persona: './personas/worker.md', max_concurrency: 2 },
+          companion: ['reviewer'], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }, cwd),
+      companions: { reviewer: { name: 'reviewer', description: 'Review coverage', instruction: 'Check review coverage', intervalMs: 60_000 } },
+    };
+    let leaderCalls = 0;
+    let retryCalls = 0;
+    let retryReviewed = false;
+    const retryPrompts: string[] = [];
+    const recoverFromCompaction = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => response('error'));
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'leader') {
+          return { ...response('done'), structuredOutput: leaderCalls++ === 0
+            ? { parts } : { done: true, reasoning: 'Review complete', cancelPartIds: [], parts: [] } };
+        }
+        if (name === 'reviewer') {
+          const needsFollowUp = !retryReviewed && prompt.includes('"label":"step_name","value":"coding-review.retry"');
+          if (needsFollowUp) retryReviewed = true;
+          return { ...response('done'), structuredOutput: {
+            findings: needsFollowUp ? [{ severity: 'must_fix', file: 'input.ts', line: 1, finding }] : [], notes: null,
+          } };
+        }
+        expect(name).toBe('worker');
+        if (prompt.includes(parts[0]!.instruction)) {
+          await retryStarted.promise;
+          await store.issue(interventions[1]!);
+          return { ...response('done'), sessionId: 'thread-validation' };
+        }
+        retryPrompts.push(prompt);
+        expect(callOptions.permissionMode).toBe('readonly');
+        expect(callOptions.edit).toBe(false);
+        if (++retryCalls === 1) {
+          retryStarted.resolve();
+          await secondDelivered.promise;
+          leaveNote(callOptions, 'Checked retry initial evidence');
+        } else if (retryCalls === 2) {
+          expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1, deliveredSameSession: 1 });
+          leaveNote(callOptions, 'Checked retry follow-up evidence');
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread-retry' } });
+        }
+        return { ...response('done'), sessionId: 'thread-retry' };
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation and retry', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'team-companion-live', liveIntervention: store,
+      companionEnabled: true, companionReviewMode: 'completion', companionFixPolicy: 'single',
+      companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
+      companionDiffReader: {
+        readBaselineSha: async () => 'baseline',
+        readDiff: async () => ({ status: 'ok', snapshot: {
+          digest: 'review-input', changedLines: 1, content: '+validation review', changedFiles: ['input.ts'],
+          fileFingerprints: { 'input.ts': 'file-1' }, hunkFingerprints: { 'input.ts:1-1': 'hunk-1' },
+          omittedBytes: 0, truncated: false,
+        } }),
+      },
+    });
+    try {
+      const state = await engine.run();
+      expect(state.status, state.lastOutput?.content).toBe('completed');
+      expect(retryPrompts).toHaveLength(3);
+      expect(retryPrompts[0]!.split(interventions[0]!)).toHaveLength(2);
+      expect(retryPrompts[0]).not.toContain(interventions[1]);
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      for (const prompt of [recoverFromCompaction.mock.calls[0]![0], retryPrompts[2]!]) {
+        expect(prompt.split(parts[1]!.instruction)).toHaveLength(2);
+        expect(prompt.split(finding)).toHaveLength(2);
+        for (const intervention of interventions) expect(prompt.split(intervention)).toHaveLength(2);
+        expect(checkpointData(prompt)).toContain('Checked retry initial evidence');
+        expect(checkpointData(prompt)).toContain('Checked retry follow-up evidence');
+      }
+    } finally { engine.removeAllListeners(); }
+  });
+
   it('retains the original work log, Phase 1 instruction and live intervention through compaction', async () => {
     writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
     const store = new LiveInterventionFileStore(cwd, 'live-checkpoint');
@@ -538,6 +972,110 @@ describe('review work logs across provider attempts', () => {
       expect(calls).toBe(2);
       expect(sessions).toEqual([undefined, 'thread', 'thread']);
       expect(store.read()).toMatchObject({ pending: 0, deliveredSameSession: 1 });
+    } finally { engine.removeAllListeners(); }
+  });
+
+  it.each([
+    { order: 'retry-only', recoveryMode: 'live' },
+    { order: 'retry-first', recoveryMode: 'direct' },
+    { order: 'retry-first', recoveryMode: 'live' },
+    { order: 'companion-first', recoveryMode: 'direct' },
+    { order: 'companion-first', recoveryMode: 'live' },
+    { order: 'retry-first', recoveryMode: 'live', checkpointUnavailable: true },
+  ])('retains cumulative recovery instructions ($order, $recoveryMode compaction, checkpoint unavailable=$checkpointUnavailable)', async ({ order, recoveryMode, checkpointUnavailable }) => {
+    const companionFollowUp = order !== 'retry-only';
+    writeFileSync(join(cwd, '.gitignore'), '.takt/\n');
+    const store = new LiveInterventionFileStore(cwd, 'retry-live-checkpoint');
+    const checkpointTarget = join(root, 'redirected-checkpoint');
+    if (checkpointUnavailable) {
+      mkdirSync(checkpointTarget);
+      const internalDir = join(cwd, '.takt', 'runs', 'retry-live-checkpoint', 'reports', REPORT_INTERNAL_NAMESPACE);
+      mkdirSync(internalDir, { recursive: true });
+      symlinkSync(checkpointTarget, join(internalDir, 'review-checkpoints'), 'dir');
+    }
+    const instruction = 'Review the initial validation boundary';
+    const retryInstruction = 'Recheck the completion retry boundary';
+    const finding = 'Inspect the companion follow-up boundary';
+    const interventions = ['Inspect the first live boundary', 'Inspect the second live boundary'];
+    const workflow = {
+      ...normalizeWorkflowConfig({
+        name: 'takt-development-review', initial_step: 'coding-review', max_steps: 3,
+        steps: [{ name: 'coding-review', edit: false, instruction,
+          completion_retry: { min_retry: 1, max_retry: 1, retry_instruction: retryInstruction },
+          ...(companionFollowUp ? { companion: ['reviewer'] } : {}),
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+      }, cwd),
+      companions: { reviewer: { name: 'reviewer', description: 'Review coverage', instruction: 'Check review coverage', intervalMs: 60_000 } },
+    };
+    let calls = 0;
+    let companionCalls = 0;
+    const recoverFromCompaction = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => response('done'));
+    provider(({ name }) => ({
+      call: async (prompt, callOptions) => {
+        if (name === 'review-completion-judge') {
+          return { ...response('done'), structuredOutput: { complete: true, reason: 'covered', missing_paths: [] } };
+        }
+        if (name === 'reviewer') {
+          return { ...response('done'), structuredOutput: {
+            findings: companionCalls++ === (order === 'companion-first' ? 0 : 1)
+              ? [{ severity: 'must_fix', file: 'input.ts', line: 1, finding }] : [], notes: null,
+          } };
+        }
+        calls++;
+        if (calls === (order === 'companion-first' ? 3 : 2)) expect(prompt.split(retryInstruction)).toHaveLength(2);
+        if (companionFollowUp && calls === (order === 'companion-first' ? 2 : 3)) expect(prompt.split(finding)).toHaveLength(2);
+        leaveNote(callOptions, calls === 1 ? progress : laterProgress);
+        const lastTaskCall = companionFollowUp ? 3 : 2;
+        if (recoveryMode === 'live' && calls >= lastTaskCall && calls < lastTaskCall + interventions.length) {
+          await store.issue(interventions[calls - lastTaskCall]!);
+        }
+        if (calls === lastTaskCall + (recoveryMode === 'live' ? interventions.length : 0)) {
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        }
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const engine = new WorkflowEngine(workflow, cwd, 'Review validation', {
+      projectCwd: cwd, provider: 'codex', model: 'test', reportDirName: 'retry-live-checkpoint', liveIntervention: store,
+      companionEnabled: companionFollowUp, companionReviewMode: 'completion', companionFixPolicy: 'single',
+      companionProviders: { reviewer: { provider: 'codex', model: 'test' } },
+      companionDiffReader: {
+        readBaselineSha: async () => 'baseline',
+        // A completion retry needs a new diff to trigger a second companion review.
+        readDiff: async () => {
+          const revision = calls >= 2 ? 'retry' : 'initial';
+          return { status: 'ok', snapshot: {
+            digest: `review-${revision}`, changedLines: 1, content: `+validation ${revision}`, changedFiles: ['input.ts'],
+            fileFingerprints: { 'input.ts': `file-${revision}` }, hunkFingerprints: { 'input.ts:1-1': `hunk-${revision}` },
+            omittedBytes: 0, truncated: false,
+          } };
+        },
+      },
+    });
+    try {
+      const state = await engine.run();
+      expect(state.status).toBe('completed');
+      if (companionFollowUp) expect(state.companion).toEqual({ completionSettled: true, followUpRounds: 1 });
+      expect(companionCalls).toBe(order === 'companion-first' ? 1 : companionFollowUp ? 2 : 0);
+      expect(calls).toBe((companionFollowUp ? 3 : 2) + (recoveryMode === 'live' ? interventions.length : 0));
+      expect(recoverFromCompaction).toHaveBeenCalledOnce();
+      const [recoveryPrompt, recoveryOptions] = recoverFromCompaction.mock.calls[0]!;
+      expect(recoveryPrompt.split(instruction)).toHaveLength(2);
+      expect(recoveryPrompt.split(retryInstruction)).toHaveLength(2);
+      if (companionFollowUp) expect(recoveryPrompt.split(finding)).toHaveLength(2);
+      if (checkpointUnavailable) {
+        expect(checkpointData(recoveryPrompt)).toBeUndefined();
+        expect(fs.readdirSync(checkpointTarget)).toEqual([]);
+      } else {
+        expect(checkpointData(recoveryPrompt)).toContain(progress);
+        expect(checkpointData(recoveryPrompt)).toContain(laterProgress);
+      }
+      expect(recoveryOptions.sessionId).toBe('thread');
+      if (recoveryMode === 'live') {
+        for (const intervention of interventions) expect(recoveryPrompt.split(intervention), intervention).toHaveLength(2);
+        expect(store.read()).toMatchObject({ pending: 0, deliveredSameSession: interventions.length });
+      }
     } finally { engine.removeAllListeners(); }
   });
 
@@ -1049,6 +1587,59 @@ describe('review work logs across provider attempts', () => {
     expect(fs.readdirSync(target)).toEqual([]);
   });
 
+  it.each([true, false].flatMap((storageAvailable) =>
+    ['follow-up', 'original', 'continuation', 'extended', 'intervention', 'short-phrase', 'embedded', 'unseparated'].map((taskKind) => ({ storageAvailable, taskKind })),
+  ))('uses the complete recovery instruction without remerging the current task (storage=$storageAvailable, task=$taskKind)', async ({ storageAvailable, taskKind }) => {
+    const recoveryBase = `${originalInstruction}\n\nFollow up the remaining boundary`;
+    const intervention = 'Inspect the new live intervention';
+    const task = taskKind === 'follow-up' ? recoveryBase
+      : taskKind === 'original' ? originalInstruction
+      : taskKind === 'continuation' ? PHASE1_EMPTY_CONTINUATION_INSTRUCTION
+      : taskKind === 'extended' ? `${recoveryBase}\n\n${intervention}`
+      : taskKind === 'short-phrase' ? 'retry'
+      : taskKind === 'embedded' ? `${intervention}\n\n${recoveryBase}`
+      : taskKind === 'unseparated' ? `${originalInstruction}${intervention}` : intervention;
+    const expected = recoveryBase;
+    const reportDir = storageAvailable ? context.reportDir : join(cwd, 'unavailable-reports');
+    if (!storageAvailable) {
+      const target = join(root, 'redirected');
+      mkdirSync(target);
+      symlinkSync(target, reportDir, 'dir');
+    }
+    let calls = 0;
+    const recoverFromCompaction = vi.fn(async (prompt: string, _callOptions: ProviderCallOptions) => {
+      expect(prompt.startsWith(`${expected}\n\n`)).toBe(true);
+      expect(prompt.split(originalInstruction)).toHaveLength(expected.split(originalInstruction).length);
+      expect(checkpointData(prompt)).toContain(progress);
+      return response('done');
+    });
+    provider(() => ({
+      call: async (prompt, callOptions) => {
+        const request = calls++ === 0 ? expected : task;
+        if (storageAvailable) {
+          expect(prompt.startsWith(`${request}\n\n`)).toBe(true);
+          expect(prompt.split(originalInstruction)).toHaveLength(request.split(originalInstruction).length);
+          leaveNote(callOptions);
+          callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
+        } else {
+          expect(prompt).toBe(request);
+        }
+        return response('done');
+      },
+      recoverFromCompaction,
+    }));
+    const runOptions = {
+      ...options, reviewCheckpoint: { ...context, reportDir },
+      reviewCheckpointInstruction: originalInstruction, reviewCheckpointRecoveryInstruction: recoveryBase,
+    };
+
+    await runAgent(undefined, task, runOptions);
+    await runAgent(undefined, task, { ...runOptions, sessionId: 'thread' });
+
+    expect(calls).toBe(2);
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(storageAvailable ? 2 : 0);
+  });
+
   it.each(['read', 'save', 'append'] as const)('rechecks checkpoint ancestors and file symlinks before %s', async (operation) => {
     const store = await ReviewCheckpointStore.create(cwd, context, originalInstruction);
     store.save(progress);
@@ -1119,7 +1710,7 @@ describe('review work logs across provider attempts', () => {
     } finally { spy.mockRestore(); }
   });
 
-  it('reviews an untracked nested repository without a checkpoint or automatic resend', async () => {
+  it('recovers the original review instruction after compaction for an untracked nested repository without checkpoint logs', async () => {
     const nested = join(cwd, 'nested');
     execFileSync('git', ['init', '-q', nested]);
     writeFileSync(join(nested, 'file.ts'), 'nested input');
@@ -1128,14 +1719,22 @@ describe('review work logs across provider attempts', () => {
     expect(execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd, encoding: 'utf8' })).toContain('nested/');
     const call = vi.fn(async (prompt: string, callOptions: ProviderCallOptions) => {
       expect(prompt).toBe(originalInstruction);
+      leaveNote(callOptions);
       callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
       return response('done');
     });
-    const recoverFromCompaction = vi.fn();
+    const recoveredResponse = { ...response('done'), content: 'Recovered nested repository review' };
+    const recoverFromCompaction = vi.fn(async (_prompt: string, _callOptions: ProviderCallOptions) => recoveredResponse);
     provider(() => ({ call, recoverFromCompaction }));
-    expect(await runAgent(undefined, originalInstruction, options)).toMatchObject({ status: 'done' });
+
+    expect(await runAgent(undefined, originalInstruction, options)).toEqual(recoveredResponse);
+
     expect(call).toHaveBeenCalledOnce();
-    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction).toHaveBeenCalledWith(originalInstruction, expect.objectContaining({
+      sessionId: 'thread', permissionMode: 'readonly', edit: false,
+    }));
+    expect(existsSync(context.reportDir)).toBe(false);
   });
 
   it.each(['working tree', 'pull request'] as const)('includes dirty submodules in %s scope without reusing logs or invoking child clean filters', async (source) => {

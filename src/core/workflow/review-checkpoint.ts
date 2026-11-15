@@ -25,6 +25,19 @@ export function excludeReviewCheckpointScope(scope: TaskReviewScope, repositoryR
     : scope;
 }
 
+export function composeReviewRecoveryInstruction(recoveryBase: string, task: string): string {
+  const seenBlocks = new Set(recoveryBase.split('\n\n').map((block) => block.trim()));
+  const additionalBlocks: string[] = [];
+  for (const candidate of task.split('\n\n')) {
+    const block = candidate.trim();
+    if (block.length > 0 && !seenBlocks.has(block)) {
+      additionalBlocks.push(block);
+      seenBlocks.add(block);
+    }
+  }
+  return [recoveryBase, ...additionalBlocks].filter((block) => block.length > 0).join('\n\n');
+}
+
 export interface ReviewCheckpointContext {
   readonly reportDir: string;
   readonly task: string;

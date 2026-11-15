@@ -100,6 +100,7 @@ import type { InstructionBuildTransaction } from './instruction-build-transactio
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
+import { composeReviewRecoveryInstruction } from '../review-checkpoint.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   completeObservedPhase1Attempt,
@@ -293,6 +294,7 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly phase1Instruction: string;
+  readonly instructionWithoutLiveIntervention: string;
   readonly injectedReports: readonly InjectedReport[];
   readonly reportInputs?: Phase1ReportInputs;
   readonly priorStepResponseText?: string;
@@ -679,6 +681,8 @@ export class StepExecutor {
 
   async completeCompanionReview(input: {
     readonly phase1Instruction: string;
+    /** Accumulated Phase 1 and follow-up instructions, excluding replaceable live history. */
+    readonly reviewRecoveryInstruction: string;
     readonly eventStep: WorkflowStep;
     readonly executableStep: AgentWorkflowStep;
     readonly state: WorkflowState;
@@ -692,7 +696,7 @@ export class StepExecutor {
     readonly phase1LogSource?: string;
     readonly onSingleFixSettled?: () => void;
     readonly abortSignal: AbortSignal | undefined;
-    readonly afterPhase1Response?: (response: AgentResponse) => Promise<CompanionFollowUpResult>;
+    readonly afterPhase1Response?: (response: AgentResponse, recoveryInstruction: string) => Promise<CompanionFollowUpResult>;
     readonly recordUsage?: (
       success: boolean,
       usage: AgentResponse['providerUsage'],
@@ -709,6 +713,7 @@ export class StepExecutor {
           usage,
         );
       });
+    let reviewRecoveryInstruction = input.reviewRecoveryInstruction;
     const fixResult = await runCompanionFixPolicy({
       policy: fixPolicy,
       initialResponse: input.initialResponse,
@@ -733,10 +738,15 @@ export class StepExecutor {
           phaseAttempts.set(recoveryAttempt.sequence, created);
           return created;
         };
+        reviewRecoveryInstruction = composeReviewRecoveryInstruction(
+          reviewRecoveryInstruction,
+          this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
+        );
+        const followUpInstruction = this.appendLiveInterventionInstruction(reviewRecoveryInstruction, undefined);
         const recovery = await runPhase1WithEmptyRecovery({
           workflowMeta: attempt.options.workflowMeta,
           language: attempt.options.language,
-          instruction: this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
+          instruction: followUpInstruction,
           initialSessionId: attempt.sessionId,
           execute: async (recoveryAttempt) => {
             const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
@@ -757,7 +767,13 @@ export class StepExecutor {
                 execute: (instruction, sessionId, onPromptResolved) => executeAgent(
                   input.executableStep.persona,
                   instruction,
-                  { ...attempt.options, reviewCheckpointInstruction: input.phase1Instruction, sessionId, onPromptResolved },
+                  {
+                    ...attempt.options,
+                    reviewCheckpointInstruction: input.phase1Instruction,
+                    reviewCheckpointRecoveryInstruction: composeReviewRecoveryInstruction(followUpInstruction, instruction),
+                    sessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: (...args) => {
                   promptResolvedAttempts.add(phaseAttempt.sequence);
@@ -859,7 +875,7 @@ export class StepExecutor {
           recordUsage(false, normalizedResponse.providerUsage);
           return { kind: 'normal_follow_up', response: normalizedResponse };
         }
-        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse);
+        const responseAfterLiveIntervention = await afterPhase1Response(normalizedResponse, reviewRecoveryInstruction);
         recordUsage(
           responseAfterLiveIntervention.response.status === 'done',
           responseAfterLiveIntervention.response.providerUsage,
@@ -1207,15 +1223,14 @@ export class StepExecutor {
       step: executableStep.name,
       phase: 1,
     }, executableStep.engineSynthesized === true);
+    const instructionWithoutLiveIntervention = this.buildPhase1Instruction(instruction.text, executableStep, runtime);
     return {
       executableStep,
+      instructionWithoutLiveIntervention,
       // Without a prepared delivery, resolve history after the final pending check in runNormalStep.
       phase1Instruction: liveInterventionDelivery === undefined
-        ? this.buildPhase1Instruction(instruction.text, executableStep, runtime)
-        : this.appendLiveInterventionInstruction(
-            this.buildPhase1Instruction(instruction.text, executableStep, runtime),
-            liveInterventionDelivery,
-          ),
+        ? instructionWithoutLiveIntervention
+        : this.appendLiveInterventionInstruction(instructionWithoutLiveIntervention, liveInterventionDelivery),
       injectedReports: instruction.injectedReports,
       reportInputs: instruction.reportInputs,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
@@ -1249,7 +1264,7 @@ export class StepExecutor {
     );
     return liveInstruction.length === 0
       ? instruction
-      : [instruction, liveInstruction].join('\n\n');
+      : composeReviewRecoveryInstruction(instruction, liveInstruction);
   }
 
   /**
@@ -1890,8 +1905,9 @@ export class StepExecutor {
       )
       : { text: preparedExecution.phase1Instruction, injectedReports: preparedExecution.injectedReports, reportInputs: preparedExecution.reportInputs };
     const instruction = preparedInstruction.text;
-    let phase1Instruction = preparedExecution?.phase1Instruction
+    const instructionWithoutLiveIntervention = preparedExecution?.instructionWithoutLiveIntervention
       ?? this.buildPhase1Instruction(instruction, executableStep, executionRuntime);
+    let phase1Instruction = preparedExecution?.phase1Instruction ?? instructionWithoutLiveIntervention;
     const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       executableStep,
       executionRuntime,
@@ -2149,6 +2165,8 @@ export class StepExecutor {
     }
 
     let phaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
+    // Follow-ups accumulate independently; live history is replaced from the store at each call.
+    let reviewRecoveryInstruction = instructionWithoutLiveIntervention;
     const drainLiveIntervention = async (
       initialResponse: AgentResponse,
       initialUsageRecorded = false,
@@ -2181,6 +2199,7 @@ export class StepExecutor {
           executableStep,
           executionRuntime,
         );
+        const liveRecoveryInstruction = composeReviewRecoveryInstruction(reviewRecoveryInstruction, liveInstruction);
         const liveAttempt: Phase1Attempt = {
           sequence: phaseExecutionSequence++,
           reason: 'live_intervention',
@@ -2224,6 +2243,7 @@ export class StepExecutor {
               {
                 ...agentOptions,
                 reviewCheckpointInstruction: phase1Instruction,
+                reviewCheckpointRecoveryInstruction: liveRecoveryInstruction,
                 sessionId,
                 onPromptResolved,
                 ...(sameSessionCommitter === undefined
@@ -2294,9 +2314,14 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
+    const afterCompanionPhase1Response = async (companionResponse: AgentResponse, recoveryInstruction: string) => {
+      reviewRecoveryInstruction = recoveryInstruction;
+      return drainLiveIntervention(companionResponse);
+    };
     let companionSingleFixSettled = false;
     response = await this.completeCompanionReview({
       phase1Instruction,
+      reviewRecoveryInstruction,
       eventStep: step,
       executableStep,
       state,
@@ -2307,7 +2332,7 @@ export class StepExecutor {
       providerInfo,
       nextSequence: () => phaseExecutionSequence++,
       phase1ExecutionLog,
-      afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+      afterPhase1Response: afterCompanionPhase1Response,
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
       },
@@ -2332,9 +2357,11 @@ export class StepExecutor {
     if (executableStep.completionRetry !== undefined) {
       const completion = await this.completeReviewerResponse({
         step: executableStep,
-        originalInstruction: phase1Instruction,
+        originalInstruction: instructionWithoutLiveIntervention,
         initialResponse: response,
         executeRetry: async (retryInstruction, retrySessionId) => {
+          reviewRecoveryInstruction = composeReviewRecoveryInstruction(reviewRecoveryInstruction, retryInstruction);
+          const retryRecoveryInstruction = this.appendLiveInterventionInstruction(reviewRecoveryInstruction, undefined);
           if (!companionSingleFixSettled) {
             activeCompanionRuntime?.beginReviewAttempt();
           }
@@ -2349,7 +2376,7 @@ export class StepExecutor {
           const retryResponse = await runPhase1WithEmptyRecovery({
             workflowMeta: agentOptions.workflowMeta,
             language: agentOptions.language,
-            instruction: retryInstruction,
+            instruction: retryRecoveryInstruction,
             initialSessionId: retrySessionId,
             execute: async (attempt) => {
               const observedAttempt = resolveObservedAttempt(attempt);
@@ -2369,7 +2396,15 @@ export class StepExecutor {
                 execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
                   executableStep.persona,
                   attemptInstruction,
-                  { ...agentOptions, reviewCheckpointInstruction: retryInstruction, sessionId: attemptSessionId, onPromptResolved },
+                  {
+                    ...agentOptions,
+                    reviewCheckpointInstruction: phase1Instruction,
+                    reviewCheckpointRecoveryInstruction: composeReviewRecoveryInstruction(
+                      retryRecoveryInstruction, attemptInstruction,
+                    ),
+                    sessionId: attemptSessionId,
+                    onPromptResolved,
+                  },
                 ),
                 onPhaseStart: this.deps.onPhaseStart,
                 onPhaseComplete: this.deps.onPhaseComplete,
@@ -2427,6 +2462,7 @@ export class StepExecutor {
           }
           return this.completeCompanionReview({
             phase1Instruction,
+            reviewRecoveryInstruction,
             eventStep: step,
             executableStep,
             state,
@@ -2437,7 +2473,7 @@ export class StepExecutor {
             providerInfo,
             nextSequence: () => phaseExecutionSequence++,
             phase1ExecutionLog,
-            afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
+            afterPhase1Response: afterCompanionPhase1Response,
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
             },

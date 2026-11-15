@@ -63,6 +63,8 @@ export interface RunAgentOptions {
   reviewCheckpoint?: import('../core/workflow/review-checkpoint.js').ReviewCheckpointContext;
   /** Stable Phase 1 request for checkpoint identity across continuations and live interventions. */
   reviewCheckpointInstruction?: string;
+  /** Complete current instruction, including follow-ups and live history, for fresh or compacted execution. */
+  reviewCheckpointRecoveryInstruction?: string;
   /** Runner-local recovery input, rebuilt after each compaction from persisted progress. */
   checkpointRecoveryInstruction?: () => string;
   /** Runner-local capture of each provider attempt, including suppressed compaction results. */

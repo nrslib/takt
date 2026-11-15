@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../core/models/types.js';
@@ -190,7 +190,20 @@ describe('Builtin PR merge workflow execution', () => {
     const recoveryPrompts: Array<{ step: string; prompt: string; requiredPermissionMode: string | undefined; cwd: string | undefined }> = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
-    if (scenario.largeCiLogs) execFileSync('git', ['init', '-q'], { cwd: cloneCwd });
+    if (scenario.largeCiLogs) {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: cloneCwd, stdio: 'pipe',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull,
+          GIT_AUTHOR_NAME: 'TAKT test', GIT_AUTHOR_EMAIL: 'takt-test@example.invalid',
+          GIT_COMMITTER_NAME: 'TAKT test', GIT_COMMITTER_EMAIL: 'takt-test@example.invalid' } });
+      // A PR clone has a committed HEAD on its head branch, not an unborn repository.
+      git('init', '--quiet', '--initial-branch=main');
+      writeFileSync(join(cloneCwd, 'pr-change.ts'), 'export const value = 1;\n');
+      git('add', '--', 'pr-change.ts');
+      git('commit', '--quiet', '-m', 'base');
+      git('checkout', '--quiet', '-b', 'feature/pr');
+      writeFileSync(join(cloneCwd, 'pr-change.ts'), 'export const value = 2;\n');
+      git('commit', '--quiet', '-am', 'PR change');
+    }
     const reportDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'reports');
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };

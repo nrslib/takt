@@ -25,6 +25,7 @@ import {
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
+import { composeReviewRecoveryInstruction } from '../core/workflow/review-checkpoint.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -643,10 +644,8 @@ export async function runAgent(
     return defaultRunner.run(personaSpec, task, options);
   }
   const originalInstruction = options.reviewCheckpointInstruction ?? task;
-  // Identity stays on the original request; a compacted or fresh session also
-  // needs the current attempt's instructions (for example, a live intervention).
-  const recoveryInstruction = originalInstruction === task
-    ? originalInstruction : `${originalInstruction}\n\n${task}`;
+  const recoveryInstruction = options.reviewCheckpointRecoveryInstruction
+    ?? composeReviewRecoveryInstruction(originalInstruction, task);
   let checkpoint: Awaited<ReturnType<typeof startReviewCheckpoint>>;
   try {
     checkpoint = await startReviewCheckpoint(options.cwd, options.reviewCheckpoint, originalInstruction, options.language ?? 'en');
@@ -655,7 +654,13 @@ export async function runAgent(
     // Unsupported inputs disable reuse, not the review. Operational failures
     // still propagate rather than silently discarding evidence.
     log.warn('Review checkpoint unavailable', { reason: error.message });
-    return defaultRunner.run(personaSpec, options.sessionId === undefined ? recoveryInstruction : task, { ...options, bypassPermissions: false });
+    return defaultRunner.run(personaSpec, options.sessionId === undefined ? recoveryInstruction : task, {
+      ...options,
+      bypassPermissions: false,
+      // Storage availability must not change a review's compaction recovery eligibility.
+      reviewCheckpointRecorder: { observe: () => undefined, finish: () => undefined },
+      checkpointRecoveryInstruction: () => recoveryInstruction,
+    });
   }
   try {
     return await defaultRunner.run(personaSpec, checkpoint.instruction(options.sessionId === undefined ? recoveryInstruction : task), {

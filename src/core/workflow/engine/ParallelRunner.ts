@@ -84,6 +84,7 @@ import {
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { formatCompletionRetryDiagnostic } from '../completion-retry.js';
+import { composeReviewRecoveryInstruction } from '../review-checkpoint.js';
 import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
@@ -113,6 +114,11 @@ type ParallelSubStepResult = {
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
+
+type ParallelReviewRequest = {
+  readonly identityInstruction: string;
+  retryInstruction: string;
+};
 
 class LiveInterventionParallelRestart extends Error {
   constructor(
@@ -361,6 +367,8 @@ export class ParallelRunner {
   ): Promise<StepRunResult> {
     const liveIntervention = this.deps.engineOptions.liveIntervention;
     const attemptState = captureParallelAttemptState(state);
+    // Checkpoint identity and the active retry request outlive rolled-back parallel attempts.
+    const reviewRequests = new Map<string, ParallelReviewRequest>();
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
       restoreParallelAttemptState(state, attemptState);
@@ -394,6 +402,7 @@ export class ParallelRunner {
           maxSteps,
           updatePersonaSession,
           invalidatedSessions,
+          reviewRequests,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -443,6 +452,7 @@ export class ParallelRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     invalidatedSessions: Map<string, string>,
+    reviewRequests: Map<string, ParallelReviewRequest>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -793,6 +803,15 @@ export class ParallelRunner {
           },
         };
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subExecutionRuntime);
+        let reviewRequest = reviewRequests.get(subStep.name);
+        if (baseOptions.reviewCheckpoint !== undefined && reviewRequest === undefined) {
+          reviewRequest = { identityInstruction: phase1Instruction, retryInstruction: '' };
+          reviewRequests.set(subStep.name, reviewRequest);
+        }
+        // Each restart's Phase 1 already contains the full live delivery history.
+        const reviewRecoveryInstruction = reviewRequest === undefined ? phase1Instruction : composeReviewRecoveryInstruction(
+          phase1Instruction, reviewRequest.retryInstruction,
+        );
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
           provider: subPm.provider,
@@ -847,7 +866,7 @@ export class ParallelRunner {
         const phase1Result = await runPhase1WithEmptyRecovery({
           workflowMeta: agentOptions.workflowMeta,
           language: agentOptions.language,
-          instruction: phase1Instruction,
+          instruction: reviewRecoveryInstruction,
           initialSessionId: agentOptions.sessionId,
           execute: async (attempt) => {
             const result = await executeObservedPhase1Attempt({
@@ -870,7 +889,11 @@ export class ParallelRunner {
                   attemptInstruction,
                   {
                     ...agentCallOptions,
-                    reviewCheckpointInstruction: phase1Instruction,
+                    reviewCheckpointInstruction: reviewRequest?.identityInstruction ?? phase1Instruction,
+                    reviewCheckpointRecoveryInstruction: composeReviewRecoveryInstruction(
+                      reviewRecoveryInstruction,
+                      attempt.reason === 'empty_continuation' ? attemptInstruction : '',
+                    ),
                     sessionId,
                     onPromptResolved,
                   },
@@ -995,6 +1018,14 @@ export class ParallelRunner {
             originalInstruction: phase1Instruction,
             initialResponse: subResponse,
             executeRetry: async (instruction, sessionId) => {
+              if (reviewRequest !== undefined) {
+                // Completion retry prefixes this attempt's original instruction; retain only its retry suffix across restarts.
+                reviewRequest.retryInstruction = composeReviewRecoveryInstruction(
+                  reviewRequest.retryInstruction, instruction.slice(phase1Instruction.length),
+                );
+              }
+              const retryRecoveryInstruction = reviewRequest === undefined ? instruction
+                : composeReviewRecoveryInstruction(phase1Instruction, reviewRequest.retryInstruction);
               const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
               const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
                 const existing = observedAttempts.get(attempt.sequence);
@@ -1006,7 +1037,7 @@ export class ParallelRunner {
               const retry = await runPhase1WithEmptyRecovery({
                 workflowMeta: agentOptions.workflowMeta,
                 language: agentOptions.language,
-                instruction,
+                instruction: retryRecoveryInstruction,
                 initialSessionId: sessionId,
                 execute: async (attempt) => {
                   const observedAttempt = resolveObservedAttempt(attempt);
@@ -1028,7 +1059,15 @@ export class ParallelRunner {
                         executableSubStep,
                         subPm,
                         attemptInstruction,
-                        { ...agentCallOptions, reviewCheckpointInstruction: instruction, sessionId: attemptSessionId, onPromptResolved },
+                        {
+                          ...agentCallOptions,
+                          reviewCheckpointInstruction: reviewRequest?.identityInstruction ?? phase1Instruction,
+                          reviewCheckpointRecoveryInstruction: composeReviewRecoveryInstruction(
+                            retryRecoveryInstruction, attemptInstruction,
+                          ),
+                          sessionId: attemptSessionId,
+                          onPromptResolved,
+                        },
                         false,
                       )
                     ),

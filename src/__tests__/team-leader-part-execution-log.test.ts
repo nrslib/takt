@@ -39,7 +39,7 @@ describe('team leader part execution log', () => {
     await expect(runTeamLeaderPart(
       optionsBuilder, step, undefined, part, 0, 1000, () => undefined, undefined,
       { enabled: false, workflowName: 'test', iteration: 1 },
-      () => 'Inspect source', undefined, undefined,
+      () => ({ phase1Instruction: 'Inspect source', instructionWithoutLiveIntervention: 'Inspect source' }), undefined, undefined,
       { forceNewSession: false, deadlineSignal: controller.signal, providerInfo, phase1ExecutionLog: log },
     )).rejects.toBe(cancellation);
 
