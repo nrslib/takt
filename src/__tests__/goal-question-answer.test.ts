@@ -5,14 +5,14 @@ import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn(), queued: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(private readonly directory: string) {}
   get(id: string) { return doubles.get(this.directory, id); }
   update(id: string, transform: (goal: Goal) => Goal, onSaved?: () => void) { return doubles.update(this.directory, id, transform, onSaved); }
 } }));
 vi.mock('../infra/goals/events.js', async (original) => ({
-  ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event,
+  ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event, readManagerEvents: doubles.queued,
 }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
@@ -33,6 +33,7 @@ beforeEach(() => {
     onSaved?.();
     return structuredClone(goal);
   });
+  doubles.queued.mockReturnValue([]);
 });
 
 it('saves a human answer with source mcp and records the manager event', async () => {
@@ -197,4 +198,62 @@ it('rejects a retry with a different answer while publication is pending', async
   expect(goal.questions![0]!.answer!.text).toBe('CSV');
   expect(goal.questions![0]!.answerPublicationPending).toBe(true);
   expect(doubles.event).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the saved-and-pending explanation when the event failure is a permission error', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementation(() => { throw new Error("EACCES: permission denied, open '/config/manager-inbox/x.json'"); });
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/answer was saved/iu);
+  expect(firstTextContent(result.content)).toMatch(/Publication is pending; retry the same call/iu);
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+});
+
+it('does not save a second event when the answer event is still queued', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.update
+    .mockImplementationOnce(async (_directory: string, _id: string, transform: (current: Goal) => Goal, onSaved?: () => void) => {
+      goal = transform(structuredClone(goal));
+      onSaved?.();
+      return structuredClone(goal);
+    })
+    .mockImplementationOnce(async (_directory: string, _id: string, transform: (current: Goal) => Goal) => {
+      transform(structuredClone(goal));
+      throw new Error('disk full');
+    });
+
+  const first = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(first.isError).toBe(true);
+  expect(firstTextContent(first.content)).toMatch(/Publication is pending/iu);
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+  expect(doubles.event).toHaveBeenCalledTimes(1);
+
+  doubles.queued.mockReturnValue([{ event: { kind: 'answer', goalId, questionId } }]);
+  const retried = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(retried.isError, firstTextContent(retried.content)).toBeUndefined();
+  expect(doubles.event).toHaveBeenCalledTimes(1);
+  expect(goal.questions![0]!.answerPublicationPending).toBeUndefined();
+});
+
+it('publishes only one event when the same call is retried concurrently', async () => {
+  goal.questions = [{
+    id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'answered',
+    answer: { text: 'CSV', source: 'mcp', answeredAt: '2026-01-01T00:00:00.000Z' }, answerPublicationPending: true,
+  }];
+  const input: AnswerGoalQuestionInput = { cwd, goalId, questionId, answer: { text: 'CSV' } };
+
+  const [first, second] = await Promise.all([
+    answerTaktGoalQuestion(input, {}, signal),
+    answerTaktGoalQuestion(input, {}, signal),
+  ]);
+
+  expect(first.isError, firstTextContent(first.content)).toBeUndefined();
+  expect(second.isError, firstTextContent(second.content)).toBeUndefined();
+  expect(doubles.event).toHaveBeenCalledTimes(1);
+  expect(goal.questions![0]!.answerPublicationPending).toBeUndefined();
 });
