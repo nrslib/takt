@@ -2,8 +2,10 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { addGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
+import { addGoalQuestion, answerGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
 import { appendGoalNotification, formatGoalQuestionNotification } from '../../infra/goals/notifications.js';
+import { saveManagerEvent } from '../../infra/goals/events.js';
+import { answerGoalQuestionInputSchema, type AnswerGoalQuestionInput } from './schemas.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
 import type { AskGoalQuestionInput, GetGoalQuestionInput, listGoalQuestionsInputSchema, withdrawGoalQuestionInputSchema } from './schemas.js';
@@ -62,4 +64,23 @@ export function withdrawTaktGoalQuestion(input: z.infer<typeof withdrawGoalQuest
     return { goalId: goal.id, status: goal.status, questionId: input.questionId,
       questionStatus: goal.questions!.find((question) => question.id === input.questionId)!.status };
   }, 'Goal question withdrawal failed', 'withdraw_question');
+}
+
+export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  try {
+    const parsed = answerGoalQuestionInputSchema.parse(input);
+    assertCwdAllowedByMcpRoot(parsed.cwd, deps.allowedProjectRoot);
+    const store = new GoalStore(parsed.cwd);
+    const question = (await store.get(parsed.goalId)).questions?.find((saved) => saved.id === parsed.questionId);
+    if (question === undefined) throw new Error('Question does not exist');
+    if ((question.kind ?? 'question') === 'approval') {
+      throw new Error('Approval inquiries are retired and cannot be answered; answer a question or operation_request instead');
+    }
+    signal.throwIfAborted();
+    const saved = await store.update(parsed.goalId,
+      (goal) => answerGoalQuestion(goal, parsed.questionId, parsed.answer, 'mcp'));
+    const answer = saved.questions!.find((savedQuestion) => savedQuestion.id === parsed.questionId)!.answer!;
+    saveManagerEvent(parsed.cwd, { kind: 'answer', goalId: parsed.goalId, questionId: parsed.questionId, answer });
+    return jsonResult({ questionId: parsed.questionId, answer });
+  } catch (error) { return errorResult('Goal question answer failed', error); }
 }

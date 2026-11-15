@@ -34,9 +34,10 @@ const goalAnswerFields = {
   report: z.enum(['completed', 'unable']).optional(),
   scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional(),
 };
-export const GoalAnswerSchema = z.object({
-  ...goalAnswerFields, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
-}).strict().superRefine((answer, ctx) => {
+export const GoalAnswerInputSchema = z.object(goalAnswerFields).strict();
+export const GoalAnswerSchema = GoalAnswerInputSchema.extend({
+  source: z.enum(['tui', 'slack', 'mcp']), answeredAt: z.iso.datetime(),
+}).superRefine((answer, ctx) => {
   if (answer.text.trim().length === 0 && answer.decision === undefined && answer.report === undefined) {
     ctx.addIssue({ code: 'custom', path: ['text'], message: 'An answer requires text or a structured response' });
   }

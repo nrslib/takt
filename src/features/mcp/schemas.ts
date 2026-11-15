@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
@@ -134,6 +134,10 @@ export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit:
 export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
+export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(), answer: GoalAnswerInputSchema,
+});
+export type AnswerGoalQuestionInput = z.infer<typeof answerGoalQuestionInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();

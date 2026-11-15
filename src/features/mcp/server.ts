@@ -29,6 +29,7 @@ import {
   askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  answerGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -60,7 +61,7 @@ import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
-import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -405,6 +406,15 @@ export function createTaktMcpServer(
         inputSchema: createGoalInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_answer_goal_question',
+      {
+        title: 'Answer a goal question',
+        description: 'Answer one pending question on a goal. The answer is recorded with source mcp. Questions for retired approval inquiries cannot be answered. Responses fit 64 KiB, with explicit truncation.',
+        inputSchema: answerGoalQuestionInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
   }
 
