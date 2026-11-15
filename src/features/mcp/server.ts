@@ -411,7 +411,7 @@ export function createTaktMcpServer(
       'takt_answer_goal_question',
       {
         title: 'Answer a goal question',
-        description: 'Answer one pending question on a goal. Use answer.text for a question and answer.report (completed or unable) for an operation_request. The answer is recorded with source mcp. Questions for retired approval inquiries cannot be answered. Responses fit 64 KiB, with explicit truncation. Read the saved answer with takt_get_goal_question and path answer.text.',
+        description: 'Answer one pending question on a goal. Use answer.text for a question and answer.report (completed or unable) for an operation_request. The answer is recorded with source mcp. If recording the manager event fails, the answer stays saved with publication pending; retry the same call to publish it. Questions for retired approval inquiries cannot be answered. Responses fit 64 KiB, with explicit truncation. Read the saved answer with takt_get_goal_question and path answer.text.',
         inputSchema: answerGoalQuestionInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
