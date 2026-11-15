@@ -2787,6 +2787,20 @@ describe('goal creation through the standalone MCP', () => {
     });
   });
 
+  it.each([undefined, 'all', 'manager', 'read-only'] as const)('exposes takt_answer_goal_question only on the standalone tool set %s', async (toolSet) => {
+    await withServer(cwd, toolSet, async (client) => {
+      const tools = (await client.listTools()).tools;
+      const tool = tools.find(({ name }) => name === 'takt_answer_goal_question');
+      if (toolSet === undefined || toolSet === 'all') {
+        expect(tool).toBeDefined();
+        expect(tool!.description).toContain('64 KiB');
+        expect(tool!.description).toContain('truncation');
+      } else {
+        expect(tool).toBeUndefined();
+      }
+    });
+  });
+
   it('accepts a goal task enqueue against the created goal', async () => {
     await withServer(cwd, 'all', async (client) => {
       expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
