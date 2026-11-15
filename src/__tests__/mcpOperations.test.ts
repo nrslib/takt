@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
 import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
@@ -11,6 +12,10 @@ import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
 import { goalSummary, goalWriteSummary } from '../features/mcp/goalResponse.js';
 import { MCP_RESPONSE_MAX_BYTES, responseBytes } from '../features/mcp/response.js';
 import type { Goal, GoalCreateInput } from '../infra/goals/schema.js';
+
+vi.mock('node:fs/promises', async (original) => ({
+  ...await original<typeof import('node:fs/promises')>(),
+}));
 
 const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({
@@ -699,6 +704,7 @@ describe('MCP create goal operation', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.spyOn(repositoryDirectory, 'resolveGitRepositoryDirectory').mockResolvedValue(input.cwd);
+    vi.spyOn(fsPromises, 'realpath').mockResolvedValue(input.cwd);
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
@@ -715,15 +721,14 @@ describe('MCP create goal operation', () => {
     expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
   });
 
-  it('forwards the Git root instead of a subdirectory to the service', async () => {
-    const controller = new AbortController();
+  it('rejects a subdirectory without calling the creation service', async () => {
+    vi.mocked(fsPromises.realpath).mockResolvedValue('/repo/sub');
     goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
 
-    const result = await createTaktGoal({ ...input, cwd: '/repo/sub' }, {}, controller.signal);
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub' }, {}, new AbortController().signal);
 
-    expect(result.isError).toBeUndefined();
-    expect(repositoryDirectory.resolveGitRepositoryDirectory).toHaveBeenCalledWith('/repo/sub');
-    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
   });
 
   it('rejects a non-Git directory without calling the creation service', async () => {

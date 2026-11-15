@@ -2726,28 +2726,11 @@ describe('goal creation through the standalone MCP', () => {
     await expect(new GoalStore(cwd).get(createdId)).resolves.toMatchObject({ id: createdId, status: 'created' });
   });
 
-  it.each([undefined, 'all'] as const)('saves a goal at the Git root when cwd is a subdirectory with tool set %s', async (toolSet) => {
+  it.each([undefined, 'all'] as const)('rejects a subdirectory without creating a goal with tool set %s', async (toolSet) => {
     const subdirectory = join(cwd, 'sub');
     mkdirSync(subdirectory);
 
     await withServer(cwd, toolSet, async (client) => {
-      const result = await client.callTool({ name: createGoalTool, arguments: {
-        ...createArguments(), cwd: subdirectory,
-      } });
-
-      expect(result.isError).toBeUndefined();
-      const goalJson = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8'));
-      expect(goalJson).toMatchObject({ id: createdId, objective, status: 'created' });
-      expect(existsSync(join(subdirectory, '.takt', 'goals'))).toBe(false);
-    });
-    await expect(new GoalStore(cwd).get(createdId)).resolves.toMatchObject({ id: createdId });
-  });
-
-  it('rejects a Git root outside the allowed root without creating a goal', async () => {
-    const subdirectory = join(cwd, 'sub');
-    mkdirSync(subdirectory);
-
-    await withServer(subdirectory, 'all', async (client) => {
       const result = await client.callTool({ name: createGoalTool, arguments: {
         ...createArguments(), cwd: subdirectory,
       } });

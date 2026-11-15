@@ -401,7 +401,7 @@ export function createTaktMcpServer(
       'takt_create_goal',
       {
         title: 'Create TAKT goal',
-        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd an absolute path. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd the absolute path to the Git repository root. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
         inputSchema: createGoalInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
