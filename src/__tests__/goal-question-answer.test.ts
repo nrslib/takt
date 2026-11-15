@@ -50,6 +50,7 @@ it('saves a human answer with source mcp and records the manager event', async (
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
     kind: 'answer', goalId, questionId, answer: saved.answer,
   }));
+  expect(saved.answerPublicationPending).toBeUndefined();
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ questionId, answer: saved.answer });
 });
 
@@ -158,4 +159,42 @@ it('reports that the answer was saved when recording the manager event fails', a
   expect(result.isError).toBe(true);
   expect(firstTextContent(result.content)).toMatch(/answer was saved/iu);
   expect(goal.questions![0]!.status).toBe('answered');
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+});
+
+it('republishes a saved answer whose publication is pending when the same call is retried', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementationOnce(() => { throw new Error('event store unavailable'); });
+
+  const first = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+  expect(first.isError).toBe(true);
+  const savedAnswer = goal.questions![0]!.answer;
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+
+  const retried = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(retried.isError, firstTextContent(retried.content)).toBeUndefined();
+  expect(goal.questions![0]!.answer).toEqual(savedAnswer);
+  expect(goal.questions![0]!.answerPublicationPending).toBeUndefined();
+  expect(doubles.event).toHaveBeenCalledTimes(2);
+  expect(doubles.event).toHaveBeenLastCalledWith(cwd, expect.objectContaining({
+    kind: 'answer', goalId, questionId, answer: savedAnswer,
+  }));
+  expect(JSON.parse(firstTextContent(retried.content))).toMatchObject({ questionId, answer: savedAnswer });
+});
+
+it('rejects a retry with a different answer while publication is pending', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementationOnce(() => { throw new Error('event store unavailable'); });
+
+  const first = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+  expect(first.isError).toBe(true);
+
+  const retried = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'JSON' } }, {}, signal);
+
+  expect(retried.isError).toBe(true);
+  expect(firstTextContent(retried.content)).toMatch(/different answer/iu);
+  expect(goal.questions![0]!.answer!.text).toBe('CSV');
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+  expect(doubles.event).toHaveBeenCalledTimes(1);
 });
