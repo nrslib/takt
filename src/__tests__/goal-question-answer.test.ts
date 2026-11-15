@@ -1,10 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { answerTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
+import type { AnswerGoalQuestionInput } from '../features/mcp/schemas.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn(), run: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(private readonly directory: string) {}
   get(id: string) { return doubles.get(this.directory, id); }
@@ -13,7 +14,6 @@ vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
 vi.mock('../infra/goals/events.js', async (original) => ({
   ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event,
 }));
-vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
@@ -35,7 +35,7 @@ beforeEach(() => {
   });
 });
 
-it('saves a human answer with source mcp and the same manager event as the TUI flow', async () => {
+it('saves a human answer with source mcp and records the manager event', async () => {
   goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
   const before = Date.now();
 
@@ -50,7 +50,6 @@ it('saves a human answer with source mcp and the same manager event as the TUI f
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
     kind: 'answer', goalId, questionId, answer: saved.answer,
   }));
-  expect(doubles.run).not.toHaveBeenCalled();
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ questionId, answer: saved.answer });
 });
 
@@ -80,7 +79,6 @@ it.each(['answered', 'withdrawn'] as const)('rejects answering a %s question wit
   expect(firstTextContent(result.content)).toMatch(/not awaiting|pending/iu);
   expect(goal).toEqual(before);
   expect(doubles.event).not.toHaveBeenCalled();
-  expect(doubles.run).not.toHaveBeenCalled();
 });
 
 it('rejects an answer for a missing question without saving an event', async () => {
@@ -102,7 +100,7 @@ it('rejects answering a retired approval inquiry instead of recording a decision
     operation: { toolName: 'Bash', args: 'ls', cwd, argsDigest: 'a'.repeat(64) },
   }];
 
-  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { decision: 'allow' } }, {}, signal);
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: '許可します' } }, {}, signal);
 
   expect(result.isError).toBe(true);
   expect(firstTextContent(result.content)).toMatch(/approval|承認/iu);
@@ -138,5 +136,26 @@ it('reports a persistence failure without saving a manager event', async () => {
 
   expect(result.isError).toBe(true);
   expect(doubles.event).not.toHaveBeenCalled();
-  expect(doubles.run).not.toHaveBeenCalled();
+});
+
+it('rejects decision and scope fields that this tool cannot record', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  const answer = { decision: 'allow', scope: 'global' } as unknown as AnswerGoalQuestionInput['answer'];
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(goal.questions![0]!.status).toBe('pending');
+  expect(doubles.event).not.toHaveBeenCalled();
+});
+
+it('reports that the answer was saved when recording the manager event fails', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementation(() => { throw new Error('event store unavailable'); });
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/answer was saved/iu);
+  expect(goal.questions![0]!.status).toBe('answered');
 });
