@@ -721,6 +721,16 @@ describe('MCP create goal operation', () => {
     expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
   });
 
+  it('forwards the checked Git root when cwd resolves to the root through a symlink and parent segment', async () => {
+    const controller = new AbortController();
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub/link/..' }, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
   it('rejects a subdirectory without calling the creation service', async () => {
     vi.mocked(fsPromises.realpath).mockResolvedValue('/repo/sub');
     goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());

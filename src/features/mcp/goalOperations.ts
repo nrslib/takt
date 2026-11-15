@@ -76,7 +76,7 @@ export async function createTaktGoal(input: GoalCreateInput, deps: McpOperationD
     if (await realpath(input.cwd) !== root) {
       throw new Error(`cwd must be the Git repository root: ${root}`);
     }
-    const goal = await createGoal(input, signal);
+    const goal = await createGoal({ ...input, cwd: root }, signal);
     return jsonResult({ goal: goalWriteSummary(goal) });
   } catch (error) { return errorResult('Goal creation failed', error); }
 }
