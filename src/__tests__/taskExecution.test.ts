@@ -117,6 +117,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { executeAndCompleteTask, executeTask, executeTaskAndCompleteWithDetails } from '../features/tasks/execute/taskExecution.js';
 import { executeRunTaskAndComplete } from '../features/tasks/execute/runTaskExecution.js';
+import { getInvocationRuntimeAssignment } from '../infra/config/runtime-provider/invocation.js';
 import { error, info } from '../shared/ui/index.js';
 
 const createTask = (name: string): TaskInfo => ({
@@ -2193,5 +2194,55 @@ describe('executeAndCompleteTask', () => {
     expect(mockPersistTaskResult).toHaveBeenCalledTimes(1);
     expect(mockPersistPrFailedTaskResult).not.toHaveBeenCalled();
     expect(mockBuildTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('executes the task inside its runtime assignment', async () => {
+    const task = createTask('task-with-runtime-assignment');
+    task.data = { ...task.data!, runtime_assignment: 'slow' };
+    let observed: string | undefined;
+    const executor = vi.fn(async () => {
+      observed = getInvocationRuntimeAssignment();
+      return { success: true };
+    });
+
+    await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+
+    expect(executor).toHaveBeenCalledOnce();
+    expect(observed).toBe('slow');
+  });
+
+  it('leaves the runtime assignment unset for a task without one', async () => {
+    const task = createTask('task-without-runtime-assignment');
+    let observed: string | undefined = 'not-executed';
+    const executor = vi.fn(async () => {
+      observed = getInvocationRuntimeAssignment();
+      return { success: true };
+    });
+
+    await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+
+    expect(executor).toHaveBeenCalledOnce();
+    expect(observed).toBeUndefined();
+  });
+
+  it('keeps concurrent task runtime assignments isolated', async () => {
+    const slowTask = createTask('slow-task');
+    slowTask.data = { ...slowTask.data!, runtime_assignment: 'slow' };
+    const fastTask = createTask('fast-task');
+    fastTask.data = { ...fastTask.data!, runtime_assignment: 'fast' };
+    const observed = new Map<string, string | undefined>();
+    const capture = (label: string) => async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      observed.set(label, getInvocationRuntimeAssignment());
+      return { success: true };
+    };
+
+    await Promise.all([
+      executeTaskAndCompleteWithDetails(slowTask, createTaskRunnerMock() as never, '/project', capture('slow')),
+      executeTaskAndCompleteWithDetails(fastTask, createTaskRunnerMock() as never, '/project', capture('fast')),
+    ]);
+
+    expect(observed.get('slow')).toBe('slow');
+    expect(observed.get('fast')).toBe('fast');
   });
 });
