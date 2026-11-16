@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import {
+  approveTaktGoalRegistration,
   listTaktGoalRegistrationProposals,
 } from '../features/mcp/goalRegistrationProposalOperations.js';
 import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
@@ -81,6 +82,13 @@ beforeEach(() => {
   });
 });
 
+function acceptSubmission(): void {
+  doubles.submit.mockImplementation(async (_command: ConversationCommand, onAccepted?: (operationId: string) => void) => {
+    onAccepted?.(operationId);
+    return { kind: 'accepted' as const, operationId };
+  });
+}
+
 it('lists the pending registration proposal of the current repository conversation', async () => {
   const record = recordFixture(repositoryAssignment, { revision, repositoryDirectory: cwd, summary });
   doubles.read.mockResolvedValue({ record });
@@ -151,3 +159,69 @@ it('rejects a root outside the MCP scope before reading conversations', async ()
   expect(doubles.read).not.toHaveBeenCalled();
 });
 
+it('approves the pending proposal through the same command as the manager screen', async () => {
+  acceptSubmission();
+  const registered = goalRecord();
+
+  const pending = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId, result: { kind: 'goal_registered', goal: registered } });
+  const result = await pending;
+
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
+  expect(doubles.connect).toHaveBeenCalledOnce();
+  const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
+  expect(command).toEqual({ kind: 'approve_summary', revision });
+  expect(command).not.toHaveProperty('requirePending');
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    goal: expect.objectContaining({ id: registered.id }),
+  });
+  expect(doubles.close).toHaveBeenCalledOnce();
+});
+
+it('reports a stale approval like the manager screen when the daemon rejects the submission', async () => {
+  doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
+
+  const result = await approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/stale/iu);
+  expect(doubles.output).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledOnce();
+});
+
+it('ignores results of other operations while waiting for the approval result', async () => {
+  acceptSubmission();
+  const registered = goalRecord();
+
+  const pending = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId: '750e8400-e29b-41d4-a716-446655440088',
+    result: { kind: 'error', code: 'stale_summary', message: '別の操作の結果' } });
+  emit!({ kind: 'result', operationId, result: { kind: 'goal_registered', goal: registered } });
+  const result = await pending;
+
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    goal: expect.objectContaining({ id: registered.id }),
+  });
+});
+
+it('reports an accepted approval whose result never arrives within the bounded wait', async () => {
+  vi.useFakeTimers();
+  try {
+    acceptSubmission();
+
+    const resultPromise = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+    await vi.advanceTimersByTimeAsync(120_000);
+    const result = await resultPromise;
+
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toMatch(/accepted/iu);
+    expect(firstTextContent(result.content)).toMatch(/result|observ/iu);
+    expect(doubles.close).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});

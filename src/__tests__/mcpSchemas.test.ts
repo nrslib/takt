@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import {
   getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
-  listGoalRegistrationProposalsInputSchema,
+  listGoalRegistrationProposalsInputSchema, approveGoalRegistrationInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -221,6 +221,21 @@ describe('MCP goal registration proposal inputs', () => {
     expect(listGoalRegistrationProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
     expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
     expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
+  });
+
+  it('approves a registration proposal by project path and revision', () => {
+    expect(approveGoalRegistrationInputSchema.parse({ cwd: '/repo', revision })).toEqual({ cwd: '/repo', revision });
+  });
+
+  it.each([0, -1, 1.5, '3', Number.MAX_SAFE_INTEGER + 1])('rejects a registration revision of %s', (invalid) => {
+    expect(approveGoalRegistrationInputSchema.safeParse({ cwd: '/repo', revision: invalid }).success).toBe(false);
+  });
+
+  it('exposes no pending-requirement field on the approval tool', () => {
+    const approve = z.toJSONSchema(approveGoalRegistrationInputSchema, { io: 'input' });
+    expect(approve.required?.slice().sort()).toEqual(['cwd', 'revision']);
+    expect(approve.additionalProperties).toBe(false);
+    expect(approve.properties).not.toHaveProperty('requirePending');
   });
 });
 
