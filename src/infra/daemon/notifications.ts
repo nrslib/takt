@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { opendir } from 'node:fs/promises';
+import { opendir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { FileAsyncLock } from './lock.js';
@@ -10,11 +10,15 @@ const notification = z.object({ id: z.string().min(1).max(128), message: z.strin
   subject: z.object({ key: z.string().min(1), state: z.string().min(1) }).strict().optional() }).strict();
 export type DirectorNotification = Pick<z.infer<typeof notification>, 'id' | 'message'>;
 export type DirectorNotificationSubject = NonNullable<z.infer<typeof notification>['subject']>;
+type Notification = z.infer<typeof notification>;
 const key = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 export class DaemonNotifications {
   private readonly directory: string;
   private readonly lock = new FileAsyncLock();
+  /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
+  private readonly index: { stamp: string | undefined; values: Map<string, Notification> } = { stamp: undefined, values: new Map() };
+  private prepared: Promise<void> | undefined;
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
 
   async save(input: z.infer<typeof notification>, signal: AbortSignal): Promise<boolean> {
@@ -34,19 +38,37 @@ export class DaemonNotifications {
         }
       }
       await writePrivateFile(path, JSON.stringify(value), signal);
+      this.index.stamp = undefined;
       return true;
     }, { signal, timeoutMs: 5000 });
   }
 
-  async *iterate() {
-    await ensurePrivateDirectory(this.directory);
+  async *iterate(): AsyncGenerator<Notification> {
+    for (const value of await this.refresh()) yield structuredClone(value);
+  }
+
+  private async refresh(): Promise<Notification[]> {
+    this.prepared ??= ensurePrivateDirectory(this.directory).catch((error: unknown) => {
+      this.prepared = undefined;
+      throw error;
+    });
+    await this.prepared;
+    const info = await stat(this.directory);
+    const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
+    if (stamp === this.index.stamp) return [...this.index.values.values()];
+    const names = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
+      names.add(entry.name);
+      if (this.index.values.has(entry.name)) continue;
       const content = await readEntirePrivateFile(join(this.directory, entry.name));
       if (content === undefined) throw new Error('Notification disappeared during read');
       const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
       if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
-      yield value;
+      this.index.values.set(entry.name, value);
     }
+    for (const name of this.index.values.keys()) if (!names.has(name)) this.index.values.delete(name);
+    this.index.stamp = stamp;
+    return [...this.index.values.values()];
   }
 }
