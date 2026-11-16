@@ -41,8 +41,10 @@ export async function receiveInboxChange(change: WatchFileChange, files: DaemonP
     const assignment = await conversations.routing.resolve({ kind: 'repository', repositoryDirectory: directory });
     await conversations.ensure(assignment);
     const event = managerInboxTurnEvent(directory, saved);
-    const id = saved.kind === 'answer' && saved.goalId === null
-      ? `standalone-answer-${createHash('sha256').update(JSON.stringify([await files.inboxDirectory(directory), saved.questionId])).digest('hex')}`
+    const id = saved.kind === 'answer'
+      ? saved.goalId === null
+        ? `standalone-answer-${createHash('sha256').update(JSON.stringify([await files.inboxDirectory(directory), saved.questionId])).digest('hex')}`
+        : `goal-answer-${createHash('sha256').update(JSON.stringify([await files.inboxDirectory(directory), saved.goalId, saved.questionId])).digest('hex')}`
       : `inbox-${createHash('sha256').update(change.path).digest('hex')}`;
     const input: EventInput = { eventId: id, requestId: id, conversationId: conversationId(assignment), source: 'run', occurredAt: saved.createdAt, event };
     const admission = await ingress.accept(input);
