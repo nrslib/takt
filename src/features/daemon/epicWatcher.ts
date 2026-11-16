@@ -31,9 +31,7 @@ export function startEpicWatcher(conversations: DaemonConversations, ingress: Pi
         for await (const notice of conversations.notifications.iterate()) if (notice.conversationId === id) notifications.push(notice.id);
         const version = hash.update(']').update(JSON.stringify(notifications.sort())).digest('hex');
         if (versions.get(id) !== version) {
-          const read = await conversations.snapshot(id);
-          conversations.send(id, { kind: 'snapshot', read: { ...read, operationId: null } },
-            { revision: read.revision, stateSequence: read.stateSequence, operationId: null });
+          await conversations.refresh(id);
           versions.set(id, version);
         }
       } catch (error) { onError(error); }

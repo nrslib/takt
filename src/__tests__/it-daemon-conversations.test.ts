@@ -23,9 +23,19 @@ import { randomUUID } from 'node:crypto';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 
-async function waitForQueuedMessage(tui: ManagerTuiProcess): Promise<void> {
-  const message = getLabel('manager.conversation.queued', 'en', { count: '1' }).replace(/\s+/gu, '');
-  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, '')).toContain(message), { timeout: 30000 });
+async function waitForQueuedMessage(tui: ManagerTuiProcess, message: string): Promise<void> {
+  const heading = getLabel('tui.ui.queuedCount', 'en', { count: '1' });
+  await vi.waitFor(async () => {
+    const rows = stripVTControlCharacters(await tui.frame()).split('\n').map((row) => row.trim());
+    const headingRow = rows.indexOf(heading);
+    expect(headingRow).toBeGreaterThan(-1);
+    expect(rows[headingRow + 1]).toBe(`❯ ${message}`);
+  }, { timeout: 30000 });
+}
+
+async function waitForWaitingCount(tui: ManagerTuiProcess): Promise<void> {
+  const status = getLabel('manager.conversation.waiting', 'en', { count: '1' });
+  await vi.waitFor(async () => expect(stripVTControlCharacters(await tui.frame())).toContain(status), { timeout: 30000 });
 }
 
 async function waitForManagerNormalized(tui: ManagerTuiProcess, text: string): Promise<void> {
@@ -184,8 +194,9 @@ it('restores a tool completed while the TUI process was closed exactly once with
     const checkHistory = (value: string): void => {
       const frame = stripVTControlCharacters(value);
       expect(frame.split('private-result-marker')).toHaveLength(2);
-      expect(frame).toContain('private-input-marker');
-      expect(frame).toMatch(/success.*\(\d+ ms\)/u);
+      const toolRows = frame.split('\n').filter((row) => row.includes('private-input-marker'));
+      expect(toolRows).toHaveLength(1);
+      expect(toolRows[0]!.trim()).toMatch(/^◆ Bash Ran private-input-marker ✓ (?:\d+ ms|\d+\.\d s)$/u);
       expect(frame).not.toContain('private-reasoning-marker');
       expect(frame).not.toContain('コードを読んでいるところです。');
       expect(frame).not.toContain('調べがつきました。');
@@ -510,7 +521,7 @@ it('accepts a busy TUI message and executes it after the active turn completes',
     await submitManagerText(tui, 'The accepted request');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toMatchObject({ operationId: expect.any(String) }), { timeout: 30000 });
     await submitManagerText(tui, 'The queued request');
-    await waitForQueuedMessage(tui);
+    await waitForQueuedMessage(tui, 'The queued request');
     fixture.release();
     await waitForManager(tui, 'The daemon completed this request.');
     await vi.waitFor(async () => expect((await fixture.state())?.turn).toBeNull(), { timeout: 30000 });
@@ -533,7 +544,7 @@ it('keeps the queued /make-goal proposal unregistered until explicit approval on
     await tui.ready(operationId);
     expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
-    await waitForQueuedMessage(tui);
+    await waitForWaitingCount(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({

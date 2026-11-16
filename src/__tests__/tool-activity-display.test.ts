@@ -1,8 +1,112 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
+import * as resultUtils from '../shared/tool-activity/result.js';
+import { RunningToolResult } from '../shared/tool-activity/runningResult.js';
+import { sanitizeSensitiveTextWithKnownValues } from '../shared/utils/sensitiveText.js';
+import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
+
+const turn = { operationId: 'turn', generation: 1 };
+
+function startedEntry(input: Record<string, unknown>): ToolActivityEntry {
+  return { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
+    input, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
+}
+
+function startedDisplay(input: Record<string, unknown>): ToolActivityDisplay {
+  const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+  display.handle({ type: 'tool_use', data: { id: 'build', tool: 'Bash', input } });
+  return display;
+}
+
+function appendOutput(display: ToolActivityDisplay, output: string): void {
+  display.handle({ type: 'tool_output', data: { id: 'build', tool: 'Bash', output } });
+}
 
 describe('tool activity display', () => {
+  it.each([
+    '{"x":"\\u1234\\n\\\"\\\\", "data":[null,true,false,-1.25e+3,0,[],{}]}',
+    '[{"empty":{}},[],0,-0,1e-2,12.5,true,false,null]',
+  ])('keeps every valid JSON prefix structured: %s', (raw) => {
+    const result = new RunningToolResult();
+    for (let end = 1; end <= raw.length; end++) {
+      const entry = { ...startedEntry({}), output: raw.slice(0, end) };
+      result.read(entry);
+      expect(result.preview(entry).text).toBe('');
+    }
+    expect(resultUtils.classifyToolResult(raw).kind).toBe('structured');
+  });
+
+  it.each([{}, { token: 'unrelated-credential' }])('flushes a compact unterminated output while the tool is still running with input %j', (input) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'ready', tool: 'Bash', input: { command: 'printf ready; sleep 60', ...input } } });
+    display.handle({ type: 'tool_output', data: { id: 'ready', tool: 'Bash', output: 'ready' } });
+    display.flush();
+    display.flush();
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ ready']);
+    expect(display.history.entries()[0]?.status).toBe('running');
+  });
+
+  it.each([
+    { mode: 'compact', input: { token: 's3cr3t' }, chunks: ['Downloading files', '\n'], expected: ['  │ Downloading file[REDACTED]', '  │ s'] },
+    { mode: 'compact', input: {}, chunks: ['Authorization: Bear', 'er abc\n'], expected: ['  │ Authorization: [REDACTED]'] },
+    { mode: 'expanded', input: { token: 's3cr3t' }, chunks: ['Downloading files', '\n'], expected: ['  │ Downloading file[REDACTED]', '  │ s'] },
+  ] as const)('does not print a line again after flushing a masked tail in $mode mode: $chunks', ({ mode, input, chunks, expected }) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay(mode, false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'held', tool: 'Bash', input } });
+    for (const chunk of chunks) {
+      display.handle({ type: 'tool_output', data: { id: 'held', tool: 'Bash', output: chunk } });
+      display.flush();
+    }
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual(expected);
+  });
+
+  it.each([
+    { chunks: ['{"stdout":"ok"}\n'], expected: 'ok' },
+    { chunks: ['[1,2,3]\n'], expected: '[structured output omitted]' },
+  ])('prints a compact structured result only once after streaming $chunks', ({ chunks, expected }) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'json', tool: 'Bash', input: {} } });
+    for (const chunk of chunks) {
+      display.handle({ type: 'tool_output', data: { id: 'json', tool: 'Bash', output: chunk } });
+      display.flush();
+      display.flush();
+    }
+    display.handle({ type: 'tool_result', data: { id: 'json', content: chunks.join(''), isError: false } });
+    display.flush();
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual([`  │ ${expected}`]);
+    expect(output.filter((line) => line.includes('Bash output:'))).toHaveLength(1);
+    expect(output.filter((line) => line.includes('✓'))).toEqual(['  ✓ Bash']);
+  });
+
+  it('masks the input with a value that a later output reveals as a secret', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'echo revealed-value' } } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'tick\n' } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'api_key=revealed-value\n' } });
+    expect(display.groups()[0]!.entries[0]!.input).not.toContain('revealed-value');
+  });
+  it.each(['silent', 'compact'] as const)('masks a secret value of the input in every later output in %s mode', (mode) => {
+    const display = new ToolActivityDisplay(mode, false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'printf ready', token: 'input-secret' } } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'ready\n' } });
+    for (let index = 0; index < 2; index++) display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'input-secret\n' } });
+    expect(display.detail('1', 0).result.text).not.toContain('input-secret');
+  });
+
+  it('masks repeated credentials from the whole committed span before printing compact output', () => {
+    const printed: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => printed.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: {} } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'using abc123secretvalue password=abc123secretvalue\n' } });
+    display.flush();
+    expect(printed.join('\n')).not.toContain('abc123secretvalue');
+    expect(printed.join('\n')).toContain('using [REDACTED]');
+  });
   it.each(['compact', 'expanded', 'silent'] as const)('should protect normalized secrets through split input, reads and flush in %s mode', (mode) => {
     for (const token of ['secret123', 'sec\x1b[31mret123']) {
       for (const chunks of [
@@ -30,17 +134,11 @@ describe('tool activity display', () => {
     }
   });
 
-  it.each([false, true])('should preserve normalized consumption and pending secrets with restore=%s', (restore) => {
-    let display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+  it('should preserve normalized consumption and pending secrets', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'secret123' } } });
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready\nsec\x1b[3' } });
     const key = display.history.entries()[0]!.key;
-    expect(display.detail(key, 0).result.text).toBe('ready');
-    if (restore) {
-      const state = display.history.snapshot();
-      display = new ToolActivityDisplay('silent', false, vi.fn(), false);
-      display.restore(state);
-    }
     expect(display.detail(key, 0).result.text).toBe('ready');
     for (const output of ['1mret', '123\x1b[0m\n', 'after\t日本語\n']) {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output } });
@@ -72,23 +170,64 @@ describe('tool activity display', () => {
     expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ [REDACTED] ready']);
   });
 
-  it('should restore completed results without output and keep partial running secrets private', () => {
-    const writer = vi.fn();
-    const source = new ToolActivityDisplay('silent', false, writer, false);
-    source.handle({ type: 'tool_use', data: { id: 'done', tool: 'Read', input: { file_path: 'done.ts' } } });
-    source.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
-    source.handle({ type: 'tool_use', data: { id: 'running', tool: 'Bash', input: { token: 'secret123' } } });
-    source.handle({ type: 'tool_output', data: { id: 'running', tool: 'Bash', output: 'ready '.repeat(50) + 'secret' } });
-    const restored = new ToolActivityDisplay('expanded', false, writer, false);
-    restored.restore(source.history.snapshot());
-    expect(restored.groups().flatMap((group) => group.entries).map((entry) => entry.status)).toEqual(['failure', 'running']);
-    const key = restored.history.entries()[1]!.key;
-    expect(restored.detail(key, 0).result.text).toContain('ready');
-    expect(restored.detail(key, 0).result.text).not.toContain('secret');
-    expect(writer).not.toHaveBeenCalled();
-    restored.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
-    expect(writer).not.toHaveBeenCalled();
+
+  describe('a secret value that the output reveals after it was already shown', () => {
+    it('should apply a later-discovered value only to new running output', () => {
+      const secret = 'late-value-012345';
+      const display = startedDisplay({ command: 'deploy' });
+      appendOutput(display, `using ${secret}\n`);
+      expect(display.detail('1', 0).result.text).toBe(`using ${secret}`);
+
+      appendOutput(display, `password=${secret}\n`);
+      appendOutput(display, `using ${secret}\n`);
+      const projection = display.groups()[0]!.entries[0]!;
+      const expected = `using ${secret}\npassword=[REDACTED]\nusing [REDACTED]`;
+      expect(projection.input).toBe('deploy');
+      expect(projection.result.text).toBe(expected);
+      expect(display.detail('1', 0).result.text).toBe(expected);
+    });
+
   });
+
+  describe('secret values that an output chunk splits in the middle of the value', () => {
+    const inputs = [
+      { known: false, input: { command: 'cat deploy.env' } },
+      { known: true, input: { command: 'cat deploy.env', api_key: 'seed-secret' } },
+    ];
+
+    it.each(splitSecretScenarios.flatMap((scenario) => inputs.map(({ known, input }) => ({ scenario, known, input }))))(
+      'should not show any part of the secret: $scenario.name (known=$known)', ({ scenario, input }) => {
+        const display = startedDisplay(input);
+
+        for (const chunk of scenario.chunks) {
+          appendOutput(display, chunk);
+          for (const text of [display.groups()[0]!.entries[0]!.result.text, display.detail('1', 0).result.text]) {
+            expect(secretFragmentsIn(text, scenario)).toEqual([]);
+          }
+        }
+
+        const text = scenarioText(scenario);
+        expect(display.detail('1', 0).result.text).toBe(sanitizeSensitiveTextWithKnownValues(text, text).replace(/\n$/u, ''));
+      },
+    );
+
+    it.each(splitSecretScenarios.flatMap((scenario) => (['compact', 'expanded'] as const).flatMap((mode) =>
+      inputs.map(({ known, input }) => ({ scenario, mode, known, input })))))(
+      'should not print any part of the secret: $scenario.name in $mode mode (known=$known)', ({ scenario, mode, input }) => {
+        const printed: string[] = [];
+        const display = new ToolActivityDisplay(mode, false, (line) => printed.push(line), false);
+        display.handle({ type: 'tool_use', data: { id: 'build', tool: 'Bash', input } });
+
+        for (const chunk of scenario.chunks) {
+          display.handle({ type: 'tool_output', data: { id: 'build', tool: 'Bash', output: chunk } });
+        }
+        display.handle({ type: 'tool_result', data: { id: 'build', content: scenarioText(scenario), isError: false } });
+
+        expect(secretFragmentsIn(printed.join('\n'), scenario)).toEqual([]);
+      },
+    );
+  });
+
   it.each([1, 5])('should clone only the selected detail with %s unrelated entries', (count) => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     const [target] = display.handle({ type: 'tool_use', data: { id: 'target', tool: 'Bash', input: { command: 'printf ready' } } });
@@ -119,17 +258,18 @@ describe('tool activity display', () => {
     expect(value.result.text).toContain('[REDACTED] ready');
     expect(display.detail(value.key, 0).result.text).toContain('[REDACTED] ready');
   });
-  it('should defer structured streaming content until the final result supplies all secret fields', () => {
+  it.each([0, 11000])('should defer structured streaming content until the final result supplies all secret fields (padding=%i)', (padding) => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf ready' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '{"stdout":"ready secret123"}' } });
+    const suffix = 'x'.repeat(padding);
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: JSON.stringify({ stdout: `ready secret123${suffix}` }) } });
     const key = display.groups()[0]!.entries[0]!.key;
     for (const result of [display.groups()[0]!.entries[0]!.result, display.detail(key, 0).result]) {
       expect(result.text).toBe('');
       expect(result.text).not.toContain('secret123');
     }
-    display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"ready secret123","token":"secret123"}', isError: false } });
-    expect(display.detail(key, 0).result.text).toBe('ready [REDACTED]');
+    display.handle({ type: 'tool_result', data: { id: 'a', content: JSON.stringify({ stdout: `ready secret123${suffix}`, token: 'secret123' }), isError: false } });
+    expect(display.detail(key, 0).result.text).toBe(`ready [REDACTED]${suffix}`);
   });
   it('should read grouped projections and successive detail pages without writing in silent mode', () => {
     const writer = vi.fn();
@@ -194,6 +334,22 @@ describe('tool activity display', () => {
     }
   });
 
+  describe('output of more than 10,000 characters arriving at once for a tool whose input has a secret candidate', () => {
+    const input = { command: 'make', token: 'secret123' };
+    const lines = Array.from({ length: 1500 }, (_, index) => `line-${index}\n`).join('');
+
+    it('should print the compact stream instead of only the redaction marker', () => {
+      const output: string[] = [];
+      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input } });
+
+      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: lines } });
+
+      expect(output).toContain('  │ line-0');
+      expect(output.join('\n')).not.toContain('[REDACTED]');
+    });
+  });
+
   it('should include completed secret fields when projecting buffered structured output', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
@@ -204,6 +360,17 @@ describe('tool activity display', () => {
     expect(output).toContain('  │ ready [REDACTED]');
     expect(output.join('\n')).not.toContain('secret123');
     expect(output.filter((line) => line.includes('ready'))).toHaveLength(1);
+  });
+
+  it('should include completed secret fields when printing held text output on completion', () => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: {} } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '[progress] secret123' } });
+    expect(output).toEqual([]);
+    display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"[progress] secret123","token":"secret123"}', isError: false } });
+    expect(output).toContain('  │ [progress] [REDACTED]');
+    expect(output.join('\n')).not.toContain('secret123');
   });
 
   it('should keep structured output budgets and avoid repeating a final projection after an incomplete flush', () => {
@@ -319,6 +486,14 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_result', data: { id: 'a', content: chunks.join(''), isError: false } });
     expect(output.filter((line) => line.startsWith('  │ '))).toEqual([`  │ ${chunks[0]}`]);
     expect(output).toContain('  [output truncated; more available]');
+  });
+
+  it.each(['[INFO] ready', '[REDACTED] ready'])('should display known log prefixes on explicit flush: %s', (text) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_output', data: { tool: 'Bash', output: text } });
+    display.flush();
+    expect(output).toContain(`  │ ${text}`);
   });
 
   it('should not repeat a partial line across multiple flushes and completion', () => {

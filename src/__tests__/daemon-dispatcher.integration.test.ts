@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { accepted, deferred, harness, input, MemoryEventStore, ControlledTurnRunner, turnState } from './helpers/controlledDaemon.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
-import type { TurnIdentity, TurnResult, TurnOutcome } from '../core/daemon/messages.js';
+import type { TurnIdentity, TurnResult } from '../core/daemon/messages.js';
 import type { AssistantCliOverrides } from '../core/config/provider-resolution.js';
-import { MAX_PROCESS_PENDING_REQUESTS, parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
+import { parseDaemonProcessMessage, TURN_PROTOCOL_VERSION } from '../core/daemon/processProtocol.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import type { AcceptedEvent, TurnEvent } from '../core/daemon/events.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import type { EventStore } from '../core/daemon/ports.js';
 import type { ConversationProgress } from '../shared/types/conversation-activity.js';
-import { ToolHistoryPersistenceError } from '../core/daemon/toolHistoryPersistenceError.js';
 
 const interrupt = (turn: TurnIdentity) => ({ kind: 'interrupt' as const, ...turn });
 
@@ -36,37 +35,27 @@ const interruptedEvents: TurnEvent[] = [
 ];
 
 describe('event driven daemon dispatcher', () => {
-  it.each(['completed', 'failed', 'interrupted', 'deferred'] as const)('waits for history persistence failure before saving a %s outcome and retains its change', async (kind) => {
-    const h = await harness(); await h.dispatcher.accept(input('history-failure', 'conversation', 'other'));
+  it('delivers a pending progress backlog in FIFO order', async () => {
+    const h = await harness(); await h.dispatcher.accept(input('fifo-progress'));
     const active = await h.runner.started(1);
     const entered = deferred<void>(); const release = deferred<void>();
-    h.owner.progress = vi.fn(async () => { entered.resolve(); await release.promise; throw new ToolHistoryPersistenceError(new Error('disk')); });
-    const progress = h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: { kind: 'tool_event', eventId: 'result',
-      event: { type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } } } });
-    await entered.promise;
-    const change = { operationId: active.turn.operationId, expectedVersion: 0,
-      session: { provider: 'mock', model: null, sessionId: 'acquired-session' } };
-    const outcome: TurnOutcome = kind === 'completed' ? { kind, result: { kind: 'reply', message: 'done' }, change }
-      : kind === 'deferred' ? { kind } : { kind, message: 'original-outcome', change };
-    let resultSaveFailed = false;
-    h.store.beforeResult = async () => {
-      if (kind === 'completed' && !resultSaveFailed) { resultSaveFailed = true; throw new Error('Result storage unavailable'); }
-    };
-    const finish = h.runner.finish(active, outcome);
+    const observed: string[] = [];
+    h.owner.progress = vi.fn(async (_turn: TurnIdentity, message: ConversationProgress) => {
+      if (observed.length === 0) { entered.resolve(); await release.promise; }
+      if (typeof message !== 'string' && message.kind === 'tool_event') observed.push(message.eventId);
+    });
+    const post = (index: number) => h.dispatcher.post({ kind: 'turn_progress', turn: active.turn, message: {
+      kind: 'tool_event', eventId: String(index), event: { type: 'tool_use', toolActivity: { callId: 'call', operationId: active.turn.operationId, generation: active.turn.generation }, data: { id: String(index), tool: 'Read', input: {} } },
+    } });
+    const pending = [post(0)]; await entered.promise;
     try {
-      expect(h.store.saveResult).not.toHaveBeenCalled();
-      release.resolve(); await Promise.all([progress, finish]);
-      if (kind === 'completed') {
-        await h.dispatcher.retryStorage();
-        expect(h.store.saveResult).toHaveBeenCalledTimes(2);
-        expect(h.store.saveResult.mock.calls[0]![1]).toEqual(h.store.saveResult.mock.calls[1]![1]);
-      }
-      const saved = h.store.saveResult.mock.calls[0]![1];
-      expect(saved.outcome).toMatchObject({ kind: kind === 'completed' ? 'failed' : kind, ...(kind === 'deferred' ? {} : { change }) });
-      if (kind !== 'completed') expect(saved.outcome).toEqual(outcome);
-      expect(h.applied.get(active.turn.operationId)).toEqual(saved);
-      expect(h.runner.calls).toHaveLength(1);
-    } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
+      for (let index = 1; index < 500; index++) pending.push(post(index));
+      release.resolve(); await Promise.all(pending);
+      expect(observed).toEqual(Array.from({ length: 500 }, (_, index) => String(index)));
+    } finally {
+      release.resolve();
+      await Promise.all(pending); await h.dispatcher.control({ kind: 'stop' });
+    }
   });
   it('keeps tool starts and results ordered and drains their persistence before settling the turn', async () => {
     const h = await harness(); await h.dispatcher.accept(input('history'));
@@ -95,30 +84,6 @@ describe('event driven daemon dispatcher', () => {
       expect(h.store.records.get('history')?.state).toBe('settled');
       expect(h.failures).not.toHaveBeenCalled();
     } finally { release.resolve(); await h.dispatcher.control({ kind: 'stop' }); }
-  });
-  it('bounds ordered progress while delivery is blocked and releases capacity after delivery', async () => {
-    const h = await harness();
-    await h.dispatcher.accept(input('bounded-text'));
-    const running = await h.runner.started(1);
-    const entered = deferred<void>();
-    const release = deferred<void>();
-    h.owner.progress = vi.fn(async () => { entered.resolve(); await release.promise; });
-    const post = (message: string) => h.dispatcher.post({ kind: 'turn_progress', turn: running.turn,
-      message: { kind: 'turn_text', message } });
-    const first = post('first');
-    await entered.promise;
-    const pending = [first, ...Array.from({ length: MAX_PROCESS_PENDING_REQUESTS - 1 }, (_, i) => post(String(i)))];
-    try {
-      await expect(post('overflow')).rejects.toThrow('Turn progress capacity exceeded');
-      expect(h.owner.progress).toHaveBeenCalledTimes(1);
-      release.resolve();
-      await Promise.all(pending);
-      expect(h.owner.progress).toHaveBeenCalledTimes(MAX_PROCESS_PENDING_REQUESTS);
-      await post('after drain');
-      expect(h.owner.progress).toHaveBeenCalledTimes(MAX_PROCESS_PENDING_REQUESTS + 1);
-      await h.runner.finish(running);
-      expect(h.failures).not.toHaveBeenCalled();
-    } finally { release.resolve(); await Promise.all(pending); await h.dispatcher.control({ kind: 'stop' }); }
   });
 
   it.each([false, true])('orders pending text deliveries and cancels them when interrupted=%s', async (interrupted) => {
@@ -162,7 +127,7 @@ describe('event driven daemon dispatcher', () => {
     if (phase === 'starting') h.store.beforeStart = async () => { entered.resolve(); await release.promise; };
     else {
       const snapshot = h.owner.snapshot;
-      h.owner.snapshot = vi.fn(async (id) => { entered.resolve(); await release.promise; return snapshot(id); });
+      h.owner.snapshot = vi.fn(async (id, request) => { entered.resolve(); await release.promise; return snapshot(id, request); });
     }
     await h.dispatcher.accept(input('E1', 'conversation', 'other'));
     await entered.promise;
@@ -322,10 +287,10 @@ describe('event driven daemon dispatcher', () => {
     const entered = deferred<TurnIdentity>();
     const release = deferred<void>();
     const snapshot = h.owner.snapshot;
-    h.owner.snapshot = vi.fn(async (id) => {
+    h.owner.snapshot = vi.fn(async (id, request) => {
       entered.resolve(h.store.markStarted.mock.calls[0]![1]);
       await release.promise;
-      return snapshot(id);
+      return snapshot(id, request);
     });
     await h.dispatcher.accept(input('T1'));
     const turn = await entered.promise;
@@ -641,8 +606,8 @@ describe('event driven daemon dispatcher', () => {
     const order: string[] = [];
     let savedVersion = 0;
     const snapshot = h.owner.snapshot;
-    h.owner.snapshot = vi.fn(async (id) => {
-      const read = await snapshot(id);
+    h.owner.snapshot = vi.fn(async (id, request) => {
+      const read = await snapshot(id, request);
       return { ...read, turnState: { ...read.turnState, version: savedVersion } };
     });
     h.stateRequests.handle.mockImplementationOnce(async (_turn, _request, signal) => {
@@ -701,7 +666,7 @@ describe('event driven daemon dispatcher', () => {
     expect({ operationId: read.operationId, generation: read.generation }).toEqual({
       operationId: t1.turn.operationId, generation: t1.turn.generation,
     });
-    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation');
+    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation', { toolHistory: false });
     await h.runner.progress(t1, 'progress');
     expect(h.owner.progress).toHaveBeenCalledWith(t1.turn, 'progress', expect.any(AbortSignal));
     await h.runner.finish(t1);
@@ -1107,7 +1072,7 @@ describe('event driven daemon dispatcher', () => {
 
   it('passes the accepted event and versioned state unchanged to the turn process', async () => {
     const h = await harness();
-    const snapshot = await h.owner.snapshot('conversation');
+    const snapshot = await h.owner.snapshot('conversation', { toolHistory: false });
     snapshot.turnState.version = 7;
     snapshot.cancel = vi.fn();
     h.owner.snapshot = vi.fn(async () => snapshot);
@@ -1115,6 +1080,7 @@ describe('event driven daemon dispatcher', () => {
     const call = await h.runner.started(1);
     expect(call.input).toEqual({ event: h.store.records.get('short')!.event, turn: call.turn, state: snapshot.turnState });
     expect(call.input.state).toBe(snapshot.turnState);
+    expect(h.owner.snapshot).toHaveBeenCalledWith('conversation', { toolHistory: false });
     expect(snapshot.cancel).toHaveBeenCalledTimes(1);
     expect(h.store.records.get('short')?.state).toBe('running');
     await h.runner.finish(call);

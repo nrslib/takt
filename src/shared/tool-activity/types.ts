@@ -1,18 +1,13 @@
 import type { StreamCallContext, StreamEvent } from '../types/provider.js';
 
 export type ToolActivityEvent = Extract<StreamEvent, { type: 'tool_use' | 'tool_result' | 'tool_output' }>;
-
-export interface ToolActivityHistoryState {
-  entries: ToolActivityEntry[];
-  sequence: number;
-}
+export type IdentifiedToolActivityEvent = ToolActivityEvent & { data: { id: string }; toolActivity: StreamCallContext };
 
 export interface ToolActivityTurnState {
   operationId: string;
   generation: number;
   finished: boolean;
-  eventIds: string[];
-  history: ToolActivityHistoryState;
+  history: { entries: ToolActivityEntry[] };
 }
 
 export type ToolActivityStatus = 'running' | 'success' | 'failure';
@@ -24,9 +19,7 @@ export interface ToolActivityEntry {
   tool: string;
   input: Record<string, unknown>;
   output: string;
-  outputTruncated?: boolean;
   result?: string;
-  resultTruncated?: boolean;
   status: ToolActivityStatus;
   association: 'matched' | 'unmatched';
   startedAt?: number;

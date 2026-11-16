@@ -11,6 +11,7 @@ import {
   getWorkflowInputSchema,
   getGoalInputSchema,
   enqueueTaskInputSchema,
+  createGoalInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
   cleanupTasksInputSchema,
@@ -28,6 +29,7 @@ import {
   askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  answerGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -42,7 +44,7 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
-import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { createTaktGoal, enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
 import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
@@ -59,7 +61,7 @@ import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
-import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -302,7 +304,7 @@ export function createTaktMcpServer(
       title: 'Read manager work', description: 'Read recent manager work in reverse saved order with optional limit (1-50) and offset. Read full entries with takt_get_goal path workLog, recordId, and a text field path. Responses fit 64 KiB, with explicit truncation.', inputSchema: listGoalRecordsInputSchema,
     }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
     server.registerTool('takt_ask_goal_question', {
-      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Tool approvals are retired and cannot be created. Answers are supplied by people through TUI or Slack. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
+      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Tool approvals are retired and cannot be created. Answers are supplied by people through TUI or Slack, or with takt_answer_goal_question. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
       inputSchema: askGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question failed', (deps) => askTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))));
     server.registerTool('takt_list_goal_questions', {
@@ -395,6 +397,24 @@ export function createTaktMcpServer(
         inputSchema: enqueueTaskInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Task enqueue failed', (deps) => enqueueTaktTask(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_create_goal',
+      {
+        title: 'Create TAKT goal',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd the absolute path to the Git repository root. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        inputSchema: createGoalInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_answer_goal_question',
+      {
+        title: 'Answer a goal question',
+        description: 'Answer one pending question on a goal. Use answer.text for a question and answer.report (completed or unable) for an operation_request. The answer is recorded with source mcp. If delivery to the manager fails after the answer is saved, the answer stays saved and the TAKT daemon delivers it later; do not answer again. Questions for retired approval inquiries cannot be answered. Responses fit 64 KiB, with explicit truncation. Read the saved answer with takt_get_goal_question and path answer.text.',
+        inputSchema: answerGoalQuestionInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
   }
 

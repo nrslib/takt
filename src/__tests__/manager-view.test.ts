@@ -4,6 +4,7 @@ import { renderToString } from 'ink';
 import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
 import { TranscriptEntryView, TranscriptView } from '../features/tui/TranscriptEntryView.js';
+import { formatTranscriptEntryOutput } from '../features/tui/transcriptOutput.js';
 import type { OperationResult, PortOutput } from '../features/manager/conversationPort.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { getLabel } from '../shared/i18n/index.js';
@@ -192,13 +193,142 @@ describe.each(['ja', 'en'] as const)('manager view (%s)', (lang) => {
     },
   );
 
-  it('shows queued acceptance as a system notice without an assistant marker', async () => {
+  it.each(['message', 'approve_summary'])('shows input rejection immediately during a tool-free running %s operation', async (kind) => {
     const { app, client } = mount(lang);
-    client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });
-    app.stdin.write('Hello\r');
-    const content = getLabel('manager.conversation.queued', lang, { count: '1' });
-    await waitFor(() => expect(entries()).toContainEqual({ role: 'system', content }));
-    expect(app.lastFrame()).not.toContain('●');
+    client.change({ state: { ...client.getSnapshot().state!, running: { operationId: randomUUID(), kind, generation: 1 } } });
+    const message = getLabel('manager.conversation.queue_full', lang);
+    client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
+    app.stdin.write('Rejected input\r');
+    await waitFor(() => expect(entries()).toContainEqual({ role: 'system', content: message }));
+    expect(entries().some((entry) => entry.role === 'user' && entry.content === 'Rejected input')).toBe(true);
+    expect(client.commands()).toEqual([{ kind: 'message', text: 'Rejected input' }]);
+    expect(client.getSnapshot().state?.running).not.toBeNull();
+    client.change({ state: { ...client.getSnapshot().state!, running: null } });
+    await waitFor(() => expect(entries()).toContainEqual({ role: 'user', content: 'Rejected input' }));
+  });
+
+  it.each([false, true])('recovers a settled message once after reconnect, including a lost acceptance response=%s', async (lostResponse) => {
+    const { app, client } = mount(lang);
+    const operationId = randomUUID();
+    client.submit.mockImplementationOnce(async (_command, onAccepted) => {
+      if (!lostResponse) onAccepted?.(operationId);
+      client.change({ connection: 'disconnected' });
+      if (lostResponse) throw new Error('Connection lost before acceptance response');
+      return { kind: 'accepted', operationId };
+    });
+    app.stdin.write('Recover this message\r');
+    await waitFor(() => expect(client.submit).toHaveBeenCalledOnce());
+    const items = [...client.getSnapshot().items, { kind: 'user_message' as const, operationId,
+      message: 'Recover this message', acceptedSequence: 1, pending: false }];
+    client.change({ connection: 'connected', readStatus: 'complete', state: { ...client.getSnapshot().state!, running: null }, items });
+    await waitFor(() => expect(entries().filter((entry) => entry.role === 'user')).toEqual([
+      { role: 'user', content: 'Recover this message' },
+    ]));
+    client.output({ kind: 'user_message', operationId, message: 'Recover this message' });
+    client.change({ items: [...items] });
+    await waitFor(() => expect(entries().filter((entry) => entry.role === 'user')).toHaveLength(1));
+    client.change({ items: [...items, { kind: 'user_message', operationId: randomUUID(), message: 'Recover this message', acceptedSequence: 2, pending: false }] });
+    await waitFor(() => expect(entries().filter((entry) => entry.role === 'user')).toHaveLength(2));
+  });
+
+  it('keeps a queued message in the queue area above the input and moves it into the log once when its turn starts', async () => {
+    const { app, client } = mount(lang);
+    const running = { operationId: randomUUID(), kind: 'turn', generation: 1 };
+    const context = { callId: 'call', operationId: running.operationId, generation: 1 };
+    const state = { ...client.getSnapshot().state!, running };
+    client.output({ kind: 'user_message', operationId: running.operationId, message: 'first request' });
+    client.output({ kind: 'running', state });
+    client.output({ kind: 'tool_completed', entry: { key: 'before', toolId: 'before', tool: 'Bash', input: { command: 'before queue' },
+      output: '', context, status: 'success', association: 'matched', result: 'before-result' } });
+    await waitFor(() => expect(entries().map((entry) => entry.role)).toEqual(['user', 'tool']));
+    const queuedId = randomUUID();
+    client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: queuedId, queuedMessageCount: 1 });
+    app.stdin.write('queued request\r');
+    await waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: 'queued request' }]));
+    const queuedItem = { kind: 'user_message' as const, operationId: queuedId, message: 'queued request', acceptedSequence: 2, pending: true };
+    client.change({ state: { ...state, queuedMessageCount: 1 }, items: [...client.getSnapshot().items, queuedItem] });
+    const heading = getLabel('tui.ui.queuedCount', lang, { count: '1' });
+    await waitFor(() => {
+      const rows = app.lastFrame()!.split('\n');
+      const headingRow = rows.findIndex((row) => row.includes(heading));
+      expect(headingRow).toBeGreaterThan(-1);
+      expect(rows[headingRow + 1]).toBe('❯ queued request');
+      expect(rows[headingRow + 2]!.startsWith('╭')).toBe(true);
+    });
+    client.output({ kind: 'tool_completed', entry: { key: 'after', toolId: 'after', tool: 'Bash', input: { command: 'after queue' },
+      output: '', context, status: 'success', association: 'matched', result: 'after-result' } });
+    client.output({ kind: 'result', operationId: running.operationId, result: { kind: 'reply', message: 'first reply' } });
+    await waitFor(() => expect(entries().map((entry) => entry.role)).toEqual(['user', 'tool', 'tool', 'assistant']));
+    expect(JSON.stringify(entries())).not.toContain('queued request');
+    const next = { ...state, running: { operationId: queuedId, kind: 'turn', generation: 1 }, queuedMessageCount: 0 };
+    client.change({ state: next });
+    await waitFor(() => {
+      expect(entries().map((entry) => entry.role)).toEqual(['user', 'tool', 'tool', 'assistant', 'user']);
+      expect(entries().at(-1)).toEqual({ role: 'user', content: 'queued request' });
+      expect(app.lastFrame()).not.toContain(heading);
+    });
+    client.output({ kind: 'user_message', operationId: queuedId, message: 'queued request' });
+    client.change({ items: [...client.getSnapshot().items.filter((item) => item !== queuedItem), { ...queuedItem, pending: false }] });
+    await waitFor(() => expect(entries().filter((entry) => entry.content === 'queued request')).toHaveLength(1));
+  });
+
+  it('shows the thinking label without a log entry and commits tools and text in the order they happened', async () => {
+    const { app, client } = mount(lang);
+    const operationId = randomUUID();
+    const context = { callId: 'call', operationId, generation: 1 };
+    client.output({ kind: 'user_message', operationId, message: 'inspect' });
+    client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 1 } } });
+    client.output({ kind: 'activity', operationId, generation: 1, activity: { kind: 'thinking' } });
+    await waitFor(() => expect(app.lastFrame()).toContain(getLabel('tui.ui.extendedThinking', lang)));
+    client.output({ kind: 'turn_text', operationId, generation: 1, message: 'Reading the file first.' });
+    client.output({ kind: 'tool_started', entry: { key: 'read', toolId: 'read', tool: 'Read', input: { file_path: 'a.ts' }, output: '',
+      context, status: 'running', association: 'matched' } });
+    client.output({ kind: 'activity', operationId, generation: 1, activity: { kind: 'tool', tool: 'Read' } });
+    await waitFor(() => {
+      const rows = app.lastFrame()!.split('\n');
+      const running = rows.findIndex((row) => row.startsWith('◆ Read a.ts …'));
+      expect(running).toBeGreaterThan(-1);
+      expect(running).toBeLessThan(rows.findIndex((row) => row.startsWith('╭')));
+    });
+    client.output({ kind: 'tool_completed', entry: { key: 'read', toolId: 'read', tool: 'Read', input: { file_path: 'a.ts' }, output: '',
+      context, status: 'success', association: 'matched', result: 'file body', startedAt: 1000, completedAt: 1074 } });
+    client.output({ kind: 'result', operationId, result: { kind: 'reply', message: 'Done.' } });
+    await waitFor(() => expect(entries().map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool', 'assistant']));
+    expect(entries()[2]!.content.split('\n')[0]).toBe('Read a.ts ✓ 74 ms');
+    expect(entries().filter((entry) => entry.content.includes('file body'))).toHaveLength(1);
+    expect(app.lastFrame()).toContain('◆ Read a.ts ✓ 74 ms');
+  });
+
+  it('keeps the committed tools and records the interruption after them', async () => {
+    const { client } = mount(lang);
+    const operationId = randomUUID();
+    const context = { callId: 'call', operationId, generation: 1 };
+    const state = { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 1 } };
+    client.output({ kind: 'user_message', operationId, message: 'inspect' });
+    client.output({ kind: 'running', state });
+    client.output({ kind: 'tool_completed', entry: { key: 'done', toolId: 'done', tool: 'Bash', input: { command: 'npm test' }, output: '',
+      context, status: 'success', association: 'matched', result: 'kept-result' } });
+    client.output({ kind: 'pending', state: { ...state, running: null, interrupted: true } });
+    client.output({ kind: 'result', operationId, result: { kind: 'error', code: 'interrupted', message: 'Turn interrupted' } });
+    await waitFor(() => expect(entries()).toEqual([
+      { role: 'user', content: 'inspect' },
+      expect.objectContaining({ role: 'tool', content: expect.stringContaining('kept-result') }),
+      { role: 'system', content: 'Turn interrupted' },
+    ]));
+  });
+
+  it('marks omitted tool output with [more] and keeps the raw clock values out of the log', async () => {
+    const { app, client } = mount(lang);
+    const operationId = randomUUID();
+    client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { operationId, kind: 'turn', generation: 1 } } });
+    client.output({ kind: 'tool_completed', entry: { key: 'long', toolId: 'long', tool: 'Bash', input: { command: 'cat log' }, output: '',
+      context: { callId: 'call', operationId, generation: 1 }, status: 'success', association: 'matched',
+      result: 'one\ntwo\nthree\nfour', startedAt: 1794811657541, completedAt: 1794811660741 } });
+    await waitFor(() => expect(entries()).toHaveLength(1));
+    const content = entries()[0]!.content;
+    expect(content.split('\n')).toEqual(['Bash Ran cat log ✓ 3.2 s', 'one', 'two', 'three', '[more]']);
+    expect(app.lastFrame()).not.toContain('@1794811657541');
+    expect(app.lastFrame()).not.toMatch(/#\d/u);
   });
 
   it.each(['reply', 'progress', 'notice'] as const)('distinguishes daemon %s output by kind even with identical text', async (kind) => {
@@ -561,4 +691,77 @@ it.each(['system', 'assistant'] as const)('renders %s entries at width 80 with t
       expect(output).toContain('\x1b[37m● ');
     }
   } finally { chalk.level = level; }
+});
+
+it.each([
+  { role: 'thinking' as const, marker: '◇' },
+  { role: 'tool' as const, marker: '◆' },
+])('renders $role entries with the $marker marker, dims the whole entry and leaves a blank row after it', ({ role, marker }) => {
+  const level = chalk.level;
+  try {
+    chalk.level = 3;
+    const content = 'First line\nSecond line';
+    const entry = { role, content };
+    const inkOutput = renderToString(createElement(TranscriptEntryView, { entry, userMessageColors: FALLBACK_USER_MESSAGE_COLORS }), { columns: 80 });
+    expect(stripAnsi(inkOutput)).toBe(`${marker} First line\n  Second line\n`);
+    for (const row of inkOutput.split('\n').filter((row) => row !== '')) expect(row).toContain('\x1b[2m');
+    const ttyOutput = formatTranscriptEntryOutput(entry, FALLBACK_USER_MESSAGE_COLORS);
+    expect(stripAnsi(ttyOutput)).toBe(`${marker} First line\n  Second line\n\n`);
+    expect(ttyOutput.startsWith('\x1b[2m')).toBe(true);
+  } finally { chalk.level = level; }
+});
+
+it('commits completed tools directly in delivery order and keeps replacement tails out of the log', async () => {
+  const { client } = mount('en');
+  const operationId = randomUUID();
+  const context = { callId: 'call', operationId, generation: 1 };
+  client.output({ kind: 'user_message', operationId, message: 'first' });
+  client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { kind: 'turn', operationId, generation: 1 } } });
+  client.output({ kind: 'tool_started', entry: { key: '1', toolId: 'tool', tool: 'Bash', input: {}, output: '', context, status: 'running', association: 'matched' } });
+  client.output({ kind: 'tool_output', key: '1', text: '', tail: 'provisional' });
+  await waitFor(() => expect(entries()).toEqual([{ role: 'user', content: 'first' }]));
+  const completed = { key: '1', toolId: 'tool', tool: 'Bash', input: {}, output: '', context, status: 'success' as const, association: 'matched' as const, result: 'completed tool' };
+  client.output({ kind: 'tool_completed', entry: completed });
+  client.output({ kind: 'result', operationId, result: { kind: 'reply', message: 'reply' } });
+  client.output({ kind: 'user_message', operationId: randomUUID(), message: 'second' });
+  await waitFor(() => {
+    const log = entries();
+    expect(log.map((entry) => entry.role)).toEqual(['user', 'tool', 'assistant', 'user']);
+    expect(log[1]!.content).toContain('completed tool');
+    expect(log[2]!.content).toBe('reply');
+    expect(log[3]!.content).toBe('second');
+    expect(log.some((entry) => entry.content.includes('provisional'))).toBe(false);
+  });
+  client.change({ items: [...client.getSnapshot().items, { kind: 'tool_history', history: { operationId, generation: 1, finished: true, history: { entries: [completed] } } }] });
+  await waitFor(() => expect(entries()).toHaveLength(4));
+});
+
+it('opens completed tool details with Ctrl+O after the active region becomes empty', async () => {
+  const { app, client } = mount('en');
+  const operationId = randomUUID();
+  const context = { callId: 'call', operationId, generation: 1 };
+  client.output({ kind: 'running', state: { ...client.getSnapshot().state!, running: { kind: 'turn', operationId, generation: 1 } } });
+  client.output({ kind: 'tool_completed', entry: { key: randomUUID(), toolId: 'tool', tool: 'Bash', input: {}, output: '', context,
+    status: 'success', association: 'matched', result: 'one\ntwo\nthree\nfour\nhidden-detail' } });
+  client.output({ kind: 'pending', state: { ...client.getSnapshot().state!, running: null } });
+  await waitFor(() => expect(app.lastFrame()).not.toContain('hidden-detail'));
+  app.stdin.write('\x0f');
+  await waitFor(() => expect(app.lastFrame()).toContain('hidden-detail'));
+});
+
+it('waits only for initial snapshot completion before committing tool entries', async () => {
+  const { app, client } = mount('en', new ManagerClientDouble({ readStatus: 'reading' }));
+  const operationId = randomUUID();
+  const entry = { key: randomUUID(), toolId: 'tool', tool: 'Bash', input: {}, output: '',
+    context: { callId: 'call', operationId, generation: 1 }, status: 'success' as const, association: 'matched' as const,
+    result: 'completed-during-initial-read' };
+  client.output({ kind: 'tool_completed', entry });
+  await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en')));
+  expect(entries()).toEqual([]);
+  client.change({ readStatus: 'complete', items: [...client.getSnapshot().items, { kind: 'tool_history',
+    history: { operationId, generation: 1, finished: true, history: { entries: [entry] } } }] });
+  await waitFor(() => expect(entries()).toHaveLength(1));
+  client.change({ readStatus: 'incomplete' });
+  client.output({ kind: 'tool_completed', entry: { ...entry, key: randomUUID(), toolId: 'later', result: 'later-entry' } });
+  await waitFor(() => expect(entries()).toHaveLength(2));
 });

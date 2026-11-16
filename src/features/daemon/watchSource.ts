@@ -20,7 +20,7 @@ import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemo
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
-import { publishPendingInquiryAnswers } from './pendingInquiryAnswers.js';
+import { publishPendingGoalAnswers, publishPendingInquiryAnswers, type PendingGoalAnswer } from './pendingInquiryAnswers.js';
 import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -151,7 +151,11 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
 
   async inquiries(): Promise<void> {
     const present = new Set<string>();
+    const pendingGoalAnswers: PendingGoalAnswer[] = [];
     for await (const notice of this.inquiryNotices()) {
+      if (notice.target.goalId !== null && notice.question.answerPublicationPending === true) {
+        pendingGoalAnswers.push({ repositoryDirectory: notice.target.repositoryDirectory, goalId: notice.target.goalId, question: notice.question });
+      }
       const key = JSON.stringify([notice.conversationId, notice.target, notice.question.id]);
       present.add(key);
       const version = digest(notice.question);
@@ -163,6 +167,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     this.inquiriesInitialized = true;
     for (const key of this.inquiriesSeen.keys()) if (!present.has(key)) this.inquiriesSeen.delete(key);
     await this.publishPendingAnswers();
+    await publishPendingGoalAnswers(this.conversations.routing.directory, pendingGoalAnswers, this.onError);
   }
 
   private async publishPendingAnswers(): Promise<void> {

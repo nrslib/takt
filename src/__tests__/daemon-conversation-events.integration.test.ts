@@ -100,6 +100,54 @@ it('releases fixture initialization protection after both successful and failed 
   await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce(), { timeout: 3000 });
 });
 
+it.each([true, false])('tries unsaved completed tools once during idle shutdown (save recovers=%s)', async (recovers) => {
+  const logged: string[] = [];
+  const restore = installDaemonErrorLog(async (message) => { logged.push(message); });
+  cleanups.push(async () => { restore(); });
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const startLoop = watchLoop.startWatchLoop;
+  let checkIdle!: () => Promise<void>;
+  vi.spyOn(watchLoop, 'startWatchLoop').mockImplementation((interval, check, onError) => {
+    if (interval !== 500) return startLoop(interval, check, onError);
+    checkIdle = () => check(new AbortController().signal);
+    return { wake() {}, async drain() {}, async close() {} };
+  });
+  const f = await fixture();
+  const toolEvent = (call: Awaited<ReturnType<typeof f.runner.started>>, event: { type: 'tool_use'; data: { id: string; tool: string; input: Record<string, unknown> } }
+    | { type: 'tool_result'; data: { id: string; content: string; isError: boolean } }) => f.dispatcher.post({ kind: 'turn_progress', turn: call.turn,
+    message: { kind: 'tool_event', eventId: randomUUID(), event: { ...event, toolActivity: { callId: 'call', operationId: call.turn.operationId, generation: call.turn.generation } } } });
+  accepted(await f.post('failed-history'));
+  const first = await f.runner.started(1);
+  await toolEvent(first, { type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'retained.ts' } } });
+  const failure = new Error('History unavailable');
+  const append = vi.spyOn(f.conversations.store, 'appendCompletedTool').mockRejectedValueOnce(failure);
+  if (!recovers) append.mockRejectedValue(failure);
+  await toolEvent(first, { type: 'tool_result', data: { id: 'tool', content: 'retained', isError: false } });
+  await f.runner.finish(first); await f.dispatcher.drain();
+  f.input.detach(f.opened.attachmentId);
+  const reopened = await f.input.open({ conversationId: f.id, assignment: { kind: 'repository', repositoryDirectory: f.repository },
+    speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: 'reconnect', counterpart: { namespace: 'local', id: 'operator' } } },
+  { async deliver() { return { kind: 'delivered' }; } });
+  const histories = [];
+  for await (const item of reopened.read.items) if (item.kind === 'tool_history') histories.push(item.history);
+  reopened.read.complete(); f.input.detach(reopened.attachmentId);
+  expect(histories).toMatchObject([{ history: { entries: [{ status: 'success', input: { file_path: 'retained.ts' } }] } }]);
+  expect(await new ConversationStateStore(f.directory).readToolHistories(f.id)).toEqual([]);
+  now += 500; await checkIdle();
+  await vi.waitFor(() => expect(f.runner.closed).toBe(true), { timeout: 3000 });
+  await f.close();
+  expect(append).toHaveBeenCalledTimes(2);
+  const restarted = await new ConversationStateStore(f.directory).readToolHistories(f.id);
+  if (recovers) {
+    expect(restarted).toMatchObject([{ operationId: first.turn.operationId,
+      history: { entries: [{ status: 'success', input: { file_path: 'retained.ts' } }] } }]);
+    expect(restarted.flatMap((history) => history.history.entries)).toHaveLength(1);
+  } else expect(restarted).toEqual([]);
+  expect(logged.filter((message) => message === failure.message)).toHaveLength(recovers ? 1 : 2);
+  await f.stopped;
+});
+
 it.each([0, 1])('compares idle shutdown during snapshot preparation with %s initializing connections', async (initializing) => {
   let now = Date.now();
   vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -127,11 +175,10 @@ it.each([0, 1])('compares idle shutdown during snapshot preparation with %s init
     const reached = deferred<void>();
     const resume = deferred<void>();
     const snapshot = daemon.dispatcher.snapshot.bind(daemon.dispatcher);
-    vi.spyOn(daemon.dispatcher, 'snapshot').mockImplementation(async (id) => {
-      const saved = await snapshot(id);
+    vi.spyOn(daemon.dispatcher, 'snapshot').mockImplementation(async (id, request) => {
       reached.resolve();
       await resume.promise;
-      return saved;
+      return snapshot(id, request);
     });
     const opening = daemon.input.open({ conversationId: conversationId(assignment), assignment,
       speaker: { namespace: 'local', id: 'operator' },
@@ -177,7 +224,7 @@ it.each([
   const store = new StandaloneInquiryStore(f.directory, owner);
   const question = await store.create({ body,
     operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } });
-  const before = await f.conversations.snapshot(f.id);
+  const before = await f.conversations.snapshot(f.id, { toolHistory: false });
   const pending = [];
   for await (const item of before.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
   before.complete();
@@ -229,7 +276,7 @@ it.each([
   expect(execute).toHaveBeenCalledOnce();
   expect(turnData(execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...expected.inquiryAnswer });
   expect(await readdir(inbox)).toEqual([]);
-  const after = await f.conversations.snapshot(f.id);
+  const after = await f.conversations.snapshot(f.id, { toolHistory: false });
   const remaining = [];
   for await (const item of after.items) if (item.kind === 'inquiry') remaining.push(item.inquiry.question.id);
   after.complete();
@@ -386,6 +433,146 @@ it.each([
     await answering;
     mark.mockRestore();
   }
+});
+
+const savedGoalAnswer = (text: string) => ({ text, source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' });
+const goalWithQuestion = (questionId: string, body: string, answerText: string): Goal => ({ ...goalRecord(),
+  questions: [{ id: questionId, recipient: 'human' as const, body, status: 'answered' as const, answer: savedGoalAnswer(answerText) }] });
+
+async function goalAnswerFixture(...goals: Goal[]) {
+  vi.spyOn(watcherModule, 'startDaemonWatchers').mockImplementation(() => ({ changed() {}, async drain() {}, async close() {} }));
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  return fixture(async (_directory, repository) => {
+    for (const goal of goals) {
+      const directory = join(repository, '.takt', 'goals', goal.id);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'goal.json'), JSON.stringify(goal));
+    }
+  });
+}
+
+function goalAnswerReceiver(f: Awaited<ReturnType<typeof fixture>>, files: DaemonPersistedFiles, inbox: string) {
+  const target = { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' };
+  return (name: string) => receiveInboxChange({ target, path: join(inbox, name), removed: false, generation: 'answer', value: {} },
+    files, f.conversations, f.dispatcher);
+}
+
+function goalAnswerService(directory: string, execute: PreparedConversationRuntime['executor']['execute']) {
+  return createConversationTurnService(directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'goal-answer', executor: { execute } };
+  }, async close() {} });
+}
+
+it('deduplicates one saved goal answer delivered through different inbox files', async () => {
+  const questionId = randomUUID();
+  const body = 'Continue the export verification?';
+  const answer = savedGoalAnswer('Continue');
+  const goal = goalWithQuestion(questionId, body, answer.text);
+  const f = await goalAnswerFixture(goal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(2);
+  const accept = vi.spyOn(f.dispatcher, 'accept');
+  const receive = goalAnswerReceiver(f, files, inbox);
+  for (const name of names) await receive(name);
+  const ids = accept.mock.calls.map(([value]) => value.eventId);
+  expect(new Set(ids).size).toBe(1);
+  expect(ids[0]).toMatch(/^goal-answer-[a-f0-9]{64}$/);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  await f.dispatcher.drain();
+  const call = await f.runner.started(1);
+  const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+    request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+  await f.runner.finish(call, outcome);
+  await f.dispatcher.drain();
+  expect(execute).toHaveBeenCalledOnce();
+  expect(f.runner.calls).toHaveLength(1);
+  expect(turnData(execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',
+    goalId: goal.id, questionId, question: body, answer });
+  expect(await readdir(inbox)).toEqual([]);
+});
+
+it('deduplicates a saved goal answer redelivered after a daemon restart', async () => {
+  const questionId = randomUUID();
+  const body = 'Continue after the restart?';
+  const answer = savedGoalAnswer('Continue');
+  const goal = goalWithQuestion(questionId, body, answer.text);
+  let f = await goalAnswerFixture(goal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  const [first] = await readdir(inbox);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  await goalAnswerReceiver(f, files, inbox)(first!);
+  await f.dispatcher.drain();
+  const call = await f.runner.started(1);
+  const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+    request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+  await f.runner.finish(call, outcome);
+  await f.dispatcher.drain();
+  expect(execute).toHaveBeenCalledOnce();
+  await f.close();
+  f = await fixture();
+  const [remaining] = await readdir(inbox);
+  expect(remaining).toBeDefined();
+  expect(remaining).not.toBe(first);
+  await goalAnswerReceiver(f, new DaemonPersistedFiles(f.directory), inbox)(remaining!);
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(0);
+  expect(execute).toHaveBeenCalledOnce();
+  expect(await readdir(inbox)).toEqual([]);
+});
+
+it('processes goal answers for different goals and questions as separate events', async () => {
+  const sharedQuestionId = randomUUID();
+  const otherQuestionId = randomUUID();
+  const answer = savedGoalAnswer('Export');
+  const firstGoal = goalWithQuestion(sharedQuestionId, 'Which goal handles the export?', answer.text);
+  const secondGoal = { ...goalWithQuestion(sharedQuestionId, 'Which goal handles the import?', answer.text), id: randomUUID() };
+  const f = await goalAnswerFixture(firstGoal, secondGoal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: firstGoal.id, questionId: sharedQuestionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: firstGoal.id, questionId: otherQuestionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: secondGoal.id, questionId: sharedQuestionId, answer });
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(3);
+  const accept = vi.spyOn(f.dispatcher, 'accept');
+  const receive = goalAnswerReceiver(f, files, inbox);
+  for (const name of names) await receive(name);
+  expect(new Set(accept.mock.calls.map(([value]) => value.eventId)).size).toBe(3);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  const events: unknown[] = [];
+  for (let index = 0; index < 3; index++) {
+    await vi.waitFor(() => expect(f.runner.calls.length).toBeGreaterThan(index), { timeout: 3000 });
+    const call = f.runner.calls[index]!;
+    events.push(call.input.event.event);
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    await f.dispatcher.drain();
+  }
+  expect(execute).toHaveBeenCalledTimes(3);
+  expect(events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: firstGoal.id, questionId: sharedQuestionId }),
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: firstGoal.id, questionId: otherQuestionId }),
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: secondGoal.id, questionId: sharedQuestionId }),
+  ]));
+  expect(await readdir(inbox)).toEqual([]);
 });
 
 it('retains a standalone answer after storage rejection and consumes it after successful admission', async () => {
@@ -962,7 +1149,7 @@ it('persists a blocked notification for a large goal after an unattached turn pr
   const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
   expect(saved.notifications).toEqual([expect.objectContaining({ id: admission.operationId, kind: 'blocked', severity: 'error' })]);
   expect(f.outputs).toHaveLength(outputCount);
-  const snapshot = await f.conversations.snapshot(f.id);
+  const snapshot = await f.conversations.snapshot(f.id, { toolHistory: false });
   const items = [];
   for await (const item of snapshot.items) items.push(item);
   snapshot.complete();
@@ -1187,12 +1374,13 @@ it('settles interruption after a save commits before its reply reaches the child
     } }),
     transport: { async send(message) {
       if (message.kind === 'daemon_request') {
-        const reply = await f.dispatcher.request(message.turn, message.request, new AbortController().signal);
-        expect(reply).toMatchObject({ kind: 'state_saved', version: 1 });
-        committed.resolve();
-        await releaseReply.promise;
-        await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
-        replied.resolve();
+        // 書き込みの完了と返信の到着は別に起きる。返信だけを遅らせる。
+        void f.dispatcher.request(message.turn, message.request, new AbortController().signal).then(async (reply) => {
+          expect(reply).toMatchObject({ kind: 'state_saved', version: 1 });
+          committed.resolve();
+          await releaseReply.promise;
+          await runtime.receive({ ...envelope, kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
+        }).then(replied.resolve, replied.reject);
       } else if (message.kind === 'turn_finished') {
         expect(message.outcome).toMatchObject({ kind: 'interrupted', change: { expectedVersion: 0 } });
         await f.runner.finish(active, message.outcome);
@@ -1817,7 +2005,7 @@ it('delivers one patrol result to the connected TUI without displaying inspectio
   expect(f.outputs.filter((output) => output.kind === 'result')).toEqual([
     { kind: 'result', operationId: turn.turn.operationId, result: { kind: 'reply', message } },
   ]);
-  const snapshot = await f.conversations.snapshot(f.id);
+  const snapshot = await f.conversations.snapshot(f.id, { toolHistory: false });
   const messages: string[] = [];
   for await (const item of snapshot.items) if (item.kind === 'display_event') messages.push(item.event.message);
   snapshot.complete();

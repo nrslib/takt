@@ -52,7 +52,7 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
     changes: { objective: `${objective} updated` }, reason: 'Retain the previous definition' });
   expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
   const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  const project = () => collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false));
+  const project = () => collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity));
   for (const _attempt of [1, 2]) {
     const items = await project();
     expect(items.filter((item) => item.kind === 'epic')).toEqual([
@@ -70,7 +70,7 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
   expect(businessContext).not.toContain(updated.objective);
   const errors = vi.fn();
   const conversations = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
-    new DaemonNotifications(directory), async () => {}, errors);
+    new DaemonNotifications(directory), async () => {}, errors, { readTurns: async () => [] });
   const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
   const epicReads = vi.spyOn(DaemonEpicFiles.prototype, 'get');
   try {
@@ -89,7 +89,7 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
   expect(await getEpic({ ...owner, epicId: original.id })).toEqual(updated);
 });
 
-it('projects each Epic on demand and preserves cancellation and later read failures', async () => {
+it('projects each Epic on demand and preserves later read failures', async () => {
   const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Epics', repositoryDirectories: [] });
   const records = [epicRecord(), { ...epicRecord(), id: secondGoalId }]
     .map((epic) => ({ ...epic, workspaceId: workspace.id })).sort((a, b) => a.id.localeCompare(b.id));
@@ -97,7 +97,7 @@ it('projects each Epic on demand and preserves cancellation and later read failu
   for (const record of records) await store.create(record);
   const get = vi.spyOn(DaemonEpicFiles.prototype, 'get');
   const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  const read = () => conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false);
+  const read = () => conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity);
   const iterator = read();
   expect((await iterator.next()).value).toMatchObject({ kind: 'assignment' });
   expect(get).not.toHaveBeenCalled();
@@ -107,14 +107,6 @@ it('projects each Epic on demand and preserves cancellation and later read failu
   expect(get).toHaveBeenCalledTimes(2);
   expect((await iterator.next()).done).toBe(true);
   writeFileSync(join(directory, 'workspaces', workspace.id, 'epics', records[1]!.id, 'epic.json'), '{');
-  let cancelled = false;
-  const stopped = conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => cancelled);
-  await stopped.next();
-  await stopped.next();
-  get.mockClear();
-  cancelled = true;
-  expect((await stopped.next()).done).toBe(true);
-  expect(get).not.toHaveBeenCalled();
   const failed = read();
   await failed.next();
   await failed.next();
@@ -133,7 +125,7 @@ it('reports corrupt tasks while projecting goals and inquiries with awaiting-mer
   const tasksPath = join(repository, '.takt', 'tasks.yaml');
   writeFileSync(tasksPath, 'tasks: [');
 
-  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment(), () => false));
+  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment()));
 
   expect(items.filter((item) => item.kind === 'goal')).toEqual([active, waiting].map((goal) => ({ kind: 'goal', goal: {
     id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,

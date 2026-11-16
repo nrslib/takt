@@ -78,7 +78,7 @@ export async function startDaemon(options: {
     if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' }) && (version.operationId === null || output.id.startsWith('result-'))) {
       await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
     }
-  }, reportDaemonError);
+  }, reportDaemonError, eventStore);
   const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };
   const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
   const waitGoals = new WatchGoalReader();
@@ -102,7 +102,7 @@ export async function startDaemon(options: {
   } };
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
     ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
-  runner: { start(value, signal) { conversations.started(value); runner.start(value, signal); },
+  runner: { async start(value, signal) { await conversations.started(value); runner.start(value, signal); },
     interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => closeResource(runner) },
   resources, limits: { maxPendingEvents, maxPendingBytes: 1024 * 1024 },
   onFailure: ({ phase, error }) => {

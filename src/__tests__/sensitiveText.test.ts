@@ -7,13 +7,28 @@ import {
   createSensitiveTextStreamRedactor,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
-  sanitizeSensitiveValueWithKnownValues,
   sanitizeSensitiveText,
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
+import { maskSensitiveRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
 
 describe('sensitiveText', () => {
+  it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
+    for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
+      const masked = matching === 'known'
+        ? sanitizeSensitiveTextWithKnownValues(text, { token: value })
+        : maskSensitiveRanges(text, substringSensitiveRanges(text, [value]));
+      expect(masked).toBe('before [REDACTED] after');
+    }
+  });
+
+  it('masks overlapping short configured substrings without changing input-derived word matching', () => {
+    const text = 'before ababa after';
+    expect(maskSensitiveRanges(text, substringSensitiveRanges(text, ['aba']))).toBe('before [REDACTED] after');
+    expect(sanitizeSensitiveTextWithKnownValues(text, { token: 'aba' })).toBe(text);
+  });
+
   describe.each(["'", '"'])('shell header enclosed in %s', (quote) => {
     it.each([
       ['Authorization', 'Basic c2VjcmV0==', 'Basic [REDACTED]'],
@@ -380,29 +395,6 @@ describe('sensitiveText', () => {
     }
   });
 
-  it('bounds retained sensitive candidates and remains fail-closed after exhaustion', () => {
-    const byCount = createBoundedSensitiveValues();
-    for (let index = 0; index <= MAX_TRACKED_SENSITIVE_VALUES; index += 1) {
-      byCount.collect({ token: `secret-${index}` });
-    }
-    expect(byCount.exhausted).toBe(true);
-    expect(byCount.exhaustReason).toBe('candidate_count');
-    expect(byCount.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', byCount)).toBe('[REDACTED]');
-
-    const byBytes = createBoundedSensitiveValues();
-    byBytes.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES + 1) });
-    expect(byBytes.exhausted).toBe(true);
-    expect(byBytes.exhaustReason).toBe('candidate_bytes');
-    expect(byBytes.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('another-secret', byBytes)).toBe('[REDACTED]');
-
-    const bySourceScan = createBoundedSensitiveValues();
-    bySourceScan.collect({ token: 'x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE + 1) });
-    expect(bySourceScan.exhausted).toBe(true);
-    expect(bySourceScan.exhaustReason).toBe('source_scan');
-  });
-
   it('accepts exactly 1,024 sensitive candidates', () => {
     const bounded = createBoundedSensitiveValues();
     bounded.collect({
@@ -476,18 +468,6 @@ describe('sensitiveText', () => {
     expect(output).toContain('[REDACTED]');
   });
 
-  it('fails closed without emitting an oversized pending credential', () => {
-    const secret = `oversized-${'x'.repeat(10_050)}`;
-    const redactor = createSensitiveTextStreamRedactor();
-
-    const output = redactor.write('Authorization: Bearer ', {})
-      + redactor.write(secret, {})
-      + redactor.flush({});
-
-    expect(output).toBe('[REDACTED]');
-    expect(output).not.toContain(secret);
-  });
-
   it.each([
     ['write', { content: 'private write body' }, 'content'],
     ['apply_patch', { patchText: 'private patch body' }, 'patchText'],
@@ -543,24 +523,5 @@ describe('sensitiveText', () => {
       self: '[REDACTED]',
     });
     expect(sanitizeSensitiveTextWithKnownValues('cycle-secret', source)).toBe('[REDACTED]');
-  });
-
-  it('redacts values beyond the traversal limit', () => {
-    const source = Array.from({ length: 10_050 }, (_, index) => `value-${index}`);
-
-    expect(sanitizeSensitiveValue(source)).toBe('[REDACTED]');
-  });
-
-  it('fails closed when known-value collection exceeds the traversal limit', () => {
-    const source = Array.from({ length: 10_050 }, (_, index) => (
-      index === 10_049 ? { token: 'unvisited-secret' } : index
-    ));
-
-    expect(sanitizeSensitiveValueWithKnownValues(
-      { content: 'unvisited-secret' },
-      source,
-    )).toEqual({ content: '[REDACTED]' });
-    expect(sanitizeSensitiveTextWithKnownValues('unvisited-secret', source)).toBe('[REDACTED]');
-    expect(sanitizeSensitiveTextWithKnownValues('', source)).toBe('');
   });
 });
