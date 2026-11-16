@@ -670,6 +670,7 @@
     "src/__tests__/runSyncConflictResolver.test.ts",
     "src/__tests__/runner-mcp-pool-identity.test.ts",
     "src/__tests__/runtime-assignment-invocation.test.ts",
+    "src/__tests__/runtime-assignment-missing-goal-task.integration.test.ts",
     "src/__tests__/runtime-assignment.integration.test.ts",
     "src/__tests__/runtime-internal-agent-assistant.test.ts",
     "src/__tests__/runtime-mcp-engine-wiring.test.ts",

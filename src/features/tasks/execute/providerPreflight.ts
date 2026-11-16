@@ -8,6 +8,10 @@ import { assertPrMergeRetryWorktreePath, resolveReusedWorktreeExecution, toReuse
 import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
 
+import { runtimeAssignmentUnavailableReason } from './runtimeAssignmentGuard.js';
+
+export { runtimeAssignmentUnavailableReason };
+
 export function terminalProviderConfirmation(): ConfirmManagedProvider | undefined {
   return process.stdin.isTTY === true && process.stdout.isTTY === true && !process.env.CI && process.env.TAKT_NO_TTY !== '1'
     ? (message) => confirm(message, false) : undefined;
@@ -65,6 +69,11 @@ export async function checkPendingTaskProviders(taskRunner: TaskRunner, cwd: str
     const unchecked = pending.filter((task) => checked.get(task.name) !== JSON.stringify(task));
     if (unchecked.length === 0) return;
     for (const task of unchecked) {
+      if (task.data?.goal_id !== undefined
+        && runtimeAssignmentUnavailableReason(cwd, task.data) !== undefined) {
+        checked.set(task.name, JSON.stringify(task));
+        continue;
+      }
       await checkQueuedTaskProviders(cwd, task, options, confirmation, signal);
       signal?.throwIfAborted();
       checked.set(task.name, JSON.stringify(task));

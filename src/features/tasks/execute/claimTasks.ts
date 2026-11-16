@@ -2,6 +2,7 @@ import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
 import { saveManagerEvent } from '../../../infra/goals/events.js';
 import { PrivateFileLockAcquisitionError } from '../../../shared/utils/private-file-lock.js';
 import { TaskClaimLockAcquisitionError } from '../../../infra/task/taskLifecycleService.js';
+import { runtimeAssignmentUnavailableReason } from './runtimeAssignmentGuard.js';
 
 export class TaskClaimLockUnavailableError extends Error {
   constructor(message: string, options: ErrorOptions) {
@@ -21,7 +22,7 @@ export function claimTasksWithGoalCompletions(
     .filter((task) => task.status === 'pending' && task.goalId !== undefined).map((task) => task.name));
   let tasks: TaskInfo[];
   try {
-    tasks = taskRunner.claimNextTasks(count);
+    tasks = taskRunner.claimNextTasks(count, (task) => runtimeAssignmentUnavailableReason(cwd, task.data));
   } catch (error) {
     if (hasPending && (error instanceof TaskClaimLockAcquisitionError
       || (error instanceof PrivateFileLockAcquisitionError && error.code === 'ENOSPC'))) {
