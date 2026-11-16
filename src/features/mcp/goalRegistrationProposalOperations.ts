@@ -38,6 +38,7 @@ async function submitRegistrationCommand(
   const client = new ConversationIpcClient(identity);
   try {
     await client.connect();
+    signal.throwIfAborted();
     let wait: Promise<OperationResult> | undefined;
     const submission = await client.submit(command, (operationId) => {
       wait = new Promise<OperationResult>((resolve, reject) => {

@@ -256,3 +256,24 @@ it('reports an accepted approval whose result never arrives within the bounded w
     vi.useRealTimers();
   }
 });
+
+it.each(['approve', 'reject'] as const)(
+  'does not submit a %s command when the connection wait is aborted before it opens',
+  async (operation) => {
+    const controller = new AbortController();
+    let openConnection!: () => void;
+    doubles.connect.mockImplementationOnce(() => new Promise<void>((resolve) => { openConnection = resolve; }));
+    const input = { cwd, revision, conversationId: ownerConversationId };
+
+    const pending = operation === 'approve'
+      ? approveTaktGoalRegistration(input, {}, controller.signal)
+      : rejectTaktGoalRegistration(input, {}, controller.signal);
+    await vi.waitFor(() => expect(doubles.connect).toHaveBeenCalledOnce());
+    controller.abort();
+    openConnection();
+    const result = await pending;
+
+    expect(result.isError).toBe(true);
+    expect(doubles.submit).not.toHaveBeenCalled();
+  },
+);
