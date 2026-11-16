@@ -238,7 +238,7 @@ describe('PR clone code effects', () => {
       return '';
     });
     expect(await syncPrCloneEffect(options, { pr: 123 }, false)).toMatchObject({ success: true });
-    expect(mocks.git).toHaveBeenCalledWith('git', ['merge', '--no-edit', 'refs/takt/pr-base/main'], expect.objectContaining({
+    expect(mocks.git).toHaveBeenCalledWith('git', ['merge', '--ff', '--no-edit', 'refs/takt/pr-base/main'], expect.objectContaining({
       env: { ...safe, GIT_CONFIG_COUNT: '4', GIT_CONFIG_KEY_2: 'merge.audit.driver', GIT_CONFIG_VALUE_2: 'false',
         GIT_CONFIG_KEY_3: 'merge.nested.driver', GIT_CONFIG_VALUE_3: 'false' },
     }));
