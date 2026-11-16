@@ -194,10 +194,12 @@ export async function executeTaskWorkflow(
   const config = resolveWorkflowConfigValues(projectCwd, ['language', 'personaProviders', 'providerRouting', 'providerProfiles']);
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   const concurrency = prExecutionContext?.mergeConcurrency;
+  // Each conflict resolution can repeat a full child review within the shared step budget.
   const mergeResyncBudget = concurrency !== undefined
+    && workflowConfig.maxSteps !== 'infinite'
     && ['merge-review-fix', 'merge-review-fix-simple', 'merge-prepare'].includes(workflowConfig.name)
     && getWorkflowTrustInfo(workflowConfig, projectCwd).source === 'builtin'
-    ? 5 * Math.max(2, concurrency - 1) : 0;
+    ? workflowConfig.maxSteps * Math.max(2, concurrency - 1) : 0;
   const maxSteps = maxStepsOverride ?? workflowConfig.maxSteps;
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,

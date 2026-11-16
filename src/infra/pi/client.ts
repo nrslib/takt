@@ -36,7 +36,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import type { PiCallOptions } from './types.js';
-import { PI_CODEMODE_TOOL_NAME, resolvePiActiveTools } from '../providers/pi-tool-policy.js';
+import { PI_CODEMODE_TOOL_NAME, PI_INSPECTION_TOOLS, resolvePiActiveTools } from '../providers/pi-tool-policy.js';
 
 import { loadManagedSdk } from '../managed-providers/loader.js';
 import { managedFailureResponse, managedFailureStream, warnStaleProvider } from '../managed-providers/messages.js';
@@ -355,13 +355,18 @@ function createPiClient(modules: PiModules['modules']): PiClient {
   ): void {
     const registeredTools = readPiTools(session, options);
     validatePiToolProvenance(registeredTools, explicitExtensionPaths, registeredProvenance);
+    const allowedTools = options.allowedTools === undefined && options.internalAgentIsolation === 'strict-readonly'
+      ? [...PI_INSPECTION_TOOLS]
+      : options.allowedTools;
     const activeTools = resolvePiActiveTools(
       options.permissionMode,
-      options.allowedTools,
+      allowedTools,
       registeredTools,
       explicitExtensionPaths,
     );
-    session.setActiveToolsByName(activeTools);
+    session.setActiveToolsByName(options.internalAgentIsolation === 'strict-readonly'
+      ? activeTools.filter((tool) => PI_INSPECTION_TOOLS.some((allowed) => allowed === tool))
+      : activeTools);
   }
 
   /**
@@ -428,7 +433,8 @@ function createPiClient(modules: PiModules['modules']): PiClient {
       enforce(refreshTools);
     };
     extensionRuntime.setActiveTools = (toolNames) => {
-      if (currentOptions.permissionMode === 'readonly'
+      if (currentOptions.internalAgentIsolation === 'strict-readonly'
+        || currentOptions.permissionMode === 'readonly'
         || currentOptions.permissionMode === 'edit'
         || currentOptions.allowedTools !== undefined) {
         enforce();
@@ -438,7 +444,8 @@ function createPiClient(modules: PiModules['modules']): PiClient {
       }
     };
     executionGuard.check = (toolName) => {
-      if (currentOptions.permissionMode === 'full' && currentOptions.allowedTools === undefined) {
+      if (currentOptions.internalAgentIsolation !== 'strict-readonly'
+        && currentOptions.permissionMode === 'full' && currentOptions.allowedTools === undefined) {
         enforce(undefined, true);
         return true;
       }

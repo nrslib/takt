@@ -122,10 +122,10 @@ it('does not queue a summary instruction rejected by queue capacity or approve a
   await waitFor(() => expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, '')));
   await showProposal(context, summaryA, 5);
   await waitFor(() => expect(context.client.refresh).toHaveBeenCalled());
-  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]);
+  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true }]);
   approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
     { kind: 'approve_summary', revision: 5 },
   ]));
 });

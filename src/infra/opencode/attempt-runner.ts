@@ -838,6 +838,7 @@ export class OpenCodeAttemptRunner {
               options.preparedMcp,
               options.skillsEnabled,
               executionContext,
+              options.externalDirectoryAllowlist,
             );
             try {
               const signal = AbortSignal.any([resolutionSignal, acquired.invalidationSignal]);
@@ -1190,6 +1191,7 @@ export class OpenCodeAttemptRunner {
       options.preparedMcp,
       options.skillsEnabled,
       executionContext,
+      options.externalDirectoryAllowlist,
     );
     throwIfCallAborted();
     registerSharedServerExitCleanup();
@@ -1240,6 +1242,7 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
       allowedMcpPermissions,
       options.strictToolAllowlist,
+      options.externalDirectoryAllowlist,
     );
     if (sessionId === undefined) {
       throwIfCallAborted();
@@ -1341,6 +1344,9 @@ export class OpenCodeAttemptRunner {
     const promptPayload: Record<string, unknown> = {
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
       ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.externalDirectoryAllowlist !== undefined
+        ? { externalDirectoryAllowlist: options.externalDirectoryAllowlist }
+        : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,

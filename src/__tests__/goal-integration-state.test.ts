@@ -1043,6 +1043,17 @@ it.each(['before final check', 'after final check'])(
   },
 );
 
+it('saves PR finishing guidance with conditional full review and retained CodeRabbit and CI handling', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+
+  const instruction = goal.completion!.instructions.find((text) => text.includes('takt_merge_goal_pr'));
+  expect(instruction).toMatch(/until: prepare.*approval.*until: merge.*automatic.*human instruction/iu);
+  expect(instruction).toMatch(/merge-prepare.*merge-review-fix-simple.*CodeRabbit.*CI waiting/iu);
+  expect(instruction).toMatch(/both initial.*resynchronization.*clean base sync skips the full review/iu);
+  expect(instruction).toMatch(/after AI conflict resolution.*review and fixes.*before push/iu);
+  expect(instruction).toMatch(/custom merge\.prepare_workflow.*merge\.workflow.*own steps/iu);
+});
+
 it('instructs the manager to review an advanced goal tip and resubmit all completion evidence', async () => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
 

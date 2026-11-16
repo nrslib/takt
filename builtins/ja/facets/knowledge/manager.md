@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、CodeRabbit への対応、CI 待ちを担当します。競合のない同期ではフルレビューを呼ばず、AIで競合を解消した場合は初回・再同期ともレビューと修正を経てからpushします。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
@@ -61,7 +61,7 @@ takt_check_goal_completion は保存 PR の head/base とマージ状態を照�
 
 人は TUI の Ctrl+R や Slack の問い合わせスレッドで回答し、回答の出所と型が保存されます。旧承認記録は過去の記録の参照・取り下げに使われます。完成・中止時は問い合わせが閉じ、一時停止時は保持されます。
 
-TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。summary を持つ応答から登録案が表示されます。
+TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。通常の相談では登録案を自動生成せず、合意が整ったら /make-goal を案内します。/make-goal を明示実行した応答の summary だけが承認待ちの登録案になります。
 
 manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。問い合わせの回答画面は保存済みの質問から利用できます。通常画面は起動後の通知の冒頭を表示し、全文や過去の通知はゴール記録から参照できます。通知の配送結果はログに保存されます。
 

@@ -6153,7 +6153,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       persona === '../personas/coder.md' && options?.resolvedProvider === 'claude'
     ));
     expect(partCall).toBeDefined();
-    expect(partCall?.[2]?.allowedTools).toEqual(['Read', 'Grep']);
+    expect(partCall?.[2]?.allowedTools).toEqual(['Read', 'Bash', 'Grep']);
   });
 
   it('OpenCode part では part_edit false の part_allowed_tools から編集系ツールを除去するが bash は残す', async () => {
@@ -6251,7 +6251,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       persona === 'coder' && options?.resolvedProvider === 'pi'
     ));
     expect(partCall).toBeDefined();
-    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
+    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
   });
 
   it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {

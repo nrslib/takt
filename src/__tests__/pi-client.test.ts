@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => {
     extensionPath: string;
   }> = [];
   let sessionSequence = 0;
+  let activeToolNames: string[] = [];
 
   const assistantMessage = {
     role: 'assistant',
@@ -78,7 +79,10 @@ const mocks = vi.hoisted(() => {
     sessionId: 'sdk-session-0',
     model: { provider: 'test', id: 'model' } as { provider: string; id: string } | undefined,
     messages: [],
-    setActiveToolsByName: vi.fn(),
+    setActiveToolsByName: vi.fn((toolNames: string[]) => {
+      activeToolNames = [...toolNames];
+    }),
+    getActiveToolNames: vi.fn(() => [...activeToolNames]),
     setModel: vi.fn(async () => undefined),
     setThinkingLevel: vi.fn((level: string) => {
       currentThinkingLevel = level;
@@ -198,7 +202,9 @@ const mocks = vi.hoisted(() => {
       loadedExtensions = [];
       pendingProviderRegistrations = [];
       toolDefinitions = createDefaultTools();
+      activeToolNames = [];
       mocks.session.setActiveToolsByName.mockClear();
+      mocks.session.getActiveToolNames.mockClear();
       mocks.session.bindExtensions.mockReset();
       mocks.session.bindExtensions.mockResolvedValue(undefined);
       mocks.session.setModel.mockClear();
@@ -1000,7 +1006,7 @@ export default function registerLifecycleTool(pi) {
     });
     expect(result.status).toBe('done');
     expect(mocks.getLoaderOptions()).toMatchObject({ [loaderKey]: [resourcePath] });
-    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls', 'bash']);
   });
 
   it('loads multiple successful extension sources only once', async () => {
@@ -1585,13 +1591,54 @@ export default function registerLifecycleTool(pi) {
         imageAttachments: [{ placeholder: '[Image #1]', path: imagePath }],
       });
 
-      expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read']);
+      expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'bash']);
       expect(mocks.getPromptOptions()).toMatchObject({
         images: [{ type: 'image', mimeType: 'image/png', data: Buffer.from('image-data').toString('base64') }],
       });
     } finally {
       rmSync(imageDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { label: 'implicit inspection tools', allowedTools: undefined, expected: ['read', 'grep', 'find', 'ls'] },
+    { label: 'explicit deny-all', allowedTools: [], expected: [] },
+    { label: 'explicit Read', allowedTools: ['Read'], expected: ['read'] },
+    { label: 'explicit Bash', allowedTools: ['Bash'], expected: [] },
+    { label: 'explicit Read and Bash', allowedTools: ['Read', 'Bash'], expected: ['read'] },
+  ])('limits $label to inspection tools for strict-readonly', async ({ label, allowedTools, expected }) => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'generate verification specifications', {
+      ...sessionOptions(`pi-sdk-strict-${label}`),
+      permissionMode: 'readonly',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools,
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    mocks.triggerRuntimeRefreshTools();
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    mocks.triggerRuntimeSetActiveTools(['read', 'bash', 'edit', 'write']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(expected);
+    expect(invokeToolGuard('bash')).toMatchObject({ block: true });
+  });
+
+  it.each(['full', undefined] as const)('keeps strict-readonly inspection limits with permission mode %s', async (permissionMode) => {
+    mocks.resetTransient();
+
+    const response = await callPi('worker', 'inspect without shell access', {
+      ...sessionOptions(`pi-sdk-strict-mode-${permissionMode}`),
+      permissionMode,
+      internalAgentIsolation: 'strict-readonly',
+    });
+
+    expect(response.status).toBe('done');
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    mocks.triggerRuntimeSetActiveTools(['bash']);
+    expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith(['read', 'grep', 'find', 'ls']);
+    expect(invokeToolGuard('bash')).toMatchObject({ block: true });
   });
 
   it('enables only read for verification interpretation with a read-only allowlist', async () => {
@@ -1626,15 +1673,16 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
     expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([
       'read',
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
   });
 
@@ -1672,6 +1720,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -1694,9 +1743,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -1734,9 +1783,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
   });
 
@@ -1875,6 +1924,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2062,9 +2112,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
       'trusted_extension_tool',
     ]);
     expect(mocks.session.setActiveToolsByName).toHaveBeenLastCalledWith([
@@ -2072,6 +2122,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
     expect(mocks.createAgentSession).toHaveBeenCalledOnce();
@@ -2165,6 +2216,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2263,6 +2315,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2584,9 +2637,9 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'edit',
       'write',
-      'bash',
     ]);
   });
 
@@ -2648,6 +2701,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
       'trusted_extension_tool',
     ]);
   });
@@ -2679,6 +2733,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     mocks.triggerRuntimeRefreshTools();
@@ -2687,6 +2742,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     mocks.triggerRuntimeSetActiveTools(['read', 'grep']);
@@ -2695,6 +2751,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
     expect(mocks.createAgentSession).toHaveBeenCalledOnce();
   });
@@ -2727,6 +2784,7 @@ export default function registerLifecycleTool(pi) {
       'grep',
       'find',
       'ls',
+      'bash',
     ]);
 
     overrideRead.sourceInfo.path = AMBIENT_EXTENSION_PATH;

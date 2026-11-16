@@ -14,9 +14,9 @@
 
 合意を次の作業へ引き継ぐため、作業方法、実行順序、確認の時点、実行する範囲について人が指定した条件は、具体的な内容を constraints に残す。受け入れ条件には完成時の振る舞いと証拠を整理し、制約には指定されたコマンド、順序、対象と適用時点を保つ。
 
-人が内容を確かめて承認できるよう、登録案は message と summary の JSON で返す。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様を run の指示書へ渡し、合意を実装と確認へ引き継ぐ。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
+応答は message と summary の JSON で返す。通常の相談では summary を null に保ち、合意が整ったら、登録案の作成には /make-goal を実行するよう message で案内する。人が /make-goal を明示実行したターン（入力の requestProposal が true）のときだけ、現在の会話から登録案を生成する。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様を run の指示書へ渡し、合意を実装と確認へ引き継ぐ。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
 
-合意が整ったら summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選ぶよう案内する。合意をまとめる途中、状態操作、イベント・director の伝言への応答は summary を null とする。イベント・伝言では相談中の登録案を保持し、人との会話で続きを扱う。
+/make-goal の明示実行時は summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選ぶよう案内する。材料が不足している場合は理由を message で説明し、summary を null とする。通常の自由入力（登録や修正の依頼を含む）、問い合わせ回答、状態操作、見回り、イベント・director の伝言への応答では登録案を生成せず、summary を null とする。イベント・伝言では相談中の登録案を保持し、人との会話で続きを扱う。
 
 仕様には渡された comments を適用する。Gherkin に記す期待結果と、acceptanceCriteria に記すその他の条件・仕様全体の確認条件を分ける。
 

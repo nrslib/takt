@@ -1,5 +1,5 @@
 import type { RunAgentOptions } from '../../agents/runner.js';
-import { PI_READONLY_TOOLS } from '../../infra/providers/pi-tool-policy.js';
+import { PI_INSPECTION_TOOLS } from '../../infra/providers/pi-tool-policy.js';
 
 export function reportPhaseEventTools(provider: RunAgentOptions['resolvedProvider']): readonly string[] {
   switch (provider) {
@@ -15,7 +15,7 @@ export function reportPhaseEventTools(provider: RunAgentOptions['resolvedProvide
     case 'opencode':
       return ['read', 'list', 'glob', 'grep'];
     case 'pi':
-      return PI_READONLY_TOOLS;
+      return PI_INSPECTION_TOOLS;
     case 'copilot':
       return ['view', 'glob', 'grep'];
     case 'kiro':

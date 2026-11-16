@@ -20,6 +20,8 @@ export interface ProviderImageAttachment {
 
 export interface ProviderCallOptions {
   cwd: string;
+  /** TAKT-owned external context directories OpenCode may read for this run. */
+  openCodeExternalDirectories?: readonly string[];
   /** The caller owns session recovery; provider retries must not replay a turn. */
   callerManagedSession?: true;
   /** Keep supplied prepared MCP alive until the caller finishes all attempts. */
@@ -80,6 +82,8 @@ export interface ProviderCallOptions {
 export interface ProviderCompactSessionOptions {
   cwd: string;
   sessionId: string;
+  /** TAKT-owned external context directories OpenCode may read for this run. */
+  openCodeExternalDirectories?: readonly string[];
   model?: string;
   /** Internal workflow capability for resolving an OpenCode runtime default. */
   allowDefaultModel?: boolean;

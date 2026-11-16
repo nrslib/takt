@@ -29,7 +29,7 @@ manager:
 
 処理中のTUIには、経過時間と現在の動作を表示します。Bashはdescriptionがあればその説明を、その他の道具は名前を表示します。長い表示は末尾を「…」で省略し、幅80でも経過時間を残します。通常のターンと `/verify` の解釈段階では、途中の文を次の道具の開始時に、最後の返答より前へ順番に表示します。ターンまたは解釈段階の終了時に残った文は、途中出力として表示せずに破棄します。最後の返答は引き続き表示します。途中の文は保存せず、再接続しても再表示しません。見回りでは道具の表示と経過時間だけを表示し、途中の文は出しません。Slackには途中の文や道具のdescriptionを送りません。
 
-登録案が表示されていても、`/make-goal` は今の会話から案を作り直すだけで、登録はしません。登録には「登録する」の選択と `Enter` が必要です。材料が不足している場合は、その旨を表示して会話を続けられます。manager から登録案を提示することもあります。
+登録案が表示されていても、`/make-goal` は今の会話から案を作り直すだけで、登録はしません。登録には「登録する」の選択と `Enter` が必要です。材料が不足している場合は、その旨を表示して会話を続けられます。通常の相談では登録案を自動生成しません。合意が整ったら manager が `/make-goal` を案内し、TUI・Slack ともに明示実行したときだけ承認待ちの案を作ります。
 
 通常画面の最下部には、担当名・進行中のゴール（実行中・一時停止中）・人のマージ待ち・未回答の問い合わせの件数を表示します。仕上げが動いているゴールや、最後の仕上げが失敗したゴールは進行中に数えます。担当の見出しが長い場合は中央を省略して件数を残し、狭い端末では担当名と件数を2行に分けます。実験的機能の注意書きは、起動ごとに会話表示の先頭に黄色で一度だけ表示します。完成・中止したゴールの一覧や問い合わせの本文は並べません。入力欄で `/` を打つと `/make-goal` と `/verify` が補完候補になり、`↑↓` で選んで `Tab` で確定できます。`/make-goal` と `/verify` 以外の `/` で始まる入力は、普通の発言として manager に送ります。
 
@@ -233,7 +233,7 @@ manager:
 
 `takt_merge_goal_pr` は必須の `cwd`、`goalId`、`prNumber`、`until` を受け、`merge_task: true` と `goal_id` を持つタスクを `tasks.yaml` に pending で積み、すぐにタスク名を返します。`prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）、`merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使います。同じ対象の pending / running タスクは二重に積めません。
 
-daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の取り込み、競合解消、レビューと修正、push、Caccia、CI 待ちを行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
+daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の変更を取り込み、push、Caccia、CI 待ちへ進みます。AIで競合を解消した場合は、初回・再同期ともpush前にレビューと修正を行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
 
 push 後は、元リポジトリのゴールブランチが origin の祖先なら fast-forward します。分岐していれば両方の履歴を保持して失敗結果とイベントで知らせます。チェックアウト中の作業コピーは書き換えず、追従を止めて知らせます。タスクの取り込み前と再申請の push 前にも同じ確認を行います。追従で先端が変わった場合は、その新しい SHA の受け入れ条件を確認し直して申請します。
 

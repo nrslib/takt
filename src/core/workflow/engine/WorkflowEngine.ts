@@ -121,6 +121,7 @@ function getWorkflowRunExecutor(engine: WorkflowEngine): () => Promise<WorkflowR
 }
 
 export class WorkflowEngine extends EventEmitter {
+  readonly openCodeExternalDirectories: readonly string[];
   private reportExecutionResumePending = true;
   private state: WorkflowState;
   private config: WorkflowConfig;
@@ -419,6 +420,7 @@ export class WorkflowEngine extends EventEmitter {
         };
       },
     });
+    this.openCodeExternalDirectories = services.openCodeExternalDirectories;
     this.optionsBuilder = services.optionsBuilder;
     this.stepExecutor = services.stepExecutor;
     this.parallelRunner = services.parallelRunner;

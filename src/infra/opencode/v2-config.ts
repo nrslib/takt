@@ -1,6 +1,7 @@
 import type { ConfigEntry } from '@opencode/client';
 import type { Config as V1Config } from '@opencode-ai/sdk/v2/types';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { buildOpenCodeV2ExternalDirectoryRules } from './external-directories.js';
 
 type V2Config = Extract<ConfigEntry, { type: 'document' }>['info'];
 
@@ -10,6 +11,7 @@ export function buildV2ServerConfig(
   plugin: string,
   mcp: Record<string, unknown> | undefined,
   skillsEnabled = false,
+  externalDirectoryAllowlist?: readonly string[],
 ): V2Config {
   const servers: NonNullable<NonNullable<V2Config['mcp']>['servers']> = {};
   for (const [name, config] of Object.entries((mcp ?? {}) as NonNullable<V1Config['mcp']>)) {
@@ -35,7 +37,7 @@ export function buildV2ServerConfig(
   return {
     ...(model === undefined ? {} : { model }),
     plugins: [plugin],
-    permissions: [{ action: 'external_directory', resource: '*', effect: 'deny' }],
+    permissions: buildOpenCodeV2ExternalDirectoryRules(externalDirectoryAllowlist),
     agents: { takt: agent('opencode_agent_prompt'), 'takt-review': agent('opencode_review_agent_prompt'), 'takt-report': agent('opencode_report_agent_prompt'), 'takt-read': agent('opencode_read_agent_prompt') },
     ...(apiKey === undefined ? {} : { providers: { opencode: { settings: { apiKey } } } }),
     ...(mcp === undefined ? {} : { mcp: { servers } }),

@@ -1056,7 +1056,7 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 | 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
 |------|------|--------|-------|----------|----|------------------|--------------|---------|----------|-----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` | `ask` ACP session mode + 生成的 `--config` deny 规则（`exec`、`edit`、`Write(**)`、`mcp__*`） |
+| `readonly` | 工具（包括 shell）的可用性以及对 shell 写入的防护因 provider 而异，请参阅各 provider 列 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` | `ask` ACP session mode + 生成的 `--config` deny 规则（`exec`、`edit`、`Write(**)`、`mcp__*`） |
 | `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成的 `--config` allow 规则（`exec`、`edit`、`Write(**)`） |
 | `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode；permission 请求以 `allow_once` 应答 |
 
@@ -1648,7 +1648,7 @@ takt update codex     # 仅更新指定提供者
 
 GitLab 支持 MR 详情、CI 状态获取和批量选择。启用 Caccia 时，在 `takt merge` 和 `from_pr` 任务中，Caccia effect 返回原因是 `github_unavailable` 的 `skipped`，然后等待返回 head 的 CI。合并结果 pipeline 通过合并提交的第二个父提交与 source head 的一致性进行验证。没有 pipeline 或 pipeline 对应旧 head 时不会通过 CI。指定合并方式和限制 head 仍不受支持，传入这些参数的 `merge_pr` 会失败。CI 等待完成不代表合并成功。
 
-默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。manager 调用 `takt_merge_goal_pr` 且指定 `until: prepare` 时使用 `merge.prepare_workflow`（默认 `merge-prepare`）；`until: merge` 和 `takt merge` 仍使用 `merge.workflow`，此设置不改变 CLI 的 workflow 选择。
+默认的 `merge.workflow` 是 `merge-review-fix-simple`：先同步 PR 与 base 分支；无冲突时跳过完整审查，直接进入 push → Caccia → CI 等待；AI 解决冲突后则由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查，然后进入同一 push、Caccia 和 CI 流程。初次同步和重新同步均遵循此条件。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。manager 调用 `takt_merge_goal_pr` 且指定 `until: prepare` 时使用 `merge.prepare_workflow`（默认 `merge-prepare`）；`until: merge` 和 `takt merge` 仍使用 `merge.workflow`，此设置不改变 CLI 的 workflow 选择。默认的 `merge-prepare` 使用相同的同步、条件审查、push、Caccia 和 CI 流程，随后正常结束，等待人工合并。
 
 `takt merge` 批量处理默认同时运行 2 个 PR workflow。可以在项目或全局配置中设置正的安全整数；项目级 `merge` 配置块优先于全局配置块。命令行 `--concurrency` 优先于配置。根级 `concurrency` 只控制 `takt run` 和 `takt watch`。指定 PR 编号时只处理该 PR。
 

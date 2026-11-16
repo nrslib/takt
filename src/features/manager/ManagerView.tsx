@@ -321,7 +321,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (summaryRequest) setSummarizing(true);
     resetChoice();
     void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
-      ...(summaryRequest ? { display: false } : {}) },
+      ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
       })

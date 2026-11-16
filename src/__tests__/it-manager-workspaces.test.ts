@@ -334,11 +334,11 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       for (const target of [undefined, repositoryC, repository('a/nested')]) {
         reply(target);
-        expect((await submitAndWait(session, { kind: 'message', text: '相談' })).kind).toBe('error');
+        expect((await submitAndWait(session, { kind: 'message', text: getLabel('manager.goSummaryRequest', 'ja'), display: false, requestProposal: true })).kind).toBe('error');
         expect(session.getSnapshot().state?.pending).toBeNull();
       }
       reply(repositoryB);
-      expect((await submitAndWait(session, { kind: 'message', text: '相談' })).kind).toBe('reply');
+      expect((await submitAndWait(session, { kind: 'message', text: getLabel('manager.goSummaryRequest', 'ja'), display: false, requestProposal: true })).kind).toBe('reply');
       expect(session.getSnapshot().state!.pending!.repositoryDirectory).toBe(repositoryB);
       const registered = await submitAndWait(session, { kind: 'approve_summary', revision: session.getSnapshot().state!.pending!.revision });
       expect(registered.kind).toBe('goal_registered');
@@ -346,7 +346,7 @@ describe('manager workspace storage and repository boundaries', () => {
       expect((await new GoalStore(repositoryB).list()).goals).toHaveLength(1);
       reply(repositoryC);
       await addManagerRepository(await resolveCurrentManagerAssignment(identity, globalDirectory), repositoryC, globalDirectory);
-      await submitAndWait(session, { kind: 'message', text: '別の相談' });
+      await submitAndWait(session, { kind: 'message', text: getLabel('manager.goSummaryRequest', 'ja'), display: false, requestProposal: true });
       const pending = session.getSnapshot().state!.pending!;
       await removeManagerRepository(await resolveCurrentManagerAssignment(identity, globalDirectory), repositoryC, globalDirectory);
       expect((await submitAndWait(session, { kind: 'approve_summary', revision: pending.revision })).kind).toBe('error');

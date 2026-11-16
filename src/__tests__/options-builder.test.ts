@@ -34,6 +34,7 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
+  readonly openCodeExternalDirectories?: readonly string[];
 }
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -81,6 +82,8 @@ function createBuilder(
     reportsRootDir === undefined
       ? undefined
       : () => reportsRootDir,
+    undefined,
+    phaseContextSources.openCodeExternalDirectories,
   );
 }
 
@@ -103,6 +106,21 @@ describe('OptionsBuilder.buildBaseOptions', () => {
         codex: { defaultPermissionMode: 'full' },
       },
     });
+  });
+
+  it('carries TAKT external context directories into OpenCode workflow options', () => {
+    const contextDirectory = '/state/.takt/runs/run-a/context';
+    const builder = createBuilder(
+      createStep({ provider: 'opencode', model: 'opencode/model' }),
+      { provider: 'opencode', model: 'opencode/model' },
+      undefined,
+      { openCodeExternalDirectories: [contextDirectory] },
+    );
+
+    const step = createStep({ provider: 'opencode', model: 'opencode/model' });
+    expect(builder.buildBaseOptions(step).openCodeExternalDirectories).toEqual([contextDirectory]);
+    expect(builder.buildNewSessionReportOptions(step, { maxTurns: 1 }).openCodeExternalDirectories)
+      .toEqual([contextDirectory]);
   });
 
   it('passes runtime defaults permission mode to the actual provider call', () => {
@@ -958,7 +976,9 @@ describe('OptionsBuilder.buildResumeOptions', () => {
         expect(options.executionPhase).toBe(2);
         expect(options.outputSchema).toBeUndefined();
       }
-      if (provider === 'pi') expect(phase1.allowedTools).toEqual(expectedTools);
+      if (provider === 'pi') {
+        expect(phase1.allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
+      }
     },
   );
 
@@ -981,15 +1001,15 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     },
   );
 
-  it('allows the actual Pi readonly tool names after workflow aliases are normalized', () => {
+  it('allows Pi inspection tools but not Bash in report phases after workflow aliases are normalized', () => {
     const step = createStep({ provider: 'pi', model: 'test-model' });
     const options = createBuilder(step).buildResumeOptions(step, 'session', { maxTurns: 3 });
     const tools = ['read', 'grep', 'find', 'ls', 'codemode', 'bash', 'write', 'edit']
       .map((name) => ({ name, source: 'builtin' }));
-    const phase1Names = resolvePiActiveTools('readonly', ['Read', 'Grep', 'Glob', 'LS', 'CodeMode'], tools);
+    const inspectionNames = resolvePiActiveTools('readonly', ['Read', 'Grep', 'Glob', 'LS', 'CodeMode'], tools);
 
-    expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names));
-    expect(resolvePiActiveTools(options.permissionMode, options.allowedTools, tools)).toEqual(phase1Names);
+    expect(new Set(options.allowedTools)).toEqual(new Set(inspectionNames));
+    expect(resolvePiActiveTools(options.permissionMode, options.allowedTools, tools)).toEqual(inspectionNames);
   });
 
   it('rejects every DeepSeek report route before SDK startup when tool constraints cannot be enforced', async () => {
@@ -1460,7 +1480,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
-  it('removes write and command tools when output contracts exist and edit is not enabled', () => {
+  it('removes write tools but keeps Bash when output contracts exist and edit is not enabled', () => {
     // Given
     const step = createStep({
       outputContracts: [{ name: 'report.md', format: 'markdown', useJudge: true }],
@@ -1475,10 +1495,10 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     const options = builder.buildAgentOptions(step);
 
     // Then
-    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read', 'Bash']);
   });
 
-  it('removes command tools when edit is false without output contracts', () => {
+  it('keeps command tools when edit is false without output contracts', () => {
     const step = createStep({
       providerOptions: {
         claude: { allowedTools: ['Read', 'bash', ' Bash '] },
@@ -1489,7 +1509,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read', 'bash', 'Bash']);
   });
 
   it('removes OpenCode command tools when edit is false without output contracts', () => {

@@ -287,7 +287,7 @@ If the GitHub PR head differs from the clone's starting HEAD, the effect fetches
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -1421,7 +1421,7 @@ TAKT uses three provider-independent permission modes:
 
 | Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
 |------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|-----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
+| `readonly` | Tool availability, including shell access, and protection against shell writes vary by provider; see the provider columns | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
 | `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + generated `--config` allow rules (`exec`, `edit`, `Write(**)`) |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode; permission requests answered `allow_once` |
 
@@ -1433,7 +1433,7 @@ Devin runs through `devin acp` (Agent Client Protocol over stdio) rather than pr
 
 The generated `--config` replaces only Devin's user-level config. A project-level `.devin/config.json` (and `.devin/config.local.json`) in the repository has higher precedence in Devin, and its `permissions.allow` rules pre-approve tool calls before Devin sends TAKT a permission request — in `edit` mode or with no permission mode set, a repository `.devin/config.json` with `allow: ["exec", ...]` let a shell command run that TAKT would otherwise have rejected. `readonly` and `strict-readonly` are not affected, because the ACP `ask` mode exposes no write/exec tools, and TAKT's `deny` rules still win over project `allow` rules for the rules TAKT emits. Review a repository's `.devin/config.json` before running `edit`-mode Devin steps on untrusted repositories.
 
-Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
+Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. Both Pi `readonly` and `edit` enable `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
 ### Configuration
 
@@ -2104,7 +2104,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 GitLab supports MR details, CI status acquisition, and bulk selection. When Caccia is enabled, its effect in `takt merge` and `from_pr` tasks returns `skipped` with `github_unavailable` and continues to CI on the returned head. Merged results pipelines are matched through the merge commit's second parent and the source head. Missing pipelines and pipelines for an older head do not pass CI. Selecting a merge method or constraining the head is still unsupported: `merge_pr` fails when either is supplied. Completing the CI wait does not imply a successful merge.
 
-The default `merge.workflow` is `merge-review-fix-simple`. It gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
+The default `merge.workflow` is `merge-review-fix-simple`. After AI conflict resolution, it gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. A clean sync skips this full review and proceeds to push, Caccia, and CI. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
 
 Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
 

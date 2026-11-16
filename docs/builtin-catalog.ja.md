@@ -33,9 +33,9 @@ TAKT に同梱されるワークフローとペルソナの一覧です。まず
 |  | `review-fix` | レビューの指摘を修正して再確認する。 |
 |  | `caccia` | CodeRabbit レビューの1反復。渡されたスレッドを判断し、妥当な指摘を修正して判断レポートを出力する。 |
 |  | `merge-review` | review と Caccia 効果の後、CI と評価をコメントして終了する。 |
-|  | `merge-review-fix` | review-fix → push → Caccia 効果 → 最新 head の CI・レビュー判定 → マージ。 |
-|  | `merge-review-fix-simple` | takt merge の既定。1体のレビューと別ステップの裁定・修正・検証後、push → Caccia 効果 → CI・レビュー判定 → マージ。 |
-|  | `merge-prepare` | 同期・競合解消、1体のレビューと裁定・修正・検証、push、Caccia、CI 待ちまで仕上げ、人のマージを待つ。 |
+|  | `merge-review-fix` | 同期し、AIによる競合解消時は review-fix を実行。push → Caccia 効果 → 最新 head の CI・レビュー判定 → マージ。 |
+|  | `merge-review-fix-simple` | takt merge の既定。同期し、AIによる競合解消時は1体のレビューと裁定・修正・検証を実行。push → Caccia 効果 → CI・レビュー判定 → マージ。 |
+|  | `merge-prepare` | 同期し、AIによる競合解消時は1体のレビューと裁定・修正・検証を実行。push、Caccia、CI 待ちまで仕上げ、人のマージを待つ。 |
 |  | `audit-unit` | ユニットテストの全件監査。振る舞いとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-e2e` | E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-security` | セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする |
@@ -102,7 +102,7 @@ workflow YAML 自体には provider/model/provider-options field はありませ
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
-マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了します。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `sync → commit_and_push → caccia → wait_ci → merge_pr` の順です。AIで競合を解消した場合は、初回・再同期とも `commit_and_push` の前にレビュー・修正を行います。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了します。効果の失敗は `error` をコメントして ABORT で終了します。Git の push 自体は Caccia を起動しません。PR 公開後の自動 Caccia は[設定リファレンス](./configuration.ja.md#caccia-レビューループ)の有効化条件・除外条件・実行順序に従います。
 
 `merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。CI 待機の timeout も未解決として ABORT し、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
 

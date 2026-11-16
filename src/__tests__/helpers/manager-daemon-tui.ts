@@ -10,6 +10,7 @@ import { readDaemonOwner } from '../../infra/daemon/owner.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
+import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -53,6 +54,11 @@ export interface ManagerTuiProcess {
   exit(): Promise<void>;
 }
 
+export interface ManagerDaemonResponse {
+  message: string;
+  summary: (ManagerGoalSummary & { repositoryDirectory?: string }) | null;
+}
+
 export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[], activity = false) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'team-a', 'takt3');
@@ -79,7 +85,11 @@ export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly s
   const responses = replies === undefined
     ? Array.from({ length: 8 }, () => ({ message: 'The daemon completed this request.', summary: { ...summary, repositoryDirectory: repository } }))
     : replies.map((message) => ({ message, summary: null }));
-  writeFileSync(scenario, JSON.stringify(responses.map((structured_output) => ({ persona: 'manager', content: '', structured_output }))));
+  const setResponses = (next: readonly ManagerDaemonResponse[]): void => writeFileSync(scenario, JSON.stringify(next.map(({ message, summary: responseSummary }) => ({
+    persona: 'manager', content: '', structured_output: { message,
+      summary: responseSummary === null ? null : { ...responseSummary, repositoryDirectory: responseSummary.repositoryDirectory ?? repository } },
+  }))));
+  setResponses(responses);
   const harness = join(directory, 'ink-harness.mjs');
   writeFileSync(harness, `
 import { render } from ${JSON.stringify(pathToFileURL(require.resolve('ink-testing-library')).href)};
@@ -180,7 +190,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Socket } from 'node:net';
 import { ConversationStateStore } from ${JSON.stringify(built('infra/daemon/conversationStateStore.js'))};
 import { MockProvider } from ${JSON.stringify(built('infra/providers/mock.js'))};
-import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
 const save = ConversationStateStore.prototype.write;
 ConversationStateStore.prototype.write = async function(stored, signal) {
@@ -195,7 +204,7 @@ MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
     record({ event: 'provider_start', agent: config.name, model: options.model,
-      summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
+      summaryRequest: prompt.includes('"requestProposal":true') });
     const deadline = Date.now() + 60000;
     const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';
     if (showActivity) options.onStream?.({ type: 'thinking', data: { thinking: 'private-reasoning-marker' } });
@@ -352,7 +361,7 @@ finally { process.disconnect(); }
     const owner = await readDaemonOwner(directory);
     if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
   };
-  return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository };
+  return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository, setResponses };
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {

@@ -458,6 +458,9 @@ export class StepExecutor {
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
+                ...(judgeOptions.openCodeExternalDirectories === undefined
+                  ? {}
+                  : { openCodeExternalDirectories: judgeOptions.openCodeExternalDirectories }),
                 onStream: judgeOptions.onStream,
                 onActivity: judgeOptions.onActivity,
                 mcpServers: judgeOptions.mcpServers,
@@ -2029,6 +2032,9 @@ export class StepExecutor {
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
+                    ...(agentOptions.openCodeExternalDirectories === undefined
+                      ? {}
+                      : { openCodeExternalDirectories: agentOptions.openCodeExternalDirectories }),
                   }).then((response) => {
                     const freshResponse = { ...response };
                     delete freshResponse.sessionId;

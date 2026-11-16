@@ -18,7 +18,8 @@ import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { registerReservedGoal } from '../../infra/goals/service.js';
+import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
+import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { ensureManagerRun } from './autoRun.js';
@@ -152,13 +153,33 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             nextRevision(state.current.revision);
             const reservation = existing?.revision === command.revision ? existing
               : { state: 'reserved' as const, revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory };
-            // The reservation must be durable before creating a goal or its Git resources.
-            await state.save({ approval: reservation });
-            io.signal.throwIfAborted();
-            const goal = await registerReservedGoal({ ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
-            return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
-              approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
-            }) };
+            let reservationSaved = existing?.state === 'reserved';
+            try {
+              if (new GoalStore(reservation.repositoryDirectory).find(reservation.goalId) === undefined) {
+                validateGoalBranchReferences(reservation.repositoryDirectory, priorPending.summary.startBranch, priorPending.summary.integrationBranch);
+              }
+              if (!reservationSaved) {
+                // The reservation must be durable before creating a goal or its Git resources.
+                await state.save({ approval: reservation });
+                reservationSaved = true;
+              }
+              io.signal.throwIfAborted();
+              const goal = await registerReservedGoal({ ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
+              return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
+                approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
+              }) };
+            } catch (error) {
+              if (reservationSaved) {
+                try {
+                  if (!await hasGoalRegistrationArtifacts(reservation.repositoryDirectory, reservation.goalId)) {
+                    await state.save({ approval: null });
+                  }
+                } catch (reconciliationError) {
+                  throw new Error(`Goal registration failed: ${String(error)}; reservation reconciliation failed: ${String(reconciliationError)}`, { cause: error });
+                }
+              }
+              throw error;
+            }
           }
         } else if (command.kind === 'message') {
           const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
@@ -210,14 +231,15 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               io.progress(getLabel('manager.conversation.assignment_changed', language));
             }
             let pending: PendingSummary | null = null;
-            if (output.summary !== null) {
-              if (!human || assignment.kind === 'daemon') throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && (!human || assignment.kind === 'daemon')) throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && human && command.requestProposal === true && !verify && assignment.kind !== 'daemon') {
               const { repositoryDirectory: requested, ...summary } = output.summary;
               const target = requested ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
               if (target === undefined) throw new ConversationError('invalid_assignment');
               const repositoryDirectory = await resolveAssignedProjectRoot(target, assignment);
               if (!latest.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
               validateManagerSummary(summary);
+              validateGoalBranchReferences(repositoryDirectory, summary.startBranch, summary.integrationBranch);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({

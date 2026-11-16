@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
 import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
 import * as goalGit from '../infra/goals/git-command.js';
+import * as repositoryDirectory from '../infra/task/repositoryDirectory.js';
 import * as runMeta from '../core/workflow/run/run-meta.js';
 import { listGoalsInputSchema, type EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import { goalId, goalRecord } from './helpers/goal-fixtures.js';
-import { goalSummary } from '../features/mcp/goalResponse.js';
+import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import { goalSummary, goalWriteSummary } from '../features/mcp/goalResponse.js';
 import { MCP_RESPONSE_MAX_BYTES, responseBytes } from '../features/mcp/response.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalCreateInput } from '../infra/goals/schema.js';
+
+vi.mock('node:fs/promises', async (original) => ({
+  ...await original<typeof import('node:fs/promises')>(),
+}));
 
 const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({
@@ -21,6 +28,12 @@ vi.mock('../infra/goals/store.js', () => ({
     }
     get = goalDoubles.get;
   },
+}));
+
+const goalServiceDoubles = vi.hoisted(() => ({ createGoal: vi.fn() }));
+vi.mock('../infra/goals/service.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/service.js')>(),
+  createGoal: goalServiceDoubles.createGoal,
 }));
 
 function invalidGoalErrors(count: number) {
@@ -682,5 +695,69 @@ describe('MCP enqueue operation', () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe('Task enqueue failed: permission denied');
+  });
+});
+
+describe('MCP create goal operation', () => {
+  const input: GoalCreateInput = { cwd: '/repo', id: goalId, ...goalInput() };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.spyOn(repositoryDirectory, 'resolveGitRepositoryDirectory').mockResolvedValue(input.cwd);
+    vi.spyOn(fsPromises, 'realpath').mockResolvedValue(input.cwd);
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns the saved goal summary and forwards the input and signal to the service', async () => {
+    const controller = new AbortController();
+    const goal = goalRecord();
+    goalServiceDoubles.createGoal.mockResolvedValue(goal);
+
+    const result = await createTaktGoal(input, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalWriteSummary(goal) });
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('forwards the checked Git root when cwd resolves to the root through a symlink and parent segment', async () => {
+    const controller = new AbortController();
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub/link/..' }, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('rejects a subdirectory without calling the creation service', async () => {
+    vi.mocked(fsPromises.realpath).mockResolvedValue('/repo/sub');
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub' }, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-Git directory without calling the creation service', async () => {
+    vi.mocked(repositoryDirectory.resolveGitRepositoryDirectory).mockRejectedValue(new Error('Not a Git repository'));
+
+    const result = await createTaktGoal(input, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
+  });
+
+  it('converts service failures to sanitized MCP errors', async () => {
+    goalServiceDoubles.createGoal.mockRejectedValue(
+      new Error("EACCES: permission denied, open '/Users/reviewer/secret/.takt/goals/goal.json'"),
+    );
+
+    const result = await createTaktGoal(input, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toBe('Goal creation failed: permission denied');
   });
 });

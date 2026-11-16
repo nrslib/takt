@@ -240,17 +240,17 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(partTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'workspace-write' : undefined);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and tool filter for edit=false', async (provider) => {
+  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and Bash while filtering edit tools for edit=false', async (provider) => {
     const options = builder({
       provider,
       providerOptions: { claude: { allowedTools: ['Read', 'Grep', 'Write', 'Edit', 'Bash'] } },
     }).buildAgentOptions(reviewStep);
-    expect(options.allowedTools).toEqual(['Read', 'Grep']);
+    expect(options.allowedTools).toEqual(['Read', 'Grep', 'Bash']);
     expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
     const callOptions = claudeCall.mock.calls[0]![2];
     expect(callOptions.permissionMode).toBe('edit');
     expect(buildSdkOptions(callOptions)).toMatchObject({
-      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep'],
+      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep', 'Bash'],
     });
   });
 

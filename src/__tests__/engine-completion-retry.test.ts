@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
@@ -139,6 +139,33 @@ describe('WorkflowEngine completion retry wiring', () => {
     expect(runReportPhase).toHaveBeenCalledOnce();
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
+  });
+
+  it('passes external run context directories to the Phase 3 completion judge', async () => {
+    const cloneCwd = join(cwd, 'clone');
+    mkdirSync(cloneCwd, { recursive: true });
+    const step = reviewStep('reviewer', { completionRetry: { ...completion, maxRetry: 0 } });
+    engine = new WorkflowEngine(normalConfig(step), cloneCwd, 'task', {
+      projectCwd: cwd,
+      provider: 'opencode',
+      model: 'opencode/probe',
+      runPathsDirectory: join(cwd, '.takt', 'runs'),
+      reportDirName: 'external-run-context',
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === COMPLETION_RETRY_JUDGE_NAME) return judgeResponse(true);
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'review', 'review-session');
+    });
+
+    await expect(engine.run()).resolves.toMatchObject({ status: 'completed' });
+
+    const judgeCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => (
+      options.internalAgentName === COMPLETION_RETRY_JUDGE_NAME
+    ));
+    expect(judgeCall?.[2].openCodeExternalDirectories).toEqual([
+      realpathSync(join(cwd, '.takt', 'runs', 'external-run-context', 'context')),
+    ]);
   });
 
   it('loads the review-completion judge runtime seat through to the common transport', async () => {

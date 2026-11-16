@@ -11,6 +11,7 @@ import {
   getWorkflowInputSchema,
   getGoalInputSchema,
   enqueueTaskInputSchema,
+  createGoalInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
   cleanupTasksInputSchema,
@@ -42,7 +43,7 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
-import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { createTaktGoal, enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
 import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
@@ -353,7 +354,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Prepare or merge a goal PR',
-      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare workflow handles preparation through review, CodeRabbit and CI; custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
+      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare and merge-review-fix-simple workflows handle target-branch integration, CodeRabbit feedback, and CI waiting. For both initial synchronization and resynchronization, a clean base sync skips the full review; after AI conflict resolution, review and fixes run before push. Custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
       inputSchema: mergeGoalPrInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {
@@ -395,6 +396,15 @@ export function createTaktMcpServer(
         inputSchema: enqueueTaskInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Task enqueue failed', (deps) => enqueueTaktTask(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_create_goal',
+      {
+        title: 'Create TAKT goal',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd the absolute path to the Git repository root. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        inputSchema: createGoalInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
   }
 
