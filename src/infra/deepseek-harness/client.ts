@@ -556,7 +556,11 @@ function writeResponseRedactedChunks(
     const combined = context.toolBoundaryText + text;
     const values = new Set(Object.values(knownSecrets));
     for (const value of context.buffer.sensitiveValues.values) values.add(value);
-    const ranges = sensitiveTextRanges(combined, values)
+    const knownRanges = substringSensitiveRanges(combined, values);
+    const candidateRanges = /^\S+(?:\r?\n)?$/u.test(text)
+      ? sensitiveTextRanges(combined, values)
+      : knownRanges;
+    const ranges = candidateRanges
       .filter((range) => range.end > context.toolBoundaryText.length)
       .map((range) => ({
         start: Math.max(0, range.start - context.toolBoundaryText.length),
