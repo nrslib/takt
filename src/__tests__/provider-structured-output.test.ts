@@ -347,18 +347,6 @@ describe('CodexProvider — structured output', () => {
     expect(mockCallCodex).toHaveBeenCalledOnce();
   });
 
-  it('keeps review checkpoint source access readonly even with Codex-managed profile permissions', async () => {
-    mockCallCodex.mockResolvedValue(doneResponse('coding-review'));
-    await new CodexProvider().setup({ name: 'coding-review' }).call('review', {
-      cwd: '/tmp', executionPhase: 1, edit: false, permissionMode: 'readonly',
-      providerOptions: { codex: { configProfile: 'review-profile', permissionControl: 'codex' } },
-      checkpointRecoveryInstruction: () => 'remaining review',
-    });
-    const mapped = mockCallCodex.mock.calls[0]![2];
-    expect(mapped.configProfile).toBe('review-profile');
-    expect(buildCodexSessionConfig(mapped).permissionThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
-  });
-
   it('provider_options.codex.configProfile を通常実行と strict isolated structured 実行へ渡す', async () => {
     mockCallCodex.mockResolvedValue(doneResponse('coder'));
     const providerOptions = {

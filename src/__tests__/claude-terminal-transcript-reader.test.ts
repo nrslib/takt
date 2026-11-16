@@ -185,6 +185,34 @@ describe('Claude terminal transcript reader', () => {
     expect(parsed.lastAssistantText).toBe(notice);
   });
 
+  it('Given a note before a tool call and no text after it, When parsing, Then lastAssistantText is empty', () => {
+    const transcript = [
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { file_path: 'retry.ts' } }],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        session_id: 'claude-session-1',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }] },
+      }),
+    ].join('\n');
+
+    const parsed = parseClaudeTerminalTranscript(transcript);
+
+    expect(parsed.assistantText).toBe('Progress note: editing retry.ts.');
+    expect(parsed.lastAssistantText).toBe('');
+  });
+
   it('Given tool_result content, When parsing, Then an error result remains linked to its tool id', () => {
     const transcript = JSON.stringify({
       type: 'user',
@@ -326,6 +354,7 @@ describe('Claude terminal transcript reader', () => {
     expect(parsed).toEqual({
       sessionId: 'claude-session-1',
       assistantText: '',
+      lastAssistantText: '',
       events: [
         {
           type: 'ask_user_question',

@@ -205,6 +205,7 @@ import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
 import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
@@ -877,7 +878,7 @@ describe('/resume command', () => {
     expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
     expect(capture.callCount).toBe(3);
     expect(capture.sessionIds).not.toContain('unapproved-session');
-    expect(capture.systemPrompts.slice(0, 2)).toEqual(['initial system prompt', 'initial system prompt']);
+    expect(capture.systemPrompts.slice(0, 2)).toEqual(Array(2).fill(withProgressNotesGuidance('initial system prompt', 'en')));
     expect(capture.prompts[1]).toContain('after cancellation');
     expect(capture.prompts[2]).toMatch(/Quint/);
     expect(capture.prompts[2]).toMatch(/Alloy/);
@@ -978,7 +979,7 @@ describe('/resume command', () => {
 
       expect(result.action).toBe('execute');
       expect(resolveResumedSessionConfiguration).toHaveBeenCalledOnce();
-      expect(capture.systemPrompts[0]).toBe(`resumed system prompt formalSpec=${formalSpec}`);
+      expect(capture.systemPrompts[0]).toBe(withProgressNotesGuidance(`resumed system prompt formalSpec=${formalSpec}`, 'en'));
       if (formalSpec) {
         expect(capture.prompts[1]).toMatch(/\bQuint\b/);
         expect(capture.prompts[1]).toMatch(/\bAlloy\b/);

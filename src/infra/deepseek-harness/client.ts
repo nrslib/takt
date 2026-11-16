@@ -128,6 +128,7 @@ interface HarnessStreamState {
   pendingTextDeltasBySession: Set<string>;
   pendingThinkingDeltasBySession: Set<string>;
   responseRedactionContext: ResponseRedactionContext;
+  answerBySession: Map<string, string>;
   emittedToolUses: Set<string>;
   emittedToolResults: Set<string>;
   finishReason?: string;
@@ -785,6 +786,22 @@ function textFromContentBlocks(value: unknown): string {
     .join('');
 }
 
+/**
+ * Text before a message's last tool call is working text, so only the text after it can be the answer.
+ * Redact it against that earlier text: a credential split by the tool call must not leave its suffix.
+ */
+function redactedAnswerAfterLastToolCall(
+  blocks: readonly Record<string, unknown>[],
+  knownSecrets: Record<string, string>,
+): string {
+  const answerStart = blocks.reduce((start, block, index) => (block.type === 'tool-call' ? index + 1 : start), 0);
+  return redactCrossBoundaryFinalValue(
+    textFromContentBlocks(blocks.slice(answerStart)),
+    textFromContentBlocks(blocks.slice(0, answerStart)),
+    knownSecrets,
+  );
+}
+
 /** Decode tool arguments into a validated object or fixed protocol failure. */
 function parseToolArguments(raw: unknown): Record<string, unknown> {
   const text = requireString(raw, 'tool-call arguments');
@@ -873,6 +890,7 @@ function normalizeHarnessEvent(
     const blocks = contentBlocks(message.content);
     const hasTextDelta = state.pendingTextDeltasBySession.delete(sessionId);
     const text = textFromContentBlocks(blocks);
+    state.answerBySession.set(sessionId, redactedAnswerAfterLastToolCall(blocks, knownSecrets));
     if (!hasTextDelta && text.length > 0) {
       state.sawTextBySession.add(sessionId);
       invokeStream(
@@ -1776,23 +1794,27 @@ function createSuccessResponse(
   if (result.finishReason !== 'completed') {
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned an unsupported turn completion reason');
   }
-  const finalResponse = redactFinalResponse(
+  // The SDK's finalResponse joins every text block of the last assistant message, including text
+  // before its tool calls, so it is the answer only when no assistant message was observed.
+  const answer = redactFinalResponse(
     state.responseRedactionContext,
-    result.finalResponse,
+    state.answerBySession.get(result.sessionId) ?? result.finalResponse,
     knownSecrets,
   );
   assertSafeSessionId(result.sessionId);
   assertOpaqueSessionId(result.sessionId, knownSecrets);
-  if (finalResponse.length === 0) {
+  // A turn that ends with a tool call has no answer yet; returning an empty done keeps
+  // its session for the empty continuation instead of a fresh retry that repeats the tools.
+  if (answer.length === 0 && state.emittedToolUses.size === 0) {
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned no assistant text');
   }
-  if (!state.sawTextBySession.has(result.sessionId)) {
-    invokeStream(options.onStream, { type: 'text', data: { text: finalResponse } }, knownSecrets);
+  if (answer.length > 0 && !state.sawTextBySession.has(result.sessionId)) {
+    invokeStream(options.onStream, { type: 'text', data: { text: answer } }, knownSecrets);
   }
   invokeStream(options.onStream, {
     type: 'result',
     data: {
-      result: finalResponse,
+      result: answer,
       success: true,
       sessionId: result.sessionId,
     },
@@ -1800,7 +1822,7 @@ function createSuccessResponse(
   return {
     persona: agentType,
     status: 'done',
-    content: finalResponse,
+    content: answer,
     timestamp: new Date(),
     sessionId: result.sessionId,
   };
@@ -1842,6 +1864,7 @@ export async function callDeepSeekHarness(
       pendingChunks: [],
       failClosed: false,
     },
+    answerBySession: new Map(),
     emittedToolUses: new Set(),
     emittedToolResults: new Set(),
   };

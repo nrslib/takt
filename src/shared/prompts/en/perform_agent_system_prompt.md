@@ -46,6 +46,8 @@ This is the definition's structure, not the execution order or history. Each des
 {{/if}}
 
 
+{{progressNotes}}
+
 {{#if providerRuntimeInstructions}}
 
 ## Provider Runtime Instructions

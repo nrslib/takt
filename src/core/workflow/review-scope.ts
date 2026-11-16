@@ -50,7 +50,7 @@ import { detectDefaultBranch } from '../../infra/task/branchList.js';
 import { getCurrentBranch } from '../../infra/task/git.js';
 import { buildReviewGitEnvironment } from '../../infra/task/review-git-environment.js';
 import type { PullRequestContext } from './pr-context.js';
-import { excludeReviewCheckpointPaths } from './review-checkpoint.js';
+import { excludeProgressNotesPaths } from './progress-notes.js';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -100,7 +100,7 @@ export type TaskReviewScope =
 
 export interface TaskReviewScopeInput {
   readonly cwd: string;
-  /** Only this run's checkpoint output is excluded, not other reports or runs. */
+  /** Only this run's progress notes are excluded, not other reports or runs. */
   readonly reportDir?: string;
   /** 境界で一度だけ解決した base。 */
   readonly baseRange: ReviewScopeBaseRange;
@@ -433,7 +433,7 @@ export function collectTaskReviewScope(input: TaskReviewScopeInput): TaskReviewS
   const env = buildReviewGitEnvironment(input.cwd);
   const repositoryRoot = runGit(input.cwd, ['rev-parse', '--show-toplevel'], env).toString('utf8').replace(/\n$/, '');
   const excludeOutputs = (paths: readonly string[]): string[] => input.reportDir === undefined
-    ? [...paths] : excludeReviewCheckpointPaths(paths, repositoryRoot, input.reportDir);
+    ? [...paths] : excludeProgressNotesPaths(paths, repositoryRoot, input.reportDir);
   const untracked = excludeOutputs(input.untracked ?? readUntrackedPaths(repositoryRoot, env));
   if (input.prContext !== undefined) {
     const workingTreePaths = excludeOutputs(collectUncommittedPaths(repositoryRoot, untracked, env));

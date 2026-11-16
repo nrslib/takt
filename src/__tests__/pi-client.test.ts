@@ -647,7 +647,7 @@ export default function registerLifecycleTool(pi) {
     { reason: 'overflow', willRetry: true, promptCalls: 1 },
     { reason: 'overflow', willRetry: false, promptCalls: 2 },
     { reason: 'threshold', willRetry: false, promptCalls: 2 },
-  ] as const)('coordinates checkpoint review replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
+  ] as const)('coordinates the Phase 1 recovery replay with Pi SDK continuation ($reason, willRetry=$willRetry)', async ({ reason, willRetry, promptCalls }) => {
     mocks.resetTransient();
     const prompt = mocks.session.prompt.getMockImplementation()!;
     const sdkContinue = vi.fn(async () => {
@@ -670,7 +670,7 @@ export default function registerLifecycleTool(pi) {
       executionPhase: 1,
       edit: false,
       resolvedExecution: { provider: 'pi', model, providerOptions: undefined, permissionMode: 'readonly' },
-      reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'Review the remaining call path' },
       onStream: (event) => { if (event.type === 'init') sessionIds.push(event.data.sessionId!); },
     });
     expect(result.status).toBe('done');
@@ -3301,6 +3301,78 @@ export default function registerLifecycleTool(pi) {
     expect(response.status).toBe('error');
     expect(response.error).toContain('Pi SDK returned no assistant text');
     expect(mocks.session.getLastAssistantText).not.toHaveBeenCalled();
+  });
+
+  /** Emits an SDK-shaped run: a message with text before a tool call, the tool execution, then a final message. */
+  function emitToolTurn(noteBeforeTool: string | undefined, finalText: string | undefined): void {
+    const toolCall = { type: 'toolCall', id: 'tool-1', name: 'edit', arguments: { path: 'retry.ts' } };
+    const toolMessage = {
+      role: 'assistant',
+      content: noteBeforeTool === undefined ? [toolCall] : [{ type: 'text', text: noteBeforeTool }, toolCall],
+      stopReason: 'toolUse',
+    };
+    const finalMessage = {
+      role: 'assistant',
+      content: finalText === undefined ? [] : [{ type: 'text', text: finalText }],
+      stopReason: 'stop',
+    };
+    if (noteBeforeTool !== undefined) {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: noteBeforeTool } });
+    }
+    mocks.emit({ type: 'message_end', message: toolMessage });
+    mocks.emit({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'edit', args: { path: 'retry.ts' } });
+    mocks.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'tool-1',
+      toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'edited' }] },
+      isError: false,
+    });
+    if (finalText !== undefined) {
+      mocks.emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: finalText } });
+    }
+    mocks.emit({ type: 'message_end', message: finalMessage });
+    mocks.emit({ type: 'agent_end', messages: [toolMessage, finalMessage] });
+  }
+
+  it('returns only the text after the last tool call as the answer while streaming the earlier note', async () => {
+    mocks.resetTransient();
+    const texts: string[] = [];
+    mocks.session.prompt.mockImplementationOnce(async () => {
+      emitToolTurn('Note: editing retry.ts next.', 'Edit complete.');
+    });
+
+    const response = await callPi('worker', 'edit retry.ts', {
+      ...sessionOptions('pi-sdk-note-tool-answer'),
+      onStream: (event) => {
+        if (event.type === 'text') texts.push(event.data.text);
+      },
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Edit complete.' });
+    expect(texts).toEqual(['Note: editing retry.ts next.', 'Edit complete.']);
+  });
+
+  it.each([
+    { label: 'a note before the tool call', note: 'Note: editing retry.ts next.' },
+    { label: 'no text at all', note: undefined },
+  ])('returns an empty done result with the session ID when the turn ends with a tool call after $label', async ({ note }) => {
+    mocks.resetTransient();
+    const results: unknown[] = [];
+    mocks.session.prompt.mockImplementationOnce(async () => {
+      emitToolTurn(note, undefined);
+    });
+
+    const response = await callPi('worker', 'edit retry.ts', {
+      ...sessionOptions('pi-sdk-tool-ended-turn'),
+      onStream: (event) => {
+        if (event.type === 'result') results.push(event.data);
+      },
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId: mocks.session.sessionId });
+    expect(response.error).toBeUndefined();
+    expect(results).toEqual([expect.objectContaining({ result: '', success: true, sessionId: mocks.session.sessionId })]);
   });
 
   it('serializes concurrent calls that reuse one SDK session', async () => {

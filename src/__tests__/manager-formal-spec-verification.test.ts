@@ -4,6 +4,7 @@ import { makeProvider } from './test-helpers.js';
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { FormalSpecVerificationResult } from '../features/interactive/formalSpecVerification.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -176,6 +177,22 @@ it('does not start checkers after cancellation during generation', async () => {
   expect(runFormalSpecVerification).not.toHaveBeenCalled();
 });
 
+
+it('adds the progress notes guidance to the manager, generator and interpreter prompts without replacing them', async () => {
+  const f = fixture();
+  f.call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```' });
+  f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null } });
+
+  await f.executor.execute(f.input);
+
+  const guidance = loadTemplate('progress_notes', 'ja');
+  const [manager, generator, interpreter] = f.setup.mock.calls.map(([agentSetup]) => agentSetup.systemPrompt!);
+  expect(f.setup).toHaveBeenCalledTimes(3);
+  expect(manager).toBe(`${guidance}\n\nmanager system prompt`);
+  expect(generator!.startsWith(`${guidance}\n\n`)).toBe(true);
+  expect(generator!.split(guidance)).toHaveLength(2);
+  expect(interpreter!.startsWith(`${guidance}\n\nmanager system prompt\n\n`)).toBe(true);
+});
 
 it.each([true, false])('uses manager-only generation guidance with comments=%s', async (comments) => {
   const f = fixture();

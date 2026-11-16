@@ -863,6 +863,77 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(result.content).not.toContain(unavailableToolError);
   });
 
+  it('should stream every text part but return only the last one, so earlier working text stays out of the result', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-final-text';
+    const stream = new MockEventStream([
+      textPartUpdated(sessionId, 'note-part', 'Checked input.ts. Remaining: answer.'),
+      sensitiveToolPartUpdated(sessionId, 'tool-part', 'unused-token'),
+      textPartUpdated(sessionId, 'answer-part', 'final answer'),
+      sessionIdle(sessionId),
+    ], sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('coder', 'check input', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('final answer');
+    expectStreamTextOnce(onStream, 'Checked input.ts. Remaining: answer.');
+    expectStreamTextOnce(onStream, 'final answer');
+  });
+
+  it('should return an empty successful result with the session when the turn ends with a tool, so a note before the tool is not the answer', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-ends-with-tool';
+    const stream = new MockEventStream([
+      textPartUpdated(sessionId, 'note-part', 'Checked input.ts. Remaining: answer.'),
+      sensitiveToolPartUpdated(sessionId, 'tool-part', 'unused-token'),
+      sessionIdle(sessionId),
+    ], sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('coder', 'check input', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('');
+    expect(result.sessionId).toBe(sessionId);
+    expectStreamTextOnce(onStream, 'Checked input.ts. Remaining: answer.');
+  });
+
   it('should correct an unavailable-tool loop in-session, then recover a repeated fingerprint in one fresh session', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([

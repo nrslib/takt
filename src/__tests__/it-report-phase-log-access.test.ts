@@ -36,7 +36,7 @@ describe('Phase 2 direct readonly access to the Phase 1 log', () => {
   function createContext(provider: ProviderType, sessionId: string | undefined = 'phase1-session'): ReportPhaseRunnerContext {
     const reportDir = join(directory, 'reports');
     const builder = new OptionsBuilder({ projectCwd: directory, provider, model: 'offline', onStream: (event) => context.onStream?.(event) }, () => directory, () => directory,
-      () => sessionId, () => reportDir, () => 'en', () => 'log-access');
+      () => sessionId, () => reportDir, () => 'en', () => 'log-access', () => undefined, () => 'task', () => ({ kind: 'not_a_git_repository' as const }));
     const context: ReportPhaseRunnerContext = {
       workflowName: 'log-access', cwd: directory, reportDir, language: 'en',
       lastResponse: 'Current work summary', phase1ExecutionLog: reference,

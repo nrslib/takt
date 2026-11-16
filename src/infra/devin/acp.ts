@@ -50,6 +50,7 @@ const PROCESS_EXIT_POLL_MS = 5;
 
 export interface DevinAcpTurnOutcome {
   content: string;
+  calledTool: boolean;
   sessionId: string;
   providerUsage: ProviderUsageSnapshot;
   stopReason: string;
@@ -412,7 +413,8 @@ export async function runDevinAcpPrompt(
   // text collection and event emission only run while a prompt is in flight.
   let promptActive = false;
   let sendCancel: (() => void) | undefined;
-  const textParts: string[] = [];
+  let textParts: string[] = [];
+  let calledTool = false;
   const toolStates = new Map<string, DevinToolStreamState>();
 
   const app = client({ name: 'takt' })
@@ -429,6 +431,11 @@ export async function runDevinAcpPrompt(
       proc.refreshDescendants();
       if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
         textParts.push(update.content.text);
+      }
+      // Text before a tool call is working text (progress notes, commentary); the result follows the last call.
+      if (update.sessionUpdate === 'tool_call') {
+        textParts = [];
+        calledTool = true;
       }
       for (const event of sessionUpdateToStreamEvents(update, toolStates)) {
         options.onStream?.(event);
@@ -528,6 +535,7 @@ export async function runDevinAcpPrompt(
 
         return {
           content: textParts.join(''),
+          calledTool,
           sessionId: activeSessionId,
           providerUsage: usageFromAcp(response.usage),
           stopReason: response.stopReason,

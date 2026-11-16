@@ -26,6 +26,7 @@ import type { InternalAgentIsolation, StreamCallback, StreamEvent } from '../../
 import type { McpServerConfig, PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import { parseTaskStateReferenceMarker } from '../../shared/task-state-reference.js';
 import {
   providerSupportsAllowedTools,
@@ -339,11 +340,11 @@ export async function callAIWithRetry(
       );
     }
 
-    const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+    const resolvedSystemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,
       ctx.provider.getRuntimeInstructions(),
-    );
+    ), ctx.lang);
     const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
     const hasImageAttachments = options.imageAttachments !== undefined && options.imageAttachments.length > 0;
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput

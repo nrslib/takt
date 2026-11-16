@@ -65,7 +65,11 @@ function callOptions(enabled?: boolean): ProviderCallOptions {
 function optionsBuilder(options: Partial<WorkflowEngineOptions> = {}): OptionsBuilder {
   return new OptionsBuilder({ projectCwd: '/work', provider: 'opencode', model: 'probe/probe', providerOptions: skillOptions(true), ...options },
     () => '/work', () => '/work', () => undefined, () => '/work/reports', () => 'en',
-    () => 'workflow',);
+    () => 'workflow',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
+  );
 }
 
 function sentTools(index: number): Record<string, boolean> {

@@ -20,6 +20,7 @@ const runtimeBehavior = vi.hoisted(() => ({
   runError: undefined as unknown,
   closeError: undefined as unknown,
   notifications: [] as unknown[],
+  finalResponse: 'ok',
   startCount: 0,
   runCount: 0,
   closeCount: 0,
@@ -106,7 +107,7 @@ const DeepSeekHarness = class {
         type: 'turn/end', data: { reason: { kind: 'completed' } },
       } } });
     }
-    return { sessionId: this.id, finalResponse: 'ok', finishReason: 'completed' };
+    return { sessionId: this.id, finalResponse: runtimeBehavior.finalResponse, finishReason: 'completed' };
   }
 
   /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
@@ -174,6 +175,7 @@ import {
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
 import * as runtimeStateModule from '../infra/deepseek-harness/runtime-state.js';
+import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
@@ -276,6 +278,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeStateBehavior.failBarrierPublication = false;
     runtimeStateBehavior.failPatchDisposal = false;
     runtimeBehavior.notifications = [];
+    runtimeBehavior.finalResponse = 'ok';
     runtimeBehavior.startCount = 0;
     runtimeBehavior.runCount = 0;
     runtimeBehavior.closeCount = 0;
@@ -500,7 +503,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
       onStream: (streamEvent) => events.push(streamEvent),
     });
 
-    expect(response).toMatchObject({ status: 'done', content: 'ok', sessionId });
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
     expect(events.map((streamEvent) => streamEvent.type)).toEqual([
       'init',
       'text',
@@ -521,6 +524,178 @@ describe('DeepSeek Harness SDK error mapping', () => {
       content: 'README content',
       isError: false,
     });
+  });
+
+  const toolEndedTurnNotifications = (sessionId: string, afterToolCall: readonly string[] = []): unknown[] => {
+    const event = (value: Record<string, unknown>) => ({
+      method: 'session.event',
+      params: { sessionId, event: value },
+    });
+    return [
+      { method: 'session.started', params: { sessionId } },
+      event({
+        type: 'assistant/message',
+        data: {
+          message: {
+            content: [
+              { type: 'text', text: 'Note: editing retry.ts next.' },
+              { type: 'tool-call', id: 'edit-1', name: 'Edit', arguments: '{"path":"retry.ts"}' },
+              ...afterToolCall.map((text) => ({ type: 'text', text })),
+            ],
+          },
+        },
+      }),
+      event({
+        type: 'tool/result',
+        data: {
+          message: {
+            source: { callId: 'edit-1' },
+            content: [{ type: 'tool-result', content: [{ type: 'text', text: 'edited' }], isError: false }],
+          },
+        },
+      }),
+      event({ type: 'turn/end', data: { reason: { kind: 'completed' } } }),
+    ];
+  };
+
+  it('returns an empty done result with the session ID when a completed turn ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    // The SDK's finalResponse joins every text block of the last assistant message, including the note before its tool call.
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(response.error).toBeUndefined();
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'tool_use', 'tool_result', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Note: editing retry.ts next.' });
+    expect(events.at(-1)?.data).toEqual({ result: '', success: true, sessionId });
+  });
+
+  it('keeps a completed turn with neither assistant text nor a tool call as a provider error', async () => {
+    runtimeBehavior.notifications = [{
+      method: 'session.event',
+      params: { sessionId: 'error-mapping-session', event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+    }];
+    runtimeBehavior.finalResponse = '';
+
+    const response = await callDeepSeekHarness('worker', 'say nothing', { cwd: temporaryRoot });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('answers with the text after the last tool call of the last assistant message', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId, ['Edited retry.ts.']);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.Edited retry.ts.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Edited retry.ts.', sessionId });
+    expect(events.filter((streamEvent) => streamEvent.type === 'text').map((streamEvent) => streamEvent.data))
+      .toEqual([{ text: 'Note: editing retry.ts next.Edited retry.ts.' }]);
+    expect(events.at(-1)?.data).toEqual({ result: 'Edited retry.ts.', success: true, sessionId });
+  });
+
+  it('answers with the SDK finalResponse when no assistant message was observed', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = 'Final answer.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'answer', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Final answer.', sessionId });
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Final answer.' });
+  });
+
+  it('keeps a credential split by the tool call out of the answer and the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = Math.floor(credential.length / 2);
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/message',
+        data: { message: { content: [
+          { type: 'text', text: `Key ${credential.slice(0, split)}` },
+          { type: 'tool-call', id: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+          { type: 'text', text: `${credential.slice(split)} is configured.` },
+        ] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `Key ${credential} is configured.`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the key', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', sessionId });
+    expect(response.content).toMatch(/ is configured\.$/);
+    for (const fragment of [credential.slice(0, split), credential.slice(split), 'Key ']) {
+      expect(response.content).not.toContain(fragment);
+    }
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+  });
+
+  it('continues the same session instead of a fresh retry when Phase 1 ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const requestedSessionIds: (string | undefined)[] = [];
+
+    const recovered = await runPhase1WithEmptyRecovery({
+      instruction: 'edit retry.ts',
+      initialSessionId: undefined,
+      execute: (attempt) => {
+        if (attempt.reason === 'empty_continuation') {
+          runtimeBehavior.notifications = [
+            {
+              method: 'session.event',
+              params: { sessionId, event: {
+                type: 'assistant/message',
+                data: { message: { content: [{ type: 'text', text: 'Edit complete.' }] } },
+              } },
+            },
+            {
+              method: 'session.event',
+              params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+            },
+          ];
+          runtimeBehavior.finalResponse = 'Edit complete.';
+        }
+        requestedSessionIds.push(attempt.sessionId);
+        return callDeepSeekHarness('worker', attempt.instruction, { cwd: temporaryRoot, sessionId: attempt.sessionId });
+      },
+      discardSession: vi.fn(),
+    });
+
+    expect(recovered.response).toMatchObject({ status: 'done', content: 'Edit complete.', sessionId });
+    expect(recovered.finalAttempt).toMatchObject({ reason: 'empty_continuation', sessionId });
+    expect(requestedSessionIds).toEqual([undefined, sessionId]);
+    expect(runtimeBehavior.runCount).toBe(2);
   });
 
   it('reports cleanup failure with a fixed diagnostic and prevents later runtime creation', async () => {

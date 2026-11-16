@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { composeReviewRecoveryInstruction } from '../core/workflow/review-checkpoint.js';
+import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 
-describe('composeReviewRecoveryInstruction', () => {
+describe('composeRecoveryInstruction', () => {
   it.each([
     { base: 'P\n\nP', task: 'P\n\nP', expected: 'P\n\nP' },
     { base: 'P\n\nP', task: 'P\n\nF\n\nF\n\nP\n\nR\n\nlive', expected: 'P\n\nP\n\nF\n\nF\n\nR\n\nlive' },
@@ -13,13 +13,13 @@ describe('composeReviewRecoveryInstruction', () => {
     { base: ' F \n\n F ', task: 'F\n\nF', expected: ' F \n\n F ' },
     { base: 'P', task: '    F\n      nested  \n\n\tR \t', expected: 'P\n\n    F\n      nested  \n\n\tR \t' },
   ])('preserves the base and every task block absent from the base verbatim ($base, $task)', ({ base, task, expected }) => {
-    expect(composeReviewRecoveryInstruction(base, task)).toBe(expected);
+    expect(composeRecoveryInstruction(base, task)).toBe(expected);
   });
 
   it('deduplicates later instructions against previously appended blocks', () => {
-    const first = composeReviewRecoveryInstruction('P\n\nP', ' F \n\n F ');
+    const first = composeRecoveryInstruction('P\n\nP', ' F \n\n F ');
 
-    expect(composeReviewRecoveryInstruction(first, 'F\n\nR\n\nR'))
+    expect(composeRecoveryInstruction(first, 'F\n\nR\n\nR'))
       .toBe('P\n\nP\n\n F \n\n F \n\nR\n\nR');
   });
 });

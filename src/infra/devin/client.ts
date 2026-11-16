@@ -193,7 +193,10 @@ export class DevinClient {
       }
 
       const content = outcome.content.trim();
-      if (content.length === 0) {
+      // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+      // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+      const endedAfterToolCall = outcome.calledTool && outcome.stopReason === 'end_turn';
+      if (content.length === 0 && !endedAfterToolCall) {
         const emptyError = outcome.stopReason === 'end_turn'
           ? 'devin returned empty output'
           : `devin returned empty output (stop reason: ${outcome.stopReason})`;

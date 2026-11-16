@@ -37,6 +37,7 @@ import {
 } from '../live-intervention/delivery.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import type { InstructionContext } from '../instruction/instruction-context.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
@@ -68,7 +69,7 @@ export interface ArpeggioRunnerDeps {
   readonly getMaxSteps: () => WorkflowMaxSteps;
   readonly getWorkflowName: () => string;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
-  readonly getReviewScope: () => InstructionContext['reviewScope'];
+  readonly getReviewScope: () => TaskReviewScope;
   readonly getWorkflowCallVars?: () => InstructionContext['workflowCallVars'];
   readonly getInteractive: () => boolean;
   readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
@@ -370,7 +371,11 @@ export class ArpeggioRunner {
     const stepProviderModel = runtime
       ? this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)
       : this.deps.optionsBuilder.resolveStepProviderModel(step);
-    const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
+    const reviewScope = this.deps.getReviewScope();
+    const agentOptions: RunAgentOptions = {
+      ...this.deps.optionsBuilder.buildAgentOptions(step, runtime),
+      progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(step, reviewScope),
+    };
     const previousOutput = getPreviousOutput(state);
     const previousResponseText = step.passPreviousResponse && previousOutput
       ? preparePreviousResponseContent(
@@ -398,7 +403,7 @@ export class ArpeggioRunner {
       ),
       language: agentOptions.language ?? 'en',
       interactive: this.deps.getInteractive(),
-      reviewScope: this.deps.getReviewScope(),
+      reviewScope,
       workflowState: state,
       workflowRules: this.deps.getWorkflowRules(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),

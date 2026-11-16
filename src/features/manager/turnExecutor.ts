@@ -14,6 +14,7 @@ import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstruc
 import { createTurnActivityReporter } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
 import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -43,7 +44,7 @@ export interface ManagerTurnInput {
 }
 
 export function createManagerTurnExecutor(cwd: string, plan: ManagerConversationPlan) {
-  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
+  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance(plan.strategy.systemPrompt, plan.ctx.lang) });
   return {
     execute(input: ManagerTurnInput) {
       const run = async () => {

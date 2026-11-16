@@ -15,6 +15,7 @@ const step = {
 const part = { id: 'part-1', title: 'Inspect', instruction: 'Inspect source' };
 const providerInfo = { provider: 'mock' as const, model: undefined };
 const optionsBuilder = {
+  buildProgressNotesRequest: () => undefined,
   buildAgentOptions: () => ({ cwd: process.cwd(), provider: 'mock', permissionMode: 'readonly' }),
 } as unknown as OptionsBuilder;
 
@@ -39,7 +40,7 @@ describe('team leader part execution log', () => {
     await expect(runTeamLeaderPart(
       optionsBuilder, step, undefined, part, 0, 1000, () => undefined, undefined,
       { enabled: false, workflowName: 'test', iteration: 1 },
-      () => ({ phase1Instruction: 'Inspect source', instructionWithoutLiveIntervention: 'Inspect source' }), undefined, undefined,
+      () => ({ phase1Instruction: 'Inspect source', instructionWithoutLiveIntervention: 'Inspect source', reviewScope: { kind: 'not_a_git_repository' } }), undefined, undefined,
       { forceNewSession: false, deadlineSignal: controller.signal, providerInfo, phase1ExecutionLog: log },
     )).rejects.toBe(cancellation);
 
@@ -48,5 +49,24 @@ describe('team leader part execution log', () => {
       .toEqual(['cancelled']);
     expect(log.toReportInput()).toContain('partial evidence');
     expect(log.toReportInput()).not.toContain(completed.content);
+  });
+
+  it('returns a failed part with its provider and releases the part deadline when the instruction cannot be built', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(runAgent).mockClear();
+      const failure = new Error('git rev-parse failed');
+
+      const result = await runTeamLeaderPart(
+        optionsBuilder, step, undefined, part, 0, 1000, () => undefined, undefined,
+        { enabled: false, workflowName: 'test', iteration: 1 },
+        () => { throw failure; }, undefined, undefined,
+        { forceNewSession: false, providerInfo },
+      );
+
+      expect(result).toMatchObject({ part, providerInfo, response: { status: 'error', error: failure.message } });
+      expect(runAgent).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });

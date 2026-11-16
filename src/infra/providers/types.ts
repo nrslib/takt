@@ -34,7 +34,6 @@ export interface ProviderCallOptions {
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
-  checkpointRecoveryInstruction?: () => string;
   /** Expose only the built-in Read tool for a strict read-only call. */
   allowReadonlyFileRead?: boolean;
   /** Exact files that the /verify interpretation call may read. */

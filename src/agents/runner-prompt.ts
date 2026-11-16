@@ -1,5 +1,6 @@
 import { assignmentStepName, phaseName } from '../shared/prompts/phase-context.js';
 import { loadTemplate } from '../shared/prompts/index.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 import { buildProviderRuntimeSystemPrompt } from '../infra/providers/runtimeSystemPrompt.js';
 import type { RunAgentOptions } from './types.js';
 
@@ -28,17 +29,18 @@ export function buildWrappedSystemPrompt(
   agentDefinition: string,
   options: WrappedPromptOptions,
 ): string {
+  const language = options.language ?? 'en';
   if (!shouldRenderWorkflowContext(options)) {
-    return buildRuntimeOnlySystemPrompt(agentDefinition, options);
+    return withProgressNotesGuidance(buildRuntimeOnlySystemPrompt(agentDefinition, options), language);
   }
 
   const templateVars: Record<string, string | boolean | null> = {
     agentDefinition,
     providerRuntimeInstructions: options.providerRuntimeInstructions,
+    progressNotes: loadTemplate('progress_notes', language),
   };
   if (options.workflowMeta) {
     const context = options.workflowMeta.context;
-    const language = options.language ?? 'en';
     templateVars.hasWorkflowContext = context !== undefined;
     if (context !== undefined) {
       if (options.executionPhase === undefined) throw new Error('Workflow prompt requires executionPhase');
@@ -61,5 +63,5 @@ export function buildWrappedSystemPrompt(
     }
   }
 
-  return loadTemplate('perform_agent_system_prompt', options.language ?? 'en', templateVars);
+  return loadTemplate('perform_agent_system_prompt', language, templateVars);
 }

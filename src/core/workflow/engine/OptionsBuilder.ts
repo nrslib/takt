@@ -30,7 +30,7 @@ import {
   providerSupportsAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
 import { reportPhaseEventTools } from '../report-phase-tools.js';
-import { usesReviewCheckpoint } from '../review-checkpoint.js';
+import type { ProgressNotesRequest } from '../progress-notes.js';
 import type {
   ProviderActivityCallback,
   ProviderType,
@@ -100,9 +100,9 @@ export class OptionsBuilder {
     private readonly getReportDir: () => string,
     private readonly getLanguage: () => Language | undefined,
     private readonly getWorkflowName: () => string,
-    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getTask?: () => string,
-    private readonly getReviewScope?: () => TaskReviewScope,
+    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined,
+    private readonly getTask: () => string,
+    private readonly getReviewScope: () => TaskReviewScope,
     private readonly getFailureDir?: () => string,
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
     private readonly recordActivity: ProviderActivityCallback = () => {},
@@ -721,29 +721,12 @@ export class OptionsBuilder {
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
-    const reviewScope = usesReviewCheckpoint(this.getWorkflowName(), step)
-      ? this.getReviewScope?.() : undefined;
-    const checkpoint = reviewScope?.kind === 'collected' && this.getTask !== undefined
-      ? {
-          reviewCheckpoint: {
-            reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
-            task: this.getTask(),
-            reviewer: step.name,
-            definition: JSON.stringify(step),
-            scope: reviewScope,
-          },
-          permissionMode: 'readonly' as const,
-          permissionResolution: undefined,
-          edit: false,
-        }
-      : {};
 
     const mcpServers = this.resolveMcpServersForStep(step, resolvedProvider);
     const mcpServerIdentity = this.resolveMcpServerIdentityForEffectiveServers(mcpServers);
 
     return {
       ...baseOptions,
-      ...checkpoint,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession
         ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel, mcpServerIdentity }))
@@ -754,6 +737,22 @@ export class OptionsBuilder {
       mcpAssignment: this.engineOptions.mcpAssignment,
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
+  }
+
+  /**
+   * Every step's Phase 1 within a run takes part in progress notes and compaction recovery.
+   * `reviewScope` is the scope the Phase 1 instruction was built with, so the notes identity matches it.
+   */
+  buildProgressNotesRequest(step: WorkflowStep, reviewScope: TaskReviewScope): ProgressNotesRequest {
+    const notesStep = {
+      reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
+      task: this.getTask(),
+      stepName: step.name,
+      definition: JSON.stringify(step),
+    };
+    return step.edit === false
+      ? { ...notesStep, bindsSourceRevision: true, scope: reviewScope }
+      : { ...notesStep, bindsSourceRevision: false };
   }
 
   private resolveReportPhaseConstraints(
@@ -902,10 +901,10 @@ export class OptionsBuilder {
     return {
       workflowMeta: this.buildWorkflowMeta(step, runtime),
       cwd: this.getCwd(),
-      task: this.getTask?.(),
+      task: this.getTask(),
       projectCwd: this.getProjectCwd(),
       userInputs: [...state.userInputs],
-      reviewScope: this.getReviewScope?.(),
+      reviewScope: this.getReviewScope(),
       reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
       ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
       ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),

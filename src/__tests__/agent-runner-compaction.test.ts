@@ -50,7 +50,7 @@ function makeRunOptions(overrides: Partial<RunAgentOptions> = {}): RunAgentOptio
     abortSignal: new AbortController().signal,
     childProcessEnv: { TAKT_TEST_ENV: 'preserved' },
     edit: false,
-    reviewCheckpointRecorder: { observe: vi.fn(), finish: vi.fn() },
+    progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     resolvedExecution: {
       provider: 'codex',
       model: 'gpt-test',
@@ -152,7 +152,7 @@ describe('AgentRunner compaction recovery', () => {
     });
   });
 
-  it('does not resend a completed ordinary task after compaction without a checkpoint recorder', async () => {
+  it('does not resend a completed ordinary task after compaction without a progress notes recorder', async () => {
     const onStream = vi.fn();
     const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
     const result = { type: 'result', data: { result: 'completed', sessionId: 'current-thread', success: true } } as const;
@@ -164,7 +164,7 @@ describe('AgentRunner compaction recovery', () => {
     getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction }));
 
     const response = await new AgentRunner().run(undefined, 'ordinary task', makeRunOptions({
-      onStream, reviewCheckpointRecorder: undefined,
+      onStream, progressNotesRecorder: undefined,
     }));
 
     expect(response).toMatchObject({ status: 'done', content: 'completed' });

@@ -60,15 +60,13 @@ export interface RunAgentOptions {
   internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
-  reviewCheckpoint?: import('../core/workflow/review-checkpoint.js').ReviewCheckpointContext;
-  /** Stable Phase 1 request for checkpoint identity across continuations and live interventions. */
-  reviewCheckpointInstruction?: string;
+  progressNotes?: import('../core/workflow/progress-notes.js').ProgressNotesRequest;
+  /** Stable Phase 1 request for the progress notes identity across continuations and live interventions. */
+  progressNotesInstruction?: string;
   /** Complete current instruction, including follow-ups and live history, for fresh or compacted execution. */
-  reviewCheckpointRecoveryInstruction?: string;
-  /** Runner-local recovery input, rebuilt after each compaction from persisted progress. */
-  checkpointRecoveryInstruction?: () => string;
-  /** Runner-local capture of each provider attempt, including suppressed compaction results. */
-  reviewCheckpointRecorder?: import('../infra/review-checkpoint/session.js').ReviewCheckpointRecorder;
+  progressNotesRecoveryInstruction?: string;
+  /** Runner-local capture of each provider attempt, including suppressed compaction results, and the recovery input rebuilt from it. */
+  progressNotesRecorder?: import('../infra/progress-notes/session.js').ProgressNotesRecorder;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**

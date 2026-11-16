@@ -38,8 +38,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     permissionMode: options.permissionMode,
     aiReviewPermissions: options.aiReviewPermissions,
     edit: options.edit,
-    // Checkpoint access never delegates source-write permissions to a Codex profile.
-    permissionControl: options.checkpointRecoveryInstruction === undefined ? providerCodexOptions?.permissionControl : 'takt',
+    permissionControl: providerCodexOptions?.permissionControl,
     configProfile: providerCodexOptions?.configProfile,
     networkAccess: providerCodexOptions?.networkAccess,
     onStream: options.onStream,

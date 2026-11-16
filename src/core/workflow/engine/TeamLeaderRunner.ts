@@ -1461,7 +1461,7 @@ export class TeamLeaderRunner {
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       (partStep) => {
-        const instruction = this.deps.stepExecutor.buildInstruction(
+        const { text: instruction, reviewScope } = this.deps.stepExecutor.prepareInstruction(
           partStep,
           partIteration,
           state,
@@ -1471,6 +1471,7 @@ export class TeamLeaderRunner {
           instructionTransaction,
         );
         return {
+          reviewScope,
           instructionWithoutLiveIntervention: instruction,
           phase1Instruction: [instruction, resolveLiveInterventionPrompt(
             this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
@@ -1498,7 +1499,7 @@ export class TeamLeaderRunner {
         },
         completeCompanionReview: async ({
           phase1Instruction,
-          reviewRecoveryInstruction,
+          phase1RecoveryInstruction,
           partStep,
           initialResponse,
           agentOptions,
@@ -1514,7 +1515,7 @@ export class TeamLeaderRunner {
           );
           return this.deps.stepExecutor.completeCompanionReview({
             phase1Instruction,
-            reviewRecoveryInstruction,
+            phase1RecoveryInstruction,
             eventStep: partStep,
             executableStep: partStep,
             state: partCompanionState,

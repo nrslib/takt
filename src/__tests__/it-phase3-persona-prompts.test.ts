@@ -13,6 +13,7 @@ import {
   resolveConfigValue,
 } from '../infra/config/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 describe('Phase 3 persona and judgment prompt regressions', () => {
   let tempDir: string;
@@ -106,6 +107,29 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
         expect(setup.mock.lastCall?.[0].systemPrompt).toContain(readFileSync(personaPath, 'utf-8'));
       }
       expect(setup).toHaveBeenCalledTimes(2);
+    });
+
+    it('composes progress notes guidance into internal judge and contextless calls without promising a log location', async () => {
+      const call = vi.fn()
+        .mockResolvedValueOnce(doneResponse({ step: 1, reason: 'approved' }))
+        .mockResolvedValueOnce(doneResponse());
+      const setup = vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
+
+      await judgeStatus('structured instruction', 'tag instruction', [{ label: 'approved' }, { label: 'needs_fix' }], {
+        judgmentInput: 'work result', cwd: projectDir, language: executionLanguage, stepName: 'review', resolvedProvider: 'mock',
+      });
+      await runAgent(undefined, 'select one pull request', {
+        cwd: projectDir,
+        language: executionLanguage,
+        resolvedExecution: { provider: 'mock', model: undefined, providerOptions: undefined, permissionMode: undefined },
+      });
+
+      const guidance = loadTemplate('progress_notes', executionLanguage);
+      expect(setup).toHaveBeenCalledTimes(2);
+      for (const [agentSetup] of setup.mock.calls) {
+        expect(agentSetup.systemPrompt).toContain(guidance);
+      }
+      expect(call.mock.calls.map(([instruction]) => instruction)).toEqual(['structured instruction', 'select one pull request']);
     });
 
     it('preserves the existing project and global persona roots', () => {

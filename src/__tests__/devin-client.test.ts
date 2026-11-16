@@ -32,6 +32,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { callDevin } from '../infra/devin/client.js';
+import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 
 interface WireMessage {
   id?: number;
@@ -645,7 +646,7 @@ describe('callDevin', () => {
     expect(options.env?.XDG_DATA_HOME).toBe('/xdg/data');
   });
 
-  it('Given streaming updates, When called, Then text deltas, thinking and tool events stream before the result', async () => {
+  it('Given streaming updates, When called, Then every event streams before the result and only text after the last tool call is the result', async () => {
     const onStream = vi.fn();
     mockAcpServer({
       updates: [
@@ -680,9 +681,10 @@ describe('callDevin', () => {
     const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
 
     expect(result.status).toBe('done');
-    expect(result.content).toBe('partial answer');
+    expect(result.content).toBe('answer');
     const types = onStream.mock.calls.map((call) => (call[0] as { type: string }).type);
     expect(types).toEqual(['init', 'text', 'thinking', 'tool_use', 'tool_output', 'tool_result', 'text', 'result']);
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'partial ' } });
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_use',
       data: { id: 'exec:0', tool: 'Bash', input: { command: 'npm test' } },
@@ -692,7 +694,7 @@ describe('callDevin', () => {
       data: { id: 'exec:0', content: 'running...', isError: false },
     });
     const resultCall = onStream.mock.calls.at(-1)?.[0] as { data: { result: string; sessionId: string; success: boolean } };
-    expect(resultCall.data).toEqual({ result: 'partial answer', sessionId: 'keen-otter', success: true });
+    expect(resultCall.data).toEqual({ result: 'answer', sessionId: 'keen-otter', success: true });
   });
 
   it('Given cumulative tool_call_update content, When called, Then only the appended suffix streams as tool_output', async () => {
@@ -1135,6 +1137,55 @@ describe('callDevin', () => {
     expect(result.status).toBe('error');
     expect(result.error).toBe('devin returned empty output');
     expect(result.partialOutput).toBeUndefined();
+  });
+
+  const NOTE_THEN_TOOL_UPDATES = [
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Note: editing retry.ts next.' } },
+    { sessionUpdate: 'tool_call', toolCallId: 'edit:0', title: 'Edit retry.ts', kind: 'edit', status: 'in_progress' },
+    { sessionUpdate: 'tool_call_update', toolCallId: 'edit:0', status: 'completed' },
+  ];
+
+  it('Given a turn that ends with a tool call after a note, When called, Then it returns an empty done result with the session ID', async () => {
+    mockAcpServer({ updates: NOTE_THEN_TOOL_UPDATES });
+    const onStream = vi.fn();
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId: 'keen-otter' });
+    expect(result.error).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Note: editing retry.ts next.' } });
+    expect(onStream).toHaveBeenLastCalledWith({
+      type: 'result',
+      data: { result: '', success: true, error: undefined, sessionId: 'keen-otter', failureCategory: undefined },
+    });
+  });
+
+  it('Given a turn that ends with a tool call, When Phase 1 recovers the empty answer, Then it continues the same session instead of a fresh retry', async () => {
+    let promptCount = 0;
+    const server = mockAcpServer({}, {
+      'session/prompt': (params, api) => {
+        promptCount += 1;
+        const updates = promptCount === 1
+          ? NOTE_THEN_TOOL_UPDATES
+          : [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Edit complete.' } }];
+        for (const update of updates) {
+          api.notify('session/update', { sessionId: params.sessionId, update });
+        }
+        return { stopReason: 'end_turn', usage: DEFAULT_USAGE };
+      },
+    });
+
+    const recovered = await runPhase1WithEmptyRecovery({
+      instruction: 'edit retry.ts',
+      initialSessionId: undefined,
+      execute: (attempt) => callDevin('coder', attempt.instruction, { cwd: '/repo', sessionId: attempt.sessionId }),
+      discardSession: vi.fn(),
+    });
+
+    expect(recovered.response).toMatchObject({ status: 'done', content: 'Edit complete.' });
+    expect(recovered.finalAttempt).toMatchObject({ reason: 'empty_continuation', sessionId: 'keen-otter' });
+    expect(requestsOf(server, 'session/new')).toHaveLength(1);
+    expect(requestsOf(server, 'session/load').map((request) => request.params?.sessionId)).toEqual(['keen-otter']);
   });
 
   it.each(['max_tokens', 'max_turn_requests', 'refusal'] as const)(

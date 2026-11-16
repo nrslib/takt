@@ -25,7 +25,7 @@ import {
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
-import { composeReviewRecoveryInstruction } from '../core/workflow/review-checkpoint.js';
+import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -39,8 +39,7 @@ import {
 } from '../infra/providers/mcp/index.js';
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
-import { startReviewCheckpoint } from '../infra/review-checkpoint/session.js';
-import { ReviewCheckpointUnavailableError } from '../infra/review-checkpoint/store.js';
+import { startProgressNotes } from '../infra/progress-notes/session.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
@@ -218,7 +217,6 @@ export class AgentRunner {
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
       executionPhase: options.executionPhase,
-      checkpointRecoveryInstruction: options.checkpointRecoveryInstruction,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -245,7 +243,7 @@ export class AgentRunner {
     agent: ProviderAgent,
     task: string,
     options: ProviderCallOptions,
-    recorder: RunAgentOptions['reviewCheckpointRecorder'],
+    recorder: RunAgentOptions['progressNotesRecorder'],
   ): Promise<AgentResponse> {
     const recoverFromCompaction = agent.recoverFromCompaction;
     if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
@@ -270,7 +268,7 @@ export class AgentRunner {
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
-          recorder?.observe(event);
+          recorder.observe(event);
           // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
           if (event.type === 'context_compacted') {
             compactionDetected = true;
@@ -289,8 +287,8 @@ export class AgentRunner {
       };
       const response = recoveryCount === 0
         ? await agent.call(task, callOptions)
-        : await recoverFromCompaction.call(agent, options.checkpointRecoveryInstruction?.() ?? task, callOptions);
-      recorder?.finish(response);
+        : await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions);
+      recorder.finish(response);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
@@ -420,7 +418,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -481,7 +479,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (options.personaPath) {
@@ -500,7 +498,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (personaSpec) {
@@ -524,7 +522,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -535,12 +533,9 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agentSetup = systemPrompt
-        ? { name: personaName, systemPrompt }
-        : { name: personaName };
-      const agent = setupAgent(agentSetup);
+      const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions, options.reviewCheckpointRecorder);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -640,36 +635,27 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   // Provider dispatch is an attempt boundary even when the provider emits no stream events.
   options.onActivity?.();
-  if (options.executionPhase !== 1 || options.reviewCheckpoint === undefined) {
+  if (options.executionPhase !== 1 || options.progressNotes === undefined) {
     return defaultRunner.run(personaSpec, task, options);
   }
-  const originalInstruction = options.reviewCheckpointInstruction ?? task;
-  const recoveryInstruction = options.reviewCheckpointRecoveryInstruction
-    ?? composeReviewRecoveryInstruction(originalInstruction, task);
-  let checkpoint: Awaited<ReturnType<typeof startReviewCheckpoint>>;
+  const originalInstruction = options.progressNotesInstruction ?? task;
+  const recoveryInstruction = options.progressNotesRecoveryInstruction
+    ?? composeRecoveryInstruction(originalInstruction, task);
+  const requestInstruction = options.sessionId === undefined ? recoveryInstruction : task;
+  // Storage availability must not change the step's compaction recovery eligibility: without notes,
+  // recovery resends the original instruction and the agent checks the current state.
+  // The same language as the system prompt's progress notes guidance (buildWrappedSystemPrompt).
+  const notes = await startProgressNotes(options.cwd, options.progressNotes, originalInstruction, options.language ?? 'en');
   try {
-    checkpoint = await startReviewCheckpoint(options.cwd, options.reviewCheckpoint, originalInstruction, options.language ?? 'en');
-  } catch (error) {
-    if (!(error instanceof ReviewCheckpointUnavailableError)) throw error;
-    // Unsupported inputs disable reuse, not the review. Operational failures
-    // still propagate rather than silently discarding evidence.
-    log.warn('Review checkpoint unavailable', { reason: error.message });
-    return defaultRunner.run(personaSpec, options.sessionId === undefined ? recoveryInstruction : task, {
+    return await defaultRunner.run(personaSpec, notes.instruction(requestInstruction), {
       ...options,
-      bypassPermissions: false,
-      // Storage availability must not change a review's compaction recovery eligibility.
-      reviewCheckpointRecorder: { observe: () => undefined, finish: () => undefined },
-      checkpointRecoveryInstruction: () => recoveryInstruction,
-    });
-  }
-  try {
-    return await defaultRunner.run(personaSpec, checkpoint.instruction(options.sessionId === undefined ? recoveryInstruction : task), {
-      ...options,
-      bypassPermissions: false,
-      reviewCheckpointRecorder: checkpoint,
-      checkpointRecoveryInstruction: () => checkpoint.instruction(recoveryInstruction),
+      progressNotesRecorder: {
+        observe: notes.observe,
+        finish: notes.finish,
+        recoveryInstruction: () => notes.instruction(recoveryInstruction),
+      },
     });
   } finally {
-    checkpoint.flush();
+    notes.flush();
   }
 }

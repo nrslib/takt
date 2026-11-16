@@ -129,6 +129,7 @@ function makeParallelDeps(
 ): ParallelRunnerDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,
@@ -178,6 +179,7 @@ function makeNormalDeps(
 ): StepExecutorDeps {
   return {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd,
         projectCwd: cwd,

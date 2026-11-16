@@ -8,6 +8,7 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
+import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 
 function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined
@@ -35,7 +36,7 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
-  readonly reviewScope?: import('../core/workflow/review-scope.js').TaskReviewScope;
+  readonly reviewScope?: TaskReviewScope;
   readonly openCodeExternalDirectories?: readonly string[];
 }
 
@@ -73,11 +74,9 @@ function createBuilder(
     () => '.takt/runs/sample/reports',
     () => 'ja',
     () => engineOverrides.workflowName ?? 'default',
-    currentWorkflowStack === undefined
-      ? undefined
-      : () => [...currentWorkflowStack],
+    () => (currentWorkflowStack === undefined ? undefined : [...currentWorkflowStack]),
     () => 'Original workflow task',
-    phaseContextSources.reviewScope === undefined ? undefined : () => phaseContextSources.reviewScope!,
+    () => phaseContextSources.reviewScope ?? { kind: 'not_a_git_repository' },
     failureDir === undefined ? undefined : () => failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
@@ -89,47 +88,39 @@ function createBuilder(
   );
 }
 
-describe('automatic review checkpoints', () => {
-  it.each(['coding-review', 'ai-antipattern-review', 'architecture-review', 'security-review', 'testing-review'])(
-    'enables isolated checkpoints for Team Leader parts of %s only in the review workflow', (reviewer) => {
-      const scope = { kind: 'collected' as const, paths: ['src/input.ts'], source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } } };
-      const parent = { name: reviewer, personaDisplayName: 'Reviewer', instruction: 'review', teamLeader: { maxConcurrency: 2, timeoutMs: 10_000 } };
-      const builder = createBuilder(parent, { workflowName: 'takt-development-review' }, undefined, { reviewScope: scope });
-      const parts = ['part-1', 'part-2'].map((id) => createPartStep(parent, { id, title: id, instruction: `Review ${id}` }));
+describe('automatic progress notes requests', () => {
+  const scope: TaskReviewScope = { kind: 'collected', paths: ['src/input.ts'], source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } } };
 
-      for (const part of parts) {
-        expect(builder.buildAgentOptions(part)).toMatchObject({
-          reviewCheckpoint: {
-            reportDir: '/project/.takt/runs/sample/reports', task: 'Original workflow task',
-            reviewer: part.name, definition: JSON.stringify(part), scope,
-          },
-          permissionMode: 'readonly', edit: false,
-        });
-        expect(createBuilder(part, { workflowName: 'independent-review' }, undefined, { reviewScope: scope })
-          .buildAgentOptions(part).reviewCheckpoint).toBeUndefined();
-      }
-      const unrelated = [
-        createStep({ name: `${reviewer}.part-1` }),
-        createPartStep({ ...parent, name: `custom.${reviewer}` }, { id: 'part-1', title: 'Other', instruction: 'Other review' }),
-        createStep({ name: `${reviewer}.monitor`, internalPromptContext: { kind: 'loop_monitor', ownerStepName: reviewer } }),
-      ];
-      for (const step of unrelated) {
-        expect(builder.buildAgentOptions(step).reviewCheckpoint).toBeUndefined();
-      }
-    },
-  );
+  it.each([
+    { label: 'non-editing step', step: createStep({ name: 'plan', edit: false }), revisionBound: true },
+    { label: 'editing step', step: createStep({ name: 'implement', edit: true }), revisionBound: false },
+    { label: 'step without an edit setting', step: createStep({ name: 'summarize' }), revisionBound: false },
+  ])('creates a request for a $label in any workflow without changing its permissions', ({ step, revisionBound }) => {
+    const builder = createBuilder(step, { workflowName: 'custom-workflow' });
+    const options = builder.buildAgentOptions(step);
 
-  it('enables only the affected review workflow and keeps its reviewers readonly despite a full profile', () => {
-    const scope = { kind: 'collected' as const, paths: ['src/input.ts'], source: { kind: 'working_tree' as const, baseRange: { kind: 'base_branch_head' as const } } };
-    const step = createStep({ name: 'coding-review', edit: false });
-    const builder = createBuilder(step, { workflowName: 'takt-development-review' }, undefined, { reviewScope: scope });
-    expect(builder.buildAgentOptions(step)).toMatchObject({
-      reviewCheckpoint: { task: 'Original workflow task', reviewer: step.name, scope },
-      permissionMode: 'readonly', edit: false,
-    });
-    expect(builder.buildAgentOptions(step).permissionResolution).toBeUndefined();
-    expect(createBuilder(step, { workflowName: 'independent-review' }, undefined, { reviewScope: scope }).buildAgentOptions(step).reviewCheckpoint).toBeUndefined();
-    expect(builder.buildAgentOptions(createStep({ name: 'implement' })).reviewCheckpoint).toBeUndefined();
+    const request = builder.buildProgressNotesRequest(step, scope);
+
+    const identity = {
+      reportDir: '/project/.takt/runs/sample/reports', task: 'Original workflow task',
+      stepName: step.name, definition: JSON.stringify(step),
+    };
+    expect(request).toEqual(revisionBound
+      ? { ...identity, bindsSourceRevision: true, scope }
+      : { ...identity, bindsSourceRevision: false });
+    expect(options.progressNotes).toBeUndefined();
+    expect(options.edit).toBe(step.edit);
+  });
+
+  it('gives each Team Leader part its own identity', () => {
+    const parent = { name: 'implement', personaDisplayName: 'Coder', instruction: 'implement', edit: true, teamLeader: { maxConcurrency: 2, timeoutMs: 10_000 } };
+    const builder = createBuilder(parent);
+    const parts = ['part-1', 'part-2'].map((id) => createPartStep(parent, { id, title: id, instruction: `Implement ${id}` }));
+
+    const requests = parts.map((part) => builder.buildProgressNotesRequest(part, scope));
+
+    expect(requests.map((request) => request.stepName)).toEqual(parts.map((part) => part.name));
+    expect(new Set(requests.map((request) => request.stepName)).size).toBe(2);
   });
 });
 

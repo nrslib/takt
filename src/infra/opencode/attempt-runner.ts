@@ -1572,6 +1572,7 @@ export class OpenCodeAttemptRunner {
 
         if (part.type === 'tool') {
           toolExecutionObserved = true;
+          textContentParts.clear();
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
@@ -1979,7 +1980,9 @@ export class OpenCodeAttemptRunner {
       failureMessage = 'OpenCode stream ended before the session became idle';
     }
 
-    content = [...textContentParts.values()].join('\n');
+    // The result is the last text part after the last tool part. Other text parts are working text
+    // (progress notes, commentary), so a turn that ends with a tool has no answer.
+    content = [...textContentParts.values()].at(-1) ?? '';
     if (!success && !streamAbortController.signal.aborted) {
       streamAbortController.abort();
     }

@@ -1701,6 +1701,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
 
   interface PiTurnState {
     responseText: string;
+    calledTool: boolean;
     assistantError?: string;
     assistantAborted: boolean;
     partialToolOutput: Map<string, string>;
@@ -1778,20 +1779,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
     if (event.type === 'message_end') {
       const message = event.message as unknown as Record<string, unknown>;
       if (message.role === 'assistant') {
-        const text = extractAssistantText(message);
-        if (text) {
-          state.responseText = text;
-        }
-        if (message.stopReason === 'error') {
-          state.assistantError = typeof message.errorMessage === 'string'
-            ? message.errorMessage
-            : 'Pi assistant message ended with an error';
-        } else if (message.stopReason === 'aborted') {
-          state.assistantAborted = true;
-        } else {
-          state.assistantError = undefined;
-          state.assistantAborted = false;
-        }
+        recordAssistantMessage(state, message);
       }
       return;
     }
@@ -1800,22 +1788,42 @@ function createPiClient(modules: PiModules['modules']): PiClient {
       const messages = event.messages;
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
       if (lastAssistant) {
-        const message = lastAssistant as unknown as Record<string, unknown>;
-        const text = extractAssistantText(message);
-        if (text) {
-          state.responseText = text;
-        }
-        if (message.stopReason === 'error') {
-          state.assistantError = typeof message.errorMessage === 'string'
-            ? message.errorMessage
-            : 'Pi assistant message ended with an error';
-        } else if (message.stopReason === 'aborted') {
-          state.assistantAborted = true;
-        } else {
-          state.assistantError = undefined;
-          state.assistantAborted = false;
-        }
+        recordAssistantMessage(state, lastAssistant as unknown as Record<string, unknown>);
       }
+    }
+  }
+
+  /**
+   * Text before a tool call is working text (progress notes, commentary) and the answer follows the
+   * last call, so a message that calls a tool replaces the answer with the text after its last
+   * toolCall block, which may be empty. A message without a tool call replaces it only when it has text.
+   */
+  function recordAssistantMessage(state: PiTurnState, message: Record<string, unknown>): void {
+    const blocks: readonly unknown[] = Array.isArray(message.content) ? message.content : [];
+    let answerStart = 0;
+    blocks.forEach((block, index) => {
+      if (block !== null && typeof block === 'object' && (block as Record<string, unknown>).type === 'toolCall') {
+        answerStart = index + 1;
+      }
+    });
+    if (answerStart > 0) {
+      state.calledTool = true;
+      state.responseText = extractTextContent(blocks.slice(answerStart));
+    } else {
+      const text = extractTextContent(message.content);
+      if (text) {
+        state.responseText = text;
+      }
+    }
+    if (message.stopReason === 'error') {
+      state.assistantError = typeof message.errorMessage === 'string'
+        ? message.errorMessage
+        : 'Pi assistant message ended with an error';
+    } else if (message.stopReason === 'aborted') {
+      state.assistantAborted = true;
+    } else {
+      state.assistantError = undefined;
+      state.assistantAborted = false;
     }
   }
 
@@ -1852,6 +1860,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
         current.setPiToolPolicyOptions(options);
         const state: PiTurnState = {
           responseText: '',
+          calledTool: false,
           assistantError: undefined,
           assistantAborted: false,
           partialToolOutput: new Map(),
@@ -1927,13 +1936,15 @@ function createPiClient(modules: PiModules['modules']): PiClient {
           throw new Error(`Pi extension failed: ${current.extensionErrors.splice(0).join('; ')}`);
         }
 
-        if (!state.responseText) {
+        // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+        // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+        if (!state.responseText && !state.calledTool) {
           const newMessages = session.messages.slice(initialMessageCount);
           const lastAssistant = [...newMessages].reverse().find((message) => message.role === 'assistant');
           state.responseText = extractAssistantText(lastAssistant);
-        }
-        if (!state.responseText) {
-          throw new Error('Pi SDK returned no assistant text');
+          if (!state.responseText) {
+            throw new Error('Pi SDK returned no assistant text');
+          }
         }
 
         emitResult(options.onStream, state.responseText, true, activeSessionId);
