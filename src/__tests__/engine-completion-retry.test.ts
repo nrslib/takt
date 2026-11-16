@@ -308,7 +308,7 @@ describe('WorkflowEngine completion retry wiring', () => {
     },
   );
 
-  it('clears the normal reviewer session after double-empty recovery succeeds fresh without one', async () => {
+  it('keeps the normal reviewer session when repeated same-session recovery succeeds', async () => {
     const step = reviewStep('reviewer');
     const delegatedUsage = vi.fn();
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
@@ -348,9 +348,9 @@ describe('WorkflowEngine completion retry wiring', () => {
       .filter(([context]) => context.step === step.name)
       .map(([, result]) => result.success);
     expect(reviewerUsage.length).toBeGreaterThan(0);
-    expect(reviewerUsage).not.toContain(false);
+    expect(reviewerUsage).toEqual([true, true, false]);
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBeUndefined();
+    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session');
   });
 
   it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
@@ -547,19 +547,18 @@ describe('WorkflowEngine completion retry wiring', () => {
       undefined,
       'reviewer-b-session-1',
       'reviewer-b-session-1',
-      undefined,
+      'reviewer-b-session-1',
     ]);
     const reviewerBUsage = delegatedUsage.mock.calls
       .filter(([context]) => context.step === 'reviewer-b')
       .map(([, result]) => result.success);
-    expect(reviewerBUsage.length).toBeGreaterThan(0);
-    expect(reviewerBUsage).not.toContain(false);
+    expect(reviewerBUsage).toEqual([true, true, true, true]);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(vi.mocked(runReportPhase).mock.calls.map(([reportedStep]) => reportedStep.name).sort())
       .toEqual(['reviewer-a', 'reviewer-b']);
     const reviewerBPhase2 = vi.mocked(runReportPhase).mock.calls
       .find(([reportedStep]) => reportedStep.name === 'reviewer-b')![2] as ReportPhaseRunnerContext;
-    expect(reviewerBPhase2.getSessionId(reviewerBPhase2.resolveSessionKey(reviewerB))).toBeUndefined();
+    expect(reviewerBPhase2.getSessionId(reviewerBPhase2.resolveSessionKey(reviewerB))).toBe('reviewer-b-session-1');
   });
 
   it('keeps a judge failure in Phase 2 without leaking it to response, state, or Phase 3', async () => {
