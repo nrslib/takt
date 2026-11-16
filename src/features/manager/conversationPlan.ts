@@ -14,6 +14,7 @@ import { loadFormalSpecVerifierConstraints } from '../interactive/formalSpecProm
 import { buildManagerSystemPrompt } from './conversationPrompt.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { resolveManagerWorkflowSelection } from './workflowSelection.js';
+import { resolveManagerRuntimeAssignmentSelection } from './runtimeAssignmentSelection.js';
 import { warn } from '../../shared/ui/index.js';
 import { invalidateGlobalConfigCache, loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 import { loadGlobalConfigTraceState } from '../../infra/config/global/globalConfigCore.js';
@@ -91,6 +92,12 @@ function buildManagerConversationPlan(
       : withRepositoryConfig(repositoryDirectory, () => resolveManagerWorkflowSelection(repositoryDirectory, resolveManagerConfig(repositoryDirectory), lang));
     for (const name of selection.missingWorkflows) {
       warn(`Manager workflow not found: ${name}; ignored in ${repositoryDirectory}. Check manager.workflows in config.yaml.`);
+    }
+    const runtimeAssignmentSelection = resolve(repositoryDirectory) === resolve(cwd)
+      ? resolveManagerRuntimeAssignmentSelection(cwd, managerConfig)
+      : withRepositoryConfig(repositoryDirectory, () => resolveManagerRuntimeAssignmentSelection(repositoryDirectory, resolveManagerConfig(repositoryDirectory)));
+    for (const name of runtimeAssignmentSelection.missingRuntimeAssignments) {
+      warn(`Manager runtime assignment not found: ${name}; ignored in ${repositoryDirectory}. Check manager.runtime_assignments in config.yaml and provider.assignments in runtime.yaml.`);
     }
   }
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
