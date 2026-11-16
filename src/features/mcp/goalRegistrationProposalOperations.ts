@@ -11,6 +11,7 @@ import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDe
 import type {
   ApproveGoalRegistrationInput,
   ListGoalRegistrationProposalsInput,
+  RejectGoalRegistrationInput,
 } from './schemas.js';
 
 const REGISTRATION_RESULT_WAIT_MS = 120_000;
@@ -78,3 +79,16 @@ export async function approveTaktGoalRegistration(
   } catch (error) { return errorResult('Goal registration approval failed', error); }
 }
 
+export async function rejectTaktGoalRegistration(
+  input: RejectGoalRegistrationInput, deps: McpOperationDependencies, signal: AbortSignal,
+): Promise<CallToolResult> {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const result = await submitRegistrationCommand(
+      { kind: 'dismiss_summary', revision: input.revision },
+      { kind: 'repository', repositoryDirectory: input.cwd }, signal);
+    if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
+    if (result.kind !== 'notice') throw new Error(`Unexpected goal registration dismissal result: ${result.kind}`);
+    return jsonResult({ revision: input.revision, notice: result.message });
+  } catch (error) { return errorResult('Goal registration rejection failed', error); }
+}

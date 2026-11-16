@@ -31,6 +31,7 @@ import {
   listGoalQuestionsInputSchema,
   listGoalRegistrationProposalsInputSchema,
   approveGoalRegistrationInputSchema,
+  rejectGoalRegistrationInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -63,7 +64,7 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
-import { approveTaktGoalRegistration, listTaktGoalRegistrationProposals } from './goalRegistrationProposalOperations.js';
+import { approveTaktGoalRegistration, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -326,6 +327,10 @@ export function createTaktMcpServer(
       title: 'Approve a goal registration', description: 'Approve the pending goal registration proposal selected by revision, with the same handling as choosing to register in the TUI registration dialog. Registers the goal and returns it. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
       inputSchema: approveGoalRegistrationInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal registration approval failed', (deps) => approveTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    server.registerTool('takt_reject_goal_registration', {
+      title: 'Reject a goal registration', description: 'Dismiss the pending goal registration proposal selected by revision without registering the goal, with the same handling as dismissing the TUI registration dialog. Returns the dismissed revision. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
+      inputSchema: rejectGoalRegistrationInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_notify_goal', {
       title: 'Notify a goal event', description: 'Save and deliver a blocked or custom event that a human should know, with optional severity. Returns saved state and notificationId within 64 KiB, with explicit truncation. Read saved text with takt_get_goal path notifications.body, recordId and textOffset/maxBytes.',
       inputSchema: notifyGoalInputSchema,

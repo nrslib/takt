@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import {
   approveTaktGoalRegistration,
   listTaktGoalRegistrationProposals,
+  rejectTaktGoalRegistration,
 } from '../features/mcp/goalRegistrationProposalOperations.js';
 import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
@@ -180,6 +181,23 @@ it('approves the pending proposal through the same command as the manager screen
   expect(doubles.close).toHaveBeenCalledOnce();
 });
 
+it('rejects the pending proposal through a dismissal without a reason field', async () => {
+  acceptSubmission();
+
+  const pending = rejectTaktGoalRegistration({ cwd, revision }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId, result: { kind: 'notice', message: '登録案を取り下げました' } });
+  const result = await pending;
+
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
+  const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
+  expect(command).toEqual({ kind: 'dismiss_summary', revision });
+  expect(command).not.toHaveProperty('reason');
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ revision });
+  expect(doubles.close).toHaveBeenCalledOnce();
+});
+
 it('reports a stale approval like the manager screen when the daemon rejects the submission', async () => {
   doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
 
@@ -188,6 +206,19 @@ it('reports a stale approval like the manager screen when the daemon rejects the
   expect(result.isError).toBe(true);
   expect(firstTextContent(result.content)).toMatch(/stale/iu);
   expect(doubles.output).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledOnce();
+});
+
+it('reports a stale rejection delivered as the turn result', async () => {
+  acceptSubmission();
+
+  const pending = rejectTaktGoalRegistration({ cwd, revision }, {}, signal);
+  await vi.waitFor(() => expect(emit).toBeDefined());
+  emit!({ kind: 'result', operationId, result: { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' } });
+  const result = await pending;
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/stale/iu);
   expect(doubles.close).toHaveBeenCalledOnce();
 });
 

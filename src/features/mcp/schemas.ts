@@ -143,8 +143,12 @@ const goalRegistrationRevisionSchema = z.number().int().safe().positive()
 export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
   revision: goalRegistrationRevisionSchema,
 });
+export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+});
 export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
 export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
+export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();
