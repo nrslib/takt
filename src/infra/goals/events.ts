@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameS
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { getGlobalConfigDir } from '../config/paths.js';
+import { hasCode } from '../daemon/privateFile.js';
 import { GoalStore } from './store.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalTaskResultSchema } from './schema.js';
 
@@ -41,10 +42,21 @@ export function saveManagerEvent(cwd: string, input: ManagerEventInput): void {
 export function readManagerEvents(cwd: string): SavedManagerEvent[] {
   const directory = inboxDirectory(cwd);
   if (!existsSync(directory)) return [];
-  return readdirSync(directory).filter((name) => name.endsWith('.json')).sort().map((name) => {
+  return readdirSync(directory).filter((name) => name.endsWith('.json')).sort().flatMap((name) => {
     const filePath = join(directory, name);
-    return { filePath, event: ManagerEventSchema.parse(JSON.parse(readFileSync(filePath, 'utf8'))) };
+    const content = readListedEvent(filePath);
+    return content === undefined ? [] : [{ filePath, event: ManagerEventSchema.parse(JSON.parse(content)) }];
   });
+}
+
+// 列挙と読取の間に、処理済みイベントを別の処理が削除することがある。
+function readListedEvent(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return undefined;
+    throw error;
+  }
 }
 
 export function deleteManagerEvent(saved: SavedManagerEvent): void {
