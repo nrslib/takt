@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TranscriptEntryView, TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { formatTranscriptEntryOutput } from '../features/tui/transcriptOutput.js';
 import type { OperationResult, PortOutput } from '../features/manager/conversationPort.js';
+import type { SnapshotDisplayItem } from '../features/manager/snapshotChanges.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
@@ -764,4 +765,43 @@ it('waits only for initial snapshot completion before committing tool entries', 
   client.change({ readStatus: 'incomplete' });
   client.output({ kind: 'tool_completed', entry: { ...entry, key: randomUUID(), toolId: 'later', result: 'later-entry' } });
   await waitFor(() => expect(entries()).toHaveLength(2));
+});
+
+const savedMessage = (operationId: string, message: string, acceptedSequence: number): SnapshotDisplayItem =>
+  ({ kind: 'user_message', operationId, message, acceptedSequence, pending: false });
+const savedResult = (operationId: string, acceptedSequence: number, result: OperationResult): SnapshotDisplayItem =>
+  ({ kind: 'turn_result', operationId, acceptedSequence, result });
+const savedTool = (operationId: string, acceptedSequence: number, result: string): SnapshotDisplayItem => ({ kind: 'tool_history', acceptedSequence,
+  history: { operationId, generation: 1, finished: true, history: { entries: [{ key: randomUUID(), toolId: 'tool', tool: 'Bash', input: {}, output: '',
+    context: { callId: 'call', operationId, generation: 1 }, status: 'success', association: 'matched', result }] } } });
+const logLines = () => entries().map((entry) => entry.role === 'tool'
+  ? `tool:${['old-tool', 'new-tool'].find((name) => entry.content.includes(name))}` : `${entry.role}:${entry.content}`);
+
+it('restores saved turns as message, tools and result once at startup and after reconnect, including a turn saved without a result', async () => {
+  const old = randomUUID(); const replied = randomUUID(); const interrupted = randomUUID();
+  const items = [...new ManagerClientDouble().getSnapshot().items,
+    savedMessage(old, 'old question', 1), savedTool(old, 1, 'old-tool'),
+    savedMessage(replied, 'new question', 2), savedTool(replied, 2, 'new-tool'), savedResult(replied, 2, { kind: 'reply', message: 'saved reply' }),
+    savedMessage(interrupted, 'stopped question', 3), savedResult(interrupted, 3, { kind: 'error', code: 'interrupted', message: 'Turn interrupted' })];
+  const { client } = mount('en', new ManagerClientDouble({ items }));
+  const restored = ['user:old question', 'tool:old-tool', 'user:new question', 'tool:new-tool', 'assistant:saved reply',
+    'user:stopped question', 'system:Turn interrupted'];
+  await waitFor(() => expect(logLines()).toEqual(restored));
+  client.change({ connection: 'disconnected', readStatus: 'incomplete' });
+  const later = randomUUID();
+  client.change({ connection: 'connected', readStatus: 'complete',
+    items: [...items, savedMessage(later, 'later question', 4), savedResult(later, 4, { kind: 'reply', message: 'later reply' })] });
+  await waitFor(() => expect(logLines()).toEqual([...restored, 'user:later question', 'assistant:later reply']));
+});
+
+it('does not repeat a reply shown live when a later snapshot contains its saved result', async () => {
+  const { client } = mount('en');
+  const operationId = randomUUID();
+  client.output({ kind: 'user_message', operationId, message: 'live question' });
+  client.output({ kind: 'result', operationId, result: { kind: 'reply', message: 'live reply' } });
+  await waitFor(() => expect(logLines()).toEqual(['user:live question', 'assistant:live reply']));
+  const next = randomUUID();
+  client.change({ items: [...client.getSnapshot().items, savedMessage(operationId, 'live question', 1), savedResult(operationId, 1, { kind: 'reply', message: 'live reply' }),
+    savedMessage(next, 'next question', 2), savedResult(next, 2, { kind: 'reply', message: 'next reply' })] });
+  await waitFor(() => expect(logLines()).toEqual(['user:live question', 'assistant:live reply', 'user:next question', 'assistant:next reply']));
 });

@@ -8,7 +8,7 @@ export function orderSnapshotItems(items: ReadonlyMap<string, SnapshotDisplayIte
   const assignment = items.get('assignment');
   const repositories = new Map(assignment?.kind === 'assignment'
     ? assignment.assignment.repositoryDirectories.map((directory, index) => [directory, index]) : []);
-  const groups = { assignment: 0, goal: 1, epic: 2, inquiry: 3, display_event: 4, user_message: 5, tool_history: 5 };
+  const groups = { assignment: 0, goal: 1, epic: 2, inquiry: 3, display_event: 4, user_message: 5, tool_history: 5, turn_result: 5 };
   const ordered = [...items.values()].sort((left, right) => {
     if (left.kind === 'epic' && right.kind === 'epic') return left.epic.workspaceId.localeCompare(right.epic.workspaceId) || left.epic.id.localeCompare(right.epic.id);
     if (left.kind === 'goal' && right.kind === 'goal') {
@@ -35,7 +35,18 @@ export function orderSnapshotItems(items: ReadonlyMap<string, SnapshotDisplayIte
     conversation.push(item);
   }
   while (next < messages.length) conversation.push(messages[next++]!);
-  return [...ordered.filter((item) => item.kind !== 'tool_history' && item.kind !== 'user_message'), ...conversation];
+  // 結果はそのターンの発言とツールの後に置く。どちらもないターンは、受付順で後の発言より前に置く。
+  const results = ordered.filter((item) => item.kind === 'turn_result').sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+  for (const result of results) {
+    const owned = conversation.map(turnOperationId).lastIndexOf(result.operationId);
+    const later = conversation.findIndex((item) => item.kind === 'user_message' && item.acceptedSequence > result.acceptedSequence);
+    conversation.splice(owned >= 0 ? owned + 1 : later >= 0 ? later : conversation.length, 0, result);
+  }
+  return [...ordered.filter((item) => item.kind !== 'tool_history' && item.kind !== 'user_message' && item.kind !== 'turn_result'), ...conversation];
+}
+
+function turnOperationId(item: SnapshotDisplayItem): string | undefined {
+  return item.kind === 'tool_history' ? item.history.operationId : item.kind === 'user_message' ? item.operationId : undefined;
 }
 
 export function snapshotItemKey(item: SnapshotValue): string {
@@ -45,6 +56,7 @@ export function snapshotItemKey(item: SnapshotValue): string {
     case 'epic': return JSON.stringify(['epic', item.epic.workspaceId, item.epic.id]);
     case 'tool_history': return JSON.stringify(['tool_history', item.history.operationId, item.history.generation]);
     case 'user_message': return JSON.stringify(['user_message', item.operationId]);
+    case 'turn_result': return JSON.stringify(['turn_result', item.operationId]);
     case 'goal': return JSON.stringify(['goal', item.goal.repositoryDirectory, item.goal.id]);
     case 'inquiry': {
       const { target, question } = item.inquiry;

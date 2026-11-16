@@ -16,6 +16,7 @@ import { RETAINED_TOOL_OUTPUT_BYTES } from '../shared/tool-activity/outputLimit.
 import { DaemonConversations } from '../features/daemon/conversationState.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
 import type { OutputVersion, PortOutput } from '../features/manager/conversationPort.js';
+import { orderSnapshotItems, snapshotItemKey } from '../features/manager/snapshotChanges.js';
 import type { ConversationToolEvent } from '../shared/types/conversation-activity.js';
 import { readDaemonOwner, registerDaemonOwner, removeDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { conversationIpcEndpoint, readDaemonIpcState, resolveDaemonConfigDirectory, writeDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
@@ -197,14 +198,15 @@ describe('durable daemon event storage', () => {
     const expected = [first, second].map((entry) => ({ operationId: entry.operationId, message: entry.event.kind === 'human_command' && entry.event.command.kind === 'message' ? entry.event.command.text : '', acceptedSequence: entry.acceptedSequence, pending: entry.eventId !== first.eventId }));
     expect((await store.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(expected);
     await store.saveResult(first.eventId, finished); await store.markSettled(first.eventId, finished);
+    const settled = expected.map((turn) => turn.operationId === first.operationId ? { ...turn, outcome: finished.outcome } : turn);
     await store.accept({ ...event('hidden', 3), event: { kind: 'human_command', command: { kind: 'message', text: 'hidden', display: false }, speaker: { namespace: 'test', id: 'human' } } });
     await store.accept({ ...event('another conversation', 4), conversationId: 'another' });
     injection.afterRenameFailure = true;
     await expect(store.accept(event('rejected', 5))).rejects.toThrow();
-    expect((await store.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(expected);
+    expect((await store.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(settled);
     const restarted = new FileEventStore(directory);
     await restarted.restore();
-    expect((await restarted.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(expected);
+    expect((await restarted.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(settled);
   });
 
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
@@ -739,6 +741,52 @@ describe('real asynchronous command process boundary', () => {
     await expect(new AsyncCommand().run({ executable: join(await root(), 'missing-executable'), args: [],
       cwd: await root(), env: { ...process.env }, maxOutputBytes: 64 }, io())).rejects.toMatchObject({ code: 'ENOENT' });
   });
+});
+
+it('restores each settled turn result after its message and tools from a restarted daemon, and reads turns without a settled result', async () => {
+  const directory = await root();
+  const f = toolOwner(directory);
+  const events = new FileEventStore(directory);
+  await f.store.create(record());
+  const state = { version: 0, assignment, session: { provider: 'codex', model: null, sessionId: null }, revision: 0, pending: null, approval: null };
+  const begin = async (name: string, sequence: number) => {
+    const accepted = { ...event(name, sequence), conversationId: id };
+    const identity = { conversationId: id, operationId: accepted.operationId, generation: 1 };
+    await events.accept(accepted); await events.markStarted(accepted.eventId, identity);
+    await f.owner.started({ turn: identity, event: accepted, state });
+    return { accepted, identity };
+  };
+  const settle = async (accepted: AcceptedEvent, identity: TurnIdentity, outcome: TurnResult['outcome']) => {
+    const finished = { ...identity, event: accepted, outcome };
+    await events.saveResult(accepted.eventId, finished); await f.owner.apply(finished); await events.markSettled(accepted.eventId, finished);
+  };
+  const replied = await begin('with tools', 1);
+  await f.owner.progress(replied.identity, toolEvent(replied.identity, 'use', { type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } }), signal());
+  await f.owner.progress(replied.identity, toolEvent(replied.identity, 'result', { type: 'tool_result', data: { id: 'tool', content: 'read-result', isError: false } }), signal());
+  await settle(replied.accepted, replied.identity, { kind: 'completed', result: { kind: 'reply', message: 'Saved reply' } });
+  const interrupted = await begin('interrupted', 2);
+  await settle(interrupted.accepted, interrupted.identity, { kind: 'interrupted' });
+  const settling = await begin('settling', 3);
+  await events.saveResult(settling.accepted.eventId, { ...settling.identity, event: settling.accepted, outcome: { kind: 'completed', result: { kind: 'reply', message: 'Not yet applied' } } });
+  await begin('running', 4);
+  await f.owner.close();
+
+  const errors: unknown[] = [];
+  const restarted = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory), new DaemonNotifications(directory),
+    async () => {}, (error) => { errors.push(error); }, new FileEventStore(directory));
+  const snapshot = await restarted.snapshot(id, { toolHistory: true });
+  const items = [];
+  for await (const item of snapshot.items) items.push(item);
+  snapshot.complete();
+  const displayed = orderSnapshotItems(new Map(items.flatMap((item) => item.kind === 'state' || item.kind === 'remove' ? [] : [[snapshotItemKey(item), item] as const])));
+  expect(displayed.flatMap((item) => item.kind === 'user_message' ? [`message:${item.message}`]
+    : item.kind === 'tool_history' ? [`tool:${item.history.history.entries.map((entry) => entry.result).join()}`]
+      : item.kind === 'turn_result' ? [`result:${item.result.kind}:${'message' in item.result ? item.result.message : ''}`] : [])).toEqual([
+    'message:with tools', 'tool:read-result', 'result:reply:Saved reply',
+    'message:interrupted', 'result:error:Turn interrupted',
+    'message:settling', 'message:running',
+  ]);
+  expect([...f.errors, ...errors]).toEqual([]);
 });
 
 type ToolEventBody = Omit<ConversationToolEvent['event'], 'toolActivity'>;

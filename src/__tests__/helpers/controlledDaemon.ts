@@ -23,10 +23,11 @@ export function input(id: string, conversationId = 'conversation', lane: 'human'
 export class MemoryEventStore implements EventStore {
   readonly records = new Map<string, StoredEvent | { state: 'settled'; event: AcceptedEvent; result: TurnResult }>();
   async readTurns(conversationId: string) {
-    return [...this.records.values()].filter(({ event }) => event.conversationId === conversationId).map(({ event, state }) => ({
-      operationId: event.operationId, acceptedSequence: event.acceptedSequence, pending: state === 'queued',
-      ...(event.event.kind === 'human_command' && event.event.command.kind === 'message' && event.event.command.display !== false
-        ? { message: event.event.command.text } : {}),
+    return [...this.records.values()].filter(({ event }) => event.conversationId === conversationId).map((record) => ({
+      operationId: record.event.operationId, acceptedSequence: record.event.acceptedSequence, pending: record.state === 'queued',
+      ...(record.event.event.kind === 'human_command' && record.event.event.command.kind === 'message' && record.event.event.command.display !== false
+        ? { message: record.event.event.command.text } : {}),
+      ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}),
     })).sort((left, right) => left.acceptedSequence - right.acceptedSequence);
   }
   readonly accept = vi.fn(async (event: AcceptedEvent): ReturnType<EventStore['accept']> => {
