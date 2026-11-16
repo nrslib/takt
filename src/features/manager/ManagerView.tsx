@@ -78,6 +78,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
   const displayedResults = useRef(new Set<string>());
+  const handledResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
   const interruptedTurn = useRef<{ operationId: string; generation?: number } | null>(null);
   const clock = useRef<{ operationId: string; generation?: number; startedAt: number } | null>(null);
@@ -225,19 +226,27 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
-  const showResult = (result: OperationResult, operationId: string): void => {
+  /** 結果を会話ログへ一度だけ積む。ライブの配送とスナップショットからの復元で同じ表示にする。 */
+  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
-    const goalOperation = goalOperations.current.get(operationId);
-    goalOperations.current.delete(operationId);
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
     else {
-      const message = goalOperation !== undefined && result.kind === 'notice'
-        ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message;
+      const message = goal !== undefined && result.kind === 'notice'
+        ? formatGoalName(goal.objective) + '\n' + result.message : result.message;
       append(message, result.kind === 'reply' ? 'assistant' : 'system');
     }
+    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
+  };
+  const showResult = (result: OperationResult, operationId: string): void => {
+    // 保存済みの結果がスナップショットから先に表示されていても、ライブの結果を受けた後処理は省かない。
+    if (handledResults.current.has(operationId)) return;
+    handledResults.current.add(operationId);
+    const goalOperation = goalOperations.current.get(operationId);
+    appendResult(result, operationId, goalOperation?.goal);
+    goalOperations.current.delete(operationId);
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
       ? { goal: goalOperation.goal, retry: true } : null);
     if (summaryOperation.current === operationId) {
@@ -245,7 +254,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       summaryOperation.current = null;
       setSummarizing(false);
     }
-    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
     if (savingAnswer.current?.operationId === operationId) savingAnswer.current = null;
@@ -265,7 +273,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
         for (const item of current.items) {
           if (item.kind === 'user_message') {
             if (!item.pending || current.state?.running?.operationId === item.operationId) appendUserMessage(item);
-          } else if (item.kind === 'tool_history') for (const entry of item.history.history.entries) appendTool(entry);
+          } else if (item.kind === 'tool_history') {
+            for (const entry of item.history.history.entries) appendTool(entry);
+          } else if (item.kind === 'turn_result') appendResult(item.result, item.operationId);
         }
       }
       const state = current.state;

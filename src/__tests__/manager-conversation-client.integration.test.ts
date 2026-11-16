@@ -261,6 +261,30 @@ it('restores a tool-free human turn before later background tools on attachment 
   await waitFor(assertOrder);
 });
 
+it('restores a saved reply after its message and tools on a restarted screen and keeps each once after reconnect', async () => {
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'reply.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'reply-tool-result', isError: false } });
+    return toolReply('Saved manager reply');
+  }));
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Question before restart' }); await fixture.settled();
+  client.close(); client = new ConversationIpcClient(assignment);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const assertLog = (): void => {
+    const log = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.flatMap((entry) =>
+      entry.content === 'Question before restart' ? [`${entry.role}:question`] : entry.content.includes('reply-tool-result') ? [`${entry.role}:tool`]
+        : entry.content === 'Saved manager reply' ? [`${entry.role}:reply`] : []);
+    expect(log).toEqual(['user:question', 'tool:tool', 'assistant:reply']);
+  };
+  await waitFor(assertLog);
+  connections[0]!.socket.destroy();
+  await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+  await refreshSnapshot(client, connections[1]!);
+  assertLog();
+});
+
 it('appends the previous tool transcript before the next user message', async () => {
   const secondTurn = deferred<void>(); let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {

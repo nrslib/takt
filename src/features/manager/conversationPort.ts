@@ -34,6 +34,7 @@ export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
   | { kind: 'tool_history'; history: ToolActivityTurnState; acceptedSequence?: number }
   | { kind: 'user_message'; operationId: string; message: string; acceptedSequence: number; pending: boolean }
+  | { kind: 'turn_result'; operationId: string; acceptedSequence: number; result: OperationResult }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }

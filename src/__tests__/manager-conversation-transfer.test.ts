@@ -108,6 +108,18 @@ it('interleaves accepted messages without reordering background tools or relying
   expect(ordered).toEqual([first, firstTool, background, next, nextTool]);
 });
 
+it('places each turn result after its own message and tools, and a result without either before the next accepted message', () => {
+  const result = (operationId: string, acceptedSequence: number): SnapshotDisplayItem => ({ kind: 'turn_result', operationId, acceptedSequence,
+    result: { kind: 'reply', message: operationId } });
+  const first: SnapshotDisplayItem = { kind: 'user_message', operationId: 'first', message: 'First input', acceptedSequence: 1, pending: false };
+  const firstTool: SnapshotDisplayItem = { kind: 'tool_history', acceptedSequence: 1,
+    history: { operationId: 'first', generation: 1, finished: true, history: { entries: [] } } };
+  const next: SnapshotDisplayItem = { kind: 'user_message', operationId: 'next', message: 'Next input', acceptedSequence: 3, pending: false };
+  const items = [result('next', 3), result('background', 2), next, result('first', 1), firstTool, first];
+  const ordered = orderSnapshotItems(new Map(items.map((item) => [snapshotItemKey(item), item])));
+  expect(ordered).toEqual([first, firstTool, result('first', 1), result('background', 2), next, result('next', 3)]);
+});
+
 it('preserves a known turn start time through a running snapshot', async () => {
   const f = fixture();
   const state = { ...f.state, running: { operationId: randomUUID(), kind: 'turn', generation: 1, startedAt: Date.now() - 65000 } };

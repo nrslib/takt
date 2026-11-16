@@ -48,10 +48,19 @@ const displayAssignmentSchema = z.union([
   z.object({ kind: z.literal('repository'), repositoryDirectory: repository, repositoryDirectories: z.array(repository) }).strict(),
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid(), name: z.string(), repositoryDirectories: z.array(repository) }).strict(),
 ]);
+const operationResultSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
+  z.object({ kind: z.literal('notice'), message: z.string() }).strict(),
+  z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
+  z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
+]);
+const savedOperationId = z.string().min(1).max(128);
 const snapshotItemSchema = z.discriminatedUnion('kind', [
   EpicSnapshotSchema,
   z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema, acceptedSequence: sequence.optional() }).strict(),
-  z.object({ kind: z.literal('user_message'), operationId: z.string().min(1).max(128), message: z.string(), acceptedSequence: sequence, pending: z.boolean() }).strict(),
+  z.object({ kind: z.literal('user_message'), operationId: savedOperationId, message: z.string(), acceptedSequence: sequence, pending: z.boolean() }).strict(),
+  z.object({ kind: z.literal('turn_result'), operationId: savedOperationId, acceptedSequence: sequence, result: operationResultSchema }).strict(),
   z.object({ kind: z.literal('state'), state: stateSchema }).strict(),
   z.object({ kind: z.literal('assignment'), assignment: displayAssignmentSchema }).strict(),
   z.object({ kind: z.literal('goal'), goal: GoalRecordObjectSchema.pick({ id: true, objective: true, status: true, executionStatus: true })
@@ -59,13 +68,6 @@ const snapshotItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('inquiry'), inquiry: inquirySchema }).strict(),
   z.object({ kind: z.literal('display_event'), event: z.object({ id: z.string(), message: z.string() }).strict() }).strict(),
   z.object({ kind: z.literal('remove'), key: z.string().min(1) }).strict(),
-]);
-const operationResultSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
-  z.object({ kind: z.literal('notice'), message: z.string() }).strict(),
-  z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
-  z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
-  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_started'), entry: ManagerToolActivityEntrySchema }).strict(),
