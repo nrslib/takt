@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { GoalStore } from '../infra/goals/store.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { abortEpic, completeEpic, getEpic, recordEpicVerificationResult, startEpicVerification } from '../infra/epics/index.js';
@@ -310,4 +311,38 @@ it.each(['missing', 'invalid JSON', 'wrong workspace'] as const)('keeps the daem
   expect(await source.patrolGoalIds(directory)).toEqual([]);
   expect(await source.hasWork(files)).toBe(true);
   expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});
+
+it('republishes only goal answers left pending for publication and clears their marks', async () => {
+  const savedAnswer = { text: 'CSV', source: 'mcp' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
+  const pendingId = randomUUID();
+  const target = GoalSchema.parse({ ...goalRecord(), questions: [
+    { id: pendingId, body: 'Which format?', recipient: 'human', status: 'answered', answer: savedAnswer, answerPublicationPending: true },
+    { id: randomUUID(), body: 'Which branch?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  const other = GoalSchema.parse({ ...goalRecord(), id: randomUUID(), questions: [
+    { id: randomUUID(), body: 'Which owner?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  for (const goal of [target, other]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const otherPath = join(directory, '.takt', 'goals', other.id, 'goal.json');
+  const otherBefore = await readFile(otherPath, 'utf8');
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+
+  await source.inquiries();
+  await source.inquiries();
+
+  expect(errors).not.toHaveBeenCalled();
+  const inboxNames = await readdir(await files.inboxDirectory(directory));
+  expect(await Promise.all(inboxNames.map((name) => files.readInboxEvent(directory, name)))).toEqual([
+    expect.objectContaining({ kind: 'answer', goalId: target.id, questionId: pendingId, answer: savedAnswer }),
+  ]);
+  const stored = await new GoalStore(directory).get(target.id);
+  expect(stored.questions!.map((question) => question.answerPublicationPending)).toEqual([undefined, undefined]);
+  expect(stored.questions!.map((question) => question.answer)).toEqual([savedAnswer, savedAnswer]);
+  expect(await readFile(otherPath, 'utf8')).toBe(otherBefore);
 });

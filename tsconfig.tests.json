@@ -365,7 +365,6 @@
     "src/__tests__/it-daemon-worktree-run-log.test.ts",
     "src/__tests__/it-edit-false-readonly.test.ts",
     "src/__tests__/it-failed-retry-order-revision-worktree.test.ts",
-    "src/__tests__/it-goal-answer-publication.test.ts",
     "src/__tests__/it-goal-content-inclusion.test.ts",
     "src/__tests__/it-goal-execution-lock-process.test.ts",
     "src/__tests__/it-goal-git-registration.test.ts",
