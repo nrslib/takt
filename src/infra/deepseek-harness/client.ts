@@ -114,7 +114,7 @@ interface ResponseRedactionContext {
   pendingChunks: ResponseTextChunk[];
   buffer: SensitiveTextStreamBuffer;
   toolInputValues: ReturnType<typeof createBoundedSensitiveValues>;
-  recentText: string;
+  toolBoundaryText: string;
 }
 
 interface HarnessStreamState {
@@ -552,19 +552,19 @@ function writeResponseRedactedChunks(
   field: ResponseTextChunk['field'],
   knownSecrets: Record<string, string>,
 ): ResponseTextChunk[] {
-  const combined = context.recentText + text;
-  if (context.recentText.length > 0 && text.length > 0) {
+  if (context.toolBoundaryText.length > 0 && text.length > 0) {
+    const combined = context.toolBoundaryText + text;
     const values = new Set(Object.values(knownSecrets));
     for (const value of context.buffer.sensitiveValues.values) values.add(value);
     const ranges = sensitiveTextRanges(combined, values)
-      .filter((range) => range.end > context.recentText.length)
+      .filter((range) => range.end > context.toolBoundaryText.length)
       .map((range) => ({
-        start: Math.max(0, range.start - context.recentText.length),
-        end: Math.min(text.length, range.end - context.recentText.length),
+        start: Math.max(0, range.start - context.toolBoundaryText.length),
+        end: Math.min(text.length, range.end - context.toolBoundaryText.length),
       }));
     text = maskSensitiveRanges(text, ranges);
   }
-  context.recentText = combined.slice(-4096);
+  context.toolBoundaryText = '';
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
     previous.text += text;
@@ -596,6 +596,8 @@ function invokeStream(
     if (event.type === 'tool_use') {
       responseRedactionContext.toolInputValues.collect(event.data.input);
       responseRedactionContext.buffer.sensitiveValues.collect(event.data.input);
+      responseRedactionContext.toolBoundaryText = responseRedactionContext.pendingChunks
+        .map((chunk) => chunk.text).join('').slice(-4096);
     }
     flushHarnessResponseRedactor(responseRedactionContext, onStream, knownSecrets);
   }
@@ -1761,7 +1763,7 @@ export async function callDeepSeekHarness(
       pendingChunks: [],
       buffer: new SensitiveTextStreamBuffer(),
       toolInputValues: createBoundedSensitiveValues(),
-      recentText: '',
+      toolBoundaryText: '',
     },
     answerBySession: new Map(),
     emittedToolUses: new Set(),

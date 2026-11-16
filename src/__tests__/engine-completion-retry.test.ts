@@ -329,7 +329,7 @@ describe('WorkflowEngine completion retry wiring', () => {
         undefined,
         'review-session',
         'review-session',
-        undefined,
+        'review-session',
       ][reviewerCalls - 1]);
       if (reviewerCalls === 1) {
         return reviewerResponse(String(persona), 'initial review', 'review-session');
@@ -348,7 +348,7 @@ describe('WorkflowEngine completion retry wiring', () => {
       .filter(([context]) => context.step === step.name)
       .map(([, result]) => result.success);
     expect(reviewerUsage.length).toBeGreaterThan(0);
-    expect(reviewerUsage).toEqual([true, true, false]);
+    expect(reviewerUsage).toEqual([true, true, true]);
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session');
   });

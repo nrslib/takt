@@ -719,6 +719,34 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(events.at(-1)?.data).toEqual({ result: 'password=[REDACTED]', success: true, sessionId });
   });
 
+  it('keeps both halves of a configured credential split across ordinary chunks out of the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = credential.length - 1;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: credential.slice(0, split) } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: `${credential.slice(split)}\n` } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(credential.slice(0, split));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
   it('continues the same session instead of a fresh retry when Phase 1 ends with a tool call', async () => {
     const sessionId = 'error-mapping-session';
     runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
