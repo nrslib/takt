@@ -1542,6 +1542,7 @@ export class OpenCodeAttemptRunner {
 
         if (part.type === 'tool') {
           toolExecutionObserved = true;
+          textContentParts.clear();
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
@@ -1842,6 +1843,16 @@ export class OpenCodeAttemptRunner {
         continue;
       }
 
+      if (sseEvent.type === 'session.compacted') {
+        const properties = sseEvent.properties as { sessionID?: string; reason?: string };
+        // Only the v2 automatic-completion notification carries a verified reason.
+        // A v1 session.compacted event cannot distinguish manual compaction.
+        if (properties.sessionID === activeSessionId && properties.reason === 'auto') {
+          options.onStream?.({ type: 'context_compacted', data: { sessionId: activeSessionId } });
+        }
+        continue;
+      }
+
       if (sseEvent.type === 'session.status') {
         const statusProps = sseEvent.properties as {
           sessionID?: string;
@@ -1940,7 +1951,9 @@ export class OpenCodeAttemptRunner {
       failureMessage = 'OpenCode stream ended before the session became idle';
     }
 
-    content = [...textContentParts.values()].join('\n');
+    // All remaining text parts form the answer after the last tool part. A turn that ends with a
+    // tool has no answer because tool handling cleared every earlier text part.
+    content = [...textContentParts.values()].join('');
     if (!success && !streamAbortController.signal.aborted) {
       streamAbortController.abort();
     }

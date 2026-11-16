@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
@@ -7,6 +8,7 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
+import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 
 function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined
@@ -34,6 +36,7 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
+  readonly reviewScope?: TaskReviewScope;
   readonly openCodeExternalDirectories?: readonly string[];
 }
 
@@ -71,11 +74,9 @@ function createBuilder(
     () => '.takt/runs/sample/reports',
     () => 'ja',
     () => engineOverrides.workflowName ?? 'default',
-    currentWorkflowStack === undefined
-      ? undefined
-      : () => [...currentWorkflowStack],
+    () => (currentWorkflowStack === undefined ? undefined : [...currentWorkflowStack]),
     () => 'Original workflow task',
-    undefined,
+    () => phaseContextSources.reviewScope ?? { kind: 'not_a_git_repository' },
     failureDir === undefined ? undefined : () => failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
@@ -86,6 +87,42 @@ function createBuilder(
     phaseContextSources.openCodeExternalDirectories,
   );
 }
+
+describe('automatic progress notes requests', () => {
+  const scope: TaskReviewScope = { kind: 'collected', paths: ['src/input.ts'], source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } } };
+
+  it.each([
+    { label: 'non-editing step', step: createStep({ name: 'plan', edit: false }), revisionBound: true },
+    { label: 'editing step', step: createStep({ name: 'implement', edit: true }), revisionBound: false },
+    { label: 'step without an edit setting', step: createStep({ name: 'summarize' }), revisionBound: false },
+  ])('creates a request for a $label in any workflow without changing its permissions', ({ step, revisionBound }) => {
+    const builder = createBuilder(step, { workflowName: 'custom-workflow' });
+    const options = builder.buildAgentOptions(step);
+
+    const request = builder.buildProgressNotesRequest(step, scope);
+
+    const identity = {
+      reportDir: '/project/.takt/runs/sample/reports', task: 'Original workflow task',
+      stepName: step.name, definition: JSON.stringify(step),
+    };
+    expect(request).toEqual(revisionBound
+      ? { ...identity, bindsSourceRevision: true, scope }
+      : { ...identity, bindsSourceRevision: false });
+    expect(options.progressNotes).toBeUndefined();
+    expect(options.edit).toBe(step.edit);
+  });
+
+  it('gives each Team Leader part its own identity', () => {
+    const parent = { name: 'implement', personaDisplayName: 'Coder', instruction: 'implement', edit: true, teamLeader: { maxConcurrency: 2, timeoutMs: 10_000 } };
+    const builder = createBuilder(parent);
+    const parts = ['part-1', 'part-2'].map((id) => createPartStep(parent, { id, title: id, instruction: `Implement ${id}` }));
+
+    const requests = parts.map((part) => builder.buildProgressNotesRequest(part, scope));
+
+    expect(requests.map((request) => request.stepName)).toEqual(parts.map((part) => part.name));
+    expect(new Set(requests.map((request) => request.stepName)).size).toBe(2);
+  });
+});
 
 describe('OptionsBuilder.buildBaseOptions', () => {
   beforeEach(() => {

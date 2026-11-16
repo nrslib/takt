@@ -8,6 +8,7 @@ import { filterSlashCommands } from '../features/interactive/slashCommandRegistr
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
@@ -89,12 +90,12 @@ describe('TUI confirmation to conversation routes through the real runner', () =
         expect(capture.systemPrompts.at(-1)).toBe(capture.systemPrompts[0]);
         expect(capture.allowedTools.at(-1)).toEqual(['Read']);
       } else {
-        expect(capture.systemPrompts.at(-1)).toBe(buildInteractiveSystemPrompt('en', {
+        expect(capture.systemPrompts.at(-1)).toBe(withProgressNotesGuidance(buildInteractiveSystemPrompt('en', {
           grillMe: mode === 'grill-me', formalSpec,
           workflowContext: {
             name: 'menu-workflow', description: 'Menu workflow', workflowStructure: 'implement', stepPreviews: [], taskHistory: [],
           },
-        }));
+        }), 'en'));
       }
       expect(filterSlashCommands('/verify', continued.props.conversation.commandAvailability).length > 0).toBe(formalSpec);
       await terminal.send('/cancel\r');

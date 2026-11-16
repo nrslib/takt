@@ -4,7 +4,7 @@ import {
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { hasMatchingDirectoryIdentity, hasMatchingIdentity, lstatOrUndefined } from './private-path-identity.js';
+import { hasMatchingDirectoryIdentity, hasMatchingIdentity, lstatOrUndefined, UnsafePrivateArtifactPathError } from './private-path-identity.js';
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
@@ -51,13 +51,13 @@ export function ensurePrivateDirectory(path: string): void {
 
 export function repairPrivateDirectory(path: string): void {
   const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Private artifact path is not a directory: ${path}`);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new UnsafePrivateArtifactPathError(`Private artifact path is not a directory: ${path}`);
   if (process.platform !== 'win32') chmodSync(path, 0o700);
 }
 
 function fileStat(path: string): Stats | undefined {
   const stat = lstatOrUndefined(path);
-  if (stat !== undefined && !stat.isFile()) throw new Error(`Private artifact path is not a regular file: ${path}`);
+  if (stat !== undefined && !stat.isFile()) throw new UnsafePrivateArtifactPathError(`Private artifact path is not a regular file: ${path}`);
   return stat;
 }
 

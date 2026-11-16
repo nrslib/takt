@@ -10,10 +10,10 @@
  * base ブランチ上で PR をレビューする構成へ「変更 0 件」を注入しないこと。
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collectTaskReviewScope,
   createTaskReviewScopeResolver,
@@ -87,6 +87,22 @@ describe('collectTaskReviewScope', () => {
     unlinkSync(join(repo, 'untouched.ts'));
 
     expect(collectedPaths(repo)).toEqual(['added.ts', 'base.ts', 'untouched.ts']);
+  });
+
+  it('uses the caller-relative alternate index for staged-only changes from a subdirectory', () => {
+    const callerCwd = join(repo, 'app');
+    mkdirSync(callerCwd);
+    try {
+      vi.stubEnv('GIT_INDEX_FILE', join(repo, '.git', 'review-index'));
+      git(repo, 'read-tree', 'HEAD');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 2;\n');
+      git(callerCwd, 'add', '../base.ts');
+      writeFileSync(join(repo, 'base.ts'), 'export const base = 1;\n');
+      vi.stubEnv('GIT_INDEX_FILE', '../.git/review-index');
+
+      expect(collectedPaths(callerCwd)).toEqual(['base.ts']);
+    } finally { vi.unstubAllEnvs(); }
+    expect(collectedPaths(repo)).toEqual([]);
   });
 
   it('collects committed changes on a task branch when the working tree is clean', () => {
@@ -358,6 +374,28 @@ describe('pull request derived scope', () => {
     });
   });
 
+  it.each([undefined, 'refs/takt/pr-head/another-checkout'])('keeps committed PR changes on the head branch when the recorded head ref is %s', (recordedHeadRef) => {
+    git(repo, 'checkout', '--quiet', 'feature');
+    writeFileSync(join(repo, 'committed-fix.ts'), 'export const committedFix = 1;\n');
+    commitAll(repo, 'commit review fix');
+    const context = recordedHeadRef === undefined
+      ? prContext(false) : { ...prContext(true), headDiffRef: recordedHeadRef };
+
+    const scope = collectTaskReviewScope({
+      cwd: repo,
+      baseRange: resolveReviewScopeBaseRange(repo),
+      prContext: createPullRequestContext(context),
+    });
+
+    expect(scope).toMatchObject({
+      paths: ['committed-fix.ts', 'pr-change.ts'],
+      source: {
+        diffRange: { baseDiffRef: recordedHeadRef === undefined ? 'refs/heads/main' : baseRef, headDiffRef: 'HEAD' },
+        includesWorkingTree: false,
+      },
+    });
+  });
+
   it('uses the explicit PR head ref and excludes committed changes on another branch', () => {
     git(repo, 'checkout', '--quiet', '-b', 'other');
     writeFileSync(join(repo, 'other-only.ts'), 'export const otherOnly = 1;\n');
@@ -468,18 +506,17 @@ describe('pull request derived scope', () => {
     expect(scope.source.kind).toBe('pull_request');
   });
 
-  it('drops the diff range when the recorded refs no longer exist', () => {
+  it('preserves PR context and local changes without substituting a range when a recorded ref is unavailable', () => {
     git(repo, 'update-ref', '-d', baseRef);
+    writeFileSync(join(repo, 'local-fix.ts'), 'export const fix = 1;\n');
 
-    const scope = collectWithPr(true);
-
-    expect(scope.kind).toBe('collected');
-    if (scope.kind !== 'collected') return;
-    expect(scope.source).toEqual({
-      kind: 'pull_request',
-      prNumber: 42,
-      includesWorkingTree: false,
-      baseRange: { kind: 'base_branch_head' },
+    expect(collectWithPr(true)).toEqual({
+      kind: 'collected',
+      paths: ['local-fix.ts'],
+      source: {
+        kind: 'pull_request', prNumber: 42, includesWorkingTree: true,
+        baseRange: { kind: 'base_branch_head' },
+      },
     });
   });
 });
@@ -499,6 +536,19 @@ describe('createTaskReviewScopeResolver', () => {
 
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  it.each(['config', 'ownership', 'executable'] as const)('propagates Git %s errors through the scope resolver', (failure) => {
+    const resolve = createTaskReviewScopeResolver({ getCwd: () => repo, getPrContext: () => undefined });
+    try {
+      vi.stubEnv('GIT_CONFIG_GLOBAL', devNull);
+      vi.stubEnv('GIT_CONFIG_SYSTEM', devNull);
+      if (failure === 'config') writeFileSync(join(repo, '.git', 'config'), '[invalid\n');
+      else if (failure === 'ownership') vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', '1');
+      else vi.stubEnv('PATH', join(repo, 'no-executables'));
+
+      expect(() => resolve()).toThrow();
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('keeps the resolved base across calls while re-reading the working tree', () => {

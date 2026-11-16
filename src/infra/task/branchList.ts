@@ -29,11 +29,11 @@ const TAKT_BRANCH_PREFIX = 'takt/';
  */
 export class BranchManager {
   /** Detect the default branch name (main or master) */
-  detectDefaultBranch(cwd: string): string {
+  detectDefaultBranch(cwd: string, env?: NodeJS.ProcessEnv): string {
     try {
       const ref = execFileSync(
         'git', ['symbolic-ref', 'refs/remotes/origin/HEAD'],
-        { cwd, encoding: 'utf-8', stdio: 'pipe' },
+        { cwd, env, encoding: 'utf-8', stdio: 'pipe' },
       ).trim();
       const prefix = 'refs/remotes/origin/';
       return ref.startsWith(prefix) ? ref.slice(prefix.length) : ref;
@@ -41,14 +41,14 @@ export class BranchManager {
       log.debug('detectDefaultBranch symbolic-ref failed', { error: String(error), cwd });
       try {
         execFileSync('git', ['rev-parse', '--verify', 'main'], {
-          cwd, encoding: 'utf-8', stdio: 'pipe',
+          cwd, env, encoding: 'utf-8', stdio: 'pipe',
         });
         return 'main';
       } catch (mainError) {
         log.debug('detectDefaultBranch main lookup failed', { error: String(mainError), cwd });
         try {
           execFileSync('git', ['rev-parse', '--verify', 'master'], {
-            cwd, encoding: 'utf-8', stdio: 'pipe',
+            cwd, env, encoding: 'utf-8', stdio: 'pipe',
           });
           return 'master';
         } catch (masterError) {
@@ -266,8 +266,8 @@ export class BranchManager {
 
 const defaultManager = new BranchManager();
 
-export function detectDefaultBranch(cwd: string): string {
-  return defaultManager.detectDefaultBranch(cwd);
+export function detectDefaultBranch(cwd: string, env?: NodeJS.ProcessEnv): string {
+  return defaultManager.detectDefaultBranch(cwd, env);
 }
 
 export function listTaktBranches(projectDir: string): BranchInfo[] {

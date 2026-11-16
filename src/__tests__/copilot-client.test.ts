@@ -1210,6 +1210,88 @@ describe('callCopilot', () => {
     expect(result.content).toContain('[REDACTED]');
   });
 
+  it('returns only the deltas after the last tool call as content and streams each delta once when Copilot sends no result', async () => {
+    const onStream = vi.fn();
+    const delta = (deltaContent: string): string => JSON.stringify({ type: 'assistant.message_delta', data: { deltaContent } });
+    mockSpawnWithScenario({
+      stdout: [
+        delta('Progress note: checked input.ts.'),
+        JSON.stringify({ type: 'tool.execution_start', data: { toolCallId: 'tool-1', toolName: 'read_file', arguments: { path: 'retry.ts' } } }),
+        JSON.stringify({ type: 'tool.execution_complete', data: { toolCallId: 'tool-1', success: true, result: { content: 'retry source' } } }),
+        delta('Final '),
+        delta('answer'),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'Final answer' });
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'text').map(([event]) => event.data.text))
+      .toEqual(['Progress note: checked input.ts.', 'Final ', 'answer']);
+  });
+
+  it.each([
+    { label: 'joins every message', result: 'Progress note: checked input.ts.Final answer' },
+    { label: 'repeats the note before the tool call', result: 'Progress note: checked input.ts.' },
+  ])('returns only the assistant message after the last tool call when the terminal result $label', async ({ result: terminalResult }) => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'assistant.message', data: { content: 'Progress note: checked input.ts.' } }),
+        JSON.stringify({ type: 'tool.execution_start', data: { toolCallId: 'tool-1', toolName: 'read_file', arguments: { path: 'retry.ts' } } }),
+        JSON.stringify({ type: 'tool.execution_complete', data: { toolCallId: 'tool-1', success: true, result: { content: 'retry source' } } }),
+        JSON.stringify({ type: 'assistant.message', data: { content: 'Final answer' } }),
+        JSON.stringify({ type: 'result', data: { result: terminalResult } }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'Final answer' });
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'text').map(([event]) => event.data.text))
+      .toEqual(['Progress note: checked input.ts.', 'Final answer']);
+  });
+
+  it('returns an empty successful answer when the turn ends with a tool call even if the terminal result repeats the note', async () => {
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'assistant.message', data: { content: 'Progress note: editing retry.ts.' } }),
+        JSON.stringify({ type: 'tool.execution_start', data: { toolCallId: 'tool-1', toolName: 'write_file', arguments: { path: 'retry.ts' } } }),
+        JSON.stringify({ type: 'tool.execution_complete', data: { toolCallId: 'tool-1', success: true, result: { content: 'written' } } }),
+        JSON.stringify({ type: 'result', data: { result: 'Progress note: editing retry.ts.' } }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'edit retry.ts', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content: '' });
+    expect(result.error).toBeUndefined();
+  });
+
+  it('returns an empty successful answer with the session ID when the turn ends with a tool call', async () => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'assistant.message', data: { content: 'Progress note: editing retry.ts.' } }),
+        JSON.stringify({ type: 'tool.execution_start', data: { toolCallId: 'tool-1', toolName: 'write_file', arguments: { path: 'retry.ts' } } }),
+        JSON.stringify({ type: 'tool.execution_complete', data: { toolCallId: 'tool-1', success: true, result: { content: 'written' } } }),
+      ].join('\n'),
+      code: 0,
+    });
+
+    const result = await callCopilot('coder', 'edit retry.ts', { cwd: '/repo', onStream });
+
+    // An empty answer continues the same session; a provider error would repeat the edit in a fresh session.
+    const sharedSessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId: sharedSessionId });
+    expect(result.error).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Progress note: editing retry.ts.' } });
+    expect(onStream).toHaveBeenLastCalledWith({ type: 'result', data: { result: '', success: true, sessionId: sharedSessionId } });
+  });
+
   it('streams complete JSONL events before process completion and flushes the final partial line once', async () => {
     const child = createMockChildProcess();
     mockSpawn.mockReturnValue(child);

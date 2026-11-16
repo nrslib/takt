@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { AgentResponse, AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, AgentWorkflowStep, NormalAgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { makeStep } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
@@ -39,6 +40,9 @@ function makeState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -53,7 +57,7 @@ function makeDoneResponse(overrides: Partial<AgentResponse> = {}): AgentResponse
   };
 }
 
-function makeReportStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function makeReportStep(overrides: Partial<NormalAgentWorkflowStep> = {}): WorkflowStep {
   return makeStep({
     name: 'review',
     persona: 'reviewer',
@@ -75,6 +79,7 @@ function makeStepExecutor(workflowSteps: Array<{
 }> = [{ name: 'review' }], reservedReportNames?: string[], producerUnrun = false): StepExecutor {
   const deps: StepExecutorDeps = {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
@@ -82,31 +87,13 @@ function makeStepExecutor(workflowSteps: Array<{
     getCwd: () => '/tmp/project',
     getProjectCwd: () => '/tmp/project',
     getReportDir: () => '.takt/runs/test/reports',
-    getRunPaths: () => ({
-      slug: 'test-run',
-      runRootRel: '.takt/runs/test',
-      reportsRel: '.takt/runs/test/reports',
-      contextRel: '.takt/runs/test/context',
-      contextKnowledgeRel: '.takt/runs/test/context/knowledge',
-      contextPolicyRel: '.takt/runs/test/context/policy',
-      contextPreviousResponsesRel: '.takt/runs/test/context/previous_responses',
-      logsRel: '.takt/runs/test/logs',
-      metaRel: '.takt/runs/test/meta.json',
-      runRootAbs: '/tmp/project/.takt/runs/test',
-      reportsAbs: '/tmp/project/.takt/runs/test/reports',
-      contextAbs: '/tmp/project/.takt/runs/test/context',
-      contextKnowledgeAbs: '/tmp/project/.takt/runs/test/context/knowledge',
-      contextPolicyAbs: '/tmp/project/.takt/runs/test/context/policy',
-      contextPreviousResponsesAbs: '/tmp/project/.takt/runs/test/context/previous_responses',
-      logsAbs: '/tmp/project/.takt/runs/test/logs',
-      metaAbs: '/tmp/project/.takt/runs/test/meta.json',
-    }),
+    getRunPaths: () => buildRunPaths('/tmp/project', 'test'),
     getFailureDir: () => '/tmp/project/.takt/runs/test/failures',
     getLanguage: () => undefined,
     getInteractive: () => false,
     getWorkflowSteps: () => workflowSteps,
     getWorkflowName: () => 'test-workflow',
-    getWorkflowDescription: () => undefined,
+    getTask: () => 'review task',
     getWorkflowRules: () => undefined,
     getInheritedReportInputs: () => undefined,
     resolveDeclaredReportInputs: () => reservedReportNames === undefined
@@ -122,13 +109,15 @@ function makeStepExecutor(workflowSteps: Array<{
         },
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
-    structuredCaller: {
-      evaluateCondition: vi.fn(),
-      judgeStatus: vi.fn(),
-      decomposeTask: vi.fn(),
-      requestMoreParts: vi.fn(),
-    },
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+    executionProvider: 'claude',
+    executionModel: 'claude-sonnet',
+    emitEvent: vi.fn(),
+    recordSynthesizedAgentUsage: vi.fn(),
+    getRunId: () => 'test-run',
+    getRunPathNamespace: () => [],
+    companionEnabled: false,
+    companionReviewMode: 'completion',
     onPhaseStart: vi.fn(),
     onPhaseComplete: vi.fn(),
     onJudgeStage: vi.fn(),
@@ -139,6 +128,7 @@ function makeStepExecutor(workflowSteps: Array<{
 function makeParallelRunner(): ParallelRunner {
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({}),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
       resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'claude', model: 'claude-sonnet' }),
@@ -147,7 +137,7 @@ function makeParallelRunner(): ParallelRunner {
     stepExecutor: {
       prepareDynamicFacetStep: vi.fn(async (step: AgentWorkflowStep) => step),
       prepareInstruction: vi.fn((step: WorkflowStep) => ({
-        text: `instruction:${step.name}`, injectedReports: [],
+        text: `instruction:${step.name}`, injectedReports: [], reviewScope: { kind: 'not_a_git_repository' },
       })),
       emitStepReports: vi.fn(),
       recordReportGeneration: vi.fn(),
@@ -169,16 +159,16 @@ function makeParallelRunner(): ParallelRunner {
       projectCwd: '/tmp/project',
     },
     getCwd: () => '/tmp/project',
-    getReportDir: () => '.takt/runs/test/reports',
+    dynamicParallelSelector: {
+      selectParticipants: vi.fn(),
+    } as unknown as ParallelRunnerDeps['dynamicParallelSelector'],
     getWorkflowName: () => 'test-workflow',
+    getTask: () => 'review task',
     getInteractive: () => false,
     observabilityEnabled: false,
-    structuredCaller: {
-      evaluateCondition: vi.fn(),
-      judgeStatus: vi.fn(),
-      decomposeTask: vi.fn(),
-      requestMoreParts: vi.fn(),
-    },
+    emitEvent: vi.fn(),
+    claimStepOccurrence: vi.fn().mockReturnValue(0),
+    getRunId: () => 'test-run',
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
@@ -612,7 +602,7 @@ describe('ReportPhaseGenerationError soft error', () => {
       content: '',
       structuredOutput: { result: 'ok' },
     }));
-    vi.spyOn(executor, 'persistPreviousResponseSnapshot').mockReturnValue('');
+    vi.spyOn(executor, 'persistPreviousResponseSnapshot').mockReturnValue(undefined);
 
     const result = await executor.runNormalStep(step, state, 'review task', 5, vi.fn());
 

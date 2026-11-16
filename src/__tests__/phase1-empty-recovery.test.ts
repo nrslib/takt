@@ -345,7 +345,7 @@ describe('Phase 1 empty response recovery', () => {
     expect(result.response.structuredOutput).toEqual({ result: 'ok' });
   });
 
-  it('restarts the original instruction fresh when continuation hits a provider error', async () => {
+  it('continues in the same session instead of restarting fresh when continuation hits a provider error', async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }))
       .mockResolvedValueOnce(response({
@@ -354,7 +354,7 @@ describe('Phase 1 empty response recovery', () => {
         error: 'provider failed',
         sessionId: 'session-1',
       }))
-      .mockResolvedValueOnce(response({ content: 'complete fresh', sessionId: 'session-fresh' }));
+      .mockResolvedValueOnce(response({ content: 'complete after continuation', sessionId: 'session-1' }));
 
     const result = await runPhase1WithEmptyRecovery({
       instruction: 'original instruction',
@@ -371,9 +371,31 @@ describe('Phase 1 empty response recovery', () => {
     ])).toEqual([
       ['initial', 'original instruction', 'session-1'],
       ['empty_continuation', expect.stringMatching(/\S/), 'session-1'],
-      ['provider_error_fresh', 'original instruction', undefined],
+      ['empty_continuation', expect.stringMatching(/\S/), 'session-1'],
     ]);
-    expect(result.response.content).toBe('complete fresh');
+    expect(result.response.content).toBe('complete after continuation');
+  });
+
+  it('bounds repeated empty continuations without restarting the original instruction fresh', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }))
+      .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }))
+      .mockResolvedValueOnce(response({ content: '', sessionId: 'session-1' }));
+
+    const result = await runPhase1WithEmptyRecovery({
+      instruction: 'original instruction',
+      initialSessionId: 'session-1',
+      execute,
+      discardSession: vi.fn(),
+      recordSupersededAttempt: vi.fn(),
+    });
+
+    expect(execute.mock.calls.map(([attempt]) => [attempt.reason, attempt.sessionId])).toEqual([
+      ['initial', 'session-1'],
+      ['empty_continuation', 'session-1'],
+      ['empty_continuation', 'session-1'],
+    ]);
+    expect(result.response).toMatchObject({ status: 'error', error: PHASE1_EMPTY_OUTPUT_ERROR });
   });
 
   it('skips fake continuation when an empty response has no effective session', async () => {

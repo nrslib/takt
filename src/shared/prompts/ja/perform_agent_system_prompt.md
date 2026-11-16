@@ -46,6 +46,8 @@
 {{/if}}
 
 
+{{progressNotes}}
+
 {{#if providerRuntimeInstructions}}
 
 ## Provider Runtime Instructions

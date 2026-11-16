@@ -46,6 +46,32 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
+  it('Given earlier assistant entries before the last one, When normalizing, Then all text streams but only the last entry is the result', () => {
+    const onStream = vi.fn();
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: 'Checked input.ts. Remaining: decision.\n{"decision":"approved"}',
+      lastAssistantText: '{"decision":"approved"}',
+      outputSchema: SCHEMA,
+      onStream,
+    });
+
+    expect(result).toMatchObject({
+      status: 'done',
+      content: '{"decision":"approved"}',
+      structuredOutput: { decision: 'approved' },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'text',
+      data: { text: 'Checked input.ts. Remaining: decision.\n{"decision":"approved"}' },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: { result: '{"decision":"approved"}', sessionId: 'claude-session-1', success: true },
+    });
+  });
+
   it('Given outputSchema but no parseable structured output, When normalizing, Then provider error is explicit', () => {
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',

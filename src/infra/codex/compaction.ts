@@ -129,6 +129,7 @@ async function containsCompaction(
   }
 }
 
+/** Confirms compaction in this call's rollout range, not its cause (automatic vs explicit new_context). */
 export async function detectCodexCompaction(
   observation: CodexRolloutObservation,
   sessionId: string | undefined,

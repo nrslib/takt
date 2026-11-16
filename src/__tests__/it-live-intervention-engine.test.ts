@@ -1190,6 +1190,78 @@ describe('WorkflowEngine live intervention integration', () => {
     expect(warning).toHaveBeenCalledWith(1);
   });
 
+  it('judges current delivered live requirements without accumulating history in completion retries', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const interventions = [
+      'Inspect the initial live boundary',
+      'Inspect the same-session live boundary',
+      'Inspect the retry live boundary',
+    ];
+    await store.issue(interventions[0]!);
+    const config: WorkflowConfig = {
+      name: 'live-intervention-completion-requirements',
+      maxSteps: 1,
+      initialStep: 'review',
+      steps: [makeStep('review', {
+        completionRetry: {
+          minRetry: 0,
+          maxRetry: 2,
+          retryInstruction: 'Recheck the review gaps.',
+        },
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    let reviewerCalls = 0;
+    const judgeRequirements: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        const payload = JSON.parse(instruction.slice(instruction.indexOf('{'))) as { review_requirements: string };
+        judgeRequirements.push(payload.review_requirements);
+        const complete = judgeRequirements.length === 3;
+        return makeResponse({
+          persona: 'review-completion-judge',
+          content: 'decision',
+          structuredOutput: {
+            complete,
+            reason: complete ? 'closed' : 'missing consumer',
+            missing_paths: complete ? [] : [{ path: 'consumer.ts', reason: 'not inspected' }],
+          },
+        });
+      }
+
+      reviewerCalls += 1;
+      if (reviewerCalls === 1 || reviewerCalls === 3) {
+        await store.issue(interventions[reviewerCalls === 1 ? 1 : 2]!);
+      }
+      return dispatchMockResponse(persona, instruction, options, makeResponse({
+        content: `review-${reviewerCalls}`,
+        sessionId: 'review-session',
+      }));
+    });
+
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const state = await engine.run();
+    const reviewerInstructions = vi.mocked(runAgent).mock.calls
+      .filter(([, , options]) => options.internalAgentName !== 'review-completion-judge')
+      .map(([, instruction]) => instruction);
+
+    expect(state.status).toBe('completed');
+    expect(reviewerInstructions).toHaveLength(5);
+    expect(judgeRequirements).toHaveLength(3);
+    for (const [index, requirements] of judgeRequirements.entries()) {
+      const delivered = interventions.slice(0, index === 0 ? 2 : 3);
+      for (const intervention of delivered) {
+        expect(requirements.split(intervention)).toHaveLength(2);
+      }
+    }
+    for (const [index, deliveredCount] of [[0, 1], [2, 2], [4, 3]] as const) {
+      for (const intervention of interventions.slice(0, deliveredCount)) {
+        expect(reviewerInstructions[index]!.split(intervention)).toHaveLength(2);
+      }
+    }
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1, deliveredSameSession: 2 });
+  });
+
   it('drains an intervention issued during completion retry before the next judge', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const config: WorkflowConfig = {

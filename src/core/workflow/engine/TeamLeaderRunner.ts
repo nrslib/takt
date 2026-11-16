@@ -1461,7 +1461,7 @@ export class TeamLeaderRunner {
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       (partStep) => {
-        const instruction = this.deps.stepExecutor.buildInstruction(
+        const { text: instruction, reviewScope } = this.deps.stepExecutor.prepareInstruction(
           partStep,
           partIteration,
           state,
@@ -1470,9 +1470,13 @@ export class TeamLeaderRunner {
           runtime?.fallback,
           instructionTransaction,
         );
-        return [instruction, resolveLiveInterventionPrompt(
-          this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
-        )].filter((part) => part.length > 0).join('\n\n');
+        return {
+          reviewScope,
+          instructionWithoutLiveIntervention: instruction,
+          phase1Instruction: [instruction, resolveLiveInterventionPrompt(
+            this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
+          )].filter((part) => part.length > 0).join('\n\n'),
+        };
       },
       runtime,
       executionAbortSignal,
@@ -1494,6 +1498,8 @@ export class TeamLeaderRunner {
           );
         },
         completeCompanionReview: async ({
+          phase1Instruction,
+          phase1RecoveryInstruction,
           partStep,
           initialResponse,
           agentOptions,
@@ -1508,6 +1514,8 @@ export class TeamLeaderRunner {
             initialResponse.providerUsage,
           );
           return this.deps.stepExecutor.completeCompanionReview({
+            phase1Instruction,
+            phase1RecoveryInstruction,
             eventStep: partStep,
             executableStep: partStep,
             state: partCompanionState,

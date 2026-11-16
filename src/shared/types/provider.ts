@@ -98,6 +98,8 @@ export interface StreamContextCompactedEventData {
 
 export interface StreamResultEventData {
   result: string;
+  /** Provider-confirmed visible assistant text from an incomplete turn, never diagnostics. */
+  partialOutput?: string;
   sessionId: string;
   success: boolean;
   error?: string;

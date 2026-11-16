@@ -60,6 +60,13 @@ export interface RunAgentOptions {
   internalAgentName?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
+  progressNotes?: import('../core/workflow/progress-notes.js').ProgressNotesRequest;
+  /** Stable Phase 1 request for the progress notes identity across continuations and live interventions. */
+  progressNotesInstruction?: string;
+  /** Complete current instruction, including follow-ups and live history, for fresh or compacted execution. */
+  progressNotesRecoveryInstruction?: string;
+  /** Runner-local capture of each provider attempt, including suppressed compaction results, and the recovery input rebuilt from it. */
+  progressNotesRecorder?: import('../infra/progress-notes/session.js').ProgressNotesRecorder;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   /**

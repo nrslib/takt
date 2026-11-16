@@ -437,6 +437,99 @@ describe('ParallelRunner live intervention integration', () => {
     expect(state.stepOutputs.get('reviewer')?.content).toBe('parallel result 2');
   });
 
+  it('settles live delivery before the completion judge under lock contention', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const content = 'Inspect the live parallel review boundary';
+    await store.issue(content);
+    const dispatched = createDeferred<void>();
+    const judgeRequirements: string[] = [];
+    const lockPath = `${store.getFilePath()}.lock`;
+    let lockFd: number | undefined;
+    const releaseLock = (): void => {
+      if (lockFd === undefined) return;
+      closeSync(lockFd);
+      lockFd = undefined;
+      unlinkSync(lockPath);
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === 'review-completion-judge') {
+        expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1 });
+        const payload = JSON.parse(instruction.slice(instruction.indexOf('{'))) as { review_requirements: string };
+        judgeRequirements.push(payload.review_requirements);
+        return makeResponse({
+          structuredOutput: { complete: true, reason: 'covered', missing_paths: [] },
+        });
+      }
+      lockFd = openSync(lockPath, 'wx');
+      markProviderDispatch(persona, instruction, options);
+      dispatched.resolve();
+      return makeResponse({ content: 'approved', sessionId: 'review-session' });
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-review-delivery-settlement',
+      maxSteps: 1,
+      initialStep: 'reviewers',
+      steps: [makeStep('reviewers', {
+        parallel: [makeStep('reviewer', {
+          completionRetry: { minRetry: 0, maxRetry: 1, retryInstruction: 'Recheck review gaps.' },
+          rules: [makeRule('approved', 'COMPLETE')],
+        })],
+        rules: [makeRule('all("approved")', 'COMPLETE')],
+      })],
+    };
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const runPromise = engine.run();
+    try {
+      await dispatched.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(store.read()).toMatchObject({ pending: 1, deliveredNextStep: 0 });
+      expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
+        options.internalAgentName === 'review-completion-judge')).toHaveLength(0);
+      releaseLock();
+
+      expect((await runPromise).status).toBe('completed');
+      expect(judgeRequirements).toHaveLength(1);
+      expect(judgeRequirements[0]!.split(content)).toHaveLength(2);
+      expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1 });
+    } finally {
+      releaseLock();
+      await runPromise;
+    }
+  });
+
+  it('aborts without judging when live delivery persistence fails', async () => {
+    const failure = new Error('delivery persistence failed');
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR, async () => {
+      throw failure;
+    });
+    await store.issue('Inspect the live parallel review boundary');
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      markProviderDispatch(persona, instruction, options);
+      return makeResponse({ content: 'approved', sessionId: 'review-session' });
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-review-delivery-failure',
+      maxSteps: 1,
+      initialStep: 'reviewers',
+      steps: [makeStep('reviewers', {
+        parallel: [makeStep('reviewer', {
+          completionRetry: { minRetry: 0, maxRetry: 1, retryInstruction: 'Recheck review gaps.' },
+          rules: [makeRule('approved', 'COMPLETE')],
+        })],
+        rules: [makeRule('all("approved")', 'COMPLETE')],
+      })],
+    };
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store));
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    expect((await engine.run()).status).toBe('aborted');
+    expect(abort.mock.calls[0]?.[3]).toMatchObject({ kind: 'runtime_error', error: failure.message });
+    expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
+      options.internalAgentName === 'review-completion-judge')).toHaveLength(0);
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1, terminalStatus: 'failed' });
+  });
+
   it('settles the current delivery before preparing a restart snapshot under lock contention', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     await store.issue('initial parallel instruction', '2026-09-03T00:00:00.000Z');

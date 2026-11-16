@@ -8,9 +8,9 @@ export type BranchEntryPoint = {
 
 const log = createLogger('branchGitResolver');
 
-export function resolveBranchEntryPointFromReflog(gitCwd: string, branch: string): BranchEntryPoint | null {
+export function resolveBranchEntryPointFromReflog(gitCwd: string, branch: string, env?: NodeJS.ProcessEnv): BranchEntryPoint | null {
   try {
-    const output = runGit(gitCwd, ['reflog', 'show', '--format=%H', branch]);
+    const output = runGit(gitCwd, ['reflog', 'show', '--format=%H', branch], env);
     const hashes = parseDistinctHashes(output).reverse();
     if (hashes.length < 2) {
       return null;
