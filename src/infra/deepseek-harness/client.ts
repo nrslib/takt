@@ -545,6 +545,22 @@ function responseTextEvent(chunk: ResponseTextChunk): StreamEvent {
     : { type: 'thinking', data: { thinking: chunk.text } };
 }
 
+/** Mask a current chunk even when it contains only the next, still-incomplete part of a known value. */
+function knownContinuationRanges(boundary: string, text: string, values: ReadonlySet<string>) {
+  const ranges: { start: number; end: number }[] = [];
+  for (const value of values) {
+    for (let split = 1; split < value.length; split += 1) {
+      if (!boundary.endsWith(value.slice(0, split))) continue;
+      const remainder = value.slice(split);
+      const length = text.startsWith(remainder)
+        ? remainder.length
+        : remainder.startsWith(text) ? text.length : 0;
+      if (length > 0) ranges.push({ start: 0, end: length });
+    }
+  }
+  return ranges;
+}
+
 /** Buffer text so credentials split across notifications remain redacted. */
 function writeResponseRedactedChunks(
   context: ResponseRedactionContext,
@@ -552,23 +568,29 @@ function writeResponseRedactedChunks(
   field: ResponseTextChunk['field'],
   knownSecrets: Record<string, string>,
 ): ResponseTextChunk[] {
-  if (context.toolBoundaryText.length > 0 && text.length > 0) {
+  if (field === 'text' && context.toolBoundaryText.length > 0 && text.length > 0) {
     const combined = context.toolBoundaryText + text;
+    const boundary = context.toolBoundaryText.length;
     const values = new Set(Object.values(knownSecrets));
     for (const value of context.buffer.sensitiveValues.values) values.add(value);
     const knownRanges = substringSensitiveRanges(combined, values);
-    const candidateRanges = /^\S+(?:\r?\n)?$/u.test(text)
-      ? sensitiveTextRanges(combined, values)
-      : knownRanges;
-    const ranges = candidateRanges
-      .filter((range) => range.end > context.toolBoundaryText.length)
+    // Generic pattern matching needs a substantial credential fragment; otherwise a natural-language
+    // word after a tool would be masked merely because the earlier assignment happens to touch it.
+    const firstTokenLength = /^\S+/u.exec(text)?.[0].length ?? 0;
+    const candidateRanges = firstTokenLength >= 8 ? sensitiveTextRanges(combined, new Set()) : [];
+    const boundaryRanges = [...knownRanges, ...candidateRanges]
+      .filter((range) => range.end > boundary)
       .map((range) => ({
-        start: Math.max(0, range.start - context.toolBoundaryText.length),
-        end: Math.min(text.length, range.end - context.toolBoundaryText.length),
+        start: Math.max(0, range.start - boundary),
+        end: Math.min(text.length, range.end - boundary),
       }));
+    const ranges = [
+      ...boundaryRanges,
+      ...knownContinuationRanges(context.toolBoundaryText, text, values),
+    ];
     text = maskSensitiveRanges(text, ranges);
+    context.toolBoundaryText = ranges.length > 0 || /\s/u.test(text) ? '' : combined.slice(-4096);
   }
-  context.toolBoundaryText = '';
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
     previous.text += text;

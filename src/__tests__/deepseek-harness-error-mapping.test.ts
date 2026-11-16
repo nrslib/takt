@@ -692,7 +692,8 @@ describe('DeepSeek Harness SDK error mapping', () => {
 
   it('masks a credential split across assistant chunks and a standalone tool call', async () => {
     const sessionId = 'error-mapping-session';
-    const suffix = 'rivateValue987654321';
+    const fragment = 'rivateValue987654321';
+    const suffix = `${fragment} is configured.\n`;
     runtimeBehavior.notifications = [
       { method: 'session.started', params: { sessionId } },
       { method: 'session.event', params: { sessionId, event: {
@@ -714,9 +715,10 @@ describe('DeepSeek Harness SDK error mapping', () => {
       onStream: (streamEvent) => events.push(streamEvent),
     });
 
-    expect(response).toMatchObject({ status: 'done', content: 'password=[REDACTED]', sessionId });
-    expect(JSON.stringify(events)).not.toContain(suffix);
-    expect(events.at(-1)?.data).toEqual({ result: 'password=[REDACTED]', success: true, sessionId });
+    expect(response.status).toBe('done');
+    expect(response.content).toContain('password=[REDACTED] is configured.');
+    expect(JSON.stringify(events)).not.toContain(fragment);
+    expect(events.at(-1)?.data).toEqual({ result: response.content, success: true, sessionId });
   });
 
   it('keeps both halves of a configured credential split across ordinary chunks out of the stream', async () => {
@@ -744,6 +746,47 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(response.status).toBe('done');
     expect(JSON.stringify(events)).not.toContain(credential.slice(0, split));
     expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('keeps the tool boundary until a configured credential split across several later chunks is resolved', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = 'opaqueValue987654321';
+    process.env.DEEPSEEK_API_KEY = credential;
+    const prefix = credential.slice(0, -5);
+    const middle = credential.slice(-5, -3);
+    const suffix = `${credential.slice(-3)}\n`;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: prefix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'reasoning-delta', text: 'analysis' } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: middle } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: suffix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(prefix);
+    expect(JSON.stringify(events)).not.toContain(middle);
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-5));
     expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
   });
 
