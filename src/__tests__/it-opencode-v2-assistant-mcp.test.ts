@@ -35,7 +35,7 @@ vi.mock('../infra/opencode/runtime.js', async (importOriginal) => {
   }) };
 });
 
-const TAKT_READ_TOOLS = ['takt_takt_get_goal', 'takt_takt_get_run', 'takt_takt_list_goals', 'takt_takt_list_tasks'];
+const TAKT_READ_TOOLS = ['takt_takt_get_goal', 'takt_takt_get_run', 'takt_takt_list_goal_registration_proposals', 'takt_takt_list_goals', 'takt_takt_list_tasks'];
 
 describe('assistant MCP servers through the default OpenCode v2 transport', () => {
   let projectCwd: string | undefined;

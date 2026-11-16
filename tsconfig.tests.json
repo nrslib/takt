@@ -300,6 +300,7 @@
     "src/__tests__/goal-question-operations.test.ts",
     "src/__tests__/goal-questions-notifications.test.ts",
     "src/__tests__/goal-read-operations.test.ts",
+    "src/__tests__/goal-registration-proposal-operations.test.ts",
     "src/__tests__/goal-schema.test.ts",
     "src/__tests__/goal-service.test.ts",
     "src/__tests__/goal-store.test.ts",

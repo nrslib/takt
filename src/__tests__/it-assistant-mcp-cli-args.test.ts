@@ -42,7 +42,7 @@ vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   confirmWithCancel: (...args: unknown[]) => mockConfirmWithCancel(...args),
 }));
 
-const TAKT_READ_TOOLS = ['takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks'] as const;
+const TAKT_READ_TOOLS = ['takt_get_goal', 'takt_get_run', 'takt_list_goal_registration_proposals', 'takt_list_goals', 'takt_list_tasks'] as const;
 const TAKT_COPILOT_ALLOWANCES = TAKT_READ_TOOLS.map((tool) => `takt(${tool})`);
 const ISOLATED_CALLS = ['strict-readonly', 'retry-agreement', 'tell'] as const;
 type IsolatedCall = typeof ISOLATED_CALLS[number];

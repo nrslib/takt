@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import {
   getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
+  listGoalRegistrationProposalsInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -212,6 +213,16 @@ describe('MCP inquiry inputs', () => {
   });
 });
 
+
+describe('MCP goal registration proposal inputs', () => {
+  const revision = 3;
+
+  it('reads registration proposals with only a project path', () => {
+    expect(listGoalRegistrationProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
+    expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
+    expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
+  });
+});
 
 describe('workflow detail input', () => {
   it.each(['merge-prepare', '@example/workflows/merge-prepare', './workflows/prepare.yaml', '/tmp/prepare.yaml'])('accepts workflow identifier %s', (workflow) => {

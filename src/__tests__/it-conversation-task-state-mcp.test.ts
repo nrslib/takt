@@ -138,7 +138,7 @@ describe('conversation task-state MCP integration', () => {
         'mcp__takt__takt_list_tasks', 'mcp__takt__takt_get_run',
         'mcp__takt__takt_list_goals', 'mcp__takt__takt_get_goal']));
       expect(options.allowedTools?.filter((tool) => tool === 'mcp__takt' || tool.startsWith('mcp__takt__')).sort())
-        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
+        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goal_registration_proposals', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
     },
   );
 
@@ -196,7 +196,7 @@ describe('conversation task-state MCP integration', () => {
       expect(options.mcpServers!.takt).toMatchObject({ command: process.execPath,
         args: [expect.any(String), '--tool-set', 'read-only', '--include-reference-markers'] });
       expect(options.allowedTools?.filter((tool) => tool === 'mcp__takt' || tool.startsWith('mcp__takt__')).sort())
-        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
+        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goal_registration_proposals', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
       expect(plan.strategy.mcpUnavailableNotice).toBeUndefined();
       expect(onNotice).not.toHaveBeenCalled();
       expect(stdout).not.toHaveBeenCalled();
@@ -275,6 +275,7 @@ describe('conversation task-state MCP integration', () => {
         expect((entries.takt as { tools?: unknown }).tools).toEqual({
           takt_get_goal: { approval_mode: 'approve' },
           takt_get_run: { approval_mode: 'approve' },
+          takt_list_goal_registration_proposals: { approval_mode: 'approve' },
           takt_list_goals: { approval_mode: 'approve' },
           takt_list_tasks: { approval_mode: 'approve' },
         });

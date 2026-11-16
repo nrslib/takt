@@ -249,7 +249,7 @@ describe('OpenCode task-state MCP integration', () => {
       expect(getPermissionRule(rules, 'backlog_*')).toBeUndefined();
       expect(getPermissionRule(rules, 'takt_*')).toBeUndefined();
       expect(rules.filter((rule) => rule.permission.startsWith('takt_')).map((rule) => rule.permission).sort())
-        .toEqual(['takt_takt_get_goal', 'takt_takt_get_run', 'takt_takt_list_goals', 'takt_takt_list_tasks']);
+        .toEqual(['takt_takt_get_goal', 'takt_takt_get_run', 'takt_takt_list_goal_registration_proposals', 'takt_takt_list_goals', 'takt_takt_list_tasks']);
       const tools = promptAsync.mock.calls[0]![0].tools as Record<string, boolean>;
       expect(tools[`${serverName}_*`]).toBe(true);
       expect(tools['backlog_*']).toBeUndefined();

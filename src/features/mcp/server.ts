@@ -29,6 +29,7 @@ import {
   askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  listGoalRegistrationProposalsInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -61,6 +62,7 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { listTaktGoalRegistrationProposals } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -93,6 +95,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_get_run',
   'takt_list_goals',
   'takt_get_goal',
+  'takt_list_goal_registration_proposals',
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
@@ -451,6 +454,16 @@ export function createTaktMcpServer(
       inputSchema: getRunInputSchema,
     },
     (input) => operation(input.cwd, 'Run read failed', (deps) => getTaktRun(projectInput(input, deps), deps)),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[4],
+    {
+      title: 'List goal registration proposals',
+      description: 'Read the goal registration proposal currently pending registration approval in the manager conversation of this project, the same state as the TUI registration dialog. Returns at most one proposal with its revision, repositoryDirectory and summary, or an empty list when nothing is pending. Responses fit 64 KiB.',
+      inputSchema: listGoalRegistrationProposalsInputSchema,
+    },
+    (input) => operation(input.cwd, 'Goal registration proposal list failed', (deps) => listTaktGoalRegistrationProposals(projectInput(input, deps), deps), false),
   );
 
   if (options.toolSet === undefined || options.toolSet === 'all') {

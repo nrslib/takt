@@ -134,6 +134,11 @@ export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit:
 export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
+const goalRegistrationProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal registration proposal.'),
+}).strict();
+export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposalIdentityInputSchema;
+export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();
