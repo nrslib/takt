@@ -1,7 +1,9 @@
 import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
 import type { ToolActivityViewLabels, ToolActivityViewPage, ToolActivityViewState } from './toolActivityViewState.js';
+import { MARKER_INDENT, TOOL_MARKER } from './transcriptOutput.js';
 
+/** Renders `page.rows.length + 1` rows; the caller lays the page out in the columns left after the marker. */
 export function ToolActivityView({ page, state, labels, height }: {
   page: ToolActivityViewPage;
   state: ToolActivityViewState;
@@ -11,7 +13,9 @@ export function ToolActivityView({ page, state, labels, height }: {
   if (height <= 0) return null;
   const hint = `${page.hasMore ? labels.more : labels.end} ${state.expanded ? labels.expanded : labels.compact}`;
   return <Box flexDirection="column">
-    {page.rows.map((row, index) => <Text key={index} wrap="truncate-end">{row || ' '}</Text>)}
+    {page.rows.map((row, index) => <Text key={index} dimColor wrap="truncate-end">
+      {`${page.heads.includes(index) ? TOOL_MARKER : MARKER_INDENT}${row}`}
+    </Text>)}
     <Text dimColor wrap="truncate-end">{hint}</Text>
   </Box>;
 }

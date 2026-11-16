@@ -120,7 +120,7 @@ describe('実際の run ログと daemon のプロセス観測', () => {
     const { runner, task, provider, status } = await queuedGoalMerge();
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
-      new DaemonNotifications(globalDirectory), async () => {}, errors);
+      new DaemonNotifications(globalDirectory), async () => {}, errors, { readTurns: async () => [] });
     const source = createWatchSource(conversations, async () => {}, errors);
     const observations: Array<readonly RunWatchTarget[]> = [];
     vi.mocked(provider.fetchPrStatus).mockImplementationOnce(async (_number, _cwd, options) => {
@@ -202,7 +202,7 @@ describe('実際の run ログと daemon のプロセス観測', () => {
   ])('worktree=$worktree・relativePath=$relativePath の実行ログを取得する', async ({ worktree, relativePath }) => {
     const errors = vi.fn();
     const conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
-      new DaemonNotifications(globalDirectory), async () => {}, errors);
+      new DaemonNotifications(globalDirectory), async () => {}, errors, { readTurns: async () => [] });
     const source = createWatchSource(conversations, async () => {}, errors);
     const runner = new TaskRunner(project);
     runner.addTask('Write a run log', { goal_id: goalId, worktree, workflow: 'watch-log', slug: 'watch-log' });

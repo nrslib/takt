@@ -40,6 +40,21 @@ it('forwards tool identities and batched results with a separate call identity f
   expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
 });
 
+it('assigns an unidentified result to the tool started after a batch that completed both its own and listed tools', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'a', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_use', data: { id: 'b', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { id: 'a', completedToolIds: ['b'], content: 'batch', isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'c', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { content: 'c result', isError: false } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.at(-1)![0]).toMatchObject({ type: 'tool_result', data: { id: 'c', content: 'c result' } });
+});
+
 it.each([true, false, undefined])('uses fresh business context only for patrols when patrol=%s', async (patrol) => {
   const { call, executor, input, invalidateSession } = fixture();
   call.mockResolvedValue(success);

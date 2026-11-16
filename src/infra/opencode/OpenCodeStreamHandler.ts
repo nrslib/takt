@@ -7,13 +7,13 @@
 
 import type { StreamCallback } from '../../shared/types/provider.js';
 import {
-  createSensitiveTextStreamRedactor,
   createBoundedSensitiveValues,
   type BoundedSensitiveValues,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
-  type SensitiveTextStreamRedactor,
+  sanitizeSensitiveValueWithKnownValues,
 } from '../../shared/utils/sensitiveText.js';
+import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
 import {
   maskOpenCodeToolContentInText,
   sanitizeOpenCodeToolInput,
@@ -61,8 +61,7 @@ export type OpenCodeStreamTrackingLimitReason =
   | 'event_count'
   | 'tracked_id_count'
   | 'text_bytes'
-  | 'reasoning_bytes'
-  | 'sensitive_sources';
+  | 'reasoning_bytes';
 
 /** OpenCode SSE event types relevant for stream handling */
 export interface OpenCodeMessagePartUpdatedEvent {
@@ -180,8 +179,8 @@ export interface OpenCodeStreamLimits {
 export interface StreamTrackingState {
   textOffsets: Map<string, number>;
   thinkingOffsets: Map<string, number>;
-  textRedactors: Map<string, SensitiveTextStreamRedactor>;
-  thinkingRedactors: Map<string, SensitiveTextStreamRedactor>;
+  responseBuffer: SensitiveTextStreamBuffer;
+  pendingResponseChunks: Array<{ kind: 'text' | 'thinking'; partId: string; text: string }>;
   partTypes: Map<string, string>;
   startedTools: Set<string>;
   sensitiveSources: BoundedSensitiveValues;
@@ -250,8 +249,8 @@ export function createStreamTrackingState(
   return {
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
-    textRedactors: new Map<string, SensitiveTextStreamRedactor>(),
-    thinkingRedactors: new Map<string, SensitiveTextStreamRedactor>(),
+    responseBuffer: new SensitiveTextStreamBuffer(),
+    pendingResponseChunks: [],
     partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
     sensitiveSources: sensitiveSources ?? createBoundedSensitiveValues(),
@@ -300,12 +299,11 @@ function exhaustStreamTrackingState(
   }
   state.textOffsets.clear();
   state.thinkingOffsets.clear();
-  state.textRedactors.clear();
-  state.thinkingRedactors.clear();
+  state.responseBuffer = new SensitiveTextStreamBuffer();
+  state.pendingResponseChunks = [];
   state.partTypes.clear();
   state.startedTools.clear();
   state.trackedIds.clear();
-  state.sensitiveSources.exhaust();
   state.exhausted = true;
 }
 
@@ -398,29 +396,29 @@ export function emitThinking(onStream: StreamCallback | undefined, thinking: str
   onStream({ type: 'thinking', data: { thinking } });
 }
 
-function redactStreamChunk(
-  redactors: Map<string, SensitiveTextStreamRedactor>,
-  partId: string,
-  text: string,
-  sensitiveSources: unknown,
-): string {
-  const redactor = redactors.get(partId) ?? createSensitiveTextStreamRedactor();
-  redactors.set(partId, redactor);
-  return redactor.write(text, sensitiveSources);
+function emitCommittedResponse(onStream: StreamCallback | undefined, state: StreamTrackingState, commit: SensitiveTextCommit): void {
+  const { committed, pending } = maskSensitiveTextChunks(commit, state.pendingResponseChunks);
+  state.pendingResponseChunks = pending;
+  for (const chunk of committed) {
+    if (chunk.kind === 'text') emitText(onStream, chunk.text);
+    else emitThinking(onStream, chunk.text);
+  }
 }
 
-export function flushSensitiveTextStreams(
-  onStream: StreamCallback | undefined,
-  state: StreamTrackingState,
+/** text/thinking の part 境界だけでは確定せず、ツールイベントなどの本文境界で flush する。 */
+export function writeSensitiveText(
+  state: StreamTrackingState, kind: 'text' | 'thinking', partId: string, text: string, onStream: StreamCallback | undefined,
 ): void {
-  for (const redactor of state.textRedactors.values()) {
-    emitText(onStream, redactor.flush(state.sensitiveSources));
-  }
-  for (const redactor of state.thinkingRedactors.values()) {
-    emitThinking(onStream, redactor.flush(state.sensitiveSources));
-  }
-  state.textRedactors.clear();
-  state.thinkingRedactors.clear();
+  if (text === '') return;
+  const previous = state.pendingResponseChunks.at(-1);
+  if (previous?.partId === partId && previous.kind === kind) previous.text += text;
+  else state.pendingResponseChunks.push({ kind, partId, text });
+  emitCommittedResponse(onStream, state, state.responseBuffer.write(text, state.sensitiveSources));
+}
+
+export function flushSensitiveTextStreams(onStream: StreamCallback | undefined, state: StreamTrackingState): void {
+  emitCommittedResponse(onStream, state, state.responseBuffer.flush(state.sensitiveSources));
+  state.sensitiveSources.collect(state.responseBuffer.sensitiveValues);
 }
 
 export function emitToolUse(
@@ -428,9 +426,12 @@ export function emitToolUse(
   tool: string,
   input: Record<string, unknown>,
   id: string,
+  sensitiveSources: unknown,
 ): void {
   if (!onStream) return;
-  const maskedInput = sanitizeOpenCodeToolInput(input, tool);
+  const maskedInput = sanitizeSensitiveValueWithKnownValues(
+    sanitizeOpenCodeToolInput(input, tool), sensitiveSources,
+  ) as Record<string, unknown>;
   onStream({ type: 'tool_use', data: { tool, input: maskedInput, id } });
 }
 
@@ -533,26 +534,13 @@ export function handlePartUpdated(
       if (!onStream) return true;
       const textPart = part as OpenCodeTextPart;
       if (delta) {
-        emitText(onStream, redactStreamChunk(
-          state.textRedactors,
-          textPart.id,
-          delta,
-          state.sensitiveSources,
-        ));
+        writeSensitiveText(state, 'text', textPart.id, delta, onStream);
         const previous = state.textOffsets.get(textPart.id) ?? 0;
         state.textOffsets.set(textPart.id, previous + delta.length);
       } else {
         const prev = state.textOffsets.get(textPart.id) ?? 0;
         if (textPart.text.length > prev) {
-          emitText(
-            onStream,
-            redactStreamChunk(
-              state.textRedactors,
-              textPart.id,
-              textPart.text.slice(prev),
-              state.sensitiveSources,
-            ),
-          );
+          writeSensitiveText(state, 'text', textPart.id, textPart.text.slice(prev), onStream);
           state.textOffsets.set(textPart.id, textPart.text.length);
         }
       }
@@ -563,12 +551,7 @@ export function handlePartUpdated(
       const reasoningPart = part as OpenCodeReasoningPart;
       if (delta) {
         if (!trackOpenCodeReasoningBytes(state, delta)) return false;
-        emitThinking(onStream, redactStreamChunk(
-          state.thinkingRedactors,
-          reasoningPart.id,
-          delta,
-          state.sensitiveSources,
-        ));
+        writeSensitiveText(state, 'thinking', reasoningPart.id, delta, onStream);
         const previous = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
         state.thinkingOffsets.set(reasoningPart.id, previous + delta.length);
       } else {
@@ -576,15 +559,7 @@ export function handlePartUpdated(
         if (reasoningPart.text.length > prev) {
           const nextText = reasoningPart.text.slice(prev);
           if (!trackOpenCodeReasoningBytes(state, nextText)) return false;
-          emitThinking(
-            onStream,
-            redactStreamChunk(
-              state.thinkingRedactors,
-              reasoningPart.id,
-              nextText,
-              state.sensitiveSources,
-            ),
-          );
+          writeSensitiveText(state, 'thinking', reasoningPart.id, nextText, onStream);
           state.thinkingOffsets.set(reasoningPart.id, reasoningPart.text.length);
         }
       }
@@ -611,15 +586,14 @@ function handleToolPartUpdated(
     state.startedTools.add(toolId);
   }
   state.sensitiveSources.collect(toolPart.state.input);
-  if (state.sensitiveSources.exhausted) {
-    exhaustStreamTrackingState(state, 'sensitive_sources');
-    return false;
-  }
 
   if (!onStream) return true;
 
+  if (isNewTool || toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
+    flushSensitiveTextStreams(onStream, state);
+  }
   if (isNewTool) {
-    emitToolUse(onStream, toolPart.tool, toolPart.state.input, toolId);
+    emitToolUse(onStream, toolPart.tool, toolPart.state.input, toolId, state.sensitiveSources);
   }
 
   switch (toolPart.state.status) {

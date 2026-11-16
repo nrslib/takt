@@ -44,14 +44,15 @@ describe('Epic persisted state watcher', () => {
     doubles.get.mockResolvedValue(epicView(epic));
     const event = epicEvents(epic).at(-1)!;
     const id = conversationId({ kind: 'workspace', workspaceId: epic.workspaceId });
-    const store = { apply: vi.fn(), updateToolHistory: vi.fn(async () => undefined),
+    const store = { apply: vi.fn(),
       read: vi.fn(async () => ({ state: { assignment: { kind: 'workspace', workspaceId: epic.workspaceId }, revision: 0, pending: null, approval: null } })) };
     const routing = { directory: '/config', permits: vi.fn(async () => true) };
     const save = vi.fn(async () => true);
     const outputs: PortOutput[] = [];
+    const onError = vi.fn();
     const conversations = new DaemonConversations(store as unknown as ConstructorParameters<typeof DaemonConversations>[0],
       routing as unknown as ConstructorParameters<typeof DaemonConversations>[1], { save } as unknown as ConstructorParameters<typeof DaemonConversations>[2],
-      async (_id, output) => { outputs.push(output); }, vi.fn());
+      async (_id, output) => { outputs.push(output); }, onError, { readTurns: async () => [] });
     await conversations.apply({ conversationId: id, operationId: verificationRunId, generation: 1,
       event: { ...event, operationId: verificationRunId, acceptedSequence: 1, lane: 'other' },
       outcome: { kind: 'completed', result: { kind: 'notice', message: '' } } });
@@ -59,6 +60,7 @@ describe('Epic persisted state watcher', () => {
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: event.eventId, conversationId: id }), expect.any(AbortSignal));
     expect(outputs).toContainEqual(expect.objectContaining({ kind: 'pending', state: expect.objectContaining({ running: null }) }));
     expect(outputs.map(({ kind }) => kind)).toEqual(['pending', 'result']);
+    expect(onError).not.toHaveBeenCalled();
   });
   it('includes saved Epic evidence and running recovery in an empty-workspace manager context', async () => {
     const member = { repositoryDirectory: '/removed', goalId: secondGoalId };
@@ -78,28 +80,29 @@ describe('Epic persisted state watcher', () => {
     const epic = epicRecord();
     const second = { ...epic, id: secondGoalId };
     doubles.list.mockResolvedValue([epic, second]);
-    const send = vi.fn();
+    const refresh = vi.fn<DaemonConversations['refresh']>().mockResolvedValue(undefined);
     let notices: { conversationId: string; id: string }[] = [];
     const conversations = { notifications: { async *iterate() { yield* notices; } }, routing: { directory: '/config', assignments: async () => [{ kind: 'workspace', workspaceId: epic.workspaceId }] },
-      ensure: vi.fn(), snapshot: vi.fn(async () => ({ revision: 0, stateSequence: 1 })), send } as unknown as DaemonConversations;
+      ensure: vi.fn(), refresh } as unknown as DaemonConversations;
     const onError = vi.fn();
     startEpicWatcher(conversations, { accept: vi.fn() }, onError);
     const signal = new AbortController().signal;
     await doubles.observe!(signal);
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith(conversationId({ kind: 'workspace', workspaceId: epic.workspaceId }));
     doubles.list.mockResolvedValue([epic, { ...second, revision: 2 }]);
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(2);
-    notices = [{ conversationId: send.mock.calls[0]![0], id: 'verification-notice' }];
+    expect(refresh).toHaveBeenCalledTimes(2);
+    notices = [{ conversationId: refresh.mock.calls[0]![0], id: 'verification-notice' }];
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(3);
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(3);
     doubles.list.mockRejectedValue(new Error('unreadable Epic'));
     await doubles.observe!(signal);
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'unreadable Epic' }));
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 
   it('validates all records before publishing and retries after read or admission failure', async () => {
@@ -109,9 +112,9 @@ describe('Epic persisted state watcher', () => {
     const second = { ...first, id: secondGoalId };
     const failure = new Error('later read failed');
     doubles.list.mockImplementation(async function* () { yield first; throw failure; });
-    const send = vi.fn();
+    const refresh = vi.fn<DaemonConversations['refresh']>().mockResolvedValue(undefined);
     const conversations = { notifications: { async *iterate() {} }, routing: { directory: '/config', assignments: async () => [{ kind: 'workspace', workspaceId: first.workspaceId }] },
-      ensure: vi.fn(), snapshot: vi.fn(async () => ({ revision: 0, stateSequence: 1 })), send } as unknown as DaemonConversations;
+      ensure: vi.fn(), refresh } as unknown as DaemonConversations;
     const accept = vi.fn<DaemonIngress['accept']>(async (event) => ({ kind: 'accepted', eventId: event.eventId, operationId: event.eventId, acceptedSequence: 1 }));
     const onError = vi.fn();
     startEpicWatcher(conversations, { accept }, onError);
@@ -119,20 +122,21 @@ describe('Epic persisted state watcher', () => {
     await doubles.observe!(signal);
     expect(onError).toHaveBeenCalledWith(failure);
     expect(accept).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
     doubles.list.mockResolvedValue([first, second]);
     await doubles.observe!(signal);
     expect(accept.mock.calls.map(([event]) => event.event)).toMatchObject([{ epicId: first.id }, { epicId: second.id }]);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(conversationId({ kind: 'workspace', workspaceId: first.workspaceId }));
+    expect(accept.mock.invocationCallOrder[1]).toBeLessThan(refresh.mock.invocationCallOrder[0]!);
     doubles.list.mockResolvedValue([first, { ...second, objective: 'changed' }]);
     accept.mockResolvedValueOnce({ kind: 'rejected', reason: 'storage' });
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenLastCalledWith(expect.any(Error));
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(2);
     await doubles.observe!(signal);
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it('awaits each event admission before consuming the next Epic body for publication', async () => {
@@ -151,16 +155,19 @@ describe('Epic persisted state watcher', () => {
       }
       return { kind: 'accepted', eventId: event.eventId, operationId: event.eventId, acceptedSequence: 1 };
     });
+    const refresh = vi.fn<DaemonConversations['refresh']>().mockResolvedValue(undefined);
     const conversations = { notifications: { async *iterate() {} }, routing: { directory: '/config', assignments: async () => [{ kind: 'workspace', workspaceId: first.workspaceId }] },
-      ensure: vi.fn(), snapshot: vi.fn(async () => ({ revision: 0, stateSequence: 1 })), send: vi.fn() } as unknown as DaemonConversations;
+      ensure: vi.fn(), refresh } as unknown as DaemonConversations;
     startEpicWatcher(conversations, { accept }, vi.fn());
     const observing = doubles.observe!(new AbortController().signal);
     await pending.promise;
     expect(consumed).toBe(3);
     expect(accept).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
     admitted.resolve();
     await observing;
     expect(consumed).toBe(4);
     expect(accept).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(conversationId({ kind: 'workspace', workspaceId: first.workspaceId }));
   });
 });

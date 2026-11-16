@@ -77,7 +77,7 @@ it('uses the daemon turn identity for tool events while preserving call and prov
     toolActivity: { callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 } };
   f.execute.mockImplementationOnce(async (input) => {
     input.onToolEvent!(event);
-    input.onToolEvent!({ type: 'tool_result', data: { completedToolIds: ['provider-tool'], content: 'done', isError: false },
+    input.onToolEvent!({ type: 'tool_result', data: { id: 'provider-tool', completedToolIds: ['provider-tool'], content: 'done', isError: false },
       toolActivity: event.toolActivity });
     return { message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined };
   });

@@ -73,9 +73,7 @@ export function createDaemonStateRequests(options: {
     }
     if (source?.state.assignment.kind !== 'daemon' || turn.conversationId !== conversationId({ kind: 'daemon' })) return forbidden();
     if (request.kind === 'notify_director') {
-      const saved = await conversations.notifications.save({ id: request.notificationId, message: request.message, subject: request.subject, turnOperationId: turn.operationId }, signal);
-      if (saved) conversations.send(turn.conversationId, { kind: 'notice', id: request.notificationId, message: request.message },
-        { revision: source.state.revision, stateSequence: source.state.version, operationId: turn.operationId });
+      await conversations.notification(turn.conversationId, { id: request.notificationId, message: request.message, subject: request.subject, turnOperationId: turn.operationId }, signal);
       return { kind: 'notification_saved', notificationId: request.notificationId };
     }
     const target = await conversations.store.read(request.conversationId);

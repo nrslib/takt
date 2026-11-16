@@ -14,7 +14,7 @@ import { epicRecord, epicWorkspaceId, verificationResultFor, verificationRunId, 
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { cwd, DOWN, ENTER, ESC, GOAL_MENU, ManagerClientDouble, QUESTION_MENU, UP, waitFor } from './helpers/manager-tui-fixtures.js';
 
-const EPIC_MENU = '\x0f';
+const EPIC_MENU = '\x14';
 const secondRepository = '/test/second-repository';
 const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: epicWorkspaceId,
   name: 'Epic workspace', repositoryDirectories: [cwd, secondRepository] };

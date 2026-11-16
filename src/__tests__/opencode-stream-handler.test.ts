@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import {
   createStreamTrackingState,
   emitInit,
+  flushSensitiveTextStreams,
+  writeSensitiveText,
   emitText,
   emitThinking,
   emitToolUse,
@@ -46,6 +48,20 @@ function buildProviderEventCallback(
     step: 'review',
   }, event);
 }
+
+it('emits held text and thinking parts with their own kinds in order and ignores empty parts', () => {
+  const size = 4;
+  const state = createStreamTrackingState();
+  const output = vi.fn<StreamCallback>();
+  for (let index = 0; index < size; index++) {
+    writeSensitiveText(state, index % 2 === 0 ? 'text' : 'thinking', `part-${index % 2}`, 'p', output);
+  }
+  expect(output).not.toHaveBeenCalled();
+  writeSensitiveText(state, 'text', 'empty', '', output);
+  writeSensitiveText(state, 'text', 'last', '\n', output);
+  expect(output.mock.calls.map(([event]) => event.type)).toEqual([...Array.from({ length: size }, (_, index) => index % 2 === 0 ? 'text' : 'thinking'), 'text']);
+  expect(output.mock.calls.map(([event]) => event.type === 'text' ? event.data.text : event.type === 'thinking' ? event.data.thinking : '').join('')).toBe('p'.repeat(size) + '\n');
+});
 
 describe('createStreamTrackingState', () => {
   it('should create fresh state with empty collections', () => {
@@ -123,10 +139,41 @@ describe('emitThinking', () => {
 });
 
 describe('emitToolUse', () => {
+  it('redacts prior tool-input candidates in later tool_use events and provider JSONL', () => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-input-candidates-'));
+    try {
+      const logger = createProviderEventLogger({ logsDir, sessionId: 'input-candidates', runId: 'run', enabled: true });
+      const callback = buildProviderEventCallback(logger);
+      const onStream = vi.fn<StreamCallback>((event) => callback(event));
+      const state = createStreamTrackingState();
+      const firstInput = { token: 's3cr3t' };
+      const nextInput = { command: 'echo s3cr3t', nested: { message: 's3cr3t' }, cwd: '/project' };
+
+      handlePartUpdated({ id: 'part-1', sessionID: 'session-1', type: 'tool', callID: 'call-1', tool: 'Bash',
+        state: { status: 'running', input: firstInput } }, undefined, onStream, state);
+      handlePartUpdated({ id: 'part-2', sessionID: 'session-1', type: 'tool', callID: 'call-2', tool: 'Bash',
+        state: { status: 'running', input: nextInput } }, undefined, onStream, state);
+
+      const expectedInput = { command: 'echo [REDACTED]', nested: { message: '[REDACTED]' }, cwd: '/project' };
+      expect(onStream).toHaveBeenCalledTimes(2);
+      expect(onStream).toHaveBeenNthCalledWith(1, { type: 'tool_use', data: { tool: 'Bash', id: 'call-1', input: { token: '[REDACTED]' } } });
+      expect(onStream).toHaveBeenNthCalledWith(2, { type: 'tool_use', data: { tool: 'Bash', id: 'call-2', input: expectedInput } });
+      const jsonl = readFileSync(logger.filepath, 'utf8');
+      expect(jsonl).not.toContain('s3cr3t');
+      const records = jsonl.trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: unknown });
+      expect(records).toMatchObject([
+        { event_type: 'tool_use', data: { id: 'call-1', input: { token: '[REDACTED]' } } },
+        { event_type: 'tool_use', data: { id: 'call-2', input: expectedInput } },
+      ]);
+      expect(firstInput).toEqual({ token: 's3cr3t' });
+      expect(nextInput).toEqual({ command: 'echo s3cr3t', nested: { message: 's3cr3t' }, cwd: '/project' });
+    } finally { rmSync(logsDir, { recursive: true, force: true }); }
+  });
+
   it('should emit tool_use event', () => {
     const onStream = vi.fn();
 
-    emitToolUse(onStream, 'Bash', { command: 'ls' }, 'tool-1');
+    emitToolUse(onStream, 'Bash', { command: 'ls' }, 'tool-1', {});
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_use',
@@ -136,6 +183,27 @@ describe('emitToolUse', () => {
 });
 
 describe('emitToolResult', () => {
+  it.each(['tool_result', 'result'] as const)('redacts known values and same-line key/value forms before emitting %s and logging it', (type) => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-same-event-'));
+    try {
+      const logger = createProviderEventLogger({ logsDir, sessionId: 'same-event', runId: 'run', enabled: true });
+      const callback = buildProviderEventCallback(logger);
+      const onStream = vi.fn<StreamCallback>((event) => callback(event));
+      const source = { api_key: 'prior-known' };
+      const content = 'token=opaque echo prior-known';
+      const expected = 'token=[REDACTED] echo [REDACTED]';
+      if (type === 'tool_result') emitToolResult(onStream, content, false, source, 'tool-1');
+      else emitResult(onStream, true, content, 'session-1', source);
+      expect(onStream).toHaveBeenCalledExactlyOnceWith({ type,
+        data: type === 'tool_result' ? { id: 'tool-1', content: expected, isError: false }
+          : { result: expected, sessionId: 'session-1', success: true, error: undefined } });
+      const jsonl = readFileSync(logger.filepath, 'utf8');
+      expect(jsonl).not.toMatch(/opaque|prior-known/u);
+      expect(JSON.parse(jsonl)).toMatchObject({ event_type: type, data: type === 'tool_result' ? { content: expected } : { result: expected } });
+      expect(source).toEqual({ api_key: 'prior-known' });
+    } finally { rmSync(logsDir, { recursive: true, force: true }); }
+  });
+
   it('should emit tool_result event for success', () => {
     const onStream = vi.fn();
 
@@ -177,7 +245,7 @@ describe('emitToolResult', () => {
         command: 'curl https://example.invalid',
       };
 
-      emitToolUse(onStream, 'Bash', input, 'tool-sensitive');
+      emitToolUse(onStream, 'Bash', input, 'tool-sensitive', {});
       emitToolResult(
         onStream,
         'failed with opaque-auth-value, opaque-proxy-value, opaque-cookie-value, opaque-session-value and opaque-credential-value',
@@ -358,13 +426,13 @@ describe('emitResult', () => {
       id: 'text-part',
       sessionID: 'session-1',
       type: 'text',
-      text: 'opencode-sensitive-value',
-    }, 'opencode-sensitive-value', onStream, state);
+      text: 'opencode-sensitive-value\n',
+    }, 'opencode-sensitive-value\n', onStream, state);
     emitResult(onStream, true, 'opencode-sensitive-value', 'session-1', state.sensitiveSources);
 
     expect(onStream).toHaveBeenNthCalledWith(2, {
       type: 'text',
-      data: { text: '[REDACTED]' },
+      data: { text: '[REDACTED]\n' },
     });
     expect(onStream).toHaveBeenNthCalledWith(3, {
       type: 'result',
@@ -379,6 +447,74 @@ describe('emitResult', () => {
 });
 
 describe('handlePartUpdated', () => {
+  it.each(['text', 'reasoning'] as const)('masks held %s with the next tool input before emitting text and provider logs', (type) => {
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-held-input-'));
+    try {
+      const logger = createProviderEventLogger({ logsDir, sessionId: 'held-input', runId: 'run', enabled: true });
+      const events: Parameters<StreamCallback>[0][] = [];
+      const onStream: StreamCallback = (event) => {
+        events.push(event);
+        logger.logEvent({ provider: 'opencode', providerModel: 'test', step: 'inspect' }, event);
+      };
+      const state = createStreamTrackingState();
+      handlePartUpdated({ id: 'before', sessionID: 'session-1', type, text: 'Before s3cr3t' }, undefined, onStream, state);
+      handlePartUpdated({ id: 'tool', callID: 'tool', type: 'tool', tool: 'Bash', state: { status: 'running', input: { token: 's3cr3t' } } },
+        undefined, onStream, state);
+      const field = type === 'text' ? 'text' : 'thinking';
+      expect(events.map((event) => event.type)).toEqual([field, 'tool_use']);
+      expect(events[0]).toEqual(field === 'text'
+        ? { type: 'text', data: { text: 'Before [REDACTED]' } }
+        : { type: 'thinking', data: { thinking: 'Before [REDACTED]' } });
+      for (const event of events) expect(JSON.stringify(event)).not.toContain('s3cr3t');
+      const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: unknown });
+      expect(records.map((record) => record.event_type)).toEqual([field, 'tool_use']);
+      expect(records[0]?.data).toEqual(events[0]?.data);
+      for (const record of records) expect(JSON.stringify(record)).not.toContain('s3cr3t');
+    } finally { rmSync(logsDir, { recursive: true, force: true }); }
+  });
+
+  it.each((['text', 'reasoning'] as const).flatMap((type) => [
+    { type, before: 'Before tok', expected: 'Before tok' },
+    { type, before: 'Before token=opaque', expected: 'Before token=[REDACTED]' },
+  ]))('flushes and masks pending $type before tool use and result: $before', ({ type, before, expected }) => {
+    const events: Parameters<StreamCallback>[0][] = [];
+    const onStream: StreamCallback = (event) => events.push(event);
+    const state = createStreamTrackingState();
+    const textOf = (values: typeof events): string => values.map((event) => event.type === 'text' ? event.data.text
+      : event.type === 'thinking' ? event.data.thinking : '').join('');
+    handlePartUpdated({ id: 'before', sessionID: 'session-1', type, text: before }, before, onStream, state);
+    handlePartUpdated({ id: 'tool', callID: 'tool', type: 'tool', tool: 'Bash', state: { status: 'running', input: { command: 'echo ok' } } },
+      undefined, onStream, state);
+    const use = events.findIndex((event) => event.type === 'tool_use');
+    expect(use).toBeGreaterThanOrEqual(0);
+    expect(textOf(events.slice(0, use))).toBe(expected);
+    handlePartUpdated({ id: 'after', sessionID: 'session-1', type, text: 'After tok' }, 'After tok', onStream, state);
+    handlePartUpdated({ id: 'tool', callID: 'tool', type: 'tool', tool: 'Bash', state: { status: 'completed', input: {}, output: 'ok', title: 'done' } },
+      undefined, onStream, state);
+    const result = events.findIndex((event) => event.type === 'tool_result');
+    expect(result).toBeGreaterThan(use);
+    expect(textOf(events.slice(use + 1, result))).toBe('After tok');
+    expect(events.at(-1)?.type).toBe('tool_result');
+    const count = events.length;
+    flushSensitiveTextStreams(onStream, state);
+    expect(events).toHaveLength(count);
+    expect(JSON.stringify(events)).not.toContain('opaque');
+  });
+
+  it.each(['text', 'reasoning'] as const)('commits %s by line and flushes its final unterminated line', (type) => {
+    const onStream = vi.fn();
+    const state = createStreamTrackingState();
+    state.sensitiveSources.collect({ token: 'unrelated-credential' });
+    handlePartUpdated({ id: 'live', sessionID: 'session-1', type, text: 'ready' }, 'ready', onStream, state);
+    expect(onStream).not.toHaveBeenCalled();
+    handlePartUpdated({ id: 'live', sessionID: 'session-1', type, text: 'ready\nlast' }, '\nlast', onStream, state);
+    expect(onStream).toHaveBeenCalledWith(type === 'text'
+      ? { type: 'text', data: { text: 'ready\n' } } : { type: 'thinking', data: { thinking: 'ready\n' } });
+    flushSensitiveTextStreams(onStream, state);
+    expect(onStream).toHaveBeenCalledWith(type === 'text'
+      ? { type: 'text', data: { text: 'last' } } : { type: 'thinking', data: { thinking: 'last' } });
+  });
+
   it('should handle text part with delta', () => {
     const onStream = vi.fn();
     const state = createStreamTrackingState();
@@ -386,6 +522,7 @@ describe('handlePartUpdated', () => {
     const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
 
     handlePartUpdated(part, 'Hello', onStream, state);
+    flushSensitiveTextStreams(onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
@@ -422,6 +559,7 @@ describe('handlePartUpdated', () => {
       state,
     );
 
+    flushSensitiveTextStreams(onStream, state);
     expect(onStream.mock.calls.map(([event]) => event)).toEqual([
       { type: 'text', data: { text: 'Hello' } },
       { type: 'thinking', data: { thinking: 'Think' } },
@@ -430,16 +568,40 @@ describe('handlePartUpdated', () => {
     ]);
   });
 
+  it.each(['text', 'reasoning'] as const)('holds a quoted credential across distinct %s parts', (type) => {
+    const onStream = vi.fn();
+    const state = createStreamTrackingState();
+    for (const [id, text] of [['p1', 'API_TOKEN="first-private'], ['p2', 'second-private"\nready\n']]) {
+      handlePartUpdated({ id: id!, sessionID: 'session-1', type, text: text! }, text, onStream, state);
+      const shown = JSON.stringify(onStream.mock.calls);
+      for (const secret of ['first-private', 'second-private']) expect(shown).not.toContain(secret);
+    }
+    expect(JSON.stringify(onStream.mock.calls)).toContain('[REDACTED]');
+    expect(JSON.stringify(onStream.mock.calls)).toContain('ready');
+  });
+
+  it('holds a credential across text and reasoning parts without moving safe text to the other channel', () => {
+    const onStream = vi.fn();
+    const state = createStreamTrackingState();
+    handlePartUpdated({ id: 'p1', sessionID: 'session-1', type: 'text', text: 'visible\nAPI_TOKEN="first-private' }, undefined, onStream, state);
+    handlePartUpdated({ id: 'p2', sessionID: 'session-1', type: 'reasoning', text: 'second-private"\nanalysis\n' }, undefined, onStream, state);
+    const text = onStream.mock.calls.map(([event]) => (event as { data: { text?: string } }).data.text ?? '').join('');
+    const thinking = onStream.mock.calls.map(([event]) => (event as { data: { thinking?: string } }).data.thinking ?? '').join('');
+    expect(text).toContain('visible\n'); expect(text).not.toContain('analysis');
+    expect(thinking).toContain('analysis\n'); expect(thinking).not.toContain('visible');
+    for (const secret of ['first-private', 'second-private']) expect(text + thinking).not.toContain(secret);
+  });
+
   it('should redact a known secret split at every text delta boundary', () => {
     const secret = 'split-opencode-secret';
     for (let split = 1; split < secret.length; split += 1) {
       const onStream = vi.fn();
       const state = createStreamTrackingState();
       state.sensitiveSources.collect({ token: secret });
-      const part: OpenCodeTextPart = { id: `p-${split}`, sessionID: 'session-1', type: 'text', text: secret };
+      const part: OpenCodeTextPart = { id: `p-${split}`, sessionID: 'session-1', type: 'text', text: `${secret}\n` };
 
       handlePartUpdated(part, secret.slice(0, split), onStream, state);
-      handlePartUpdated(part, secret.slice(split), onStream, state);
+      handlePartUpdated(part, `${secret.slice(split)}\n`, onStream, state);
 
       const streamedText = onStream.mock.calls
         .map(([event]) => (event as { data: { text?: string } }).data.text ?? '')
@@ -455,6 +617,7 @@ describe('handlePartUpdated', () => {
 
     const part1: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
     handlePartUpdated(part1, undefined, onStream, state);
+    flushSensitiveTextStreams(onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
@@ -465,6 +628,7 @@ describe('handlePartUpdated', () => {
 
     const part2: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello world' };
     handlePartUpdated(part2, undefined, onStream, state);
+    flushSensitiveTextStreams(onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'text',
@@ -478,6 +642,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeTextPart = { id: 'p1', sessionID: 'session-1', type: 'text', text: 'Hello' };
     handlePartUpdated(part, undefined, onStream, state);
+    flushSensitiveTextStreams(onStream, state);
     onStream.mockClear();
 
     handlePartUpdated(part, undefined, onStream, state);
@@ -492,6 +657,7 @@ describe('handlePartUpdated', () => {
     const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Thinking...' };
 
     handlePartUpdated(part, 'Thinking', onStream, state);
+    flushSensitiveTextStreams(onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'thinking',
@@ -527,6 +693,7 @@ describe('handlePartUpdated', () => {
 
     const part: OpenCodeReasoningPart = { id: 'r1', sessionID: 'session-1', type: 'reasoning', text: 'Step 1' };
     handlePartUpdated(part, undefined, onStream, state);
+    flushSensitiveTextStreams(onStream, state);
 
     expect(onStream).toHaveBeenCalledWith({
       type: 'thinking',
@@ -783,26 +950,26 @@ describe('handlePartUpdated', () => {
     expect(state.exhausted).toBe(true);
     expect(state.trackedIds.size).toBe(0);
     expect(state.textOffsets.size).toBe(0);
-    expect(state.textRedactors.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('must-not-leak', state.sensitiveSources)).toBe('[REDACTED]');
+    expect(state.responseBuffer.flush({}).text).toBe('');
+    expect(sanitizeSensitiveTextWithKnownValues('ordinary text', state.sensitiveSources)).toBe('ordinary text');
   });
 
-  it('fails closed and releases sensitive history when tool input accumulation is exhausted', () => {
+  it('bounds candidate tracking without failing or masking unrelated output', () => {
     const state = createStreamTrackingState();
-    let accepted = true;
-    for (let index = 0; accepted; index += 1) {
-      accepted = handlePartUpdated({
+    for (let index = 0; index < 1030; index += 1) {
+      expect(handlePartUpdated({
         id: 'tool-part',
         type: 'tool',
         callID: 'call-1',
         tool: 'remote',
         state: { status: 'running', input: { token: `secret-${index}` } },
-      }, undefined, undefined, state);
+      }, undefined, undefined, state)).toBe(true);
     }
 
-    expect(state.exhausted).toBe(true);
-    expect(state.sensitiveSources.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', state.sensitiveSources)).toBe('[REDACTED]');
+    expect(state.exhausted).toBe(false);
+    expect(state.sensitiveSources.values.size).toBe(1024);
+    expect(sanitizeSensitiveTextWithKnownValues('ordinary text', state.sensitiveSources)).toBe('ordinary text');
+    expect(sanitizeSensitiveTextWithKnownValues('secret-0', state.sensitiveSources)).toBe('[REDACTED]');
   });
 
   it('collects secrets from later input revisions of the same tool without consuming source slots', () => {
@@ -869,10 +1036,10 @@ describe('trackOpenCodeStreamEvent', () => {
 });
 
 describe('trackOpenCodeTextBytes', () => {
-  it('fails closed and releases all tracked state when cumulative text bytes exceed the limit', () => {
+  it('enforces the text resource limit while retaining bounded known values', () => {
     const state = createStreamTrackingState();
     state.textOffsets.set('text-1', 1);
-    state.textRedactors.set('text-1', {} as never);
+    state.responseBuffer.write('pending', {});
     state.sensitiveSources.collect({ token: 'secret-before-text-limit' });
 
     expect(trackOpenCodeTextBytes(state, 'a'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT))).toBe(true);
@@ -880,9 +1047,9 @@ describe('trackOpenCodeTextBytes', () => {
 
     expect(state.exhausted).toBe(true);
     expect(state.textOffsets.size).toBe(0);
-    expect(state.textRedactors.size).toBe(0);
-    expect(state.sensitiveSources.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('unknown-after-text-limit', state.sensitiveSources)).toBe('[REDACTED]');
+    expect(state.responseBuffer.flush({}).text).toBe('');
+    expect(state.sensitiveSources.values.has('secret-before-text-limit')).toBe(true);
+    expect(sanitizeSensitiveTextWithKnownValues('unknown-after-text-limit', state.sensitiveSources)).toBe('unknown-after-text-limit');
   });
 
   it('counts UTF-8 bytes across multiple text part ids', () => {
@@ -1757,7 +1924,6 @@ describe('OpenCodeClient tool call failure logging', () => {
         'event_count',
         'tracked_id_count',
         'text_bytes',
-        'sensitive_sources',
       ]) {
         expect(result.error).not.toContain(internalReason);
         expect(evidence).not.toContain(internalReason);

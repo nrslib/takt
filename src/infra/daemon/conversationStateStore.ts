@@ -4,32 +4,20 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
-import { MAX_PROCESS_MESSAGE_BYTES, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
+import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { ConversationChangeSchema, StoredTurnSchema } from './eventRecord.js';
 import { ApprovalSchema, ConversationAgentOverridesSchema, ConversationIdSchema, ConversationRecordSchema,
   PendingSummarySchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
-import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
-import { ToolActivityHistory } from '../../shared/tool-activity/history.js';
-import { ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
-import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
-import { createBoundedSensitiveValues, isSensitiveKeyName, sanitizeSensitiveTextWithKnownValues } from '../../shared/utils/sensitiveText.js';
-import { truncateUtf8 } from '../../shared/utils/utf8.js';
-import { ConversationToolEventSchema, type ConversationToolEvent } from '../../shared/types/conversation-activity.js';
+import { appendPrivateFile, ensurePrivateDirectory, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
+import { ManagerToolActivityEntrySchema } from '../../shared/tool-activity/schema.js';
+import { limitToolOutput, SAVED_TOOL_OUTPUT_BYTES } from '../../shared/tool-activity/outputLimit.js';
+import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
-const MAX_CONVERSATION_BYTES = 12 * 1024 * 1024;
-const MAX_TOOL_HISTORY_BYTES = 2 * 1024 * 1024;
-const TOOL_HISTORY_CONVERSATION_RESERVE_BYTES = 256 * 1024;
-const MIN_TOOL_HISTORY_BYTES = 64 * 1024;
-const MAX_TOOL_HISTORY_ENTRIES = 256;
-const MAX_TOOL_HISTORY_EVENT_IDS = 4096;
-const MAX_TOOL_HISTORY_INPUT_BYTES = 32 * 1024;
-const MAX_TOOL_HISTORY_INPUT_FIELD_BYTES = 8 * 1024;
-const MAX_TOOL_HISTORY_TEXT_BYTES = 16 * 1024;
 const id = z.string().min(1).max(128);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
 const messageDigest = z.string().regex(/^[a-f0-9]{64}$/);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const receiptChange = z.object({
@@ -46,7 +34,7 @@ const receipt = z.union([
   z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict(),
   z.object({ turn: StoredTurnSchema, change: receiptChange, version }).strict(),
 ]);
-const metadata = z.object({ version, receipts: z.array(receipt), toolHistory: ToolActivityTurnStateSchema.optional() }).strict().superRefine((value, context) => {
+const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {
   const operations = new Set<string>();
   if (value.version < value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
   for (const [index, entry] of value.receipts.entries()) {
@@ -60,71 +48,8 @@ interface StoredConversation {
   record: ConversationRecord;
   metadata: z.infer<typeof metadata>;
 }
-
-function boundedToolInput(input: Record<string, unknown>): Record<string, unknown> {
-  const entries = Object.entries(input).sort(([left], [right]) => Number(isSensitiveKeyName(right)) - Number(isSensitiveKeyName(left)));
-  const bounded: Record<string, unknown> = {};
-  let truncated = entries.length > 128;
-  for (const [key, value] of entries.slice(0, 128)) {
-    if (Buffer.byteLength(key, 'utf8') > 256) { truncated = true; continue; }
-    let nextValue: unknown;
-    if (typeof value === 'string') nextValue = truncateUtf8(value, MAX_TOOL_HISTORY_INPUT_FIELD_BYTES).value;
-    else {
-      const serialized = JSON.stringify(value);
-      if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > MAX_TOOL_HISTORY_INPUT_FIELD_BYTES) {
-        truncated = true;
-        continue;
-      }
-      nextValue = value;
-    }
-    const next = { ...bounded, [key]: nextValue };
-    if (Buffer.byteLength(JSON.stringify(next), 'utf8') > MAX_TOOL_HISTORY_INPUT_BYTES) {
-      truncated = true;
-      continue;
-    }
-    bounded[key] = nextValue;
-    if (typeof value === 'string' && nextValue !== value) truncated = true;
-  }
-  if (truncated) {
-    const marked = { ...bounded, __takt_truncated__: true };
-    if (Buffer.byteLength(JSON.stringify(marked), 'utf8') <= MAX_TOOL_HISTORY_INPUT_BYTES) return marked;
-  }
-  return bounded;
-}
-
-function boundToolHistory(history: ToolActivityTurnState, maxBytes: number, sensitiveValues?: ReturnType<typeof createBoundedSensitiveValues>): ToolActivityTurnState {
-  if (maxBytes < MIN_TOOL_HISTORY_BYTES) throw new Error('Conversation has insufficient reserved capacity for tool history');
-  const entries = history.history.entries.slice(-MAX_TOOL_HISTORY_ENTRIES).map((entry) => {
-    const source = sensitiveValues ?? entry.input;
-    const output = sanitizeSensitiveTextWithKnownValues(entry.output, source);
-    const boundedOutput = truncateUtf8(output, MAX_TOOL_HISTORY_TEXT_BYTES);
-    const result = entry.result === undefined ? undefined : sanitizeSensitiveTextWithKnownValues(entry.result, source);
-    const boundedResult = result === undefined ? undefined : truncateUtf8(result, MAX_TOOL_HISTORY_TEXT_BYTES);
-    const outputTruncated = boundedOutput.bytes < Buffer.byteLength(output, 'utf8');
-    const resultTruncated = boundedResult !== undefined && result !== undefined
-      && boundedResult.bytes < Buffer.byteLength(result, 'utf8');
-    return {
-      ...entry,
-      input: boundedToolInput(entry.input),
-      output: boundedOutput.value,
-      ...(entry.outputTruncated === true || outputTruncated ? { outputTruncated: true } : {}),
-      ...(boundedResult === undefined ? {} : { result: boundedResult.value,
-        ...(entry.resultTruncated === true || resultTruncated ? { resultTruncated: true } : {}) }),
-    };
-  });
-  const eventIds = history.eventIds.slice(-MAX_TOOL_HISTORY_EVENT_IDS);
-  const bounded = (): ToolActivityTurnState => ({
-    ...history,
-    eventIds,
-    history: { ...history.history, entries },
-  });
-  while (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes && entries.length > 1) entries.shift();
-  while (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes && eventIds.length > 1) eventIds.shift();
-  if (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > maxBytes) {
-    throw new Error('Tool history exceeds its reserved conversation capacity');
-  }
-  return bounded();
-}
+const completedToolRecord = z.object({ kind: z.literal('completed'),
+  entry: ManagerToolActivityEntrySchema.refine((entry) => entry.status !== 'running') }).strict();
 
 function receiptChangeFor(change: ConversationChange): z.infer<typeof receiptChange> | ConversationChange {
   const { interruptedMessage, ...fields } = change;
@@ -143,15 +68,20 @@ function receiptMatches(entry: z.infer<typeof receipt>, turn: TurnIdentity, chan
 
 export class ConversationStateStore {
   private readonly directory: string;
+  private readonly toolHistoryDirectory: string;
   private readonly lock = new FileAsyncLock();
-  private readonly toolHistorySensitiveValues = new Map<string, ReturnType<typeof createBoundedSensitiveValues>>();
 
-  constructor(configDirectory: string) { this.directory = join(configDirectory, 'conversations'); }
+  constructor(configDirectory: string) {
+    this.directory = join(configDirectory, 'conversations');
+    this.toolHistoryDirectory = join(configDirectory, 'conversation-tool-history');
+  }
 
   private path(id: string): string { return join(this.directory, `${ConversationIdSchema.parse(id)}.json`); }
 
+  private toolHistoryPath(id: string): string { return join(this.toolHistoryDirectory, `${ConversationIdSchema.parse(id)}.jsonl`); }
+
   private async load(id: string): Promise<StoredConversation | undefined> {
-    const content = await readPrivateFile(this.path(id), MAX_CONVERSATION_BYTES);
+    const content = await readEntirePrivateFile(this.path(id));
     if (content === undefined) return undefined;
     const value: unknown = JSON.parse(content.toString('utf8'));
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid stored conversation');
@@ -178,63 +108,42 @@ export class ConversationStateStore {
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
   }
 
-  async readToolHistory(id: string): Promise<ToolActivityTurnState | undefined> {
-    return (await this.load(id))?.metadata.toolHistory;
+  async readToolHistories(id: string): Promise<ToolActivityTurnState[]> {
+    const content = await readEntirePrivateFile(this.toolHistoryPath(id));
+    if (content === undefined) return [];
+    const lines = content.toString('utf8').split('\n');
+    lines.pop();
+    const turns = new Map<string, ToolActivityTurnState>();
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      let raw: unknown;
+      // mainのセッションJSONL読取と同じく、途切れたJSON行は読み飛ばす。
+      try { raw = JSON.parse(line) as unknown; }
+      catch { continue; }
+      const parsed = completedToolRecord.safeParse(raw);
+      if (!parsed.success) continue;
+      const entry = parsed.data.entry;
+      const { operationId, generation } = entry.context;
+      if (operationId === undefined || generation === undefined) continue;
+      const key = JSON.stringify([operationId, generation]);
+      let turn = turns.get(key);
+      if (turn === undefined) {
+        turn = { operationId, generation, finished: true, history: { entries: [] } };
+        turns.set(key, turn);
+      }
+      if (!turn.history.entries.some((saved) => saved.key === entry.key)) turn.history.entries.push(entry);
+    }
+    return [...turns.values()];
   }
 
-  async updateToolHistory(turn: TurnIdentity, input: ConversationToolEvent | null, signal: AbortSignal): Promise<ToolActivityTurnState | undefined> {
-    const identity = StoredTurnSchema.parse(turn);
-    const message = input === null ? null : ConversationToolEventSchema.parse(input);
-    return this.lock.exclusive(`${this.path(identity.conversationId)}.lock`, async () => {
-      signal.throwIfAborted();
-      const stored = await this.load(identity.conversationId);
-      if (stored === undefined) throw new Error('Unknown tool history conversation');
-      const previous = stored.metadata.toolHistory;
-      const sensitiveValuesKey = JSON.stringify([identity.conversationId, identity.operationId, identity.generation]);
-      // 別operationの現在性は会話所有者が照合する。世代番号はdaemon再起動で戻り得る。
-      if (previous?.operationId === identity.operationId && previous.generation > identity.generation) return undefined;
-      const sameTurn = previous?.operationId === identity.operationId && previous.generation === identity.generation;
-      if (message === null && !sameTurn) {
-        this.toolHistorySensitiveValues.delete(sensitiveValuesKey);
-        if (previous === undefined) return undefined;
-        const remaining = { ...stored.metadata };
-        delete remaining.toolHistory;
-        await this.write({ record: stored.record, metadata: remaining }, signal);
-        return undefined;
-      }
-      if (sameTurn && (previous.finished || message !== null && previous.eventIds.includes(message.eventId))) return undefined;
-      const history = new ToolActivityHistory();
-      if (sameTurn) history.restore(previous.history);
-      if (message !== null) {
-        const context = message.event.toolActivity;
-        if (context?.operationId !== identity.operationId || context.generation !== identity.generation) {
-          throw new Error('Tool event turn mismatch');
-        }
-        if (message.event.type === 'tool_use') {
-          const sensitiveValues = this.toolHistorySensitiveValues.get(sensitiveValuesKey) ?? createBoundedSensitiveValues();
-          sensitiveValues.collect(message.event.data.input);
-          this.toolHistorySensitiveValues.set(sensitiveValuesKey, sensitiveValues);
-        }
-        history.apply(message.event);
-      }
-      const state = history.snapshot();
-      const toolHistory: ToolActivityTurnState = {
-        operationId: identity.operationId, generation: identity.generation, finished: message === null,
-        history: message === null ? { ...state, entries: state.entries.filter((entry) => entry.status !== 'running') } : state,
-        eventIds: [...(sameTurn ? previous.eventIds : []), ...(message === null ? [] : [message.eventId])],
-      };
-      const metadataWithoutHistory = { ...stored.metadata };
-      delete metadataWithoutHistory.toolHistory;
-      const stateBytes = Buffer.byteLength(JSON.stringify({
-        ...ConversationRecordSchema.parse(stored.record), daemonState: metadataWithoutHistory,
-      }), 'utf8');
-      const availableBytes = MAX_CONVERSATION_BYTES - stateBytes - TOOL_HISTORY_CONVERSATION_RESERVE_BYTES;
-      const historyBudget = Math.min(MAX_TOOL_HISTORY_BYTES, availableBytes);
-      const boundedHistory = boundToolHistory(toolHistory, historyBudget, this.toolHistorySensitiveValues.get(sensitiveValuesKey));
-      await this.write({ record: stored.record, metadata: { ...metadataWithoutHistory, toolHistory: boundedHistory } }, signal);
-      if (message === null) this.toolHistorySensitiveValues.delete(sensitiveValuesKey);
-      return structuredClone(boundedHistory);
-    }, { signal, timeoutMs: 5000 });
+  async appendCompletedTool(turn: TurnIdentity, entry: ToolActivityEntry): Promise<void> {
+    const hasResult = entry.result !== undefined && entry.result !== '';
+    const output = hasResult ? '' : limitToolOutput(entry.output, SAVED_TOOL_OUTPUT_BYTES);
+    const result = entry.result === undefined ? undefined : limitToolOutput(entry.result, SAVED_TOOL_OUTPUT_BYTES);
+    const record = completedToolRecord.parse({ kind: 'completed', entry: { ...entry, output, ...(result === undefined ? {} : { result }) } });
+    await ensurePrivateDirectory(this.toolHistoryDirectory);
+    // 前の追記が途中で失敗していても、新しい記録を同じ行へ連結しない。
+    await appendPrivateFile(this.toolHistoryPath(turn.conversationId), `\n${JSON.stringify(record)}\n`);
   }
 
   async *iterate(): AsyncGenerator<ConversationRecord> {
@@ -270,7 +179,6 @@ export class ConversationStateStore {
 
   private async write(stored: StoredConversation, signal?: AbortSignal): Promise<void> {
     const content = JSON.stringify({ ...ConversationRecordSchema.parse(stored.record), daemonState: stored.metadata });
-    if (Buffer.byteLength(content) > MAX_CONVERSATION_BYTES) throw new Error('Conversation exceeds storage capacity');
     await writePrivateFile(this.path(stored.record.id), content, signal);
   }
 

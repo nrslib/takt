@@ -3,10 +3,9 @@ import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { epicEventId, epicEvents } from './epicEvents.js';
 import { join } from 'node:path';
 import { eventGoalReference } from '../../core/daemon/events.js';
-import { ToolHistoryPersistenceError } from '../../core/daemon/toolHistoryPersistenceError.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import type { ConversationOwner } from '../../core/daemon/ports.js';
+import type { ConversationTurns, ConversationOwner } from '../../core/daemon/ports.js';
 import type { ConversationSnapshot, TurnIdentity, TurnResult, TurnStart } from '../../core/daemon/messages.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { DaemonDisplayFiles } from '../../infra/daemon/displayFiles.js';
@@ -17,19 +16,28 @@ import type { ConversationState, OutputVersion, PortOutput, SnapshotItem } from 
 import { conversationProjection } from './conversationProjection.js';
 import { DaemonRouting } from './routing.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
+import { ToolTurn } from './toolTurn.js';
+import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+
+interface RunningTurn {
+  readonly state: NonNullable<ConversationState['running']> & { generation: number };
+  tools?: ToolTurn;
+}
 
 export class DaemonConversations implements ConversationOwner {
   private readonly displayFiles = new DaemonDisplayFiles();
   private readonly sequences = new Map<string, number>();
   private readonly deliveries = new Set<Promise<void>>();
   private readonly interrupted = new Set<string>();
-  private readonly running = new Map<string, NonNullable<ConversationState['running']>>();
-  private readonly historyOperations = new Map<string, Promise<void>>();
+  private readonly running = new Map<string, RunningTurn>();
+  private readonly operations = new Map<string, Promise<void>>();
+  private readonly pendingToolWrites = new Map<string, Array<{ turn: TurnIdentity; entry: ToolActivityEntry }>>();
 
   constructor(readonly store: ConversationStateStore, readonly routing: DaemonRouting,
     readonly notifications: DaemonNotifications,
     private readonly deliver: (id: string, output: PortOutput, version: OutputVersion, signal?: AbortSignal) => Promise<void>,
-    private readonly onError: (error: unknown) => void) {}
+    private readonly onError: (error: unknown) => void,
+    private readonly turns: ConversationTurns) {}
 
   async ensure(assignment: ConversationAssignment): Promise<void> {
     const id = conversationId(assignment);
@@ -45,14 +53,14 @@ export class DaemonConversations implements ConversationOwner {
     return { revision, stateSequence, operationId };
   }
 
-  private orderedHistory<T>(id: string, action: () => Promise<T>): Promise<T> {
-    const previous = this.historyOperations.get(id) ?? Promise.resolve();
+  private ordered<T>(id: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.operations.get(id) ?? Promise.resolve();
     const result = previous.then(action);
     // 失敗は呼出側へ返す。後続の読取・保存は失敗した操作の終了後にも実行できる。
     const completed = result.then(() => {}, () => {});
-    this.historyOperations.set(id, completed);
+    this.operations.set(id, completed);
     void completed.then(() => {
-      if (this.historyOperations.get(id) === completed) this.historyOperations.delete(id);
+      if (this.operations.get(id) === completed) this.operations.delete(id);
     });
     return result;
   }
@@ -65,26 +73,52 @@ export class DaemonConversations implements ConversationOwner {
     });
   }
 
-  started(input: TurnStart): void {
-    const { event, turn, state } = input;
-    const running = { operationId: turn.operationId, kind: 'turn', generation: turn.generation, startedAt: Date.now() };
-    this.running.set(turn.conversationId, { ...running });
-    this.interrupted.delete(turn.conversationId);
-    const version = this.version(turn.conversationId, state.revision, turn.operationId);
-    if (event.event.kind === 'human_command' && event.event.command.kind === 'message' && event.event.command.display !== false) {
-      this.send(turn.conversationId, { kind: 'user_message', operationId: turn.operationId, message: event.event.command.text }, version);
-    }
-    this.send(turn.conversationId, { kind: 'running', state: { conversationId: turn.conversationId, assignment: state.assignment,
-      revision: state.revision, pending: state.pending, approval: state.approval, interrupted: false,
-      running } }, version);
+  /** 送る read は配送の合図で、port は使わない。受け手ごとの読取は port が dispatcher を通して行う（main と同じ）。 */
+  refresh(id: string): Promise<void> {
+    return this.ordered(id, async () => {
+      const read = await this.captureSnapshot(id, false);
+      this.send(id, { kind: 'snapshot', read }, read);
+    });
+  }
+
+  notification(id: string, notice: Parameters<DaemonNotifications['save']>[0], signal: AbortSignal): Promise<boolean> {
+    return this.ordered(id, async () => {
+      const saved = await this.notifications.save(notice, signal);
+      if (saved) {
+        const current = await this.store.read(id);
+        // director の通知は、会話が初めて開かれるより先に保存されることもある。
+        this.send(id, { kind: 'notice', id: notice.id, message: notice.message }, this.version(id, current?.state.revision ?? 0, notice.turnOperationId ?? null));
+      }
+      return saved;
+    });
+  }
+
+  begin(turn: TurnIdentity): Promise<void> {
+    return this.ordered(turn.conversationId, async () => {
+      this.running.set(turn.conversationId, { state: { operationId: turn.operationId, generation: turn.generation,
+        kind: 'turn', startedAt: Date.now() } });
+    });
+  }
+
+  async started(input: TurnStart): Promise<void> {
+    await this.ordered(input.turn.conversationId, async () => {
+      const { event, turn, state } = input;
+      const running = { operationId: turn.operationId, kind: 'turn', generation: turn.generation, startedAt: Date.now() };
+      this.running.set(turn.conversationId, { state: running });
+      this.interrupted.delete(turn.conversationId);
+      if (event.event.kind === 'human_command' && event.event.command.kind === 'message' && event.event.command.display !== false) {
+        this.send(turn.conversationId, { kind: 'user_message', operationId: turn.operationId, message: event.event.command.text },
+          this.version(turn.conversationId, state.revision, turn.operationId));
+      }
+      this.send(turn.conversationId, { kind: 'running', state: { conversationId: turn.conversationId, assignment: state.assignment,
+        revision: state.revision, pending: state.pending, approval: state.approval, interrupted: false, running } },
+        this.version(turn.conversationId, state.revision, turn.operationId));
+    });
   }
 
   async apply(result: TurnResult): Promise<void> {
-    const { history, current, version } = await this.orderedHistory(result.conversationId, async () => {
+    const { current } = await this.ordered(result.conversationId, async () => {
       await this.store.apply(result);
-      const history = await this.store.updateToolHistory({
-        conversationId: result.conversationId, operationId: result.operationId, generation: result.generation,
-      }, null, new AbortController().signal);
       this.running.delete(result.conversationId);
       const current = await this.store.read(result.conversationId);
       if (current === undefined) throw new Error('Missing result conversation');
@@ -102,7 +136,14 @@ export class DaemonConversations implements ConversationOwner {
       }
       if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
       else this.interrupted.delete(result.conversationId);
-      return { history, current, version: this.version(result.conversationId, current.state.revision, result.operationId) };
+      const outcome = result.outcome;
+      this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,
+        revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
+        interrupted: outcome.kind === 'interrupted' } }, this.version(result.conversationId, current.state.revision, result.operationId));
+      if (outcome.kind !== 'deferred') this.send(result.conversationId, { kind: 'result', operationId: result.operationId,
+        result: outcome.kind === 'completed' ? outcome.result : { kind: 'error', code: outcome.kind, message: outcome.message ?? 'Turn interrupted' } },
+        this.version(result.conversationId, current.state.revision, result.operationId));
+      return { current };
     });
     if (result.outcome.kind === 'failed' && current.state.assignment.kind !== 'daemon') {
       try {
@@ -119,17 +160,7 @@ export class DaemonConversations implements ConversationOwner {
         }
       } catch (error) { this.onError(error); }
     }
-    if (history !== undefined) {
-      this.send(result.conversationId, { kind: 'tool_history', history }, version);
-    }
-    const outcome = result.outcome;
-    this.send(result.conversationId, { kind: 'pending', state: { conversationId: result.conversationId, assignment: current.state.assignment,
-      revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
-      interrupted: outcome.kind === 'interrupted' } }, version);
-    if (outcome.kind === 'deferred') return;
-    this.send(result.conversationId, { kind: 'result', operationId: result.operationId, result: outcome.kind === 'completed' ? outcome.result
-      : { kind: 'error', code: outcome.kind, message: outcome.message ?? 'Turn interrupted' } }, version);
-    if (result.event.event.kind === 'director_message') await this.notifyResult(result);
+    if (result.outcome.kind !== 'deferred' && result.event.event.kind === 'director_message') await this.notifyResult(result);
   }
 
   async notifyResult(result: TurnResult): Promise<void> {
@@ -137,93 +168,140 @@ export class DaemonConversations implements ConversationOwner {
     const message = outcome.kind === 'completed' && 'message' in outcome.result ? outcome.result.message
       : outcome.kind === 'failed' ? outcome.message : outcome.kind === 'interrupted' ? 'Manager turn interrupted' : 'Manager operation completed';
     const id = `result-${result.operationId}`;
-    if (await this.notifications.save({ id, message: `${result.conversationId} (${result.operationId}): ${message}` }, new AbortController().signal)) {
-      const directorId = conversationId({ kind: 'daemon' });
-      this.send(directorId, { kind: 'notice', id, message: `${result.conversationId} (${result.operationId}): ${message}` }, this.version(directorId, 0, null));
-    }
+    await this.notification(conversationId({ kind: 'daemon' }), { id,
+      message: `${result.conversationId} (${result.operationId}): ${message}` }, new AbortController().signal);
   }
 
   async progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void> {
-    if (typeof message !== 'string' && message.kind === 'tool_event') {
-      const saved = await this.orderedHistory(turn.conversationId, async () => {
-        const running = this.running.get(turn.conversationId);
-        if (signal.aborted || running?.operationId !== turn.operationId || running.generation !== turn.generation) return;
-        try {
-          const history = await this.store.updateToolHistory(turn, message, signal);
-          const current = await this.store.read(turn.conversationId);
-          if (current === undefined) throw new Error('Missing progress conversation');
-          return history === undefined ? undefined : { history, version: this.version(turn.conversationId, current.state.revision, turn.operationId) };
-        } catch (error) {
-          if (!signal.aborted || error !== signal.reason) throw new ToolHistoryPersistenceError(error);
-          return undefined;
+    const { delivery } = await this.ordered(turn.conversationId, async () => {
+      const running = this.running.get(turn.conversationId);
+      if (signal.aborted || running?.state.operationId !== turn.operationId || running.state.generation !== turn.generation) return { delivery: Promise.resolve() };
+      let outputs: PortOutput[];
+      if (typeof message !== 'string' && message.kind === 'tool_event') {
+        running.tools ??= new ToolTurn(turn);
+        outputs = running.tools.apply(message);
+        for (const output of outputs) {
+          if (output.kind === 'tool_completed') {
+            await this.appendCompletedTool(turn, output.entry);
+          }
         }
-      });
-      if (saved !== undefined && !signal.aborted) {
-        await this.deliver(turn.conversationId, { kind: 'tool_history', history: saved.history }, saved.version, signal);
+      } else if (typeof message !== 'string' && message.kind === 'turn_text') {
+        outputs = [{ ...message, operationId: turn.operationId, generation: turn.generation }];
+      } else {
+        running.tools ??= new ToolTurn(turn);
+        outputs = [typeof message === 'string' ? { kind: 'progress', operationId: turn.operationId, message }
+          : { kind: 'activity', operationId: turn.operationId, generation: turn.generation, activity: running.tools.maskActivity(message) }];
       }
-      return;
-    }
-    const version = this.version(turn.conversationId, 0, turn.operationId);
-    const current = await this.store.read(turn.conversationId);
-    if (signal.aborted) return;
-    if (current === undefined) throw new Error('Missing progress conversation');
-    version.revision = current.state.revision;
-    if (typeof message !== 'string' && message.kind === 'turn_text') {
-      await this.deliver(turn.conversationId, { ...message, operationId: turn.operationId, generation: turn.generation }, version, signal);
-      return;
-    }
-    const output: PortOutput = typeof message === 'string' ? { kind: 'progress', operationId: turn.operationId, message }
-      : { kind: 'activity', operationId: turn.operationId, generation: turn.generation, activity: message };
-    this.send(turn.conversationId, output, version);
+      const current = await this.store.read(turn.conversationId);
+      if (current === undefined) throw new Error('Missing progress conversation');
+      // FIFO への投入は同じ区間内で呼ぶ。TUI の配送応答はソケット書込を待たない。
+      const delivery = Promise.all(outputs.map((output) => this.deliver(turn.conversationId, output,
+        this.version(turn.conversationId, current.state.revision, turn.operationId), signal))).then(() => {});
+      return { delivery };
+    });
+    await delivery;
   }
 
   async inquiry(notice: import('../../core/daemon/messages.js').InquiryNotice): Promise<void> {
-    const current = await this.store.read(notice.conversationId);
-    if (current === undefined) throw new Error('Missing inquiry conversation');
-    if (notice.question.status !== 'pending' || notice.question.recipient !== 'human') {
-      const read = await this.snapshot(notice.conversationId);
-      this.send(notice.conversationId, { kind: 'snapshot', read: { ...read, operationId: null } }, this.version(notice.conversationId, current.state.revision, null));
-      return;
-    }
-    this.send(notice.conversationId, { kind: 'inquiry', target: notice.target, question: notice.question },
-      this.version(notice.conversationId, current.state.revision, null));
-  }
-
-  async snapshot(id: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>> {
-    const { current, running, savedHistory, version, interrupted } = await this.orderedHistory(id, async () => {
-      const current = await this.store.read(id);
-      if (current === undefined) throw new Error('Unknown conversation');
-      const savedHistory = await this.store.readToolHistory(id);
-      const running = this.running.get(id);
-      return { current, savedHistory, running: running === undefined ? undefined : { ...running },
-        interrupted: this.interrupted.has(id), version: this.version(id, current.state.revision, null) };
+    await this.ordered(notice.conversationId, async () => {
+      const current = await this.store.read(notice.conversationId);
+      if (current === undefined) throw new Error('Missing inquiry conversation');
+      if (notice.question.status !== 'pending' || notice.question.recipient !== 'human') {
+        const read = await this.captureSnapshot(notice.conversationId, false);
+        this.send(notice.conversationId, { kind: 'snapshot', read }, read);
+      } else this.send(notice.conversationId, { kind: 'inquiry', target: notice.target, question: notice.question },
+        this.version(notice.conversationId, current.state.revision, null));
     });
-    const history = savedHistory === undefined || running !== undefined
-      && (running.operationId !== savedHistory.operationId || running.generation !== savedHistory.generation) ? undefined
-      : { ...savedHistory, finished: savedHistory.finished || running === undefined,
-        history: { ...savedHistory.history, entries: savedHistory.history.entries.filter((entry) =>
-          entry.status !== 'running' || running !== undefined && !savedHistory.finished) } };
-    const state: ConversationState = { conversationId: id, assignment: current.state.assignment, revision: current.state.revision,
-      pending: current.state.pending, approval: current.state.approval, running: running === undefined ? null : running, interrupted };
-    const { routing, notifications, displayFiles } = this;
-    let cancelled = false;
-    return { ...version, transferId: randomUUID(), conversationId: id, mode: 'initial', turnState: current.state,
-      items: (async function* (): AsyncGenerator<SnapshotItem & { recordedAt?: string }> {
-        if (cancelled) return;
-        yield { kind: 'state', state };
-        if (history !== undefined && history.history.entries.length > 0) yield { kind: 'tool_history', history };
-        if (current.state.assignment.kind !== 'daemon') {
-          yield* conversationProjection(routing, displayFiles, current.state.assignment, () => cancelled);
-        } else {
-          yield { kind: 'assignment', assignment: await routing.display(current.state.assignment) };
-        }
-        for await (const notice of notifications.iterate()) {
-          if (cancelled) return;
-          if ((notice.conversationId ?? conversationId({ kind: 'daemon' })) !== id) continue;
-          yield { kind: 'display_event', event: { id: notice.id, message: notice.message } };
-        }
-      })(), complete() { cancelled = true; }, cancel() { cancelled = true; } };
   }
 
-  async close(): Promise<void> { await Promise.all([...this.deliveries]); }
+  snapshot(id: string, request: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot> {
+    return this.ordered(id, async () => {
+      const snapshot = await this.captureSnapshot(id, request.toolHistory);
+      request.capture?.(snapshot);
+      return snapshot;
+    });
+  }
+
+  private async appendCompletedTool(turn: TurnIdentity, entry: ToolActivityEntry): Promise<void> {
+    let pending = this.pendingToolWrites.get(turn.conversationId);
+    if (pending === undefined) { pending = []; this.pendingToolWrites.set(turn.conversationId, pending); }
+    pending.push({ turn: { conversationId: turn.conversationId, operationId: turn.operationId, generation: turn.generation }, entry });
+    await this.flushPendingToolWrites(turn.conversationId);
+  }
+
+  private async flushPendingToolWrites(id: string): Promise<void> {
+    const pending = this.pendingToolWrites.get(id);
+    if (pending === undefined) return;
+    while (pending.length > 0) {
+      const record = pending[0]!;
+      try { await this.store.appendCompletedTool(record.turn, record.entry); }
+      catch (error) { this.onError(error); return; }
+      pending.shift();
+    }
+    this.pendingToolWrites.delete(id);
+  }
+
+  private async captureSnapshot(id: string, withTools: boolean): Promise<ConversationSnapshot> {
+    const current = await this.store.read(id);
+    if (current === undefined) throw new Error('Unknown conversation');
+    const turn = this.running.get(id);
+    const running = turn === undefined ? null : { ...turn.state };
+    const state: ConversationState = { conversationId: id, assignment: current.state.assignment, revision: current.state.revision,
+      pending: current.state.pending, approval: current.state.approval, running, interrupted: this.interrupted.has(id) };
+    const items: Array<SnapshotItem & { recordedAt?: string }> = [{ kind: 'state', state }];
+    if (withTools) {
+      const histories = await this.store.readToolHistories(id).catch((error: unknown) => {
+        this.onError(error);
+        return [];
+      });
+      const merged = new Map<string, { turn: Omit<ToolActivityTurnState, 'history'>; entries: Map<string, ToolActivityEntry> }>();
+      const include = (history: ToolActivityTurnState): void => {
+        const key = JSON.stringify([history.operationId, history.generation]);
+        const known = merged.get(key) ?? { turn: history, entries: new Map<string, ToolActivityEntry>() };
+        known.turn = history;
+        for (const entry of history.history.entries) known.entries.set(entry.key, entry);
+        merged.set(key, known);
+      };
+      for (const history of histories) include(history);
+      for (const record of this.pendingToolWrites.get(id) ?? []) {
+        include({ operationId: record.turn.operationId, generation: record.turn.generation, finished: true, history: { entries: [record.entry] } });
+      }
+      const currentHistory = turn?.tools?.snapshot();
+      if (currentHistory !== undefined) include(currentHistory);
+      for (const { turn, entries } of merged.values()) {
+        if (entries.size > 0) items.push({ kind: 'tool_history', history: { ...turn, history: { entries: [...entries.values()] } } });
+      }
+    }
+    let projectionError: unknown;
+    try {
+      if (current.state.assignment.kind !== 'daemon') {
+        for await (const item of conversationProjection(this.routing, this.displayFiles, current.state.assignment)) items.push(item);
+      } else items.push({ kind: 'assignment', assignment: await this.routing.display(current.state.assignment) });
+    } catch (error) { projectionError = error; }
+    for await (const notice of this.notifications.iterate()) {
+      if ((notice.conversationId ?? conversationId({ kind: 'daemon' })) === id) {
+        items.push({ kind: 'display_event', event: { id: notice.id, message: notice.message } });
+      }
+    }
+    if (withTools) {
+      for (const turn of await this.turns.readTurns(id)) {
+        for (const item of items) {
+          if (item.kind === 'tool_history' && item.history.operationId === turn.operationId) item.acceptedSequence = turn.acceptedSequence;
+        }
+        if (turn.message !== undefined) items.push({ kind: 'user_message', ...turn, message: turn.message });
+      }
+    }
+    const frozen = structuredClone(items);
+    const version = this.version(id, current.state.revision, running?.operationId ?? null);
+    return { ...version, transferId: randomUUID(), conversationId: id, mode: 'initial', turnState: structuredClone(current.state),
+      generation: running?.generation ?? null,
+      items: { async *[Symbol.asyncIterator]() { yield* frozen; if (projectionError !== undefined) throw projectionError; } },
+      complete() {}, cancel() {} };
+  }
+
+  async close(): Promise<void> {
+    await Promise.all([...this.operations.values()]);
+    for (const id of [...this.pendingToolWrites.keys()]) await this.ordered(id, () => this.flushPendingToolWrites(id));
+    await Promise.all([...this.deliveries]);
+  }
 }

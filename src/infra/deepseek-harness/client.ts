@@ -27,15 +27,11 @@ import {
   sanitizeTerminalText,
 } from '../../shared/utils/index.js';
 import {
-  sanitizeSensitiveTextWithKnownValues,
-  sanitizeSensitiveValueWithKnownValues,
+  createBoundedSensitiveValues,
 } from '../../shared/utils/sensitiveText.js';
-import {
-  collectEmbeddedSensitiveValues,
-  hasPotentialSensitiveTextSuffix,
-  SENSITIVE_TEXT_BOUNDARY_WINDOW,
-} from '../../shared/utils/sensitive-text.js';
-import { collectSensitiveStringValues } from '../../shared/utils/sensitive-value.js';
+import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
+import { sanitizeSensitiveValueWithStringReplacer } from '../../shared/utils/sensitive-value.js';
+import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../../shared/utils/sensitive-text.js';
 import type {
   DeepSeekHarnessProviderOptions,
   DeepSeekReasoningEffort,
@@ -97,7 +93,6 @@ const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
 const DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS = 1_000;
 const DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS = 15_000;
 const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
-const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
 const DEEPSEEK_HARNESS_RUNTIME_ENV_NAMES = ['PATH'] as const;
 const DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MARKER = 'TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE';
@@ -116,9 +111,9 @@ interface ResponseTextChunk {
 }
 
 interface ResponseRedactionContext {
-  pendingText: string;
   pendingChunks: ResponseTextChunk[];
-  failClosed: boolean;
+  buffer: SensitiveTextStreamBuffer;
+  toolInputValues: ReturnType<typeof createBoundedSensitiveValues>;
 }
 
 interface HarnessStreamState {
@@ -504,21 +499,26 @@ function processKey(
   });
 }
 
-/** Remove known secret values and credential fields from complete text. */
-function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>): string {
-  let sanitized = sanitizeSensitiveTextWithKnownValues(text, knownSecrets);
-  for (const value of Object.values(knownSecrets)
-    .filter((candidate) => candidate.length > 0)
-    .sort((left, right) => right.length - left.length)) {
-    sanitized = sanitized.split(value).join('[REDACTED]');
+/** Configured credentials retain DeepSeek's substring contract; input candidates retain the shared rules. */
+function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: ReadonlySet<string>): string {
+  if (values === undefined) {
+    const configured = createBoundedSensitiveValues();
+    configured.collect({ token: Object.values(knownSecrets) });
+    values = configured.values;
   }
-  return sanitized;
+  return maskSensitiveRanges(text, [
+    ...sensitiveTextRanges(text, values),
+    ...substringSensitiveRanges(text, Object.values(knownSecrets)),
+  ]);
 }
 
 /** Convert diagnostic values into redacted, control-character-safe text. */
-function safeMessage(value: unknown, knownSecrets: Record<string, string>): string {
+function safeMessage(value: unknown, knownSecrets: Record<string, string>, toolInputValues: ReturnType<typeof createBoundedSensitiveValues>): string {
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  known.collect(toolInputValues);
   const sanitized = sanitizeTerminalText(
-    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets),
+    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets, known.values),
   );
   if (Buffer.byteLength(sanitized, 'utf8') <= DEEPSEEK_HARNESS_MAX_ERROR_BYTES) {
     return sanitized;
@@ -526,86 +526,14 @@ function safeMessage(value: unknown, knownSecrets: Record<string, string>): stri
   return `${Buffer.from(sanitized).subarray(0, DEEPSEEK_HARNESS_MAX_ERROR_BYTES).toString('utf8')}...`;
 }
 
-/** Retain a possible secret prefix at a chunk boundary until more text arrives. */
-function longestKnownSecretPrefixSuffix(
-  text: string,
-  knownSecrets: Record<string, string>,
-): string {
-  let longest = '';
-  for (const value of Object.values(knownSecrets)) {
-    if (value.length < 2) {
-      continue;
-    }
-    const maximumLength = Math.min(value.length - 1, text.length);
-    for (let length = maximumLength; length > longest.length; length -= 1) {
-      const suffix = value.slice(0, length);
-      if (text.endsWith(suffix)) {
-        longest = suffix;
-        break;
-      }
-    }
-  }
-  return longest;
-}
-
-/** Detect credential-field boundaries requiring buffered redaction. */
-function hasSensitiveCredentialBoundary(text: string): boolean {
-  return /(?:api[_-]?key|token|password|secret|credential|authorization|cookie|session[_-]?id)(?:\s*[:=]|\s*$)/iu.test(text);
-}
-
-/** Emit only safe buffered text, preserving channels and possible secret suffixes. */
+/** Mask the whole committed span before splitting it back into its original channels. */
 function drainResponseRedactedChunks(
   context: ResponseRedactionContext,
-  knownSecrets: Record<string, string>,
-  length = context.pendingText.length,
+  commit: SensitiveTextCommit,
 ): ResponseTextChunk[] {
-  const { values, exhausted } = collectSensitiveStringValues(knownSecrets);
-  context.failClosed ||= exhausted;
-  if (context.failClosed) {
-    const chunks = context.pendingChunks.map((chunk) => ({ field: chunk.field, text: '[REDACTED]' }));
-    context.pendingText = '';
-    context.pendingChunks = [];
-    return chunks;
-  }
-  collectEmbeddedSensitiveValues(context.pendingText, values);
-  // Mark source positions before replacing secrets: a replacement may span
-  // several chunks, but safe text must stay in the stream that produced it.
-  const sensitive = new Uint8Array(context.pendingText.length);
-  for (const value of values) {
-    if (value.length === 0) continue;
-    let offset = context.pendingText.indexOf(value);
-    while (offset >= 0) {
-      sensitive.fill(1, offset, offset + value.length);
-      offset = context.pendingText.indexOf(value, offset + 1);
-    }
-  }
-  // Never drain half of a redacted value and leave its unrecognizable suffix.
-  while (length > 0 && sensitive[length - 1] === 1 && sensitive[length] === 1) length -= 1;
-  let offset = 0;
-  const chunks: ResponseTextChunk[] = [];
-  const pendingChunks: ResponseTextChunk[] = [];
-  for (const chunk of context.pendingChunks) {
-    const consumed = Math.min(chunk.text.length, Math.max(0, length - offset));
-    let text = '';
-    let redacting = false;
-    for (let index = 0; index < consumed; index += 1) {
-      const redact = sensitive[offset + index] === 1;
-      if (redact) {
-        if (!redacting) text += '[REDACTED]';
-      } else {
-        text += chunk.text[index];
-      }
-      redacting = redact;
-    }
-    if (text.length > 0) chunks.push({ field: chunk.field, text });
-    if (consumed < chunk.text.length) {
-      pendingChunks.push({ field: chunk.field, text: chunk.text.slice(consumed) });
-    }
-    offset += chunk.text.length;
-  }
-  context.pendingText = context.pendingText.slice(length);
-  context.pendingChunks = pendingChunks;
-  return chunks;
+  const { committed, pending } = maskSensitiveTextChunks(commit, context.pendingChunks);
+  context.pendingChunks = pending;
+  return committed;
 }
 
 /** Convert a redacted text/thinking chunk into a provider-neutral event. */
@@ -622,71 +550,13 @@ function writeResponseRedactedChunks(
   field: ResponseTextChunk['field'],
   knownSecrets: Record<string, string>,
 ): ResponseTextChunk[] {
-  const combined = context.pendingText + text;
-  context.pendingText = combined;
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
     previous.text += text;
   } else {
     context.pendingChunks.push({ field, text });
   }
-  context.failClosed ||= combined.length > DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH
-    && (Object.values(knownSecrets).some((value) => value.length > 0) || hasPotentialSensitiveTextSuffix(combined));
-  if (context.failClosed) return drainResponseRedactedChunks(context, knownSecrets);
-  const knownPrefixSuffix = longestKnownSecretPrefixSuffix(combined, knownSecrets);
-  const containsKnownSecret = Object.values(knownSecrets)
-    .some((value) => value.length > 0 && combined.includes(value));
-  const shouldHold = knownPrefixSuffix.length > 0
-    || (
-      !containsKnownSecret
-      && hasSensitiveCredentialBoundary(combined)
-      && hasPotentialSensitiveTextSuffix(combined)
-    );
-  if (!shouldHold) {
-    return drainResponseRedactedChunks(context, knownSecrets);
-  }
-  if (Object.values(knownSecrets).some((value) => value.length > 0)) {
-    const retainedLength = Math.max(SENSITIVE_TEXT_BOUNDARY_WINDOW, knownPrefixSuffix.length);
-    return drainResponseRedactedChunks(context, knownSecrets, Math.max(0, combined.length - retainedLength));
-  }
-  return [];
-}
-
-/** Redact final values against unfinished streamed credential boundaries. */
-function redactCrossBoundaryFinalValue(
-  value: string,
-  pendingText: string,
-  knownSecrets: Record<string, string>,
-): string {
-  let continuationLength = 0;
-  for (const secret of Object.values(knownSecrets)) {
-    if (secret.length < 2) {
-      continue;
-    }
-    for (let split = 1; split < secret.length; split += 1) {
-      if (
-        pendingText.endsWith(secret.slice(0, split))
-        && value.startsWith(secret.slice(split))
-      ) {
-        continuationLength = Math.max(continuationLength, secret.length - split);
-      }
-    }
-  }
-  if (continuationLength > 0) {
-    return '[REDACTED]' + sanitizeSensitiveTextWithKnownValues(
-      value.slice(continuationLength),
-      knownSecrets,
-    );
-  }
-  const combined = pendingText + value;
-  if (
-    pendingText.length > 0
-    && sanitizeSensitiveTextWithKnownValues(pendingText, knownSecrets) === pendingText
-    && sanitizeSensitiveTextWithKnownValues(combined, knownSecrets) !== combined
-  ) {
-    return '[REDACTED]';
-  }
-  return sanitizeSensitiveTextWithKnownValues(value, knownSecrets);
+  return drainResponseRedactedChunks(context, context.buffer.write(text, { token: Object.values(knownSecrets) }, Object.values(knownSecrets)));
 }
 
 /** Deliver sanitized events while preserving already-validated opaque identifier fields. */
@@ -703,13 +573,23 @@ function invokeStream(
     const streamValue = eventData[streamField];
     if (typeof streamValue === 'string') {
       const chunks = writeResponseRedactedChunks(responseRedactionContext, streamValue, streamField, knownSecrets);
-      for (const chunk of chunks) {
-        invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
-      }
+      for (const chunk of chunks) onStream?.(responseTextEvent(chunk));
       return;
     }
   }
-  const sanitized = sanitizeSensitiveValueWithKnownValues(event, knownSecrets) as StreamEvent;
+  if (responseRedactionContext !== undefined) {
+    if (event.type === 'tool_use') {
+      responseRedactionContext.toolInputValues.collect(event.data.input);
+      responseRedactionContext.buffer.sensitiveValues.collect(event.data.input);
+    }
+    flushHarnessResponseRedactor(responseRedactionContext, onStream, knownSecrets);
+  }
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  if (responseRedactionContext !== undefined) known.collect(responseRedactionContext.toolInputValues);
+  known.collect(event);
+  const sanitized = { ...event, data: sanitizeSensitiveValueWithStringReplacer(event.data,
+    (text) => ({ value: sanitizeKnownSecrets(text, knownSecrets, known.values) })) } as StreamEvent;
   if (preserveValidatedField === undefined) {
     onStream?.(sanitized);
     return;
@@ -728,27 +608,14 @@ function invokeStream(
   } as unknown as StreamEvent);
 }
 
-/** Flush buffered text on completion/failure with conservative redaction. */
+/** Non-text delivery, completion and failure use the same masked flush. */
 function flushHarnessResponseRedactor(
-  state: HarnessStreamState,
+  context: ResponseRedactionContext,
   onStream: StreamCallback | undefined,
   knownSecrets: Record<string, string>,
-  discardPending = false,
 ): void {
-  const context = state.responseRedactionContext;
-  const hadPending = context.pendingText.length > 0;
-  const hasKnownSecretPending = hadPending
-    && longestKnownSecretPrefixSuffix(context.pendingText, knownSecrets).length > 0;
-  if (hasKnownSecretPending && !discardPending) {
-    return;
-  }
-  if (discardPending && hadPending) {
-    context.pendingText = '';
-    context.pendingChunks = [];
-    return;
-  }
-  for (const chunk of drainResponseRedactedChunks(context, knownSecrets)) {
-    invokeStream(onStream, responseTextEvent(chunk), knownSecrets);
+  for (const chunk of drainResponseRedactedChunks(context, context.buffer.flush({ token: Object.values(knownSecrets) }, Object.values(knownSecrets)))) {
+    onStream?.(responseTextEvent(chunk));
   }
 }
 
@@ -758,10 +625,11 @@ function redactFinalResponse(
   value: string,
   knownSecrets: Record<string, string>,
 ): string {
-  const finalResponse = redactCrossBoundaryFinalValue(value, context.pendingText, knownSecrets);
-  context.pendingText = '';
-  context.pendingChunks = [];
-  return finalResponse;
+  const known = createBoundedSensitiveValues();
+  known.collect({ token: Object.values(knownSecrets) });
+  known.collect(context.buffer.sensitiveValues);
+  known.collect(value);
+  return sanitizeKnownSecrets(value, knownSecrets, known.values);
 }
 
 /** Require an SDK event data object before reading type-specific fields. */
@@ -906,7 +774,7 @@ function normalizeHarnessEvent(
         const name = requireString(block.name, 'tool-call name');
         if (!state.emittedToolUses.has(id)) {
           state.emittedToolUses.add(id);
-          invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(block.arguments)), knownSecrets, 'id');
+          invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(block.arguments)), knownSecrets, 'id', state.responseRedactionContext);
         }
       }
       if (block.type === 'tool-result') {
@@ -918,7 +786,7 @@ function normalizeHarnessEvent(
             id,
             textFromContentBlocks(block.content),
             block.isError === true,
-          ), knownSecrets, 'id');
+          ), knownSecrets, 'id', state.responseRedactionContext);
         }
       }
     }
@@ -932,7 +800,7 @@ function normalizeHarnessEvent(
     const name = requireString(data.name, 'tool-call name');
     if (!state.emittedToolUses.has(id)) {
       state.emittedToolUses.add(id);
-      invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(data.arguments)), knownSecrets, 'id');
+      invokeStream(onStream, toolUseEvent(id, name, parseToolArguments(data.arguments)), knownSecrets, 'id', state.responseRedactionContext);
     }
     return;
   }
@@ -954,7 +822,7 @@ function normalizeHarnessEvent(
         id,
         resultContent,
         toolResultBlock?.isError === true || (data.error !== undefined && data.error !== null),
-      ), knownSecrets, 'id');
+      ), knownSecrets, 'id', state.responseRedactionContext);
     }
     return;
   }
@@ -966,7 +834,7 @@ function normalizeHarnessEvent(
     if (state.finishReason === 'error') {
       recordFailureReason(state, reason);
     }
-    flushHarnessResponseRedactor(state, onStream, knownSecrets);
+    flushHarnessResponseRedactor(state.responseRedactionContext, onStream, knownSecrets);
   }
 }
 
@@ -989,7 +857,7 @@ function normalizeHarnessNotification(
   if (method === 'session.started') {
     if (!state.initializedSessions.has(sessionId)) {
       state.initializedSessions.add(sessionId);
-      invokeStream(onStream, { type: 'init', data: { model, sessionId } }, knownSecrets, 'sessionId');
+      invokeStream(onStream, { type: 'init', data: { model, sessionId } }, knownSecrets, 'sessionId', state.responseRedactionContext);
     }
     return;
   }
@@ -1631,8 +1499,7 @@ function failureDetail(
     return createProviderErrorFailure(error.message);
   }
   if (isAbortSignalAborted(options.abortSignal) || (error instanceof Error && error.name === 'AbortError')) {
-    const detail = classifyAbortSignalReason(options.abortSignal?.reason ?? error);
-    return { ...detail, reason: safeMessage(detail.reason, knownSecrets) };
+    return classifyAbortSignalReason(options.abortSignal?.reason ?? error);
   }
   if (
     error instanceof DeepSeekHarnessTimeoutError
@@ -1705,8 +1572,7 @@ function failureDetail(
     return credentialDiagnosticDetail('runtime-failure', {}, credentialFailureContext)
       ?? createProviderErrorFailure('DeepSeek Harness runtime failed; verify credentials and endpoint, then retry.');
   }
-  const reason = safeMessage(error, knownSecrets);
-  return createProviderErrorFailure(reason);
+  return createProviderErrorFailure(getErrorMessage(error));
 }
 
 /** Emit terminal failure with the requested session retention policy. */
@@ -1776,6 +1642,7 @@ function createSuccessResponse(
   if (result.finishReason !== 'completed') {
     throw new DeepSeekHarnessProtocolError('DeepSeek Harness returned an unsupported turn completion reason');
   }
+  flushHarnessResponseRedactor(state.responseRedactionContext, options.onStream, knownSecrets);
   const finalResponse = redactFinalResponse(
     state.responseRedactionContext,
     result.finalResponse,
@@ -1838,9 +1705,9 @@ export async function callDeepSeekHarness(
     pendingTextDeltasBySession: new Set(),
     pendingThinkingDeltasBySession: new Set(),
     responseRedactionContext: {
-      pendingText: '',
       pendingChunks: [],
-      failClosed: false,
+      buffer: new SensitiveTextStreamBuffer(),
+      toolInputValues: createBoundedSensitiveValues(),
     },
     emittedToolUses: new Set(),
     emittedToolResults: new Set(),
@@ -1905,7 +1772,7 @@ export async function callDeepSeekHarness(
   } catch (error) {
     const knownSecrets = processRecord?.knownSecrets
       ?? resolveKnownSecretsForFailure(turnOptions.providerOptions, turnOptions.childProcessEnv);
-    flushHarnessResponseRedactor(state, turnOptions.onStream, knownSecrets, true);
+    flushHarnessResponseRedactor(state.responseRedactionContext, turnOptions.onStream, knownSecrets);
     let reportedError = error;
     if (processRecord !== undefined) {
       try {
@@ -1917,12 +1784,13 @@ export async function callDeepSeekHarness(
       }
       removeProcess(processRecord);
     }
-    const detail = failureDetail(
+    const classified = failureDetail(
       reportedError,
       turnOptions,
       knownSecrets,
       credentialFailureContext,
     );
+    const detail = { ...classified, reason: safeMessage(classified.reason, knownSecrets, state.responseRedactionContext.toolInputValues) };
     const content = processRecord?.stale === true
       ? withUpdateAdvice(formatAgentFailure(detail), 'deepseek-harness')
       : formatAgentFailure(detail);
