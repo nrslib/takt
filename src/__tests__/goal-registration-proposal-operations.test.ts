@@ -48,6 +48,7 @@ const revision = 3;
 const operationId = '750e8400-e29b-41d4-a716-446655440077';
 const signal = new AbortController().signal;
 const repositoryAssignment = { kind: 'repository' as const, repositoryDirectory: cwd };
+const ownerConversationId = conversationId(repositoryAssignment);
 const summary = {
   objective: 'MCP からゴール登録を承認できる',
   outOfScope: ['takt-dash の実装'],
@@ -99,9 +100,11 @@ it('lists the pending registration proposal of the current repository conversati
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   expect(doubles.assignment).toHaveBeenCalledWith({ kind: 'repository', repositoryDirectory: cwd }, '/global-config');
   expect(doubles.constructStore).toHaveBeenCalledWith('/daemon-config');
-  expect(doubles.read).toHaveBeenCalledWith(conversationId(repositoryAssignment));
+  expect(doubles.read).toHaveBeenCalledWith(ownerConversationId);
   expect(doubles.constructClient).not.toHaveBeenCalled();
-  expect(JSON.parse(firstTextContent(result.content))).toEqual({ proposals: [record.pending] });
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({
+    proposals: [{ ...record.pending, conversationId: ownerConversationId }],
+  });
 });
 
 it('reads the repository conversation from the normalized git root when the cwd is a subdirectory', async () => {
@@ -116,8 +119,10 @@ it('reads the repository conversation from the normalized git root when the cwd 
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   expect(doubles.repositoryDirectory).toHaveBeenCalledWith('/project/packages/app');
   expect(doubles.assignment).toHaveBeenCalledWith({ kind: 'repository', repositoryDirectory: cwd }, '/global-config');
-  expect(doubles.read).toHaveBeenCalledWith(conversationId(repositoryAssignment));
-  expect(JSON.parse(firstTextContent(result.content))).toEqual({ proposals: [record.pending] });
+  expect(doubles.read).toHaveBeenCalledWith(ownerConversationId);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({
+    proposals: [{ ...record.pending, conversationId: ownerConversationId }],
+  });
 });
 
 it('returns an empty list when no registration proposal is pending', async () => {
@@ -148,7 +153,9 @@ it('reads the resolved workspace conversation when the repository belongs to one
 
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   expect(doubles.read).toHaveBeenCalledWith(conversationId(workspaceAssignment));
-  expect(JSON.parse(firstTextContent(result.content))).toEqual({ proposals: [record.pending] });
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({
+    proposals: [{ ...record.pending, conversationId: conversationId(workspaceAssignment) }],
+  });
 });
 
 it('rejects a root outside the MCP scope before reading conversations', async () => {
@@ -164,16 +171,17 @@ it('approves the pending proposal through the same command as the manager screen
   acceptSubmission();
   const registered = goalRecord();
 
-  const pending = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+  const pending = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
   await vi.waitFor(() => expect(emit).toBeDefined());
   emit!({ kind: 'result', operationId, result: { kind: 'goal_registered', goal: registered } });
   const result = await pending;
 
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(doubles.assignment).toHaveBeenCalledWith({ kind: 'repository', repositoryDirectory: cwd }, '/global-config');
   expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
   expect(doubles.connect).toHaveBeenCalledOnce();
   const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
-  expect(command).toEqual({ kind: 'approve_summary', revision });
+  expect(command).toEqual({ kind: 'approve_summary', revision, conversationId: ownerConversationId });
   expect(command).not.toHaveProperty('requirePending');
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
     goal: expect.objectContaining({ id: registered.id }),
@@ -184,7 +192,7 @@ it('approves the pending proposal through the same command as the manager screen
 it('rejects the pending proposal through a dismissal without a reason field', async () => {
   acceptSubmission();
 
-  const pending = rejectTaktGoalRegistration({ cwd, revision }, {}, signal);
+  const pending = rejectTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
   await vi.waitFor(() => expect(emit).toBeDefined());
   emit!({ kind: 'result', operationId, result: { kind: 'notice', message: '登録案を取り下げました' } });
   const result = await pending;
@@ -192,16 +200,32 @@ it('rejects the pending proposal through a dismissal without a reason field', as
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
   expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
   const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
-  expect(command).toEqual({ kind: 'dismiss_summary', revision });
+  expect(command).toEqual({ kind: 'dismiss_summary', revision, conversationId: ownerConversationId });
   expect(command).not.toHaveProperty('reason');
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ revision });
   expect(doubles.close).toHaveBeenCalledOnce();
 });
 
+it.each(['approve', 'reject'] as const)(
+  'fails a %s whose conversationId differs from the resolved assignment before connecting or submitting',
+  async (operation) => {
+    const input = { cwd, revision, conversationId: conversationId({ kind: 'repository', repositoryDirectory: '/other' }) };
+    const result = operation === 'approve'
+      ? await approveTaktGoalRegistration(input, {}, signal)
+      : await rejectTaktGoalRegistration(input, {}, signal);
+
+    expect(result.isError).toBe(true);
+    expect(doubles.assignment).toHaveBeenCalledWith({ kind: 'repository', repositoryDirectory: cwd }, '/global-config');
+    expect(doubles.constructClient).not.toHaveBeenCalled();
+    expect(doubles.connect).not.toHaveBeenCalled();
+    expect(doubles.submit).not.toHaveBeenCalled();
+  },
+);
+
 it('reports a stale approval like the manager screen when the daemon rejects the submission', async () => {
   doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
 
-  const result = await approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+  const result = await approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
 
   expect(result.isError).toBe(true);
   expect(firstTextContent(result.content)).toMatch(/stale/iu);
@@ -212,7 +236,7 @@ it('reports a stale approval like the manager screen when the daemon rejects the
 it('reports a stale rejection delivered as the turn result', async () => {
   acceptSubmission();
 
-  const pending = rejectTaktGoalRegistration({ cwd, revision }, {}, signal);
+  const pending = rejectTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
   await vi.waitFor(() => expect(emit).toBeDefined());
   emit!({ kind: 'result', operationId, result: { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' } });
   const result = await pending;
@@ -226,7 +250,7 @@ it('ignores results of other operations while waiting for the approval result', 
   acceptSubmission();
   const registered = goalRecord();
 
-  const pending = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+  const pending = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
   await vi.waitFor(() => expect(emit).toBeDefined());
   emit!({ kind: 'result', operationId: '750e8400-e29b-41d4-a716-446655440088',
     result: { kind: 'error', code: 'stale_summary', message: '別の操作の結果' } });
@@ -244,7 +268,7 @@ it('reports an accepted approval whose result never arrives within the bounded w
   try {
     acceptSubmission();
 
-    const resultPromise = approveTaktGoalRegistration({ cwd, revision }, {}, signal);
+    const resultPromise = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal);
     await vi.advanceTimersByTimeAsync(120_000);
     const result = await resultPromise;
 

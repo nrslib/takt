@@ -145,7 +145,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
     dismissSummary: async (revision) => {
-      if (await send({ kind: 'dismiss_summary', revision }) === null) {
+      const conversationId = client.getSnapshot().state?.conversationId;
+      if (conversationId === undefined) return;
+      if (await send({ kind: 'dismiss_summary', revision, conversationId }) === null) {
         setPending(client.getSnapshot().state?.pending ?? null);
       }
     } });
@@ -280,9 +282,10 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     const current = client.getSnapshot();
     if (current.connection !== 'connected' || current.readStatus !== 'complete'
       || registering.current || current.state?.pending?.revision !== revision) return;
+    const conversationId = current.state.conversationId;
     registering.current = true;
     resetChoice();
-    if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
+    if (await send({ kind: 'approve_summary', revision, conversationId }) === null) registering.current = false;
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;

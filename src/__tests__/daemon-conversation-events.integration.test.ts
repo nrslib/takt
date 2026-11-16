@@ -1250,7 +1250,7 @@ it('recovers the reserved goal ID after its registration event leaves the inbox 
   expect((await f.conversations.store.read(f.id))?.state.approval?.state).toBe('reserved');
   await f.runner.finish(registration, { kind: 'interrupted' });
   accepted(await f.dispatcher.accept({ ...input('reapprove', f.id), event: { kind: 'human_command',
-    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'approve_summary', revision: 1 } } }));
+    speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'approve_summary', revision: 1, conversationId: f.id } } }));
   const retry = await f.runner.started(2);
   const resolve = vi.fn();
   const service = createConversationTurnService(f.directory, { resolve, async close() {} });

@@ -26,7 +26,7 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { appendGoalWorkLog } from '../infra/goals/workLog.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { ManagerClientDouble, cwd as summaryRepository, ENTER, UP } from './helpers/manager-tui-fixtures.js';
+import { ManagerClientDouble, cwd as summaryRepository, managerConversationId, ENTER, UP } from './helpers/manager-tui-fixtures.js';
 import { conversationRecord, writeLegacyConversation } from './helpers/conversation-fixtures.js';
 import { harness, input } from './helpers/controlledDaemon.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
@@ -492,7 +492,7 @@ describe('manager summary transcript and terminal height', () => {
       }
       expect(text.indexOf(previous.objective)).toBeLessThan(text.indexOf(next.objective));
       context.stdin.write(UP); context.stdin.write(ENTER);
-      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5, conversationId: managerConversationId }));
     } finally { context.dispose(); }
   });
 

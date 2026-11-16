@@ -16,17 +16,30 @@ import type {
 
 const REGISTRATION_RESULT_WAIT_MS = 120_000;
 
+interface RegistrationOwner {
+  readonly identity: ManagerAssignmentIdentity;
+  readonly conversationId: string;
+}
+
+async function resolveRegistrationOwner(cwd: string): Promise<RegistrationOwner> {
+  const repositoryDirectory = await resolveGitRepositoryDirectory(cwd);
+  const assignment = await resolveCurrentManagerAssignment(
+    { kind: 'repository', repositoryDirectory }, getGlobalConfigDir());
+  const identity: ManagerAssignmentIdentity = assignment.kind === 'workspace'
+    ? { kind: 'workspace', workspaceId: assignment.workspaceId }
+    : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
+  return { identity, conversationId: conversationId(assignment) };
+}
+
 export async function listTaktGoalRegistrationProposals(
   input: ListGoalRegistrationProposalsInput, deps: McpOperationDependencies,
 ): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const repositoryDirectory = await resolveGitRepositoryDirectory(input.cwd);
-    const assignment = await resolveCurrentManagerAssignment(
-      { kind: 'repository', repositoryDirectory }, getGlobalConfigDir());
+    const owner = await resolveRegistrationOwner(input.cwd);
     const store = new ConversationStateStore(await resolveDaemonConfigDirectory(getGlobalConfigDir()));
-    const pending = (await store.read(conversationId(assignment)))?.record.pending ?? null;
-    return jsonResult({ proposals: pending === null ? [] : [pending] });
+    const pending = (await store.read(owner.conversationId))?.record.pending ?? null;
+    return jsonResult({ proposals: pending === null ? [] : [{ ...pending, conversationId: owner.conversationId }] });
   } catch (error) { return errorResult('Goal registration proposal list failed', error); }
 }
 
@@ -66,14 +79,25 @@ async function submitRegistrationCommand(
   } finally { client.close(); }
 }
 
+async function submitOwnedRegistrationCommand(
+  input: ApproveGoalRegistrationInput | RejectGoalRegistrationInput, deps: McpOperationDependencies,
+  signal: AbortSignal,
+  buildCommand: (owner: RegistrationOwner) => Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
+): Promise<OperationResult> {
+  assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+  const owner = await resolveRegistrationOwner(input.cwd);
+  if (owner.conversationId !== input.conversationId) {
+    throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
+  }
+  return submitRegistrationCommand(buildCommand(owner), owner.identity, signal);
+}
+
 export async function approveTaktGoalRegistration(
   input: ApproveGoalRegistrationInput, deps: McpOperationDependencies, signal: AbortSignal,
 ): Promise<CallToolResult> {
   try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const result = await submitRegistrationCommand(
-      { kind: 'approve_summary', revision: input.revision },
-      { kind: 'repository', repositoryDirectory: input.cwd }, signal);
+    const result = await submitOwnedRegistrationCommand(input, deps, signal,
+      (owner) => ({ kind: 'approve_summary', revision: input.revision, conversationId: owner.conversationId }));
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
     if (result.kind !== 'goal_registered') throw new Error(`Unexpected goal registration result: ${result.kind}`);
     return jsonResult({ revision: input.revision, goal: result.goal });
@@ -84,10 +108,8 @@ export async function rejectTaktGoalRegistration(
   input: RejectGoalRegistrationInput, deps: McpOperationDependencies, signal: AbortSignal,
 ): Promise<CallToolResult> {
   try {
-    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const result = await submitRegistrationCommand(
-      { kind: 'dismiss_summary', revision: input.revision },
-      { kind: 'repository', repositoryDirectory: input.cwd }, signal);
+    const result = await submitOwnedRegistrationCommand(input, deps, signal,
+      (owner) => ({ kind: 'dismiss_summary', revision: input.revision, conversationId: owner.conversationId }));
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
     if (result.kind !== 'notice') throw new Error(`Unexpected goal registration dismissal result: ${result.kind}`);
     return jsonResult({ revision: input.revision, notice: result.message });

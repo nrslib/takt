@@ -263,9 +263,10 @@ export function createSlackConversationPort(options: {
         if (Object.keys(fields).length !== 2 || typeof fields.conversationId !== 'string' || !Number.isSafeInteger(fields.revision)
           || (fields.revision as number) < 0) return;
         const revision = fields.revision as number;
+        const conversationId = fields.conversationId;
         const command: ConversationCommand = actionId === SLACK_GOAL_APPROVE
-          ? { kind: 'approve_summary', revision, requirePending: true }
-          : { kind: 'dismiss_summary', revision };
+          ? { kind: 'approve_summary', revision, conversationId, requirePending: true }
+          : { kind: 'dismiss_summary', revision, conversationId };
         await submitCommand(endpoint, command, false, fields.conversationId, requestId);
         return;
       }

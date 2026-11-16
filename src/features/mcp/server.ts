@@ -415,7 +415,7 @@ export function createTaktMcpServer(
       'takt_approve_goal_registration',
       {
         title: 'Approve a goal registration',
-        description: 'Approve the pending goal registration proposal selected by revision, with the same handling as choosing to register in the TUI registration dialog. Registers the goal and returns it. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
+        description: 'Approve the pending goal registration proposal selected by revision and conversationId, with the same handling as choosing to register in the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Registers the goal and returns it. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals.',
         inputSchema: approveGoalRegistrationInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal registration approval failed', (deps) => approveTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
@@ -424,7 +424,7 @@ export function createTaktMcpServer(
       'takt_reject_goal_registration',
       {
         title: 'Reject a goal registration',
-        description: 'Dismiss the pending goal registration proposal selected by revision without registering the goal, with the same handling as dismissing the TUI registration dialog. Returns the dismissed revision. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
+        description: 'Dismiss the pending goal registration proposal selected by revision and conversationId without registering the goal, with the same handling as dismissing the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Returns the dismissed revision. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals.',
         inputSchema: rejectGoalRegistrationInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),

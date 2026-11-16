@@ -6,6 +6,7 @@ import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
 } from '../tasks/taskContextValidation.js';
+import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
@@ -140,11 +141,16 @@ const goalRegistrationProposalIdentityInputSchema = z.object({
 export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposalIdentityInputSchema;
 const goalRegistrationRevisionSchema = z.number().int().safe().positive()
   .describe('Revision of the pending goal registration proposal returned by takt_list_goal_registration_proposals.');
+const goalRegistrationOwnerSchema = {
+  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_registration_proposals. The approval or rejection is refused unless it identifies the conversation that owns the pending proposal.'),
+};
 export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
   revision: goalRegistrationRevisionSchema,
+  ...goalRegistrationOwnerSchema,
 });
 export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
   revision: goalRegistrationRevisionSchema,
+  ...goalRegistrationOwnerSchema,
 });
 export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
 export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;

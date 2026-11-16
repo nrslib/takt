@@ -9,6 +9,7 @@ import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { conversationRecord } from './conversation-fixtures.js';
 
 export const cwd = '/test/manager-repository';
+export const managerConversationId = conversationRecord(cwd).id;
 export const summaryA: ManagerGoalSummary = { objective: 'CSVを出力する', outOfScope: ['JSON出力'],
   acceptanceCriteria: ['CSVを取得できる'], constraints: ['mock provider のみ'] };
 export const summaryB: ManagerGoalSummary = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '通知'],

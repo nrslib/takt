@@ -870,7 +870,7 @@ it('keeps a newer running transition within revision four when an older idle sna
     const value = await authenticated(); const first = await opened(value);
     await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, running: null }));
     const accepted = (await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
-      command: { kind: 'approve_summary', revision: 4 } })).result!;
+      command: { kind: 'approve_summary', revision: 4, conversationId: value.latestState()!.conversationId } })).result!;
     expect(accepted.kind).toBe('accepted');
     await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, running: { operationId: accepted.operationId } }));

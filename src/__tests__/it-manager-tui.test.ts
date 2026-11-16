@@ -10,7 +10,7 @@ import { getLabel } from '../shared/i18n/index.js';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
-import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, QUESTION_MENU, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
+import { cwd, managerConversationId, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, QUESTION_MENU, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
 
 it.each(['disconnected', 'answered', 'pending', 'snapshot'] as const)(
   'recovers answer input after a missed result on %s recovery', async (recovery) => {
@@ -153,7 +153,7 @@ it.each(['ja', 'en'] as const)('creates a proposal from a conversation with /mak
   context.app.stdin.write(UP);
   expect(context.client.commands()).toHaveLength(2);
   context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+  await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5, conversationId: managerConversationId }));
 });
 
 it.each(['typed', 'Tab completion', 'pasted'] as const)('regenerates a displayed proposal without approval or competing withdrawal using %s input', async (delivery) => {
@@ -232,7 +232,7 @@ it('withdraws the displayed proposal when a /make-goal prefix becomes ordinary c
   expect(context.client.commands()).toEqual([]);
   context.app.stdin.write('p');
   await waitFor(() => {
-    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
+    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]);
     expect(promptFrame(context)).toContain('/map');
   });
 });
@@ -262,7 +262,7 @@ it.each(['ja', 'en'] as const)('approves exactly the restored revision with Up a
   const context = mount(lang);
   await showProposal(context, summaryB, 4);
   approveSummary(context);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
   const operationId = await context.client.operation();
   const goal = { ...goalRecord(), ...summaryB };
   context.client.change({ state: { ...context.client.getSnapshot().state!, revision: 5, pending: null } });
@@ -281,14 +281,14 @@ it.each(['ja', 'en'] as const)('returns to conversation input without registrati
   context.app.stdin.write(DOWN);
   context.app.stdin.write(ENTER);
   await waitFor(() => {
-    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
+    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]);
     expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '登録する' : 'Register goal');
     expect(promptFrame(context)).toContain(lang === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
   });
   await finish(context, 'Continue discussing the goal');
   await typeAndSubmit(context, 'Adjust the acceptance criteria');
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'dismiss_summary', revision: 4 },
+    { kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId },
     { kind: 'message', text: 'Adjust the acceptance criteria' },
   ]));
 });
@@ -297,7 +297,7 @@ it.each([ENTER, ESC, '修正', '/g', '\x1b[13;2u', '\x1b[13;3u'])('immediately w
   const context = mount();
   await showProposal(context);
   context.app.stdin.write(input);
-  await waitFor(() => expect(context.client.commands()[0]).toEqual({ kind: 'dismiss_summary', revision: 4 }));
+  await waitFor(() => expect(context.client.commands()[0]).toEqual({ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }));
   expect(context.client.commands().some((command) => command.kind === 'approve_summary')).toBe(false);
 });
 
@@ -307,7 +307,7 @@ it('restores the authoritative proposal when immediate withdrawal is refused', a
   context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message: getLabel('manager.conversation.queue_full', 'en') });
   context.app.stdin.write(ESC);
   await waitFor(() => {
-    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
+    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]);
     expect(context.app.lastFrame()).toContain(summaryA.objective);
     expect(context.app.lastFrame()).toContain('Register goal');
     expect(context.app.lastFrame()?.replace(/\s+/gu, '')).toContain(getLabel('manager.conversation.queue_full', 'en').replace(/\s+/gu, ''));
@@ -322,11 +322,11 @@ it('displays a stale approval error and requires review of the refreshed revisio
   context.client.refresh.mockImplementation(async () => { context.client.proposal(summaryB, 5); });
   approveSummary(context);
   await waitFor(() => expect(context.app.lastFrame()).toContain(summaryB.objective));
-  expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]);
+  expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]);
   expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.stale_summary', 'en'));
   approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'approve_summary', revision: 4 }, { kind: 'approve_summary', revision: 5 },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId }, { kind: 'approve_summary', revision: 5, conversationId: managerConversationId },
   ]));
 });
 
@@ -344,7 +344,7 @@ it.each(['ja', 'en'] as const)('keeps original array boundaries and multiline bu
     expect(context.client.getSnapshot().state?.pending?.summary[field]).toEqual(summary[field]);
     context.app.stdin.write(UP);
     context.app.stdin.write(ENTER);
-    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
     context.app.unmount();
   }
 });
@@ -400,7 +400,7 @@ it('keeps revision five on the same mounted screen after delayed revision four d
     expect(context.app.lastFrame()!.split(summaryA.objective)).toHaveLength(2);
   });
   approveSummary(context);
-  await waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 5 }]));
+  await waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 5, conversationId: managerConversationId }]));
 });
 
 it('disables approval after a mid-item disconnect and restores the whole proposal on the same screen and conversation', async () => {
@@ -438,6 +438,6 @@ it('disables approval after a mid-item disconnect and restores the whole proposa
   expect(client.getSnapshot().state?.pending?.summary).toEqual(summaryA);
   approveSummary(context);
   await waitFor(() => expect(client.commands().filter((command) => command.kind === 'approve_summary')).toEqual([
-    { kind: 'approve_summary', revision: 4 },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId },
   ]));
 });

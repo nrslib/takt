@@ -446,7 +446,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
     await registration;
     if (command.kind !== 'approve_summary') throw new Error('Expected approval');
-    await session!.submit({ kind: 'dismiss_summary', revision: command.revision });
+    await session!.submit({ kind: 'dismiss_summary', revision: command.revision, conversationId: command.conversationId });
     return { kind: 'notice', message: 'Registration finished' };
   });
   const answer = spyConversationCommand(session!, 'answer_question');

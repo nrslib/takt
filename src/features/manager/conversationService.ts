@@ -69,6 +69,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
+          && command.conversationId !== input.turn.conversationId) throw new ConversationError('invalid_assignment');
         if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
           if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
           return { kind: 'completed', result: { kind: 'notice', message: '' } };
