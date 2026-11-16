@@ -787,6 +787,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(JSON.stringify(events)).not.toContain(prefix);
     expect(JSON.stringify(events)).not.toContain(middle);
     expect(JSON.stringify(events)).not.toContain(credential.slice(-5));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-3));
     expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
   });
 

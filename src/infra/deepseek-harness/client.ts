@@ -548,6 +548,7 @@ function responseTextEvent(chunk: ResponseTextChunk): StreamEvent {
 /** Mask a current chunk even when it contains only the next, still-incomplete part of a known value. */
 function knownContinuationRanges(boundary: string, text: string, values: ReadonlySet<string>) {
   const ranges: { start: number; end: number }[] = [];
+  let complete = false;
   for (const value of values) {
     for (let split = 1; split < value.length; split += 1) {
       if (!boundary.endsWith(value.slice(0, split))) continue;
@@ -556,9 +557,10 @@ function knownContinuationRanges(boundary: string, text: string, values: Readonl
         ? remainder.length
         : remainder.startsWith(text) ? text.length : 0;
       if (length > 0) ranges.push({ start: 0, end: length });
+      if (text.startsWith(remainder)) complete = true;
     }
   }
-  return ranges;
+  return { ranges, complete };
 }
 
 /** Buffer text so credentials split across notifications remain redacted. */
@@ -584,12 +586,10 @@ function writeResponseRedactedChunks(
         start: Math.max(0, range.start - boundary),
         end: Math.min(text.length, range.end - boundary),
       }));
-    const ranges = [
-      ...boundaryRanges,
-      ...knownContinuationRanges(context.toolBoundaryText, text, values),
-    ];
+    const continuation = knownContinuationRanges(context.toolBoundaryText, text, values);
+    const ranges = [...boundaryRanges, ...continuation.ranges];
     text = maskSensitiveRanges(text, ranges);
-    context.toolBoundaryText = ranges.length > 0 || /\s/u.test(text) ? '' : combined.slice(-4096);
+    context.toolBoundaryText = continuation.complete || /\s/u.test(text) ? '' : combined.slice(-4096);
   }
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
