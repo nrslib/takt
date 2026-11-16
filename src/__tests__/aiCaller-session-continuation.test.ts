@@ -54,12 +54,15 @@ describe('interactive session continuation refusal', () => {
   });
 
   it('reports an empty successful provider answer without retrying the original prompt fresh', async () => {
-    const providerCall = vi.fn<ProviderAgent['call']>().mockResolvedValue({
-      persona: 'interactive',
-      status: 'done',
-      content: '',
-      sessionId: 'session-after-tool',
-      timestamp: new Date(),
+    const providerCall = vi.fn<ProviderAgent['call']>().mockImplementation(async (_prompt, callOptions) => {
+      callOptions.onStream?.({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: {} } });
+      return {
+        persona: 'interactive',
+        status: 'done',
+        content: '',
+        sessionId: 'session-after-tool',
+        timestamp: new Date(),
+      };
     });
     const provider = makeProvider({ setup: () => ({ call: providerCall }) });
 

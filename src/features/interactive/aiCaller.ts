@@ -475,7 +475,8 @@ export async function callAIWithRetry(
     display?.flush();
     const emptyResponse = response.status === 'done'
       && response.structuredOutput === undefined
-      && response.content.trim().length === 0;
+      && response.content.trim().length === 0
+      && firstAttempt.usedTools;
     const success = response.status !== 'blocked' && response.status !== 'error' && !emptyResponse;
     const rejectedSession = !success && sessionId !== undefined
       && ctx.providerType !== 'deepseek-harness'
