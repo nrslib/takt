@@ -751,6 +751,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(response.status).toBe('done');
     expect(JSON.stringify(events)).not.toContain(fragments[1]!);
     expect(JSON.stringify(events)).not.toContain(fragments[2]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!.trim());
     expect(response.content.trim()).toBe('password=[REDACTED]');
   });
 
