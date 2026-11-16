@@ -35,6 +35,8 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
+import { MAX_QUEUE_ROWS, QueueView } from '../tui/QueueView.js';
+import { MARKER_WIDTH } from '../tui/transcriptOutput.js';
 import { ToolActivityDisplayStore, toolTurnKey } from './toolActivityDisplayStore.js';
 import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from '../tui/toolActivityViewState.js';
 import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
@@ -143,18 +145,18 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     committedTools.current.add(key);
     const content = completedToolTranscript(entry, toolColumns.current ?? 80, {
       compact: '', expanded: '', more: getLabel('tui.ui.toolHistoryMore', lang), end: '', completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+      running: getLabel('tui.ui.toolHistoryRunning', lang),
     });
-    if (mounted.current) setEntries((previous) => [...previous, { role: 'system', content: toDisplayText(content) }]);
+    if (mounted.current) setEntries((previous) => [...previous, { role: 'tool', content: toDisplayText(content) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
     submitting.current++;
     setSending(true);
     try {
       const result = await client.submit(command, onAccepted);
-      if (result.kind === 'accepted') {
-        if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
-        return result.operationId;
-      }
+      // A queued message waits in the queue area above the input, not in the log:
+      // a line here would land in the middle of the turn that is still running.
+      if (result.kind === 'accepted') return result.operationId;
       if (command.kind === 'message' && command.display !== false) append(command.text, 'user');
       append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
       if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
@@ -442,8 +444,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const toolLabels = {
     compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
     more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
-    completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang), running: getLabel('tui.ui.toolHistoryRunning', lang),
   };
+  const toolPageColumns = (columns ?? 80) - MARKER_WIDTH;
+  const queuedMessages = snapshot.items.flatMap((item) => item.kind === 'user_message' && item.pending
+    && item.operationId !== running?.operationId ? [item.message] : []);
+  const queueRows = conversationInput && queuedMessages.length > 0
+    ? 1 + Math.min(MAX_QUEUE_ROWS, queuedMessages.length) : 0;
+  const hiddenQueued = queuedMessages.length - Math.max(0, queueRows - 1);
+  const queueHeading = [getLabel('tui.ui.queuedCount', lang, { count: String(queuedMessages.length) }),
+    ...(hiddenQueued > 0 ? [getLabel('tui.ui.queuedMore', lang, { count: String(hiddenQueued) })] : [])].join('  ');
   const promptRows = Math.min(MAX_VISIBLE_ROWS, layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length);
   const completionRows = conversationInput ? Math.min(3, slashCompletion.completions.length) : 0;
   let hintRows = 1;
@@ -457,12 +467,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     hintRowWidth += width;
   }
   const toolContentHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null ? 0
-    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows
+    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows - queueRows
       - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
       - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
   const toolHeight = !toolReady || allToolGroups.length === 0 ? 0
     : toolGroups.length === 0 ? Math.min(1, toolContentHeight) : toolContentHeight;
-  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, columns ?? 80,
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, toolPageColumns,
     Math.max(0, toolHeight - 1), toolLabels);
   useEffect(() => {
     if (toolViewTurn.current === toolTurn) return;
@@ -487,7 +497,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (toolHeight <= 0) return;
       setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
         : moveToolActivityView(current,
-          toolActivityViewPage(toolDisplay, toolGroups, current, columns ?? 80, Math.max(0, toolHeight - 1), toolLabels), direction));
+          toolActivityViewPage(toolDisplay, toolGroups, current, toolPageColumns, Math.max(0, toolHeight - 1), toolLabels), direction));
     },
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
@@ -515,6 +525,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
+    {queueRows > 0 && <QueueView heading={queueHeading}
+      lines={queuedMessages.slice(0, queueRows - 1).map((message) => sanitizeSensitiveText(message))} />}
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}

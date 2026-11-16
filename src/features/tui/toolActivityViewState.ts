@@ -3,6 +3,7 @@ import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { COMPACT_RESULT_LINES } from '../../shared/tool-activity/presentation.js';
 import type { ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../../shared/tool-activity/types.js';
 import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import { MARKER_WIDTH } from './transcriptOutput.js';
 
 interface ToolActivityPosition {
   group: number;
@@ -23,10 +24,13 @@ export interface ToolActivityViewLabels {
   more: string;
   end: string;
   completion: string;
+  running: string;
 }
 
 export interface ToolActivityViewPage {
   rows: readonly string[];
+  /** Rows that open a tool or a group of tools; the view puts the tool marker in front of them. */
+  heads: readonly number[];
   next: ToolActivityPosition;
   hasMore: boolean;
 }
@@ -35,11 +39,15 @@ export function createToolActivityViewState(): ToolActivityViewState {
   return { expanded: false, position: { group: 0, entry: 0, section: 'group', offset: 0 }, previous: [] };
 }
 
-/** A completed entry is printed once; the live history remains available for details. */
+/**
+ * A completed entry is printed once; the live history remains available for
+ * details. The transcript puts the tool marker in front of it, so the rows are
+ * laid out in the columns that remain.
+ */
 export function completedToolTranscript(entry: ToolActivityEntry, columns: number, labels: ToolActivityViewLabels): string {
   const display = new ToolActivityDisplay('silent', false, () => {}, false);
   display.upsert(entry);
-  return toolActivityViewPage(display, display.groups(), createToolActivityViewState(), columns, 20, labels).rows.join('\n');
+  return toolActivityViewPage(display, display.groups(), createToolActivityViewState(), columns - MARKER_WIDTH, 20, labels).rows.join('\n');
 }
 
 export function toggleToolActivityView(state: ToolActivityViewState): ToolActivityViewState {
@@ -98,6 +106,22 @@ function symbol(entry: ToolActivityProjection): string {
   return entry.status === 'failure' ? '✗' : entry.status === 'success' ? '✓' : '…';
 }
 
+function formatDuration(durationMs: number): string {
+  return durationMs < 1000 ? `${durationMs} ms` : `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+/** The compact status: the outcome and how long it took, never the raw clock values. */
+function compactStatus(entry: ToolActivityProjection, labels: ToolActivityViewLabels): string {
+  if (entry.status === 'running') return `${symbol(entry)} ${labels.running}`;
+  return entry.durationMs === undefined ? symbol(entry) : `${symbol(entry)} ${formatDuration(entry.durationMs)}`;
+}
+
+/** Shortens the title rather than the status, so the outcome stays readable in a narrow row. */
+function rowWithSuffix(text: string, suffix: string, columns: number): string {
+  const suffixWidth = stringWidth(suffix) + 1;
+  return suffixWidth < columns ? `${singleRow(text, columns - suffixWidth)} ${suffix}` : singleRow(`${text} ${suffix}`, columns);
+}
+
 function nextEntry(groups: readonly ToolActivityGroup[], position: ToolActivityPosition): ToolActivityPosition {
   const group = groups[position.group]!;
   return position.entry + 1 < group.entries.length
@@ -114,6 +138,7 @@ export function toolActivityViewPage(
   labels: ToolActivityViewLabels,
 ): ToolActivityViewPage {
   const rows: string[] = [];
+  const heads: number[] = [];
   const width = Math.max(1, columns);
   let position = state.position;
   while (rows.length < maxRows && position.group < groups.length) {
@@ -132,6 +157,7 @@ export function toolActivityViewPage(
           for (const item of group.entries) counts[item.status] += 1;
           const status = counts.failure > 0 ? '✗' : counts.running > 0 ? '…' : '✓';
           const statuses = [counts.success > 0 ? `✓${counts.success}` : '', counts.failure > 0 ? `✗${counts.failure}` : '', counts.running > 0 ? `…${counts.running}` : ''].filter(Boolean).join(' ');
+          heads.push(rows.length);
           addSingleRow(`${status} ${group.summary} ${statuses}`);
           position = advance(state.expanded ? 'header' : 'groupResult');
         } else position = advance('header');
@@ -165,8 +191,14 @@ export function toolActivityViewPage(
         break;
       case 'header': {
         const title = entry.tool === entry.action ? entry.tool : `${entry.tool} ${entry.action}`;
-        addSingleRow(`${symbol(entry)} ${title}${state.expanded || entry.input === '' ? '' : ` ${entry.input}`}`);
-        position = advance('time');
+        heads.push(rows.length);
+        if (state.expanded) {
+          addSingleRow(`${symbol(entry)} ${title}`);
+          position = advance('time');
+        } else {
+          rows.push(rowWithSuffix(entry.input === '' ? title : `${title} ${entry.input}`, compactStatus(entry, labels), width));
+          position = advance('result');
+        }
         break;
       }
       case 'time': {
@@ -176,15 +208,10 @@ export function toolActivityViewPage(
           ...(entry.durationMs === undefined ? [] : [`(${entry.durationMs} ms)`]),
           ...(entry.completionSequence === undefined ? [] : [`${labels.completion} #${entry.completionSequence}`]),
         ].join(' ');
-        if (state.expanded) {
-          const row = textRow(timing.slice(position.offset), width);
-          rows.push(row.text);
-          position = position.offset + row.consumed < timing.length
-            ? { ...position, offset: position.offset + row.consumed } : advance('input');
-        } else {
-          addSingleRow(timing);
-          position = advance('result');
-        }
+        const row = textRow(timing.slice(position.offset), width);
+        rows.push(row.text);
+        position = position.offset + row.consumed < timing.length
+          ? { ...position, offset: position.offset + row.consumed } : advance('input');
         break;
       }
       case 'input': {
@@ -223,5 +250,5 @@ export function toolActivityViewPage(
         break;
     }
   }
-  return { rows, next: position, hasMore: position.group < groups.length };
+  return { rows, heads, next: position, hasMore: position.group < groups.length };
 }

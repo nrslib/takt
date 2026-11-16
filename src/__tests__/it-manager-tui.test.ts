@@ -83,7 +83,7 @@ it.each(['disconnected', 'answered', 'pending', 'snapshot'] as const)(
     }
   });
 
-it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方送信して受付と待機件数を表示する', async () => {
+it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方送信し、会話ログに書かずに待機件数を表示する', async () => {
   const context = mount('ja');
   let accepted!: () => void;
   const firstId = randomUUID();
@@ -97,12 +97,11 @@ it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方
     await waitFor(() => expect(context.client.commands()).toEqual([
       { kind: 'message', text: '最初の発言' }, { kind: 'message', text: '次の発言' },
     ]));
-    await waitFor(() => expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(
-      getLabel('manager.conversation.queued', 'ja', { count: '1' }).replace(/\s+/gu, ''),
-    ));
     context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: firstId, kind: 'message' }, queuedMessageCount: 1 } });
     await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.waiting', 'ja', { count: '1' })));
     expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.busy', 'ja'));
+    expect(context.app.lastFrame()!.replace(/\s+/gu, '')).not.toContain(
+      getLabel('manager.conversation.queued', 'ja', { count: '1' }).replace(/\s+/gu, ''));
   } finally { accepted(); }
 });
 

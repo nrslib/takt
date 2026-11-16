@@ -133,7 +133,14 @@ function currentToolPage() {
 function committedToolRows(): string {
   const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
   const user = entries.map((entry) => entry.role).lastIndexOf('user');
-  return entries.slice(user + 1).filter((entry) => /^[✓✗] /u.test(entry.content)).map((entry) => entry.content).join('\n');
+  return entries.slice(user + 1).filter((entry) => entry.role === 'tool').map((entry) => entry.content).join('\n');
+}
+
+/** The expanded rows of the tool history; the view goes back to compact afterwards. */
+async function expandedToolRows(app: ReturnType<typeof render>): Promise<string> {
+  const rows = await browseToolPage(app, '\x0f');
+  await browseToolPage(app, '\x0f');
+  return rows;
 }
 
 function toolRows(): string {
@@ -387,7 +394,7 @@ it.each([
   columns.mockReturnValue(40); app.stdout.emit('resize');
   try {
     await client.submit({ kind: 'message', text: 'Show the command' });
-    await waitFor(() => expect(committedToolRows()).toContain('success'));
+    await waitFor(() => expect(committedToolRows()).toMatch(/^Bash .* ✓(?: |$)/mu));
     const committed = committedToolRows();
     for (const row of committed.split('\n')) expect(measureWidth(row)).toBeLessThanOrEqual(40);
     columns.mockReturnValue(80); app.stdout.emit('resize');
@@ -420,7 +427,7 @@ it('retains the received start and completion times once after compact display a
   vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(32); app.stdout.emit('resize');
   try {
     await client.submit({ kind: 'message', text: 'Show exact times' });
-    await waitFor(() => expect(toolRows()).toMatch(/success @.*…/u));
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .* ✓(?: |$)/mu));
     await client.refresh(); await complete();
     const committed = committedToolRows();
     const item = client.getSnapshot().items.find((value) => value.kind === 'tool_history');
@@ -508,16 +515,16 @@ it.each([false, true])('retains one timed tool entry across duplicate delivery, 
   const app = await snapshotView();
   try {
     expect(await client.submit({ kind: 'message', text: 'Track one tool' })).toMatchObject({ kind: 'accepted' });
-    await waitFor(() => expect(toolRows()).toContain('running @'));
-    expect(toolRows()).toContain('printf history-ready');
-    const startedAt = toolRows().match(/@(\d+)/u)![1];
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .*printf history-ready … running$/mu));
+    const startedAt = (await expandedToolRows(app)).match(/running @(\d+)/u)![1];
     result.resolve();
-    await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
+    await waitFor(() => expect(toolRows()).toMatch(isError ? /^Bash .* ✗(?: |$)/mu : /^Bash .* ✓(?: |$)/mu));
     const completed = toolRows();
-    expect(completed).toContain(`@${startedAt}`);
-    expect(completed).toMatch(/→ @\d+.*\(\d+ ms\)/u);
-    expect(completed.split('\n').filter((row) => /^[✓✗] Bash/u.test(row))).toHaveLength(1);
+    expect(completed.split('\n').filter((row) => /^Bash .* [✓✗](?: |$)/u.test(row))).toHaveLength(1);
     expect(completed).toContain('history-ready');
+    const details = await expandedToolRows(app);
+    expect(details).toContain(`${isError ? 'failure' : 'success'} @${startedAt}`);
+    expect(details).toMatch(/→ @\d+.*\(\d+ ms\)/u);
     const events = progress.mock.calls.filter(([, message]) => JSON.stringify(message).includes('"id":"tool-1"'));
     expect(events).toHaveLength(2);
     const toolOutputs = () => outputs.mock.calls.filter(([output]) => JSON.stringify(output).includes('"tool-1"'));
@@ -529,11 +536,13 @@ it.each([false, true])('retains one timed tool entry across duplicate delivery, 
     await fixture.dispatcher.drain();
     await refreshSnapshot(client, connections[0]!);
     expect(toolRows()).toBe(completed);
+    expect(await expandedToolRows(app)).toBe(details);
     expect(toolOutputs()).toHaveLength(deliveredCount);
     connections[0]!.socket.destroy();
     await waitFor(() => expect(connections).toHaveLength(2));
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
     expect(toolRows()).toBe(completed);
+    expect(await expandedToolRows(app)).toBe(details);
     expect(toolOutputs()).toHaveLength(deliveredCount);
     expect(app.lastFrame()).toContain('history-ready');
     finish.resolve(); await fixture.settled();
@@ -585,8 +594,8 @@ it.each(['operationId', 'generation'] as const)('rejects an old result when only
     results[1]!.resolve();
     await waitFor(() => expect(toolRows()).toContain('turn-1-result'));
     expect(app.lastFrame()).toContain('turn-1-result');
-    expect(toolRows()).toContain('success');
-    expect(toolRows()).not.toContain('failure');
+    expect(toolRows()).toMatch(/^Read turn-1\.ts ✓(?: |$)/mu);
+    expect(toolRows()).not.toContain('✗');
     const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
     expect(transcript.filter((entry) => JSON.stringify(entry).includes('turn-0-result'))).toHaveLength(1);
     connections[0]!.socket.destroy();
@@ -617,7 +626,7 @@ it.each([false, true])('restores a tool result completed during disconnection on
   });
   try {
     await client.submit({ kind: 'message', text: 'Complete while disconnected' });
-    await waitFor(() => expect(toolRows()).toContain('running @'));
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .*printf offline-result … running$/mu));
     const conversationId = client.getSnapshot().state!.conversationId;
     connections[0]!.socket.destroy();
     await opening.promise;
@@ -630,10 +639,10 @@ it.each([false, true])('restores a tool result completed during disconnection on
     reconnect.resolve();
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete',
       state: { conversationId, running: null } }));
-    await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
+    await waitFor(() => expect(toolRows()).toMatch(isError ? /^Bash .* ✗(?: |$)/mu : /^Bash .* ✓(?: |$)/mu));
     expect(app.lastFrame()).toContain('offline-result');
     const completed = toolRows();
-    expect(completed.split('\n').filter((row) => /^[✓✗] Bash/u.test(row))).toHaveLength(1);
+    expect(completed.split('\n').filter((row) => /^Bash .* [✓✗](?: |$)/u.test(row))).toHaveLength(1);
     await refreshSnapshot(client, connections[1]!);
     await refreshSnapshot(client, connections[1]!);
     expect(toolRows()).toBe(completed);
@@ -783,7 +792,7 @@ it('commits each of five completed reads to the log and exposes every path and r
   await client.connect(); await complete(); const app = await snapshotView();
   try {
     await client.submit({ kind: 'message', text: 'Read five files' });
-    await waitFor(() => expect(committedToolRows().match(/✓ Read/gu)).toHaveLength(5));
+    await waitFor(() => expect(committedToolRows().match(/^Read .* ✓(?: |$)/gmu)).toHaveLength(5));
     const compactResults = toolRows().match(/read-result-\d/gu) ?? [];
     expect(compactResults.length).toBeGreaterThanOrEqual(1);
     expect(compactResults).toHaveLength(5);
@@ -815,22 +824,18 @@ it('commits concurrent tools in completion delivery order and matches a delayed 
     await client.submit({ kind: 'message', text: 'Wait for background completion' });
     await waitFor(() => expect(toolRows()).toContain('background-failure'));
     const rows = toolRows();
-    const first = rows.indexOf('✓ Grep'); const second = rows.indexOf('✗ Bash');
+    const first = rows.indexOf('Grep Used Grep later-search ✓'); const second = rows.indexOf('Bash Ran background-command ✗');
     expect(first).toBeGreaterThanOrEqual(0); expect(second).toBeGreaterThan(first);
     const later = rows.slice(first, second); const background = rows.slice(second);
-    expect(background).toContain('✗ Bash Ran background-command');
-    expect(later).toContain('✓ Grep Used Grep later-search');
-    expect(background).toContain('background-command'); expect(background).toContain('failure');
     expect(background).toContain('background-failure'); expect(background).not.toContain('later-success');
-    expect(later).toContain('later-search'); expect(later).toContain('success');
     expect(later).toContain('later-success'); expect(later).not.toContain('background-failure');
     const completed = (await fixture.store.readToolHistories(client.getSnapshot().state!.conversationId)).at(-1);
     const entries = completed!.history.entries;
     expect(entries.map((entry) => entry.toolId)).toEqual(['later', 'background']);
     expect(app.lastFrame()).toContain('background-failure');
     expect(app.lastFrame()).toContain('later-success');
-    expect(app.lastFrame()).toContain('✗ Bash Ran');
-    expect(app.lastFrame()).toContain('✓ Grep Used Grep');
+    expect(app.lastFrame()).toContain('Bash Ran background-command ✗');
+    expect(app.lastFrame()).toContain('Grep Used Grep later-search ✓');
     const expanded = await browseToolPage(app, '\x0f');
     expect(expanded.split('\n')).toContain('✗ Bash Ran');
     expect(expanded.split('\n')).toContain('✓ Grep Used Grep');
@@ -1084,7 +1089,7 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
     expect(activities().at(-1).activity).toEqual({ kind: 'responding' });
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
       { role: 'assistant', content: prose },
-      { role: 'system', content: expect.stringContaining('private-result-marker') },
+      { role: 'tool', content: expect.stringContaining('private-result-marker') },
       { role: 'assistant', content: 'Final activity reply' }]);
     const delivered = outputs.mock.calls.map(([output]) => output);
     expect(delivered.filter((output) => output.kind === 'turn_text').map((output) => output.message)).toEqual([

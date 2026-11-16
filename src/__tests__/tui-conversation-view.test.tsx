@@ -1406,7 +1406,10 @@ describe('TranscriptEntryView', () => {
       const beforeCaret = Array.from({ length: buffer.baseY + buffer.cursorY }, (_, index) => (
         buffer.getLine(index)?.translateToString(true) ?? ''
       )).join('\n');
-      expect(beforeCaret).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+      // The queue sits right above the input, so a height reduction may push its
+      // rows into scrollback like any transcript row; the prompt and status row,
+      // which stay below the caret, must not leave residue.
+      expect(beforeCaret).not.toMatch(/│ ❯|╰|Thinking|↑ \d/);
       expect(beforeCaret).toContain('SHELL_MARKER');
       expect(countOccurrences(getTerminalText(terminal).replace(/\s/g, ''), 'committedhistorymarker')).toBe(1);
     };
@@ -1455,7 +1458,7 @@ describe('TranscriptEntryView', () => {
       app.unmount();
       await app.waitUntilExit();
       await updateTerminal();
-      expect(getTerminalText(terminal)).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+      expect(getTerminalText(terminal)).not.toMatch(/│ ❯|╰|Thinking|↑ \d/);
     } finally {
       app?.unmount();
       await app?.waitUntilExit();
@@ -2379,9 +2382,9 @@ describe('ConversationView activity status', () => {
         }
         expect(stringWidth(statusRows(buffer)[0]!)).toBeLessThanOrEqual(48);
         expect(statusRows(buffer)[0]).not.toContain('PRIVATE_RESULT');
-        for (const forbidden of ['END_OF_PATH', 'PRIVATE_THOUGHT']) {
-          expect(buffer).not.toContain(forbidden);
-        }
+        expect(statusRows(buffer)[0]).not.toContain('PRIVATE_THOUGHT');
+        expect(buffer).not.toContain('END_OF_PATH');
+        expect(countOccurrences(buffer, 'PRIVATE_THOUGHT')).toBe(event.type === 'thinking' ? 1 : 0);
       }
       submission!.onAssistantChunk('earlier line\nCURRENT_TAIL');
       await flushFrames();
@@ -2393,6 +2396,8 @@ describe('ConversationView activity status', () => {
       buffer = await updateTerminal();
       expect(buffer).toContain('confirmed reply');
       expect(buffer).toContain('older shell history');
+      expect(countOccurrences(buffer, '◇ PRIVATE_THOUGHT')).toBe(1);
+      expect(buffer.indexOf('◇ PRIVATE_THOUGHT')).toBeLessThan(buffer.indexOf('confirmed reply'));
       expect(statusRows(buffer)).toEqual([]);
       for (const forbidden of [UI.interruptHint, UI.extendedThinking, 'CURRENT_TAIL', 'very-long-path/']) {
         expect(buffer).not.toContain(forbidden);
@@ -2541,6 +2546,7 @@ describe('ConversationView activity status', () => {
       await flushFrames();
       expect(stripAnsi(terminal.stdout.frames.slice(offset).join(''))).toContain(getLabel('tui.ui.extendedThinking', lang));
       expect(await currentStatus()).toContain(`${getLabel('tui.ui.extendedThinking', lang)} 1m02s ${hint}`);
+      expect(await currentStatus()).not.toContain('PRIVATE_THOUGHT');
       await resize(14);
       await expectNarrowActivity(getLabel('tui.ui.extendedThinking', lang), '1m02s');
       await resize(60);
@@ -2583,7 +2589,8 @@ describe('ConversationView activity status', () => {
       await resize(60);
       expect(await currentStatus()).toContain(`${getLabel('tui.ui.responding', lang)} 1m02s ${hint}`);
       expect(await currentStatus()).toContain('visible response');
-      expect(terminal.stdout.frames.join('')).not.toContain('PRIVATE_THOUGHT');
+      expect(await currentStatus()).not.toContain('PRIVATE_THOUGHT');
+      expect(countOccurrences(getTerminalText(screen).replace(/\s/gu, ''), '◇PRIVATE_THOUGHT')).toBe(1);
       conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed' });
       await flushFrames();
       terminal.stdin.write('next');
@@ -2647,15 +2654,16 @@ describe('ConversationView tool history', () => {
       more: getLabel('tui.ui.toolHistoryMore', lang),
       end: getLabel('tui.ui.toolHistoryEnd', lang),
       completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+      running: getLabel('tui.ui.toolHistoryRunning', lang),
     };
     const compact = createToolActivityViewState();
     for (const state of [compact, toggleToolActivityView(compact)]) {
       const frames = [true, false].map((hasMore) => {
-        const page = { rows: ['safe result'], next: state.position, hasMore };
+        const page = { rows: ['safe result'], heads: [], next: state.position, hasMore };
         const frame = stripAnsi(renderToString(<ToolActivityView page={page} state={state} labels={labels} height={2} />, { columns: 32 }));
         const rows = frame.split('\n');
         expect(rows).toHaveLength(2);
-        expect(rows[0]).toBe('safe result');
+        expect(rows[0]).toBe('  safe result');
         expect(rows[1]).toContain(hasMore ? labels.more : labels.end);
         expect(stringWidth(rows[1]!)).toBeLessThanOrEqual(32);
         return frame;
@@ -2700,9 +2708,10 @@ describe('ConversationView tool history', () => {
         await writeTerminalFrames(terminal, stdout.frames.slice(processed));
         processed = stdout.frames.length;
         const screen = getVisibleTerminalText(terminal, 36);
-        const results = screen.split('\n').map((row) => row.trimEnd()).filter((row) => /^x+$/u.test(row));
+        // Output rows are indented under the tool marker, so each holds two columns fewer.
+        const results = screen.split('\n').filter((row) => /^ {2}x+$/u.test(row.trimEnd())).map((row) => row.trim());
         expect(results, screen).toHaveLength(columns === 32 ? 3 : 2);
-        expect(results.join('')).toHaveLength(columns === 32 ? 96 : 97);
+        expect(results.join('')).toHaveLength(columns === 32 ? 90 : 97);
         for (const row of results) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
         expect(screen.includes(getLabel('tui.ui.toolHistoryMore', 'en'))).toBe(columns === 32);
         const active = terminal.buffer.active;
@@ -2788,25 +2797,22 @@ describe('ConversationView tool history', () => {
       await vi.waitFor(() => expect(stream).toBeTypeOf('function'));
       stream!({ type: 'tool_use', data: { id: 'provider-tool', tool: 'Bash', input: { command: 'printf ready' } } });
       await flushFrames();
-      expect(app.lastFrame()).toContain('printf ready');
-      expect(app.lastFrame()).toContain('@1000');
-      expect(app.lastFrame()).toContain('… Bash Ran printf ready');
+      expect(app.lastFrame()).toContain(`◆ Bash Ran printf ready … ${getLabel('tui.ui.toolHistoryRunning', 'en')}`);
+      expect(app.lastFrame()).not.toContain('@1000');
       now = 1250;
       stream!({ type: 'tool_result', data: { id: 'provider-tool', content: 'provider-result-ready', isError: false } });
       await flushFrames();
       const frame = stripAnsi(app.lastFrame() ?? '');
-      expect(frame).toContain('Bash');
-      expect(frame).toContain('✓ Bash Ran printf ready');
-      expect(frame).toContain('printf ready');
+      expect(frame).toContain('◆ Bash Ran printf ready ✓ 250 ms');
       expect(frame).toContain('provider-result-ready');
-      expect(frame).toMatch(/250\s*ms/u);
-      expect(frame).toContain('@1000');
-      expect(frame).toContain('@1250');
-      expect(frame).toMatch(/✓|success/u);
+      expect(frame).not.toContain('@1000');
+      expect(frame).not.toContain('@1250');
       const expanded = await press(app, CTRL_O);
-      expect(expanded.split('\n').map((row) => row.trim())).toContain('✓ Bash Ran');
+      expect(expanded.split('\n').map((row) => row.trim())).toContain('◆ ✓ Bash Ran');
       expect(expanded).toContain('printf ready');
       expect(expanded).toContain('provider-result-ready');
+      expect(expanded).toContain('@1000');
+      expect(expanded).toContain('@1250');
     } finally {
       clock.mockRestore();
       app.unmount();
@@ -2926,17 +2932,17 @@ describe('ConversationView tool history', () => {
     }
   });
 
-  it('should keep response text separate from tool results and never display hidden reasoning', async () => {
+  it('should keep response text separate from tool results and keep the reasoning out of the status row', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
     try {
       const input = await begin(app, conversation);
-      const start = app.frames.length;
       emit(input, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'answer.ts' } } });
       emit(input, { type: 'tool_result', data: { id: 'read', content: 'separate-tool-result', isError: false } });
-      emit(input, { type: 'thinking', data: { thinking: 'HIDDEN_REASONING_BODY' } });
+      emit(input, { type: 'thinking', data: { thinking: 'REASONING_BODY' } });
       await flushFrames();
       expect(statusRows(app.lastFrame() ?? '').join('\n')).toContain(UI.extendedThinking);
+      expect(statusRows(app.lastFrame() ?? '').join('\n')).not.toContain('REASONING_BODY');
       input.onAssistantChunk('Read imaginary.ts is response prose');
       await flushFrames();
       expect(app.lastFrame()).toContain('separate-tool-result');
@@ -2947,7 +2953,9 @@ describe('ConversationView tool history', () => {
       expect(frame).toContain('separate-tool-result');
       expect(frame).toContain('Read imaginary.ts is response prose');
       expect(countOccurrences(frame, 'imaginary.ts')).toBe(1);
-      assertSafeFrames(app.frames.slice(start), ['HIDDEN_REASONING_BODY']);
+      expect(countOccurrences(frame, '◇ REASONING_BODY')).toBe(1);
+      expect(frame.indexOf('separate-tool-result')).toBeLessThan(frame.indexOf('◇ REASONING_BODY'));
+      expect(frame.indexOf('◇ REASONING_BODY')).toBeLessThan(frame.indexOf('Read imaginary.ts is response prose'));
     } finally {
       app.unmount();
     }
@@ -6739,6 +6747,212 @@ describe('TUI scrollback output', () => {
       }
       terminal.restore();
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ConversationView conversation log order', () => {
+  const CTRL_O = '\x0f';
+
+  async function begin(app: ReturnType<typeof render>, conversation: ScriptedConversation, text = 'inspect the code'): Promise<TuiSubmitInput> {
+    await flushFrames();
+    app.stdin.write(text);
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    const input = conversation.submitCalls.at(-1);
+    if (input === undefined) throw new Error('The view did not start a submission.');
+    return input;
+  }
+
+  function emit(input: TuiSubmitInput, event: StreamEvent): void {
+    if (input.onStreamEvent === undefined) throw new Error('The submission has no stream sink.');
+    input.onStreamEvent(event);
+  }
+
+  function frameOf(app: ReturnType<typeof render>): string {
+    return stripAnsi(app.lastFrame() ?? '');
+  }
+
+  /** Rows above the prompt box: the transcript and the running area. */
+  function rowsAbovePrompt(frame: string): string[] {
+    const rows = frame.split('\n');
+    return rows.slice(0, rows.findIndex((row) => row.startsWith('╭')));
+  }
+
+  function expectInOrder(frame: string, parts: readonly string[]): void {
+    let from = 0;
+    for (const part of parts) {
+      const index = frame.indexOf(part, from);
+      expect(index, `${part} after offset ${from}\n${frame}`).toBeGreaterThanOrEqual(from);
+      from = index + part.length;
+    }
+  }
+
+  it('should show the user line, thinking, tools and the reply in the order they happened, each committed once', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'thinking', data: { thinking: 'Plan: read ' } });
+      emit(input, { type: 'thinking', data: { thinking: 'the file' } });
+      await flushFrames();
+      const live = frameOf(app);
+      expect(rowsAbovePrompt(live).at(-1)).toBe('◇ Plan: read the file');
+      expect(countOccurrences(live, 'Plan: read the file')).toBe(1);
+      expect(statusRows(live).join('\n')).toContain(UI.extendedThinking);
+      expect(statusRows(live).join('\n')).not.toContain('Plan: read');
+
+      emit(input, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'a.ts' } } });
+      await flushFrames();
+      const running = frameOf(app);
+      expect(countOccurrences(running, '◇ Plan: read the file')).toBe(1);
+      expect(rowsAbovePrompt(running).some((row) => row.startsWith('◆ Read a.ts …'))).toBe(true);
+
+      emit(input, { type: 'tool_result', data: { id: 'read', content: 'file-body', isError: false } });
+      emit(input, { type: 'thinking', data: { thinking: 'Now answer.' } });
+      await flushFrames();
+      input.onAssistantChunk('streamed ');
+      input.onAssistantChunk('answer');
+      await flushFrames();
+      expect(countOccurrences(frameOf(app), 'streamed answer')).toBe(1);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'final answer' });
+      await flushFrames();
+
+      const done = frameOf(app);
+      expectInOrder(done, ['❯ inspect the code', '◇ Plan: read the file', '◆ Read a.ts ✓', 'file-body', '◇ Now answer.', '● final answer']);
+      for (const once of ['Plan: read the file', 'file-body', 'Now answer.', 'final answer']) {
+        expect(countOccurrences(done, once), once).toBe(1);
+      }
+      expect(done).not.toContain('streamed answer');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the status label and add no thinking entry when the provider sends no thinking text', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'thinking', data: { thinking: '' } });
+      await flushFrames();
+      expect(statusRows(frameOf(app)).join('\n')).toContain(UI.extendedThinking);
+      expect(frameOf(app)).not.toContain('◇');
+      conversation.resolveWith({ kind: 'assistant_response', content: 'plain answer' });
+      await flushFrames();
+      expect(frameOf(app)).toContain('● plain answer');
+      expect(frameOf(app)).not.toContain('◇');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the running tool area between the transcript and the prompt instead of below the status row', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'build', tool: 'Bash', input: { command: 'npm run build' } } });
+      emit(input, { type: 'tool_output', data: { id: 'build', tool: 'Bash', output: '> tsc -p tsconfig.json\n' } });
+      await flushFrames();
+      const rows = frameOf(app).split('\n');
+      const prompt = rows.findIndex((row) => row.startsWith('╭'));
+      const tool = rows.findIndex((row) => row.startsWith('◆ Bash Ran npm run build … running'));
+      expect(tool).toBeGreaterThan(-1);
+      expect(tool).toBeLessThan(prompt);
+      expect(rows[tool + 1]).toBe('  > tsc -p tsconfig.json');
+      expect(rows.findIndex((row) => /Tools:/u.test(row))).toBeLessThan(prompt);
+      expect(rows.findIndex((row) => statusRows(row).length > 0)).toBeGreaterThan(prompt);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should hold a queued line above the prompt and move it into the transcript once when its turn starts', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    const heading = getLabel('tui.ui.queuedCount', 'en', { count: '1' });
+    try {
+      const first = await begin(app, conversation);
+      emit(first, { type: 'tool_use', data: { id: 'before', tool: 'Read', input: { file_path: 'before.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'before', content: 'before-result', isError: false } });
+      app.stdin.write('next request');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      const queued = frameOf(app).split('\n');
+      const headingRow = queued.findIndex((row) => row.includes(heading));
+      expect(headingRow).toBeGreaterThan(-1);
+      expect(queued[headingRow]).toContain(UI.queuedHint);
+      expect(queued[headingRow + 1]).toBe('❯ next request');
+      expect(queued[headingRow + 2]!.startsWith('╭')).toBe(true);
+      expect(countOccurrences(frameOf(app), 'next request')).toBe(1);
+
+      emit(first, { type: 'tool_use', data: { id: 'after', tool: 'Read', input: { file_path: 'after.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'after', content: 'after-result', isError: false } });
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+      const moved = frameOf(app);
+      expect(conversation.submitCalls.map(({ text }) => text)).toEqual(['inspect the code', 'next request']);
+      expectInOrder(moved, ['❯ inspect the code', 'before-result', 'after-result', '● first answer', '❯ next request']);
+      expect(countOccurrences(moved, 'next request')).toBe(1);
+      expect(moved).not.toContain(heading);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each(['interrupted', 'error'] as const)('should keep the thinking and tools shown so far and record the %s turn after them', async (ending) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'done', tool: 'Bash', input: { command: 'npm test' } } });
+      emit(input, { type: 'tool_result', data: { id: 'done', content: 'kept-result', isError: false } });
+      emit(input, { type: 'thinking', data: { thinking: 'Half-finished thought' } });
+      await flushFrames();
+      if (ending === 'interrupted') app.stdin.write(ESC);
+      else conversation.resolveWith({ kind: 'error', message: 'provider failed' });
+      await flushFrames();
+      const frame = frameOf(app);
+      expectInOrder(frame, ['◆ Bash Ran npm test ✓', 'kept-result', '◇ Half-finished thought',
+        ending === 'interrupted' ? UI.responseInterrupted : 'provider failed']);
+      expect(countOccurrences(frame, 'Half-finished thought')).toBe(1);
+      if (ending === 'interrupted') conversation.resolveWith({ kind: 'assistant_response', content: 'late' });
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('should mark omitted output with a dim [more] and show the raw times only when expanded in %s', async (lang) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const level = chalk.level;
+    chalk.level = 3;
+    const app = renderConversation(conversation, 'chat', vi.fn(), { lang });
+    let now = 1794811657541;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'log', tool: 'Bash', input: { command: 'cat log' } } });
+      emit(input, { type: 'tool_use', data: { id: 'running', tool: 'Read', input: { file_path: 'running.ts' } } });
+      now += 74;
+      emit(input, { type: 'tool_result', data: { id: 'log', content: 'one\ntwo\nthree\nfour', isError: false } });
+      await flushFrames();
+      const compact = frameOf(app);
+      expectInOrder(compact, ['◆ Bash Ran cat log ✓ 74 ms', '  one', '  two', '  three', '  [more]']);
+      for (const raw of ['@1794811657541', '#1', getLabel('tui.ui.toolHistoryCompletion', lang), '[出力を省略・続きあり]', '[truncated; more]']) {
+        expect(compact).not.toContain(raw);
+      }
+      const committed = (app.lastFrame() ?? '').split('\n').find((row) => stripAnsi(row) === '  [more]');
+      expect(committed).toContain('\x1b[2m');
+      app.stdin.write(CTRL_O);
+      await flushFrames();
+      expect(frameOf(app)).toContain('@1794811657541');
+    } finally {
+      clock.mockRestore();
+      app.unmount();
+      chalk.level = level;
     }
   });
 });

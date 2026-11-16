@@ -204,7 +204,7 @@ describe('manager summary transcript and terminal height', () => {
       const hints = rows.slice(promptEnd + 1, promptEnd + 1 + hintRows);
       expect(hints.join('  ')).toBe(getLabel('manager.inputHint', 'en'));
       expect(rows[promptEnd + 1 + hintRows]).toContain('Ongoing 0');
-      const start = rows.findIndex((row) => row.startsWith('✓ Bash'));
+      const start = rows.findIndex((row) => row.startsWith('◆ ✓ Bash'));
       const end = rows.findIndex((row) => row.includes('Tools:'));
       expect(start).toBeGreaterThanOrEqual(0);
       expect(end).toBeGreaterThan(start);

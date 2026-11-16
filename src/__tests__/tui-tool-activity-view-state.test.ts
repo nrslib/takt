@@ -7,7 +7,7 @@ import {
 import type { ToolActivityGroup, ToolActivityProjection } from '../shared/tool-activity/types.js';
 import { ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 
-const labels: ToolActivityViewLabels = { compact: 'compact', expanded: 'expanded', more: 'more', end: 'end', completion: 'completion' };
+const labels: ToolActivityViewLabels = { compact: 'compact', expanded: 'expanded', more: 'more', end: 'end', completion: 'completion', running: 'running' };
 
 function fixture(content: string) {
   const entry: ToolActivityProjection = {
@@ -44,11 +44,12 @@ describe('tool activity view state', () => {
       const initial = createToolActivityViewState();
       const groups = display.groups();
       const compact = toolActivityViewPage(display, groups, initial, 80, 10, labels);
-      const header = `${isError ? '✗' : '✓'} ${title}`;
-      expect(compact.rows[0]).toBe(`${header} ${summary}`);
+      expect(compact.rows[0]).toMatch(new RegExp(`^${title} ${summary.replace(/[.*]/gu, '\\$&')} ${isError ? '✗' : '✓'} \\d+ ms$`, 'u'));
+      expect(compact.heads).toEqual([0]);
       expect(compact.rows).toContain('ready');
       const expanded = toolActivityViewPage(display, groups, toggleToolActivityView(initial), 80, 10, labels);
-      expect(expanded.rows[0]).toBe(header);
+      expect(expanded.rows[0]).toBe(`${isError ? '✗' : '✓'} ${title}`);
+      expect(expanded.heads).toEqual([0]);
       expect(expanded.rows).toContain(summary);
       expect(expanded.rows).toContain('ready');
     },
@@ -100,8 +101,8 @@ describe('tool activity view state', () => {
   it('stores only the visible prefix and keeps an undisplayed wide grapheme out of the source range', () => {
     const { reader, groups } = fixture('ready');
     const initial = createToolActivityViewState();
-    const page = toolActivityViewPage(reader, groups, initial, 10, 1, labels);
-    expect(page.rows).toEqual(['✓ Bash Ra…']);
+    const page = toolActivityViewPage(reader, groups, initial, 12, 1, labels);
+    expect(page.rows).toEqual(['Ba… ✓ 250 ms']);
     const input = { ...initial, expanded: true, position: { ...initial.position, section: 'input' as const } };
     groups[0]!.entries[0]!.input = '日本語';
     const tiny = toolActivityViewPage(reader, groups, input, 1, 1, labels);
@@ -112,7 +113,7 @@ describe('tool activity view state', () => {
     groups[0]!.entries[0]!.input = 'printf\tready';
     const state = createToolActivityViewState();
     const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
-    expect(wide.rows).toEqual(['✓ Bash Ran printf ready']);
+    expect(wide.rows).toEqual(['Bash Ran printf ready ✓ 250 ms']);
   });
   it('finishes the page safely when the selected unfinished entry is removed at turn termination', () => {
     const { reader, groups } = fixture('completed-result');
@@ -188,10 +189,38 @@ describe('tool activity view state', () => {
   it('should collapse to the shared compact summary and mark omitted results', () => {
     const { reader, groups } = fixture('one\ntwo\nthree\nfour');
     const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
-    expect(page.rows).toContain('✓ Bash Ran printf ready');
-    expect(page.rows).toContain('success @1000 → @1250 (250 ms) completion #2');
-    expect(page.rows.slice(-4)).toEqual(['one', 'two', 'three', 'more']);
+    expect(page.rows).toEqual(['Bash Ran printf ready ✓ 250 ms', 'one', 'two', 'three', 'more']);
     expect(reader.detail).not.toHaveBeenCalled();
+  });
+
+  it('should show the raw start and completion times and the completion order only when expanded', () => {
+    const { reader, groups } = fixture('one\ntwo');
+    const compact = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
+    for (const row of compact.rows) {
+      expect(row).not.toMatch(/@\d|#\d|completion/u);
+    }
+    const expanded = toolActivityViewPage(reader, groups, toggleToolActivityView(createToolActivityViewState()), 100, 10, labels);
+    expect(expanded.rows).toContain('success @1000 → @1250 (250 ms) completion #2');
+  });
+
+  it.each([
+    { status: 'success' as const, durationMs: 74, expected: 'Bash Ran printf ready ✓ 74 ms' },
+    { status: 'failure' as const, durationMs: 3240, expected: 'Bash Ran printf ready ✗ 3.2 s' },
+    { status: 'success' as const, durationMs: undefined, expected: 'Bash Ran printf ready ✓' },
+    { status: 'running' as const, durationMs: undefined, expected: 'Bash Ran printf ready … running' },
+  ])('should end the compact header with the $status status and duration', ({ status, durationMs, expected }) => {
+    const { reader, groups } = fixture('');
+    groups[0]!.entries[0] = { ...groups[0]!.entries[0]!, status, durationMs, result: { text: '', nextOffset: 0, hasMore: false, truncated: false } };
+    const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
+    expect(page.rows).toEqual([expected]);
+  });
+
+  it('should shorten the title rather than the status in a narrow compact header', () => {
+    const { reader, groups } = fixture('');
+    groups[0]!.entries[0]!.result = { text: '', nextOffset: 0, hasMore: false, truncated: false };
+    const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 20, 10, labels);
+    expect(page.rows).toEqual(['Bash Ran p… ✓ 250 ms']);
+    expect(stringWidth(page.rows[0]!)).toBeLessThanOrEqual(20);
   });
 
   it('should page forward and back without skipping the wrapped tail of a Japanese single line', () => {
