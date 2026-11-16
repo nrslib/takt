@@ -721,6 +721,39 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(events.at(-1)?.data).toEqual({ result: response.content, success: true, sessionId });
   });
 
+  it('masks an unregistered credential continued by short chunks after a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    const fragments = ['password=p', 'riv', 'ateValue987654321\n'];
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[0] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[1] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[2] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = fragments.join('');
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(fragments[1]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!);
+    expect(response.content.trim()).toBe('password=[REDACTED]');
+  });
+
   it('keeps both halves of a configured credential split across ordinary chunks out of the stream', async () => {
     const sessionId = 'error-mapping-session';
     const credential = process.env.DEEPSEEK_API_KEY!;

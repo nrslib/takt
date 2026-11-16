@@ -576,10 +576,10 @@ function writeResponseRedactedChunks(
     const values = new Set(Object.values(knownSecrets));
     for (const value of context.buffer.sensitiveValues.values) values.add(value);
     const knownRanges = substringSensitiveRanges(combined, values);
-    // Generic pattern matching needs a substantial credential fragment; otherwise a natural-language
-    // word after a tool would be masked merely because the earlier assignment happens to touch it.
-    const firstTokenLength = /^\S+/u.exec(text)?.[0].length ?? 0;
-    const candidateRanges = firstTokenLength >= 8 ? sensitiveTextRanges(combined, new Set()) : [];
+    // Do not join a capitalized natural-language sentence to the earlier assignment. Short credential
+    // fragments still need the generic pattern check, including when the next chunk completes them.
+    const startsNaturalLanguage = /^[A-Z]/u.test(text) && /\s/u.test(text);
+    const candidateRanges = startsNaturalLanguage ? [] : sensitiveTextRanges(combined, new Set());
     const boundaryRanges = [...knownRanges, ...candidateRanges]
       .filter((range) => range.end > boundary)
       .map((range) => ({
