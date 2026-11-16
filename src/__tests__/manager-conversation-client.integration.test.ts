@@ -170,7 +170,7 @@ it.each(['before publication', 'after publication'])(
     await client.submit({ kind: 'message', text: 'Current turn' }); await fixture.executing(2);
     const operationId = client.getSnapshot().state!.running!.operationId;
     vi.spyOn(daemonFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
-      if (path.endsWith(`/conversation-tool-history/${client.getSnapshot().state!.conversationId}.jsonl`)
+      if (path.endsWith(join('conversation-tool-history', `${client.getSnapshot().state!.conversationId}.jsonl`))
         && content.includes(operationId) && content.includes('turn-2.ts') && content.includes('ready')) {
         saving.resolve(); await publish.promise;
       }

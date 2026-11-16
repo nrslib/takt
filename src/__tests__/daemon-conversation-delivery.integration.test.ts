@@ -143,6 +143,27 @@ it('captures the waiting message count with messages accepted while the snapshot
   } finally { release.resolve(); await reading; }
 });
 
+it('counts a message scheduled after an idle snapshot started as waiting in that snapshot', async () => {
+  const f = await fixture(); const socket = await f.connect();
+  const opened = socket.frames.find((frame) => (frame as { result?: { attachmentId?: string } }).result?.attachmentId !== undefined) as { result: { attachmentId: string } };
+  const entered = deferred<void>(); const release = deferred<void>();
+  const display = f.routing.display.bind(f.routing);
+  vi.mocked(f.routing.display).mockImplementationOnce(async (assignment) => { entered.resolve(); await release.promise; return display(assignment); });
+  const reading = f.service.snapshot(opened.result.attachmentId);
+  try {
+    await entered.promise;
+    await f.service.submit({ attachmentId: opened.result.attachmentId, requestId: randomUUID(),
+      speaker: selected.speaker, command: { kind: 'message', text: 'accepted while idle' } });
+    release.resolve();
+    const snapshot = await reading;
+    const items = []; for await (const item of snapshot.items) items.push(item);
+    snapshot.complete();
+    expect(items.flatMap((item) => item.kind === 'user_message' && item.pending ? [item.message] : []))
+      .toEqual(['accepted while idle']);
+    expect(items.find((item) => item.kind === 'state')).toMatchObject({ state: { running: null, queuedMessageCount: 1 } });
+  } finally { release.resolve(); await reading; await vi.waitFor(() => expect(f.starts).toHaveLength(1)); }
+});
+
 it('keeps state, text, parallel completions and replies FIFO when a write is blocked', async () => {
   const f = await fixture(); const socket = await f.connect();
   await f.owner.started(f.turn);

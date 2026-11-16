@@ -201,8 +201,7 @@ export class DaemonDispatcher implements DaemonIngress, DaemonBus {
         const id = ++this.nextId;
         this.ancillaryEffects.add(id);
         effects.push(effect(() => this.dependencies.conversations.snapshot(conversationId, { toolHistory: notice.toolHistory, capture: (snapshot) => {
-          const operationId = this.active.get(conversationId)?.turn.operationId;
-          snapshot.queuedMessageCount = this.queues.pending(conversationId).filter((event) => event.lane === 'human' && event.operationId !== operationId).length;
+          snapshot.queuedMessageCount = this.queues.pending(conversationId).filter((event) => event.lane === 'human' && event.operationId !== snapshot.operationId).length;
           notice.capture?.(snapshot);
         } }), (result) => ({ kind: 'snapshot_read', id, conversationId, reply: response, result })));
         break;

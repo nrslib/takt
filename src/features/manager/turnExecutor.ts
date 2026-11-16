@@ -60,7 +60,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             : event.type === 'tool_result' ? event.data.completedToolIds?.[0] ?? pending[0] ?? randomUUID() : pending[0] ?? randomUUID());
           if ((event.type === 'tool_use' || event.type === 'tool_output') && !pending.includes(id)) pending.push(id);
           if (event.type === 'tool_result') {
-            const completed = event.data.completedToolIds ?? [id];
+            const completed = [id, ...(event.data.completedToolIds ?? [])];
             for (const value of completed) { const index = pending.indexOf(value); if (index >= 0) pending.splice(index, 1); }
           }
           return { ...event, data: { ...event.data, id }, toolActivity: context } as ToolActivityEvent;
