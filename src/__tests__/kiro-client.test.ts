@@ -1651,6 +1651,20 @@ describe('callKiro with real kiro-cli ACP stream-json payload', () => {
     expect(textEventsOf(onStream)).toEqual(['Progress note: editing retry.ts. ']);
   });
 
+  it('Given an ACP tool call without prior text or finalText, Then the body is empty with the session ID', async () => {
+    const toolOnly = acpStdout
+      .replace(`${chunk('HEL')}\n${chunk('LO')}`, toolCallLine)
+      .replace('"finalText":"FINAL"', '"finalText":""');
+    mockSpawnWithScenario({ stdout: toolOnly, code: 0 });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'run the tool', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(result.error).toBeUndefined();
+    expect(textEventsOf(onStream)).toEqual([]);
+  });
+
   it('Given finalText is truncated, When called, Then falls back to the streamed chunks', async () => {
     const truncated = acpStdout.replace(
       '"finalText":"FINAL","finalTextTruncated":false',

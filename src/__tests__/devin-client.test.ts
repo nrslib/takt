@@ -1212,6 +1212,55 @@ describe('callDevin', () => {
     },
   );
 
+  it('Given a cancelled turn with confirmed text, When called, Then preserves the partial output', async () => {
+    const onStream = vi.fn();
+    mockAcpServer({
+      stopReason: 'cancelled',
+      updates: [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial before cancellation' } },
+      ],
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('Devin execution aborted');
+    expect(result.partialOutput).toBe('partial before cancellation');
+    expect(onStream).toHaveBeenCalledWith({ type: 'result', data: expect.objectContaining({
+      success: false,
+      result: 'partial before cancellation',
+      partialOutput: 'partial before cancellation',
+    }) });
+  });
+
+  it('Given the process exits after confirmed text, When called, Then preserves the partial output with the error', async () => {
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, api, _id) => {
+          queueMicrotask(() => {
+            api.notify('session/update', {
+              sessionId: 'keen-otter',
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial before exit' } },
+            });
+            child.emit('close', 2, null);
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 2');
+    expect(result.partialOutput).toBe('partial before exit');
+  });
+
   it('Given the process exits mid-turn, When called, Then returns an error with stderr detail', async () => {
     mockSpawn.mockImplementation((...call: unknown[]) => {
       recordConfigArg(call);

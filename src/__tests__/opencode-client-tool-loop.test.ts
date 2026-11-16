@@ -863,13 +863,14 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(result.content).not.toContain(unavailableToolError);
   });
 
-  it('should stream every text part but return only the last one, so earlier working text stays out of the result', async () => {
+  it('should stream every text part and join all post-tool answer parts without earlier working text', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-final-text';
     const stream = new MockEventStream([
       textPartUpdated(sessionId, 'note-part', 'Checked input.ts. Remaining: answer.'),
       sensitiveToolPartUpdated(sessionId, 'tool-part', 'unused-token'),
-      textPartUpdated(sessionId, 'answer-part', 'final answer'),
+      textPartUpdated(sessionId, 'answer-part-1', 'final '),
+      textPartUpdated(sessionId, 'answer-part-2', 'answer'),
       sessionIdle(sessionId),
     ], sessionId);
     createOpencodeMock.mockResolvedValue({
@@ -896,7 +897,8 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('final answer');
     expectStreamTextOnce(onStream, 'Checked input.ts. Remaining: answer.');
-    expectStreamTextOnce(onStream, 'final answer');
+    expectStreamTextOnce(onStream, 'final ');
+    expectStreamTextOnce(onStream, 'answer');
   });
 
   it('should return an empty successful result with the session when the turn ends with a tool, so a note before the tool is not the answer', async () => {

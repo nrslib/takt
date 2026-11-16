@@ -187,12 +187,15 @@ export class DevinClient {
       const proc = spawnDevinAcp(args, options);
       const outcome = await runDevinAcpPrompt(proc, buildPrompt(prompt, options.systemPrompt), options);
       const { sessionId, providerUsage } = outcome;
+      const content = outcome.content.trim();
 
       if (outcome.stopReason === 'cancelled' || options.abortSignal?.aborted) {
-        throw createExecError(DEVIN_ABORTED_MESSAGE, { name: 'AbortError', sessionId });
+        throw createExecError(DEVIN_ABORTED_MESSAGE, {
+          name: 'AbortError',
+          sessionId,
+          ...(content.length === 0 ? {} : { partialOutput: content }),
+        });
       }
-
-      const content = outcome.content.trim();
       // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
       // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
       const endedAfterToolCall = outcome.calledTool && outcome.stopReason === 'end_turn';
@@ -262,7 +265,8 @@ export class DevinClient {
         };
       }
       const message = classifyExecutionError(error, options);
-      emitResult(options, '', false, message, sessionId);
+      const { partialOutput } = error;
+      emitResult(options, partialOutput ?? '', false, message, sessionId, undefined, partialOutput);
       return {
         persona: agentType,
         status: 'error',
@@ -271,6 +275,7 @@ export class DevinClient {
         timestamp: new Date(),
         sessionId,
         providerUsage: usageMissingSnapshot(),
+        ...(partialOutput === undefined ? {} : { partialOutput }),
       };
     } finally {
       try {

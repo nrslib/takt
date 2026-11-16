@@ -548,6 +548,8 @@ export async function runDevinAcpPrompt(
     // The session may already exist (session/new resolved) even though the
     // turn failed — report it so the caller can resume or inspect it.
     normalized.sessionId = sessionId;
+    const partialOutput = textParts.join('');
+    if (partialOutput.length > 0) normalized.partialOutput = partialOutput;
     throw normalized;
   } finally {
     options.abortSignal?.removeEventListener('abort', onAbort);

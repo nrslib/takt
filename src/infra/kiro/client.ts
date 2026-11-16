@@ -337,7 +337,7 @@ function collectKiroStructuredEvents(
   value: unknown,
   events: StreamEvent[],
   assistantText: string[],
-  terminalContent: { value?: string },
+  terminalContent: { value?: string; calledTool?: boolean },
 ): void {
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -427,6 +427,7 @@ function collectKiroStructuredEvents(
     collectKiroStructuredEvents(update, events, assistantText, terminalContent);
   }
   if (updateKind === 'toolcall') {
+    terminalContent.calledTool = true;
     startNewAnswerSegment(assistantText);
   }
 
@@ -451,7 +452,7 @@ function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
 
   const events: StreamEvent[] = [];
   const assistantText: string[] = [];
-  const terminalContent: { value?: string } = {};
+  const terminalContent: { value?: string; calledTool?: boolean } = {};
   let sessionId: string | undefined;
   for (const line of lines) {
     sessionId = extractKiroSessionId(line) ?? sessionId;
@@ -465,7 +466,7 @@ function parseKiroOutput(stdout: string): KiroParsedOutput | { error: string } {
   const content = streamedText ? assistantText.join('') : terminalContent.value ?? '';
   // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
   // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
-  if (content.length === 0 && events.length === 0) {
+  if (content.length === 0 && events.length === 0 && terminalContent.calledTool !== true) {
     return {
       error: `Failed to extract assistant content from kiro-cli JSONL output: ${trimDetail(trimmed)}`,
     };

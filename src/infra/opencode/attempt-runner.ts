@@ -1951,9 +1951,9 @@ export class OpenCodeAttemptRunner {
       failureMessage = 'OpenCode stream ended before the session became idle';
     }
 
-    // The result is the last text part after the last tool part. Other text parts are working text
-    // (progress notes, commentary), so a turn that ends with a tool has no answer.
-    content = [...textContentParts.values()].at(-1) ?? '';
+    // All remaining text parts form the answer after the last tool part. A turn that ends with a
+    // tool has no answer because tool handling cleared every earlier text part.
+    content = [...textContentParts.values()].join('');
     if (!success && !streamAbortController.signal.aborted) {
       streamAbortController.abort();
     }

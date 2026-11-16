@@ -473,7 +473,10 @@ export async function callAIWithRetry(
     const firstAttempt = await callProvider(agent, sessionId, display);
     const response = firstAttempt.response;
     display?.flush();
-    const success = response.status !== 'blocked' && response.status !== 'error';
+    const emptyResponse = response.status === 'done'
+      && response.structuredOutput === undefined
+      && response.content.trim().length === 0;
+    const success = response.status !== 'blocked' && response.status !== 'error' && !emptyResponse;
     const rejectedSession = !success && sessionId !== undefined
       && ctx.providerType !== 'deepseek-harness'
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
@@ -489,6 +492,7 @@ export async function callAIWithRetry(
     if (!abortController.signal.aborted
       && !forceExitRequested
       && !success
+      && !emptyResponse
       && canRetrySession
       // DeepSeek has no stale-session recovery. Retrying an unsupported
       // constraint without an ID cannot make that same constraint supported.
@@ -548,8 +552,10 @@ export async function callAIWithRetry(
     }
     return {
       result: {
-        content: success ? response.content : (response.error ?? response.content)
-          + (startFreshNextTurn
+        content: success
+          ? response.content
+          : (response.error ?? (emptyResponse ? 'The AI returned an empty response' : response.content))
+            + (startFreshNextTurn
             ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
             : ''),
         sessionId: startFreshNextTurn || rejectedSession ? undefined : response.sessionId,

@@ -278,10 +278,7 @@ export class ProgressNotesStore {
     return 'content' in file ? file.content.toString('utf8') : undefined;
   }
 
-  /**
-   * Returns the log as saved. One source revision check covers both the save and the returned log,
-   * so a caller that needs the log right after saving does not fingerprint the sources again.
-   */
+  /** Returns the sanitized log as saved after validating the current source revision. */
   append(note: string): string {
     this.assertCurrentTarget();
     return this.writeLog(`${this.readLog() ?? ''}${note}`);

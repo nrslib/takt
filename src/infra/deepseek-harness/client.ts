@@ -660,32 +660,14 @@ function redactCrossBoundaryFinalValue(
   pendingText: string,
   knownSecrets: Record<string, string>,
 ): string {
-  let continuationLength = 0;
-  for (const secret of Object.values(knownSecrets)) {
-    if (secret.length < 2) {
-      continue;
-    }
-    for (let split = 1; split < secret.length; split += 1) {
-      if (
-        pendingText.endsWith(secret.slice(0, split))
-        && value.startsWith(secret.slice(split))
-      ) {
-        continuationLength = Math.max(continuationLength, secret.length - split);
-      }
-    }
-  }
-  if (continuationLength > 0) {
-    return '[REDACTED]' + sanitizeKnownSecrets(value.slice(continuationLength), knownSecrets);
-  }
   const combined = pendingText + value;
-  if (
-    pendingText.length > 0
-    && sanitizeKnownSecrets(pendingText, knownSecrets) === pendingText
-    && sanitizeKnownSecrets(combined, knownSecrets) !== combined
-  ) {
-    return '[REDACTED]';
-  }
-  return sanitizeKnownSecrets(value, knownSecrets);
+  const ranges = sensitiveTextRanges(combined, new Set(Object.values(knownSecrets)))
+    .filter((range) => range.end > pendingText.length)
+    .map((range) => ({
+      start: Math.max(0, range.start - pendingText.length),
+      end: Math.min(value.length, range.end - pendingText.length),
+    }));
+  return maskSensitiveRanges(value, ranges);
 }
 
 /**

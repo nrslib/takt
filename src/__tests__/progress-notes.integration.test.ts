@@ -389,7 +389,7 @@ describe('progress notes across provider attempts', () => {
     expect(store.read()).toBeUndefined();
   });
 
-  it('keeps one log across empty continuation, compaction and provider_error_fresh without replacing the short request', async () => {
+  it('keeps one log across repeated same-session continuations and compaction without replacing the short request', async () => {
     let calls = 0;
     provider(() => ({
       call: async (prompt, callOptions) => {
@@ -405,7 +405,7 @@ describe('progress notes across provider attempts', () => {
           callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
           return response('done');
         }
-        expect(callOptions.sessionId).toBeUndefined();
+        expect(callOptions.sessionId).toBe('thread');
         expect(progressNotesData(prompt)).toContain(laterProgress);
         return response('done');
       },
@@ -423,7 +423,7 @@ describe('progress notes across provider attempts', () => {
         return runAgent(undefined, attempt.instruction, { ...options, progressNotesInstruction: originalInstruction, sessionId: attempt.sessionId });
       },
     });
-    expect(reasons).toEqual(['initial', 'empty_continuation', 'provider_error_fresh']);
+    expect(reasons).toEqual(['initial', 'empty_continuation', 'empty_continuation']);
     expect(result.response.status).toBe('done');
     expect(calls).toBe(3);
   });
@@ -586,7 +586,7 @@ describe('progress notes across provider attempts', () => {
           callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
           return response('done');
         }
-        expect(callOptions.sessionId).toBeUndefined();
+        expect(callOptions.sessionId).toBe('thread');
         expect(prompt.split(instruction)).toHaveLength(2);
         expect(prompt.split(retryInstruction)).toHaveLength(2);
         expect(progressNotesData(prompt)).toContain(laterProgress);
@@ -713,7 +713,7 @@ describe('progress notes across provider attempts', () => {
           callOptions.onStream?.({ type: 'context_compacted', data: { sessionId: 'thread' } });
         }
         if (prompts.length === emptyRetryCall + 2) {
-          expect(callOptions.sessionId).toBeUndefined();
+          expect(callOptions.sessionId).toBe('thread');
           expect(progressNotesData(prompt)).toContain(laterProgress);
         }
         return response('done');
@@ -1250,7 +1250,7 @@ describe('progress notes across provider attempts', () => {
     try {
       const state = await engine.run();
       expect(state.status).toBe('completed');
-      expect(phase1Sessions).toEqual(['stale-thread', 'initial-thread', undefined, 'fresh-thread']);
+      expect(phase1Sessions).toEqual(['stale-thread', 'initial-thread', 'initial-thread', 'fresh-thread']);
       const effectiveFollowUpSession = followUpSession ?? 'fresh-thread';
       expect(reportSessions).toEqual(['fresh-thread', effectiveFollowUpSession]);
       expect(normalSessions).toEqual([undefined, 'coder-thread']);
@@ -2253,7 +2253,7 @@ describe('progress notes across provider attempts', () => {
 
   // Codex (rollout compaction) and Pi (compaction after the reply) report the compaction and then the
   // turn's result, with nothing in between; the notes saved at the compaction must serve the resend.
-  it.each(['streamed text', 'streamed text with the turn result after the compaction', 'the response alone'] as const)('fingerprints the sources once to save and resend notes delivered as %s across one compaction', async (delivery) => {
+  it.each(['streamed text', 'streamed text with the turn result after the compaction', 'the response alone'] as const)('validates the sources at save and again at recovery for notes delivered as %s across one compaction', async (delivery) => {
     const size = 256 * 1024;
     writeFileSync(join(cwd, 'large.bin'), Buffer.alloc(size, 0x61));
     const { readSync: readChunk } = await vi.importActual<typeof fs>('node:fs');
@@ -2285,9 +2285,19 @@ describe('progress notes across provider attempts', () => {
     }));
     try {
       expect(await runAgent(undefined, originalInstruction, { ...options, sessionId: 'thread' })).toMatchObject({ content: 'Review complete.' });
-      expect(atRecovery.inventories - atCall.inventories).toBe(1);
-      expect(atRecovery.bytes - atCall.bytes).toBe(size);
+      expect(atRecovery.inventories - atCall.inventories).toBe(2);
+      expect(atRecovery.bytes - atCall.bytes).toBeGreaterThanOrEqual(2 * size);
     } finally { chunkSpy.mockRestore(); gitSpy.mockRestore(); }
+  });
+
+  it('revalidates saved notes when a sibling changes sources after compaction and the turn result', async () => {
+    const session = await startProgressNotes(cwd, context, originalInstruction, 'en');
+    session.observe({ type: 'text', data: { text: progress } });
+    session.observe({ type: 'context_compacted', data: { sessionId: 'thread' } });
+    session.observe({ type: 'result', data: { result: progress, success: true, sessionId: 'thread' } });
+    writeFileSync(join(cwd, 'input.ts'), 'export const changedBySibling = true;\n');
+
+    expect(progressNotesData(session.instruction(originalInstruction))).toBeUndefined();
   });
 
   it.each([
@@ -2330,7 +2340,8 @@ describe('progress notes across provider attempts', () => {
     // Git omits FIFOs from its listing. Model a listed path becoming a FIFO at
     // lstat time, without risking a blocking read in the regression test.
     const { lstatSync: original } = await vi.importActual<typeof fs>('node:fs');
-    const spy = vi.spyOn(fs, 'lstatSync').mockImplementation((...args: Parameters<typeof fs.lstatSync>) => original(...(args[0] === join(cwd, 'special') ? [join(cwd, 'pipe')] as Parameters<typeof fs.lstatSync> : args)));
+    const realCwd = fs.realpathSync(cwd);
+    const spy = vi.spyOn(fs, 'lstatSync').mockImplementation((...args: Parameters<typeof fs.lstatSync>) => original(...(args[0] === join(realCwd, 'special') ? [join(realCwd, 'pipe')] as Parameters<typeof fs.lstatSync> : args)));
     const openSpy = vi.spyOn(fs, 'openSync');
     writeFileSync(join(cwd, 'special'), 'placeholder');
     openSpy.mockClear();
@@ -2339,7 +2350,7 @@ describe('progress notes across provider attempts', () => {
       expect(store.target.revision).toBeNull();
       store.append(progress);
       expect(store.read()).toBe(progress);
-      expect(openSpy.mock.calls.some(([path]) => path === join(cwd, 'special') || path === join(cwd, 'pipe'))).toBe(false);
+      expect(openSpy.mock.calls.some(([path]) => path === join(realCwd, 'special') || path === join(realCwd, 'pipe'))).toBe(false);
     } finally { spy.mockRestore(); openSpy.mockRestore(); }
   });
 

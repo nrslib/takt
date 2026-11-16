@@ -63,9 +63,8 @@ export async function startProgressNotes(
   let pending = '';
   let sawText = false;
   let available = true;
-  // The log as found at creation or last saved. Both already checked the source revision, so an
-  // instruction built before the provider reports anything else reuses it instead of fingerprinting
-  // the sources again.
+  // Creation already checked this log's source revision. Reuse it only for the first instruction
+  // before any provider event; recovery after work must read and validate the sources again.
   let savedLog = created.log;
   // Some clients (Codex) turn a stream callback exception into a provider error response, which a
   // fresh retry would then repeat in a new session. A failure while observing is therefore kept
@@ -80,7 +79,8 @@ export async function startProgressNotes(
     if (observedFailure !== undefined) throw observedFailure;
     if (!available || pending.length === 0) return;
     try {
-      savedLog = store.append(`${pending}\n`);
+      savedLog = undefined;
+      store.append(`${pending}\n`);
       pending = '';
     } catch (error) { stopRecording(error); }
   };
@@ -89,10 +89,9 @@ export async function startProgressNotes(
     observe: (event: StreamEvent): void => {
       if (!available) return;
       try {
-        // Other events mean the turn went on, and tools or sibling steps may have changed the sources
-        // since the last save. Codex and Pi report a compaction right before the turn's result, so the
-        // compaction and the result keep the log just saved for the recovery instruction that follows.
-        if (event.type !== 'context_compacted' && event.type !== 'result') savedLog = undefined;
+        // After any provider event, later recovery revalidates the current sources instead of
+        // reusing the log read at creation; sibling steps may have changed them in between.
+        savedLog = undefined;
         if (event.type === 'init') sawText = false;
         if (event.type === 'text') {
           sawText = true;
@@ -131,6 +130,7 @@ export async function startProgressNotes(
       flush();
       if (!available) return requestInstruction;
       let notes = savedLog;
+      savedLog = undefined;
       if (notes === undefined) {
         try {
           notes = store.read();
