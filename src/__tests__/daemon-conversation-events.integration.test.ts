@@ -388,6 +388,146 @@ it.each([
   }
 });
 
+const savedGoalAnswer = (text: string) => ({ text, source: 'tui' as const, answeredAt: '2026-11-08T12:00:00Z' });
+const goalWithQuestion = (questionId: string, body: string, answerText: string): Goal => ({ ...goalRecord(),
+  questions: [{ id: questionId, recipient: 'human' as const, body, status: 'answered' as const, answer: savedGoalAnswer(answerText) }] });
+
+async function goalAnswerFixture(...goals: Goal[]) {
+  vi.spyOn(watcherModule, 'startDaemonWatchers').mockImplementation(() => ({ changed() {}, async drain() {}, async close() {} }));
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  return fixture(async (_directory, repository) => {
+    for (const goal of goals) {
+      const directory = join(repository, '.takt', 'goals', goal.id);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'goal.json'), JSON.stringify(goal));
+    }
+  });
+}
+
+function goalAnswerReceiver(f: Awaited<ReturnType<typeof fixture>>, files: DaemonPersistedFiles, inbox: string) {
+  const target = { targetId: f.repository, conversationId: f.id, kind: 'inbox' as const, directory: inbox, generation: 'answer' };
+  return (name: string) => receiveInboxChange({ target, path: join(inbox, name), removed: false, generation: 'answer', value: {} },
+    files, f.conversations, f.dispatcher);
+}
+
+function goalAnswerService(directory: string, execute: PreparedConversationRuntime['executor']['execute']) {
+  return createConversationTurnService(directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'goal-answer', executor: { execute } };
+  }, async close() {} });
+}
+
+it('deduplicates one saved goal answer delivered through different inbox files', async () => {
+  const questionId = randomUUID();
+  const body = 'Continue the export verification?';
+  const answer = savedGoalAnswer('Continue');
+  const goal = goalWithQuestion(questionId, body, answer.text);
+  const f = await goalAnswerFixture(goal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(2);
+  const accept = vi.spyOn(f.dispatcher, 'accept');
+  const receive = goalAnswerReceiver(f, files, inbox);
+  for (const name of names) await receive(name);
+  const ids = accept.mock.calls.map(([value]) => value.eventId);
+  expect(new Set(ids).size).toBe(1);
+  expect(ids[0]).toMatch(/^goal-answer-[a-f0-9]{64}$/);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  await f.dispatcher.drain();
+  const call = await f.runner.started(1);
+  const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+    request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+  await f.runner.finish(call, outcome);
+  await f.dispatcher.drain();
+  expect(execute).toHaveBeenCalledOnce();
+  expect(f.runner.calls).toHaveLength(1);
+  expect(turnData(execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',
+    goalId: goal.id, questionId, question: body, answer });
+  expect(await readdir(inbox)).toEqual([]);
+});
+
+it('deduplicates a saved goal answer redelivered after a daemon restart', async () => {
+  const questionId = randomUUID();
+  const body = 'Continue after the restart?';
+  const answer = savedGoalAnswer('Continue');
+  const goal = goalWithQuestion(questionId, body, answer.text);
+  let f = await goalAnswerFixture(goal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: goal.id, questionId, answer });
+  const [first] = await readdir(inbox);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  await goalAnswerReceiver(f, files, inbox)(first!);
+  await f.dispatcher.drain();
+  const call = await f.runner.started(1);
+  const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+    request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+  await f.runner.finish(call, outcome);
+  await f.dispatcher.drain();
+  expect(execute).toHaveBeenCalledOnce();
+  await f.close();
+  f = await fixture();
+  const [remaining] = await readdir(inbox);
+  expect(remaining).toBeDefined();
+  expect(remaining).not.toBe(first);
+  await goalAnswerReceiver(f, new DaemonPersistedFiles(f.directory), inbox)(remaining!);
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(0);
+  expect(execute).toHaveBeenCalledOnce();
+  expect(await readdir(inbox)).toEqual([]);
+});
+
+it('processes goal answers for different goals and questions as separate events', async () => {
+  const sharedQuestionId = randomUUID();
+  const otherQuestionId = randomUUID();
+  const answer = savedGoalAnswer('Export');
+  const firstGoal = goalWithQuestion(sharedQuestionId, 'Which goal handles the export?', answer.text);
+  const secondGoal = { ...goalWithQuestion(sharedQuestionId, 'Which goal handles the import?', answer.text), id: randomUUID() };
+  const f = await goalAnswerFixture(firstGoal, secondGoal);
+  const files = new DaemonPersistedFiles(f.directory);
+  const inbox = await files.inboxDirectory(f.repository);
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: firstGoal.id, questionId: sharedQuestionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: firstGoal.id, questionId: otherQuestionId, answer });
+  saveManagerEvent(f.repository, { kind: 'answer', goalId: secondGoal.id, questionId: sharedQuestionId, answer });
+  const names = await readdir(inbox);
+  expect(names).toHaveLength(3);
+  const accept = vi.spyOn(f.dispatcher, 'accept');
+  const receive = goalAnswerReceiver(f, files, inbox);
+  for (const name of names) await receive(name);
+  expect(new Set(accept.mock.calls.map(([value]) => value.eventId)).size).toBe(3);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>().mockResolvedValue({
+    message: 'Answer received', summary: null, sessionId: 'goal-answer', assignment: undefined,
+  });
+  const service = goalAnswerService(f.directory, execute);
+  const events: unknown[] = [];
+  for (let index = 0; index < 3; index++) {
+    await vi.waitFor(() => expect(f.runner.calls.length).toBeGreaterThan(index), { timeout: 3000 });
+    const call = f.runner.calls[index]!;
+    events.push(call.input.event.event);
+    const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
+      request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
+    await f.runner.finish(call, outcome);
+    await f.dispatcher.drain();
+  }
+  expect(execute).toHaveBeenCalledTimes(3);
+  expect(events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: firstGoal.id, questionId: sharedQuestionId }),
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: firstGoal.id, questionId: otherQuestionId }),
+    expect.objectContaining({ kind: 'inquiry_answered', goalId: secondGoal.id, questionId: sharedQuestionId }),
+  ]));
+  expect(await readdir(inbox)).toEqual([]);
+});
+
 it('retains a standalone answer after storage rejection and consumes it after successful admission', async () => {
   const f = await fixture();
   const store = new StandaloneInquiryStore(f.directory, { kind: 'repository', repositoryDirectory: f.repository });

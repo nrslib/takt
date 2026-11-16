@@ -1,4 +1,5 @@
 import * as goalPr from '../infra/goals/pull-request.js';
+import * as autoRun from '../features/manager/autoRun.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 const actualManagerEvents = vi.hoisted(() => ({
   saveManagerEvent: undefined as undefined | typeof import('../infra/goals/events.js')['saveManagerEvent'],
@@ -2784,6 +2785,57 @@ describe('goal creation through the standalone MCP', () => {
       } else {
         expect(tool).toBeUndefined();
       }
+    });
+  });
+
+  it.each([undefined, 'all', 'manager', 'read-only'] as const)('exposes takt_answer_goal_question only on the standalone tool set %s', async (toolSet) => {
+    await withServer(cwd, toolSet, async (client) => {
+      const tools = (await client.listTools()).tools;
+      const tool = tools.find(({ name }) => name === 'takt_answer_goal_question');
+      if (toolSet === undefined || toolSet === 'all') {
+        expect(tool).toBeDefined();
+        expect(tool!.description).toContain('64 KiB');
+        expect(tool!.description).toContain('truncation');
+      } else {
+        expect(tool).toBeUndefined();
+      }
+    });
+  });
+
+  it('answers a pending question through the standalone MCP and records the answer and the manager event', async () => {
+    const questionId = '650e8400-e29b-41d4-a716-446655440001';
+    await withServer(cwd, 'all', async (client) => {
+      expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
+      await new GoalStore(cwd).update(createdId, (goal) => ({ ...goal, questions: [{
+        id: questionId, kind: 'question', recipient: 'human',
+        body: '出力形式はどれですか', status: 'pending', createdAt: '2026-11-01T00:00:00.000Z',
+      }] }));
+
+      const runSpy = vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+      let result;
+      try {
+        result = await client.callTool({ name: 'takt_answer_goal_question', arguments: {
+          cwd, goalId: createdId, questionId, answer: { text: 'CSV' },
+        } });
+        expect(runSpy).toHaveBeenCalledExactlyOnceWith(cwd);
+      } finally {
+        runSpy.mockRestore();
+      }
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+        questionId, answer: { text: 'CSV', source: 'mcp' },
+      });
+
+      const saved = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8'));
+      expect(saved.questions).toMatchObject([{
+        id: questionId, status: 'answered', answer: { text: 'CSV', source: 'mcp' },
+      }]);
+      const events = readManagerEvents(cwd).map(({ event }) => event);
+      expect(events).toHaveLength(2);
+      expect(events[1]).toMatchObject({
+        kind: 'answer', goalId: createdId, questionId, answer: { text: 'CSV', source: 'mcp' },
+      });
     });
   });
 
