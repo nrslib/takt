@@ -686,6 +686,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     expect(response).toMatchObject({ status: 'done', content: '[REDACTED]', sessionId });
     expect(response.content).not.toContain(suffix);
     expect(JSON.stringify(events)).not.toContain(`password=p${suffix}`);
+    expect(JSON.stringify(events)).not.toContain(suffix);
     expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
   });
 
