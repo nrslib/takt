@@ -38,9 +38,12 @@ export class ManagerClientDouble {
   getSnapshot = (): ConversationClientSnapshot => this.view;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   onOutput = (listener: (output: Output) => void): (() => void) => { this.outputs.add(listener); return () => { this.outputs.delete(listener); }; };
-  submit = vi.fn(async (_command: ConversationCommand, onAccepted?: (id: string) => void): Promise<Submission> => {
+  submit = vi.fn(async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<Submission> => {
     const operationId = randomUUID();
     onAccepted?.(operationId);
+    if (command.kind === 'message' && command.display !== false && this.view.state?.running == null) {
+      this.output({ kind: 'user_message', operationId, message: command.text });
+    }
     return { kind: 'accepted', operationId };
   });
   refresh = vi.fn(async (): Promise<void> => {});

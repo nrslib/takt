@@ -50,8 +50,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each(['tui', 'slack'] as const)('saves a normal answer with %s provenance and publishes it without a permission file', async (source) => {
+  const pendingWhenPublished: unknown[] = [];
+  doubles.event.mockImplementation(() => {
+    pendingWhenPublished.push(new GoalStore(repository).getSync(goalRecord().id).questions![0]!.answerPublicationPending);
+  });
   expect(await answer({ ...command, source })).toMatchObject({ kind: 'answer_saved', answerSaved: true });
-  expect((await new GoalStore(repository).get(goalRecord().id)).questions![0]).toMatchObject({ status: 'answered', answer: { text: 'CSV', source } });
+  const saved = (await new GoalStore(repository).get(goalRecord().id)).questions![0]!;
+  expect(saved).toMatchObject({ status: 'answered', answer: { text: 'CSV', source } });
+  expect(pendingWhenPublished).toEqual([true]);
+  expect(saved.answerPublicationPending).toBeUndefined();
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(repository, expect.objectContaining({ kind: 'answer', questionId: question.id,
     answer: expect.objectContaining({ text: 'CSV', source }) }));
   expect(doubles.run).toHaveBeenCalledExactlyOnceWith(repository);
@@ -82,6 +89,14 @@ it.each(['answer', 'event', 'run'] as const)('reports the actual partial success
   expect(await answer()).toMatchObject({ kind: 'error', answerSaved: failure !== 'answer' });
   expect((await new GoalStore(repository).get(goalRecord().id)).questions![0]!.status).toBe(failure === 'answer' ? 'pending' : 'answered');
   if (failure !== 'run') expect(doubles.run).not.toHaveBeenCalled();
+});
+
+it('keeps the saved goal answer marked for daemon publication when its manager event fails', async () => {
+  doubles.event.mockImplementationOnce(() => { throw new Error('event failed'); });
+  expect(await answer()).toMatchObject({ kind: 'error', answerSaved: true });
+  expect((await new GoalStore(repository).get(goalRecord().id)).questions![0]).toMatchObject({
+    status: 'answered', answer: { text: 'CSV', source: 'tui' }, answerPublicationPending: true,
+  });
 });
 
 it.each(['question', 'operation_request'] as const)('preserves %s answer semantics', async (kind) => {

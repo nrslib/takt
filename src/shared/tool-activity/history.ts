@@ -1,6 +1,6 @@
+import { limitToolOutput } from './outputLimit.js';
 import type { StreamCallContext, StreamEvent } from '../types/provider.js';
-import type { ToolActivityEntry, ToolActivityHistoryState } from './types.js';
-import { ToolActivityHistoryStateSchema } from './schema.js';
+import type { ToolActivityEntry } from './types.js';
 
 function sameContext(left: StreamCallContext | undefined, right: StreamCallContext | undefined): boolean {
   return left?.callId === right?.callId
@@ -18,19 +18,22 @@ export class ToolActivityHistory {
     return structuredClone(this.items);
   }
 
-  snapshot(): ToolActivityHistoryState {
-    return { entries: this.entries(), sequence: this.sequence };
-  }
-
-  restore(state: ToolActivityHistoryState): void {
-    const restored = ToolActivityHistoryStateSchema.parse(state);
-    this.items = structuredClone(restored.entries);
-    this.sequence = restored.sequence;
-  }
-
   get(key: string): ToolActivityEntry | undefined {
     const entry = this.items.find((item) => item.key === key);
     return entry === undefined ? undefined : structuredClone(entry);
+  }
+
+  upsert(entry: ToolActivityEntry): void {
+    const position = this.items.findIndex((item) => item.key === entry.key);
+    if (position < 0) this.items.push(structuredClone(entry));
+    else this.items[position] = structuredClone(entry);
+  }
+
+  appendOutput(key: string, text: string, limit: number): ToolActivityEntry | undefined {
+    const entry = this.items.find((item) => item.key === key);
+    if (entry === undefined || entry.status !== 'running') return undefined;
+    entry.output = limitToolOutput(entry.output + text, limit);
+    return structuredClone(entry);
   }
 
   apply(event: StreamEvent): ToolActivityEntry[] {

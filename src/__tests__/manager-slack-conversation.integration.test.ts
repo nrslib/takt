@@ -74,10 +74,14 @@ beforeEach(async () => {
       return receipt;
     }),
     control: vi.fn().mockResolvedValue({ kind: 'interrupted' }),
-    snapshot: vi.fn(async (): Promise<ConversationSnapshot> => ({ ...version, operationId, generation: 5,
-      transferId: randomUUID(), conversationId: id, mode: 'initial', cancel: vi.fn(), complete: vi.fn(),
-      turnState: { version: 1, assignment, session: { provider: 'mock', model: null, sessionId: 'same-session' }, revision: 4, pending: { revision: 4, repositoryDirectory, summary: { objective: 'work', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] } }, approval: null },
-      items: (async function* () { yield* items; })() })),
+    snapshot: vi.fn<DaemonIngress['snapshot']>(async (_id, request) => {
+      const snapshot: ConversationSnapshot = { ...version, operationId, generation: 5,
+        transferId: randomUUID(), conversationId: id, mode: 'initial', cancel: vi.fn(), complete: vi.fn(),
+        turnState: { version: 1, assignment, session: { provider: 'mock', model: null, sessionId: 'same-session' }, revision: 4, pending: { revision: 4, repositoryDirectory, summary: { objective: 'work', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] } }, approval: null },
+        items: (async function* () { yield* items; })() };
+      request?.capture?.(snapshot);
+      return snapshot;
+    }),
   };
   input = createDaemonConversationInput({ ingress, resolveAssignment: async (selected) => selected });
   slack = await createDaemonSlackPorts({ configDirectory: process.env.TAKT_CONFIG_DIR!, input,
@@ -117,7 +121,7 @@ it.each([
     : { kind: 'workspace' as const, workspaceId: workspace.id };
   const errors = vi.fn();
   const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
-    new DaemonNotifications(configDirectory), async () => {}, errors);
+    new DaemonNotifications(configDirectory), async () => {}, errors, { readTurns: async () => [] });
   const client = createSlackClient({ appToken: 'fake-app', botToken: 'fake-bot' });
   const port = createSlackConversationPort({ repositoryDirectory: repository, configDirectory,
     resolveAssignment: async () => workspace === undefined
@@ -204,9 +208,13 @@ it.each(['unchanged', 'removed', 'empty'] as const)('posts an MCP-created standa
       selected = { ...owner, name: current.name, repositoryDirectories: [...current.repositoryDirectories] };
       channelAssignment = { kind: 'repository', repositoryDirectory: repositories[1]!, repositoryDirectories: [repositories[1]!] };
     }
-    vi.mocked(ingress.snapshot).mockImplementation(async (conversation) => ({ ...base, conversationId: conversation,
-      turnState: { ...base.turnState, assignment: selected }, transferId: randomUUID(),
-      items: (async function* () { if (conversation === workspaceId) yield { kind: 'inquiry' as const, inquiry: { target, question } }; })() }));
+    vi.mocked(ingress.snapshot).mockImplementation(async (conversation, request) => {
+      const snapshot: ConversationSnapshot = { ...base, conversationId: conversation,
+        turnState: { ...base.turnState, assignment: selected }, transferId: randomUUID(),
+        items: (async function* () { if (conversation === workspaceId) yield { kind: 'inquiry' as const, inquiry: { target, question } }; })() };
+      request?.capture?.(snapshot);
+      return snapshot;
+    });
     beforeSave = async (event) => {
       if (event.event.kind !== 'inquiry_answer') throw new Error('Expected a question answer');
       expect(await answerConversationInquiry(event.event.command, selected, configDirectory, { signal: new AbortController().signal,
@@ -352,8 +360,12 @@ it('checks the operation repository for standalone workspace inquiries on delive
     await portB.delivery.deliver(workspaceId, { kind: 'inquiry', target, question }, version);
     expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'CB' }));
     const base = await ingress.snapshot(id); items = [{ kind: 'inquiry', inquiry: { target, question } }];
-    vi.mocked(ingress.snapshot).mockImplementation(async () => ({ ...base, conversationId: workspaceId, transferId: randomUUID(),
-      turnState: { ...base.turnState, assignment: workspace }, items: (async function* () { yield* items; })() }));
+    vi.mocked(ingress.snapshot).mockImplementation(async (_id, request) => {
+      const snapshot: ConversationSnapshot = { ...base, conversationId: workspaceId, transferId: randomUUID(),
+        turnState: { ...base.turnState, assignment: workspace }, items: (async function* () { yield* items; })() };
+      request?.capture?.(snapshot);
+      return snapshot;
+    });
     await new SlackInquiryBindings(configDirectory, repositories[0]!).save({ channelId: 'CA', parentTs: 'forged', target, questionId: question.id });
     await portA.receive({ teamId: 'T1', userId: 'U1', channelId: 'CA', parentTs: 'forged' }, 'answer');
     expect(events).toEqual([]);

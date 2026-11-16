@@ -62,7 +62,7 @@ async function fixture(mode: boolean, verdict?: 'failed' | 'error') {
   const received: Array<{ id: string; output: PortOutput }> = [];
   const failures = vi.fn();
   const conversations = new DaemonConversations(state, new DaemonRouting(directory), new DaemonNotifications(directory),
-    async (id, output) => { received.push({ id, output }); }, failures);
+    async (id, output) => { received.push({ id, output }); }, failures, eventStore);
   const progress = vi.spyOn(conversations, 'progress');
   const artifacts = { runDirectory: join(repository, '.takt/runs/verify-test'),
     specifications: { quint: join(repository, '.takt/runs/verify-test/spec.qnt') },
@@ -139,8 +139,9 @@ it.each([true, false])('preserves undelivered requirements through daemon settle
   const f = await fixture(mode);
   expect(f.queued).toBe(mode ? 'turn_progress' : 'turn_finished');
   expect(await f.interrupt()).toEqual({ kind: 'interrupted' });
-  await f.finalQueued.promise;
+  // 同じ接続への書き込みは順に完了するため、詰まった表示の送信が終わってから turn_finished が送られる。
   f.release();
+  await f.finalQueued.promise;
   await f.committed;
   expect((await f.state.read(f.record.id))!.state.interruptedMessage).toBe(f.record.interruptedMessage);
   expect(f.saveResult).toHaveBeenCalledOnce();
@@ -156,9 +157,9 @@ it.each(['failed', 'error'] as const)('delivers the retained %s checker result a
   expect(runFormalSpecVerification).toHaveBeenCalledOnce();
   expect(f.received.some(({ output }) => output.kind === 'result')).toBe(false);
   expect(await f.interrupt()).toEqual({ kind: 'interrupted' });
+  f.release();
   const queued = await f.finalQueued.promise;
   expect(queued.kind).toBe('interrupted');
-  f.release();
   await f.committed;
   const delivered = f.received.find(({ output }) => output.kind === 'result')!;
   expect(delivered.id).toBe(f.record.id);

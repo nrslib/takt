@@ -6,7 +6,7 @@ import type { ManagerAssignment } from './startupResolution.js';
 import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
-import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import type { ToolActivityTurnState, ToolActivityEntry } from '../../shared/tool-activity/types.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -32,7 +32,8 @@ export interface ConversationState {
 export type SnapshotValue =
   | EpicSnapshot
   | { kind: 'state'; state: ConversationState }
-  | { kind: 'tool_history'; history: ToolActivityTurnState }
+  | { kind: 'tool_history'; history: ToolActivityTurnState; acceptedSequence?: number }
+  | { kind: 'user_message'; operationId: string; message: string; acceptedSequence: number; pending: boolean }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string; awaitingHumanMerge: boolean } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
@@ -58,7 +59,9 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
-  | { kind: 'tool_history'; history: ToolActivityTurnState }
+  | { kind: 'tool_started'; entry: ToolActivityEntry }
+  | { kind: 'tool_completed'; entry: ToolActivityEntry }
+  | { kind: 'tool_output'; key: string; text: string; tail?: string }
   | { kind: 'activity'; operationId: string; generation: number; activity: ConversationActivity }
   | (ConversationText & { operationId: string; generation: number })
   | { kind: 'user_message'; operationId: string; message: string }
@@ -79,9 +82,9 @@ export interface ConversationOpen {
   agentOverrides?: AssistantCliOverrides;
 }
 export interface ConversationInput {
-  open(input: ConversationOpen, delivery: ConversationDelivery): Promise<{ attachmentId: string; read: SnapshotRead }>;
+  open(input: ConversationOpen, delivery: ConversationDelivery, enqueueSnapshot?: (read: SnapshotRead, attachmentId: string) => void): Promise<{ attachmentId: string; read: SnapshotRead }>;
   submit(input: { attachmentId: string; requestId: string; speaker: ConversationActor; command: ConversationCommand }): Promise<Submission>;
-  snapshot(attachmentId: string): Promise<SnapshotRead>;
+  snapshot(attachmentId: string, options?: { enqueueSnapshot?: (read: SnapshotRead) => void }): Promise<SnapshotRead>;
   detach(attachmentId: string): void;
 }
 export interface ConversationPort<Endpoint> {

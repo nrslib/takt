@@ -3,7 +3,6 @@ import { ExactLoopGuard, ExactRepeatStreakGuard } from './integrity-guards.js';
 import {
   EventCountGuard,
   ReasoningVolumeGuard,
-  SensitiveBudgetGuard,
   TextVolumeGuard,
   TrackedIdsGuard,
 } from './resource-guards.js';
@@ -16,14 +15,8 @@ export const OPENCODE_GUARD_REGISTRY: readonly OpenCodeGuardDescriptor[] = Objec
   { id: 'event-count', layer: 'resource', mandatory: true, create: (policy) => new EventCountGuard(policy.streamEventLimit) },
   { id: 'tracked-ids', layer: 'resource', mandatory: true, create: (policy) => new TrackedIdsGuard(policy.streamLimits.idLimit) },
   {
-    id: 'sensitive-budget',
-    layer: 'integrity',
-    mandatory: true,
-    create: (_policy, context) => new SensitiveBudgetGuard(context.sensitiveValues),
-  },
-  {
     id: 'inactivity-timeout', layer: 'time', mandatory: true,
-    create: (policy, _context, initialAttemptTimeoutMs) => new InactivityTimeoutGuard(policy.callTimeoutMs, initialAttemptTimeoutMs),
+    create: (policy, initialAttemptTimeoutMs) => new InactivityTimeoutGuard(policy.callTimeoutMs, initialAttemptTimeoutMs),
   },
   { id: 'exact-loop', layer: 'integrity', mandatory: true, create: (policy) => new ExactLoopGuard(policy) },
   { id: 'consecutive-errors', layer: 'heuristic', mandatory: false, create: (policy) => new ConsecutiveErrorsGuard(policy) },

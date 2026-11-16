@@ -5,7 +5,7 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { ConversationError } from './conversationErrors.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
-import type { ConversationDelivery, ConversationInput, ConversationOpen, OutputVersion, PortOutput, SnapshotRead } from './conversationPort.js';
+import type { ConversationDelivery, ConversationInput, ConversationOpen, OutputVersion, PortOutput, SnapshotRead, SnapshotItem } from './conversationPort.js';
 import { SnapshotChanges } from './snapshotChanges.js';
 
 /** 配送先の解決は登録済みの routing 情報で行い、業務 Store を読まない。 */
@@ -13,7 +13,7 @@ export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
-  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; pendingDeliveries: number; activitySequence: number | undefined }>();
+  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; activitySequence?: number }>();
   const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
   let accepting = true;
   let attachmentGeneration = 0;
@@ -22,65 +22,62 @@ export function createDaemonConversationInput(options: {
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): Promise<SnapshotRead & Pick<ConversationSnapshot, 'generation'>> => {
-    const snapshot = await options.ingress.snapshot(id);
-    if (snapshot.conversationId !== id) { snapshot.cancel(); throw new ConversationError('invalid_assignment'); }
-    const screen = screenSnapshot(snapshot);
-    let exhausted = false;
-    const projected = attachment.changes.read(screen, (async function* () {
-      try {
-        for await (const item of screen.items) {
-          if (item.kind === 'tool_history' && attachment.input.binding.port !== 'tui') continue;
+  const project = (snapshot: Omit<SnapshotRead, 'items'> & { items: AsyncIterable<SnapshotItem & { recordedAt?: string }>; queuedMessageCount?: number },
+    attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number }): SnapshotRead => {
+    return attachment.changes.read(snapshot, (async function* () {
+        for await (const item of snapshot.items) {
           if (item.kind === 'remove') throw new Error('Conversation owner must provide a complete projection');
+          if (item.kind === 'tool_history' && attachment.input.binding.port !== 'tui') continue;
           if (item.kind === 'display_event') {
             if (attachment.input.assignment.kind !== 'daemon' && item.recordedAt !== undefined && Date.parse(item.recordedAt) < attachment.startedAt) continue;
             yield { kind: 'display_event' as const, event: item.event };
-          } else yield item;
+          } else if (item.kind === 'state') yield { ...item, state: { ...item.state, queuedMessageCount: snapshot.queuedMessageCount } };
+          else yield item;
         }
-        exhausted = true;
-      } finally { if (!exhausted) screen.cancel(); }
-    })());
-    return { ...projected, generation: snapshot.generation, complete() { if (exhausted) { projected.complete(); screen.complete(); } },
-      cancel() { projected.cancel(); screen.cancel(); } };
+      })());
   };
-  const replayActivityAfterRead = (attachmentId: string, snapshot: SnapshotRead & Pick<ConversationSnapshot, 'generation'>): SnapshotRead => {
-    const attachment = attached(attachmentId);
-    const request = attachment.input;
-    let completed = false;
-    let exhausted = false;
+  const read = async (id: string, attachment: { input: ConversationOpen; changes: SnapshotChanges; startedAt: number },
+    capture?: (read: SnapshotRead, snapshot: ConversationSnapshot) => void): Promise<SnapshotRead> => {
+    let projected: SnapshotRead | undefined;
+    await options.ingress.snapshot(id, { toolHistory: attachment.input.binding.port === 'tui', capture(snapshot) {
+      if (snapshot.conversationId !== id) { snapshot.cancel(); throw new ConversationError('invalid_assignment'); }
+      projected = project(snapshot, attachment);
+      capture?.(projected, snapshot);
+    } });
+    if (projected === undefined) throw new Error('Conversation snapshot was not captured');
+    return projected;
+  };
+  // main と同じく、途中接続・再接続した画面へ、読取を送り終えた時点の現在の activity を、同じ接続の FIFO で一度だけ送る。
+  const replayActivityAfterRead = (attachmentId: string, attachment: { input: ConversationOpen; delivery: ConversationDelivery; activitySequence?: number },
+    snapshot: Pick<ConversationSnapshot, 'operationId' | 'generation'>, read: SnapshotRead): SnapshotRead => {
     let cancelled = false;
-    return { ...snapshot, items: (async function* () {
-      yield* snapshot.items;
-      exhausted = true;
-    })(), complete() {
-      if (completed || cancelled || !exhausted) return;
-      completed = true;
-      snapshot.complete();
-      const activity = activities.get(request.conversationId);
-      if (request.binding.port !== 'tui' || attachments.get(attachmentId) !== attachment
-        || activity === undefined || activity.output.operationId !== snapshot.operationId
-        || activity.output.generation !== snapshot.generation || attachment.activitySequence === activity.version.stateSequence) return;
-      // 状態の配送完了後、初回読込や再取得で未配送の現在値を一度だけ配送する。
+    return { ...read, cancel() { cancelled = true; read.cancel(); }, complete() {
+      read.complete();
+      const activity = activities.get(attachment.input.conversationId);
+      if (cancelled || attachment.input.binding.port !== 'tui' || attachments.get(attachmentId) !== attachment || activity === undefined
+        || activity.output.operationId !== snapshot.operationId || activity.output.generation !== snapshot.generation
+        || attachment.activitySequence === activity.version.stateSequence) return;
       attachment.activitySequence = activity.version.stateSequence;
-      void attachment.delivery.deliver(request.conversationId, activity.output, activity.version)
+      void attachment.delivery.deliver(attachment.input.conversationId, activity.output, activity.version)
         .catch(() => { attachments.delete(attachmentId); });
-    }, cancel() { cancelled = true; snapshot.cancel(); } };
+    } };
   };
   const input: ConversationInput = {
-    async open(request, delivery) {
+    async open(request, delivery, enqueueSnapshot) {
       if (!accepting) throw new ConversationError('shutting_down');
       request = structuredClone(request);
       if (!['tui', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
       const assignment = await options.resolveAssignment(request.assignment);
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
-      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve(), pendingDeliveries: 0,
-        activitySequence: undefined as number | undefined };
-      const snapshot = await read(request.conversationId, attachment);
-      if (!accepting) { snapshot.cancel(); throw new ConversationError('shutting_down'); }
+      const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve() };
       const attachmentId = randomUUID();
-      attachments.set(attachmentId, attachment);
-      attachmentGeneration++;
-      return { attachmentId, read: replayActivityAfterRead(attachmentId, snapshot) };
+      const snapshot = await read(request.conversationId, attachment, (snapshot, captured) => {
+        if (!accepting) throw new ConversationError('shutting_down');
+        enqueueSnapshot?.(replayActivityAfterRead(attachmentId, attachment, captured, snapshot), attachmentId);
+        attachments.set(attachmentId, attachment);
+        attachmentGeneration++;
+      });
+      return { attachmentId, read: snapshot };
     },
     async submit(request) {
       if (!accepting) return { kind: 'error', code: 'shutting_down', message: 'Daemon is stopping' };
@@ -140,10 +137,12 @@ export function createDaemonConversationInput(options: {
         return { kind: 'error', code: codes[admission.reason], message: `Event rejected: ${admission.reason}` };
       } finally { finishValidation(); }
     },
-    async snapshot(attachmentId) {
+    async snapshot(attachmentId, request) {
       const attachment = attached(attachmentId);
       if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== attachment.input.conversationId) throw new ConversationError('invalid_assignment');
-      return replayActivityAfterRead(attachmentId, await read(attachment.input.conversationId, attachment));
+      return read(attachment.input.conversationId, attachment, (snapshot, captured) => {
+        request?.enqueueSnapshot?.(replayActivityAfterRead(attachmentId, attachment, captured, snapshot));
+      });
     },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };
@@ -167,21 +166,21 @@ export function createDaemonConversationInput(options: {
       } else if (output.kind === 'result' && activities.get(id)?.output.operationId === output.operationId) activities.delete(id);
       const recipients = [...attachments.values()].filter(({ input }) => input.conversationId === id);
       if (output.kind === 'snapshot') {
+        // main と同じく、受け手ごとに dispatcher を通して読み直す。待ち件数は dispatcher だけが知っている。
         output.read.cancel();
-        await Promise.all(recipients.map(async (attachment) => attachment.delivery.deliver(id, { kind: 'snapshot', read: await read(id, attachment) }, version)));
+        await Promise.all(recipients.map(async (attachment) => {
+          let delivered: Promise<unknown> = Promise.resolve();
+          await read(id, attachment, (projected) => {
+            delivered = attachment.delivery.deliver(id, { kind: 'snapshot', read: projected }, version);
+          });
+          await delivered;
+        }));
         return;
-      }
-      if ((output.kind === 'pending' || output.kind === 'running') && output.state.running !== null) {
-        const current = await options.ingress.snapshot(id);
-        try {
-          if (current.operationId !== output.state.running.operationId || current.generation === null) return;
-          output = { ...output, state: { ...output.state, running: { ...output.state.running, generation: current.generation } } };
-        } finally { current.cancel(); }
       }
       const value = output;
       await Promise.all(recipients.map(async (attachment) => {
         if (signal?.aborted) return;
-        if (value.kind === 'tool_history' && attachment.input.binding.port !== 'tui') return;
+        if ((value.kind === 'tool_started' || value.kind === 'tool_output' || value.kind === 'tool_completed') && attachment.input.binding.port !== 'tui') return;
         if (value.kind === 'turn_text') {
           if (attachment.input.binding.port === 'tui') await attachment.delivery.deliver(id, value, version, signal);
           return;
@@ -189,31 +188,11 @@ export function createDaemonConversationInput(options: {
         if (value.kind === 'activity') {
           if (attachment.input.binding.port !== 'tui') return;
           attachment.activitySequence = version.stateSequence;
-          await attachment.delivery.deliver(id, value, version);
-          return;
         }
-        if (value.kind === 'progress' && attachment.pendingDeliveries >= 32) return;
-        attachment.pendingDeliveries++;
-        try { await attachment.delivery.deliver(id, value, version); }
-        finally { attachment.pendingDeliveries--; }
+        await attachment.delivery.deliver(id, value, version);
       }));
     },
     stopAccepting() { accepting = false; },
     close() { accepting = false; attachments.clear(); activities.clear(); },
   };
-}
-
-function screenSnapshot(snapshot: ConversationSnapshot) {
-  const items = snapshot.items;
-  return { ...snapshot, items: (async function* () {
-    for await (const item of items) {
-      if (item.kind !== 'state') { yield item; continue; }
-      const running = item.state.running;
-      const startedAt = running?.operationId === snapshot.operationId && running?.generation === snapshot.generation
-        ? running?.startedAt : undefined;
-      yield { ...item, state: { ...item.state, queuedMessageCount: snapshot.queuedMessageCount, running: snapshot.operationId === null || snapshot.generation === null ? null
-        : { operationId: snapshot.operationId, kind: 'turn', generation: snapshot.generation,
-          ...(startedAt === undefined ? {} : { startedAt }) } } };
-    }
-  })() };
 }

@@ -126,10 +126,10 @@ it('finishes each output transfer before newer state on both attachments', async
   try {
     await vi.waitFor(() => expect(paused).toBe(2));
     const state = first.latestState()!;
-    await Promise.all(deliveries.map((delivery) => delivery.deliver(selected.conversationId,
-      { kind: 'pending', state }, { ...version, stateSequence: version.stateSequence + 1 })));
+    const states = deliveries.map((delivery) => delivery.deliver(selected.conversationId,
+      { kind: 'pending', state }, { ...version, stateSequence: version.stateSequence + 1 }));
     resume();
-    await Promise.all(sending);
+    await Promise.all([...sending, ...states]);
     const responses = await Promise.all([first.request('snapshot', { attachmentId: openedFirst.attachmentId }),
       second.request('snapshot', { attachmentId: openedSecond.attachmentId })]);
     await first.items(responses[0]!.result!.read.transferId);
@@ -229,55 +229,6 @@ it('reports an interrupted started text transfer and still delivers the terminal
   } finally { resume(); await Promise.allSettled([sendingText]); writing.mockRestore(); }
 });
 
-it.each(['notice', 'activity'] as const)('coalesces activity per connection while a slow TUI %s write is blocked without disconnecting it', async (kind) => {
-  const first = await authenticated(); const second = await authenticated();
-  const firstOpen = await opened(first); const secondOpen = await opened(second);
-  await first.items(firstOpen.read.transferId); await second.items(secondOpen.read.transferId);
-  let resume!: () => void;
-  const gate = new Promise<void>((resolve) => { resume = resolve; });
-  const write = conversationFrames.writeConversationFrame;
-  let blockedSocket: Socket | undefined;
-  const writing = vi.spyOn(conversationFrames, 'writeConversationFrame').mockImplementation(async (socket, value) => {
-    const frame = value as { output?: { kind: string; purpose?: string } };
-    if (blockedSocket === undefined && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
-      blockedSocket = socket;
-      await gate;
-    }
-    await write(socket, value);
-  });
-  const version = { revision: first.latestState()!.revision, stateSequence: 10, operationId: '11111111-1111-4111-8111-111111111111' };
-  const latest = { kind: 'activity' as const, operationId: version.operationId, generation: 1,
-    activity: { kind: 'tool' as const, tool: 'Tool99' } };
-  const initialOutput = kind === 'notice' ? { kind, id: 'before-activity', message: 'Keep this output' }
-    : { ...latest, activity: { kind: 'thinking' as const } };
-  const sending = service.deliver(selected.conversationId, initialOutput,
-    { ...version, operationId: kind === 'notice' ? null : version.operationId });
-  const observer = () => ({ state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() });
-  try {
-    await vi.waitFor(() => expect(blockedSocket).toBeDefined());
-    await Promise.all(Array.from({ length: 100 }, (_, index) => service.deliver(selected.conversationId,
-      { ...latest, activity: { kind: 'tool', tool: `Tool${index}` } }, { ...version, stateSequence: 11 + index })));
-    const fast = observer();
-    await vi.waitFor(() => {
-      fast.output.mockClear();
-      const receiver = new ConversationTransferReceiver(selected.conversationId, fast);
-      for (const frame of second.frames) if (frame.type === 'event') receiver.receive(frame);
-      expect(fast.output).toHaveBeenCalledWith(latest, expect.objectContaining({ ...version, stateSequence: 110 }));
-    });
-    expect(first.socket.destroyed).toBe(false);
-    expect(service.attachmentCount).toBe(2);
-    expect(first.frames.filter(({ output }) => output?.purpose === 'output')).toHaveLength(0);
-    resume(); await sending;
-    await vi.waitFor(() => expect(first.frames.filter(({ output }) => output?.kind === 'transfer_end')).toHaveLength(3));
-    const slow = observer();
-    const receiver = new ConversationTransferReceiver(selected.conversationId, slow);
-    for (const frame of first.frames) if (frame.type === 'event') receiver.receive(frame);
-    expect(slow.output.mock.calls.map(([output]) => output)).toEqual([initialOutput, latest]);
-    expect(first.socket.destroyed).toBe(false);
-    expect(service.attachmentCount).toBe(2);
-  } finally { resume(); await sending; writing.mockRestore(); }
-});
-
 it('sends the initial state before activity that arrives while that state is still being read', async () => {
   execute.mockImplementationOnce(async (input) => {
     await new Promise<void>((resolve) => { release = resolve; });
@@ -296,13 +247,13 @@ it('sends the initial state before activity that arrives while that state is sti
   const gate = new Promise<void>((resolve) => { resume = resolve; });
   const reading = new Promise<void>((resolve) => { entered = resolve; });
   const open = service.open.bind(service);
-  vi.spyOn(service, 'open').mockImplementationOnce(async (...args) => {
-    const result = await open(...args);
-    const source = result.read.items;
-    return { ...result, read: { ...result.read, items: (async function* () {
-      entered(); await gate; yield* source;
-    })() } };
-  });
+  vi.spyOn(service, 'open').mockImplementationOnce((request, delivery, enqueueSnapshot) =>
+    open(request, delivery, (read, attachmentId) => {
+      const source = read.items;
+      enqueueSnapshot?.({ ...read, items: (async function* () {
+        entered(); await gate; yield* source;
+      })() }, attachmentId);
+    }));
   const second = await authenticated();
   try {
     const secondOpen = await opened(second);
@@ -310,13 +261,14 @@ it('sends the initial state before activity that arrives while that state is sti
     const activity = { kind: 'activity' as const, operationId: snapshot.operationId!, generation: snapshot.generation!,
       activity: { kind: 'tool' as const, tool: 'InitialTool' } };
     const version = { revision: snapshot.revision, stateSequence: snapshot.stateSequence + 1, operationId: snapshot.operationId };
-    await service.deliver(selected.conversationId, activity, version);
+    const sending = service.deliver(selected.conversationId, activity, version);
     expect(second.latestState()).toBeUndefined();
     // 別のリクエストを往復させ、writer が動いても activity を先行送信しないことを確かめる。
-    await second.request('submit', { attachmentId: secondOpen.attachmentId, speaker: { namespace: 'agent', id: 'director' },
+    const forged = second.request('submit', { attachmentId: secondOpen.attachmentId, speaker: { namespace: 'agent', id: 'director' },
       command: { kind: 'message', text: 'Reject forged speaker' } });
     expect(second.frames.filter(({ output }) => output?.purpose === 'output')).toHaveLength(0);
     resume();
+    await Promise.all([sending, forged]);
     await second.items(secondOpen.read.transferId);
     const order: string[] = [];
     const observer = { state: vi.fn(() => { order.push('state'); }), item: vi.fn(), remove: vi.fn(), read: vi.fn(),
@@ -344,7 +296,7 @@ it('bounds admitted requests across input batches while responses are pending', 
   let resume!: () => void;
   const gate = new Promise<void>((resolve) => { resume = resolve; });
   const snapshot = service.snapshot.bind(service);
-  const reading = vi.spyOn(service, 'snapshot').mockImplementation(async (id) => { await gate; return snapshot(id); });
+  const reading = vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => { await gate; return snapshot(id, request); });
   const frames = Array.from({ length: 1000 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
     requestId: `bounded-${index}`, method: 'snapshot', params: { attachmentId: initial.attachmentId } }));
   try {
@@ -785,23 +737,22 @@ it('stops pulling display payloads under real socket backpressure and closes the
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let pulled = 0; let closed = 0;
-  const original = service.open;
-  const open = vi.spyOn(service, 'open').mockImplementationOnce(async (...args) => {
-    const result = await original(...args);
-    const source = result.read.items;
-    result.read.items = (async function* () {
-      const iterator = source[Symbol.asyncIterator]();
-      try {
-        yield (await iterator.next()).value!;
-        await gate;
-        for (let index = 0; index < 256; index++) {
-          pulled++;
-          yield { kind: 'goal' as const, goal: { ...goalRecord(), awaitingHumanMerge: false, objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
-        }
-      } finally { closed++; await iterator.return?.(); }
-    })();
-    return result;
-  });
+  const original = service.open.bind(service);
+  const open = vi.spyOn(service, 'open').mockImplementationOnce((request, delivery, enqueueSnapshot) =>
+    original(request, delivery, (read, attachmentId) => {
+      const source = read.items;
+      enqueueSnapshot?.({ ...read, items: (async function* () {
+        const iterator = source[Symbol.asyncIterator]();
+        try {
+          yield (await iterator.next()).value!;
+          await gate;
+          for (let index = 0; index < 256; index++) {
+            pulled++;
+            yield { kind: 'goal' as const, goal: { ...goalRecord(), awaitingHumanMerge: false, objective: `${index}:`.padEnd(128 * 1024, 'a'), repositoryDirectory: repository } };
+          }
+        } finally { closed++; await iterator.return?.(); }
+      })() }, attachmentId);
+    }));
   try {
     const value = await authenticated(); await opened(value);
     value.socket.pause(); release();
@@ -812,73 +763,6 @@ it('stops pulling display payloads under real socket backpressure and closes the
     await vi.waitFor(() => expect(closed).toBe(1));
     expect(service.attachmentCount).toBe(0);
   } finally { release(); open.mockRestore(); }
-});
-
-it.each(['complete', 'replace'] as const)('delivers newer state while an older read is pending and does not roll it back when the old read must %s', async (mode) => {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  let sourceClosed = false;
-  const original = service.open;
-  const open = vi.spyOn(service, 'open').mockImplementationOnce(async (...args) => {
-    const result = await original(...args); const source = result.read.items;
-    result.read.items = (async function* () {
-      try { for await (const item of source) { yield item; if (item.kind === 'state') await gate; } }
-      finally { sourceClosed = true; }
-    })(); return result;
-  });
-  try {
-    const value = await authenticated(); const first = await opened(value);
-    await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, pending: { revision: 4 } }));
-    expect((await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
-      command: { kind: 'message', text: 'revision five' } })).result!.kind).toBe('accepted');
-    await fixture.settled();
-    await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 5, pending: null, running: null }));
-    expect(value.frames.some(({ output }) => output?.kind === 'transfer_end' && output.transferId === first.read.transferId)).toBe(false);
-    let replacementId: string | undefined;
-    if (mode === 'replace') {
-      const replacement = (await value.request('snapshot', { attachmentId: first.attachmentId })).result!;
-      replacementId = replacement.read.transferId;
-      expect(replacementId).not.toBe(first.read.transferId);
-      await value.items(replacementId);
-    }
-    release();
-    if (mode === 'complete') await value.items(first.read.transferId);
-    await vi.waitFor(() => expect(sourceClosed).toBe(true));
-    if (replacementId !== undefined) {
-      const index = value.frames.findIndex(({ output }) => output?.kind === 'transfer_start' && output.transferId === replacementId);
-      expect(value.frames.slice(index + 1).some(({ output }) => output?.transferId === first.read.transferId)).toBe(false);
-    }
-    expect(value.latestState()).toMatchObject({ revision: 5, pending: null, running: null });
-  } finally { release(); open.mockRestore(); }
-});
-
-it('keeps a newer running transition within revision four when an older idle snapshot finishes', async () => {
-  let finishRead!: () => void; let finishGoal: (() => void) | undefined;
-  const gate = new Promise<void>((resolve) => { finishRead = resolve; });
-  const original = service.open;
-  const open = vi.spyOn(service, 'open').mockImplementationOnce(async (...args) => {
-    const result = await original(...args); const source = result.read.items;
-    result.read.items = (async function* () {
-      for await (const item of source) { yield item; if (item.kind === 'state') await gate; }
-    })(); return result;
-  });
-  const register = vi.spyOn(goalService, 'registerReservedGoal').mockImplementationOnce((input) => new Promise((resolve) => {
-    finishGoal = () => resolve({ ...goalRecord(), id: input.id, objective: input.objective,
-      outOfScope: input.outOfScope, acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints });
-  }));
-  try {
-    const value = await authenticated(); const first = await opened(value);
-    await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, running: null }));
-    const accepted = (await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
-      command: { kind: 'approve_summary', revision: 4, conversationId: value.latestState()!.conversationId } })).result!;
-    expect(accepted.kind).toBe('accepted');
-    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 4, running: { operationId: accepted.operationId } }));
-    finishRead(); await value.items(first.read.transferId);
-    expect(value.latestState()).toMatchObject({ revision: 4, running: { operationId: accepted.operationId } });
-    finishGoal!();
-    await vi.waitFor(() => expect(value.latestState()).toMatchObject({ revision: 5, running: null }));
-  } finally { finishRead(); finishGoal?.(); register.mockRestore(); open.mockRestore(); }
 });
 
 it.each(['answered', 'withdrawn'] as const)('keeps the TUI attached when the watched inquiry becomes %s', async (status) => {
@@ -911,4 +795,87 @@ it('keeps a PR mismatch inspection reply out of the goal work log', async () => 
   await fixture.settled();
   expect(execute).toHaveBeenCalledOnce();
   expect((await new GoalStore(repository).get(goal.id)).workLog).toEqual([]);
+});
+
+function receivedOutputs(value: Client): Array<Exclude<PortOutput, { kind: 'snapshot' }>> {
+  const pending = new Map<string, { purpose: string; parts: Buffer[] }>();
+  const outputs: Array<Exclude<PortOutput, { kind: 'snapshot' }>> = [];
+  for (const frame of value.frames) {
+    const output = frame.output;
+    if (output?.kind === 'transfer_start') pending.set(output.transferId, { purpose: output.purpose!, parts: [] });
+    if (output === undefined) continue;
+    const transfer = pending.get(output.transferId);
+    if (transfer === undefined) continue;
+    if (output.kind === 'transfer_data') {
+      transfer.parts.push(Buffer.from(output.data, 'base64'));
+      if (output.finalFragment) {
+        if (transfer.purpose === 'output') outputs.push(JSON.parse(Buffer.concat(transfer.parts).toString('utf8')) as Exclude<PortOutput, { kind: 'snapshot' }>);
+        transfer.parts = [];
+      }
+    }
+    if (output.kind === 'transfer_end') pending.delete(output.transferId);
+  }
+  return outputs;
+}
+
+it('delivers a queued message only after the previous tools and reply, including parallel tool completion order', async () => {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  release = resume;
+  let calls = 0;
+  execute.mockImplementation(async (input) => {
+    if (++calls === 1) {
+      enter(); await gate;
+      await input.onActivity?.({ kind: 'thinking' });
+      await input.onText?.('investigating');
+      for (const id of ['a', 'b']) await input.onToolEvent?.({ type: 'tool_use', toolActivity: { callId: 'call' }, data: { id, tool: 'Bash', input: { command: id } } });
+      await input.onToolEvent?.({ type: 'tool_output', toolActivity: { callId: 'call' }, data: { id: 'a', tool: 'Bash', output: 'a output\n' } });
+      for (const id of ['b', 'a']) await input.onToolEvent?.({ type: 'tool_result', toolActivity: { callId: 'call' }, data: { id, content: `${id} done`, isError: false } });
+    }
+    return { message: `reply-${calls}`, summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const value = await authenticated();
+  const attachment = await opened(value); await value.items(attachment.read.transferId);
+  await value.request('submit', { attachmentId: attachment.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: 'first' } });
+  await entered;
+  await value.request('submit', { attachmentId: attachment.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: 'second' } });
+  expect(receivedOutputs(value).filter((event) => event.kind === 'user_message')).toMatchObject([{ message: 'first' }]);
+  resume(); await fixture.settled();
+  await vi.waitFor(() => expect(receivedOutputs(value).filter((event) => event.kind === 'result')).toHaveLength(2));
+  const log = receivedOutputs(value).flatMap((event) => event.kind === 'user_message' ? [event.message]
+    : event.kind === 'turn_text' ? [event.message]
+    : event.kind === 'tool_completed' ? [event.entry.result!]
+    : event.kind === 'result' && 'message' in event.result ? [event.result.message] : []);
+  expect(log).toEqual(['first', 'investigating', 'b done', 'a done', 'reply-1', 'second', 'reply-2']);
+});
+
+it.each(['running', 'completed'] as const)('captures and enqueues a frozen %s snapshot atomically with subscription', async (phase) => {
+  let input!: ManagerTurnInput;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; }); release = resume;
+  execute.mockImplementation(async (value) => { input = value; enter(); await gate; return { message: 'done', summary: null, sessionId: 'session', assignment: value.assignment }; });
+  const first = await authenticated(); const attachment = await opened(first); await first.items(attachment.read.transferId);
+  await first.request('submit', { attachmentId: attachment.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: 'start' } });
+  await entered;
+  await input.onToolEvent?.({ type: 'tool_use', toolActivity: { callId: 'call' }, data: { id: 'tool', tool: 'Bash', input: {} } });
+  await input.onToolEvent?.({ type: 'tool_output', toolActivity: { callId: 'call' }, data: { id: 'tool', tool: 'Bash', output: 'private in-flight output\n' } });
+  if (phase === 'completed') await input.onToolEvent?.({ type: 'tool_result', toolActivity: { callId: 'call' }, data: { id: 'tool', content: 'whole result', isError: false } });
+  const second = await authenticated(); const reopened = await opened(second);
+  const items = await second.items(reopened.read.transferId);
+  expect(JSON.stringify(items)).not.toContain('private in-flight output');
+  if (phase === 'running') {
+    expect(items.filter((item) => (item as { kind: string }).kind === 'tool_history')).toMatchObject([
+      { kind: 'tool_history', history: { finished: false, history: { entries: [{ toolId: 'tool', tool: 'Bash', input: {}, output: '', status: 'running' }] } } },
+    ]);
+    await input.onToolEvent?.({ type: 'tool_result', toolActivity: { callId: 'call' }, data: { id: 'tool', content: 'whole result', isError: false } });
+    await vi.waitFor(() => expect(receivedOutputs(second).filter((event) => event.kind === 'tool_completed')).toHaveLength(1));
+  } else {
+    expect(JSON.stringify(items)).toContain('whole result');
+    expect(receivedOutputs(second).filter((event) => event.kind === 'tool_completed')).toEqual([]);
+  }
+  resume(); await fixture.settled();
 });

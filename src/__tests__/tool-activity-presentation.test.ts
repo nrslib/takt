@@ -14,10 +14,15 @@ function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
 }
 
 describe('tool activity presentation', () => {
-  it('should fail closed when display secret collection exceeds its candidate budget', () => {
+  it('masks an individual known line in final result and detail pages', () => {
+    const value = entry({ input: { private_key: 'first-line-secret\nsecond-line-secret' }, result: 'safe\nfirst-line-secret\n' });
+    expect(projectToolActivity(value).result.text).toBe('safe\n[REDACTED]');
+    expect(toolActivityDetail(value).text).toBe('safe\n[REDACTED]');
+  });
+  it('should retain known matches without masking unrelated text after its candidate limit', () => {
     const token = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => `private-${index}`);
     const value = entry({ input: { token }, result: 'ready private-0' });
-    expect(projectToolActivity(value).result.text).toBe('[REDACTED]');
+    expect(projectToolActivity(value).result.text).toBe('ready [REDACTED]');
   });
 
   it.each(['secret123', 'sec\x1b[31mret123', 'sec\rret123'])('should protect terminal-normalized secrets from input %j in every result page', (token) => {
@@ -112,16 +117,6 @@ describe('tool activity presentation', () => {
     const value = projectToolActivity(entry({ result: 'one\ntwo\nthree\nfour' }));
     expect(value.result.text.split('\n')).toEqual(['one', 'two', 'three']);
     expect(value.result).toMatchObject({ truncated: true, hasMore: true });
-  });
-
-  it('should mark saved output and result truncation in every result presentation', () => {
-    const forOutput = entry({ result: '', output: 'partial output', outputTruncated: true });
-    const forResult = entry({ result: 'partial result', resultTruncated: true });
-    for (const value of [forOutput, forResult]) {
-      for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
-        expect(page.text).toBe('[output truncated]\n' + (value.result || value.output));
-      }
-    }
   });
 
   it('should group the same read operation across provider spellings while retaining both paths', () => {

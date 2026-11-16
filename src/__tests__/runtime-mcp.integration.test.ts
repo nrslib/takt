@@ -327,6 +327,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_list_goal_work_log',
         'takt_enqueue_task',
         'takt_create_goal',
+        'takt_answer_goal_question',
         'takt_approve_goal_registration',
         'takt_reject_goal_registration',
         'takt_list_goal_registration_proposals',

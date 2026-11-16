@@ -32,7 +32,7 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   const failures: unknown[] = [];
   const onError = (error: unknown): void => { failures.push(error); };
   const conversations = new DaemonConversations(store, routing, new DaemonNotifications(directory),
-    (id, output, version, signal) => input.deliver(id, output, version, signal), onError);
+    (id, output, version, signal) => input.deliver(id, output, version, signal), onError, events);
   let executions = 0;
   const executionWaiters = new Map<number, Array<() => void>>();
   const business = createConversationTurnService(directory, { ...runtime, async resolve(...args) {
@@ -51,10 +51,10 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
   const pending = new Set<Promise<void>>();
   const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };
   const runner: TurnRunner = {
-    start(value, signal) {
-      conversations.started(value);
+    async start(value, signal) {
+      await conversations.started(value);
       const execute = business.execute(value, { signal, request: (request) => bus.request(value.turn, request, signal),
-        progress(message) { void bus.post({ kind: 'turn_progress', turn: value.turn, message }).catch(onError); } });
+        progress(message) { return bus.post({ kind: 'turn_progress', turn: value.turn, message }); } });
       const operation = execute.catch((error: unknown) => signal.aborted ? { kind: 'interrupted' as const }
         : { kind: 'failed' as const, message: error instanceof Error ? error.message : String(error) })
         .then((outcome) => bus.post({ kind: 'turn_finished', turn: value.turn, outcome }));

@@ -1,8 +1,9 @@
 import stringWidth from 'string-width';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { COMPACT_RESULT_LINES } from '../../shared/tool-activity/presentation.js';
-import type { ToolActivityGroup, ToolActivityProjection } from '../../shared/tool-activity/types.js';
-import type { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import type { ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../../shared/tool-activity/types.js';
+import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
+import { MARKER_WIDTH } from './transcriptOutput.js';
 
 interface ToolActivityPosition {
   group: number;
@@ -23,88 +24,30 @@ export interface ToolActivityViewLabels {
   more: string;
   end: string;
   completion: string;
+  running: string;
 }
 
 export interface ToolActivityViewPage {
   rows: readonly string[];
-  transcript?: readonly ToolActivityTranscriptRange[];
+  /** Rows that open a tool or a group of tools; the view puts the tool marker in front of them. */
+  heads: readonly number[];
   next: ToolActivityPosition;
   hasMore: boolean;
 }
 
-export interface ToolActivityTranscriptRange {
-  key: string;
-  offset: number;
-  text: string;
-  omitted: boolean;
-}
-
-export function mergeToolActivityTranscript(
-  previous: readonly ToolActivityTranscriptRange[], incoming: readonly ToolActivityTranscriptRange[],
-): ToolActivityTranscriptRange[] {
-  const fields = new Map<string, ToolActivityTranscriptRange[]>();
-  for (const range of [...previous, ...incoming]) {
-    const ranges = fields.get(range.key) ?? [];
-    ranges.push(range);
-    fields.set(range.key, ranges);
-  }
-  return [...fields.values()].flatMap((ranges) => {
-    const merged: ToolActivityTranscriptRange[] = [];
-    for (const range of ranges.sort((left, right) => left.offset - right.offset)) {
-      const last = merged.at(-1);
-      if (last === undefined || last.offset + last.text.length < range.offset) merged.push({ ...range });
-      else {
-        const previousEnd = last.offset + last.text.length;
-        const end = range.offset + range.text.length;
-        if (end > previousEnd) {
-          last.text += range.text.slice(previousEnd - range.offset);
-          last.omitted = range.omitted;
-        } else if (end === previousEnd) last.omitted &&= range.omitted;
-      }
-    }
-    return merged;
-  });
-}
-
-export function excludeToolActivityTranscript(
-  incoming: readonly ToolActivityTranscriptRange[],
-  committed: readonly ToolActivityTranscriptRange[],
-): ToolActivityTranscriptRange[] {
-  const committedByKey = new Map<string, ToolActivityTranscriptRange[]>();
-  for (const range of committed) {
-    const ranges = committedByKey.get(range.key) ?? [];
-    ranges.push(range);
-    committedByKey.set(range.key, ranges);
-  }
-  const remaining: ToolActivityTranscriptRange[] = [];
-  for (const range of incoming) {
-    let fragments = [{ ...range }];
-    for (const existing of committedByKey.get(range.key) ?? []) {
-      const existingStart = existing.offset;
-      const existingEnd = existing.offset + existing.text.length;
-      fragments = fragments.flatMap((fragment) => {
-        const fragmentEnd = fragment.offset + fragment.text.length;
-        if (existingEnd <= fragment.offset || existingStart >= fragmentEnd) return [fragment];
-        const overlapStart = Math.max(fragment.offset, existingStart);
-        const overlapEnd = Math.min(fragmentEnd, existingEnd);
-        const fragmentOverlap = fragment.text.slice(overlapStart - fragment.offset, overlapEnd - fragment.offset);
-        const existingOverlap = existing.text.slice(overlapStart - existingStart, overlapEnd - existingStart);
-        if (fragmentOverlap !== existingOverlap) return [fragment];
-        const left = overlapStart > fragment.offset ? [{ ...fragment,
-          text: fragment.text.slice(0, overlapStart - fragment.offset), omitted: false }] : [];
-        const right = overlapEnd < fragmentEnd ? [{ ...fragment,
-          offset: overlapEnd, text: fragment.text.slice(overlapEnd - fragment.offset) }] : [];
-        return [...left, ...right];
-      });
-      if (fragments.length === 0) break;
-    }
-    remaining.push(...fragments);
-  }
-  return remaining;
-}
-
 export function createToolActivityViewState(): ToolActivityViewState {
   return { expanded: false, position: { group: 0, entry: 0, section: 'group', offset: 0 }, previous: [] };
+}
+
+/**
+ * A completed entry is printed once; the live history remains available for
+ * details. The transcript puts the tool marker in front of it, so the rows are
+ * laid out in the columns that remain.
+ */
+export function completedToolTranscript(entry: ToolActivityEntry, columns: number, labels: ToolActivityViewLabels): string {
+  const display = new ToolActivityDisplay('silent', false, () => {}, false);
+  display.upsert(entry);
+  return toolActivityViewPage(display, display.groups(), createToolActivityViewState(), columns - MARKER_WIDTH, 20, labels).rows.join('\n');
 }
 
 export function toggleToolActivityView(state: ToolActivityViewState): ToolActivityViewState {
@@ -125,31 +68,30 @@ export function moveToolActivityView(
   return position === undefined ? state : { ...state, position, previous: state.previous.slice(0, -1) };
 }
 
-function textRow(text: string, columns: number): { text: string; consumed: number; source: string; omitted: boolean } {
+function textRow(text: string, columns: number): { text: string; consumed: number } {
   let row = '';
   let consumed = 0;
   let width = 0;
   for (const grapheme of segmentGraphemes(text)) {
-    if (grapheme === '\n') return { text: row, consumed: consumed + 1, source: text.slice(0, consumed + 1), omitted: false };
+    if (grapheme === '\n') return { text: row, consumed: consumed + 1 };
     const display = grapheme === '\t' ? ' ' : grapheme;
     const size = stringWidth(display);
     if (width + size > columns) {
-      if (consumed === 0) return { text: '…', consumed: grapheme.length, source: '', omitted: true };
+      if (consumed === 0) return { text: '…', consumed: grapheme.length };
       break;
     }
     row += display;
     width += size;
     consumed += grapheme.length;
   }
-  return { text: row, consumed, source: text.slice(0, consumed), omitted: false };
+  return { text: row, consumed };
 }
 
-function singleRow(text: string, columns: number): { text: string; source: string; omitted: boolean } {
+function singleRow(text: string, columns: number): string {
   const row = textRow(text, columns);
-  if (row.consumed === text.length) return { text: row.text, source: row.omitted ? '' : row.text, omitted: row.omitted };
-  if (columns <= 1) return { text: '…', source: '', omitted: true };
-  const prefix = textRow(row.text, columns - 1);
-  return { text: prefix.text + '…', source: prefix.omitted ? '' : prefix.text, omitted: true };
+  if (row.consumed === text.length) return row.text;
+  if (columns <= 1) return '…';
+  return textRow(row.text, columns - 1).text + '…';
 }
 
 function compactResultText(text: string, columns: number): string {
@@ -162,6 +104,22 @@ function compactResultText(text: string, columns: number): string {
 
 function symbol(entry: ToolActivityProjection): string {
   return entry.status === 'failure' ? '✗' : entry.status === 'success' ? '✓' : '…';
+}
+
+function formatDuration(durationMs: number): string {
+  return durationMs < 1000 ? `${durationMs} ms` : `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+/** The compact status: the outcome and how long it took, never the raw clock values. */
+function compactStatus(entry: ToolActivityProjection, labels: ToolActivityViewLabels): string {
+  if (entry.status === 'running') return `${symbol(entry)} ${labels.running}`;
+  return entry.durationMs === undefined ? symbol(entry) : `${symbol(entry)} ${formatDuration(entry.durationMs)}`;
+}
+
+/** Shortens the title rather than the status, so the outcome stays readable in a narrow row. */
+function rowWithSuffix(text: string, suffix: string, columns: number): string {
+  const suffixWidth = stringWidth(suffix) + 1;
+  return suffixWidth < columns ? `${singleRow(text, columns - suffixWidth)} ${suffix}` : singleRow(`${text} ${suffix}`, columns);
 }
 
 function nextEntry(groups: readonly ToolActivityGroup[], position: ToolActivityPosition): ToolActivityPosition {
@@ -180,7 +138,7 @@ export function toolActivityViewPage(
   labels: ToolActivityViewLabels,
 ): ToolActivityViewPage {
   const rows: string[] = [];
-  const transcript: ToolActivityTranscriptRange[] = [];
+  const heads: number[] = [];
   const width = Math.max(1, columns);
   let position = state.position;
   while (rows.length < maxRows && position.group < groups.length) {
@@ -190,26 +148,16 @@ export function toolActivityViewPage(
       position = { group: position.group + 1, entry: 0, section: 'group', offset: 0 };
       continue;
     }
-    const before = position;
-    let completedRow = entry.status !== 'running';
-    let transcriptRow: ToolActivityTranscriptRange | undefined;
-    const addSingleRow = (text: string): void => {
-      const row = singleRow(text, width);
-      rows.push(row.text);
-      transcriptRow = { key: JSON.stringify([
-        before.section === 'group' || before.section === 'groupOmission' ? group.entries.map((item) => item.key) : entry.key,
-        before.section,
-      ]), offset: before.offset, text: row.source, omitted: row.omitted };
-    };
+    const addSingleRow = (text: string): void => { rows.push(singleRow(text, width)); };
     const advance = (section: ToolActivityPosition['section']): ToolActivityPosition => ({ ...position, section, offset: 0 });
     switch (position.section) {
       case 'group':
-        completedRow = group.entries.every((item) => item.status !== 'running');
         if (group.entries.length > 1) {
           const counts = { running: 0, success: 0, failure: 0 };
           for (const item of group.entries) counts[item.status] += 1;
           const status = counts.failure > 0 ? '✗' : counts.running > 0 ? '…' : '✓';
           const statuses = [counts.success > 0 ? `✓${counts.success}` : '', counts.failure > 0 ? `✗${counts.failure}` : '', counts.running > 0 ? `…${counts.running}` : ''].filter(Boolean).join(' ');
+          heads.push(rows.length);
           addSingleRow(`${status} ${group.summary} ${statuses}`);
           position = advance(state.expanded ? 'header' : 'groupResult');
         } else position = advance('header');
@@ -233,25 +181,24 @@ export function toolActivityViewPage(
           break;
         }
         const row = textRow(text.slice(position.offset), width);
-        const startLine = text.slice(0, position.offset).split('\n').length - 1;
-        const line = preview[startLine]!;
-        completedRow = line.entry.status !== 'running';
-        transcriptRow = { key: JSON.stringify([line.entry.key, 'result']),
-          offset: line.offset + position.offset - (text.slice(0, position.offset).lastIndexOf('\n') + 1),
-          text: row.source, omitted: row.omitted };
         rows.push(row.text);
         position = { ...position, offset: position.offset + row.consumed };
         break;
       }
       case 'groupOmission':
-        completedRow = group.entries.every((item) => item.status !== 'running');
         addSingleRow(labels.more);
         position = { group: position.group + 1, entry: 0, section: 'group', offset: 0 };
         break;
       case 'header': {
         const title = entry.tool === entry.action ? entry.tool : `${entry.tool} ${entry.action}`;
-        addSingleRow(`${symbol(entry)} ${title}${state.expanded || entry.input === '' ? '' : ` ${entry.input}`}`);
-        position = advance('time');
+        heads.push(rows.length);
+        if (state.expanded) {
+          addSingleRow(`${symbol(entry)} ${title}`);
+          position = advance('time');
+        } else {
+          rows.push(rowWithSuffix(entry.input === '' ? title : `${title} ${entry.input}`, compactStatus(entry, labels), width));
+          position = advance('result');
+        }
         break;
       }
       case 'time': {
@@ -261,17 +208,10 @@ export function toolActivityViewPage(
           ...(entry.durationMs === undefined ? [] : [`(${entry.durationMs} ms)`]),
           ...(entry.completionSequence === undefined ? [] : [`${labels.completion} #${entry.completionSequence}`]),
         ].join(' ');
-        if (state.expanded) {
-          const row = textRow(timing.slice(position.offset), width);
-          rows.push(row.text);
-          transcriptRow = { key: JSON.stringify([entry.key, 'time']), offset: position.offset,
-            text: row.source, omitted: row.omitted };
-          position = position.offset + row.consumed < timing.length
-            ? { ...position, offset: position.offset + row.consumed } : advance('input');
-        } else {
-          addSingleRow(timing);
-          position = advance('result');
-        }
+        const row = textRow(timing.slice(position.offset), width);
+        rows.push(row.text);
+        position = position.offset + row.consumed < timing.length
+          ? { ...position, offset: position.offset + row.consumed } : advance('input');
         break;
       }
       case 'input': {
@@ -282,8 +222,6 @@ export function toolActivityViewPage(
         }
         const row = textRow(input.slice(position.offset), width);
         rows.push(row.text);
-        transcriptRow = { key: JSON.stringify([entry.key, 'input']), offset: position.offset,
-          text: row.source, omitted: row.omitted };
         position = { ...position, offset: position.offset + row.consumed };
         break;
       }
@@ -299,10 +237,6 @@ export function toolActivityViewPage(
         }
         const row = textRow(result.text, width);
         rows.push(row.text);
-        transcriptRow = { key: JSON.stringify([entry.key, 'result']), offset: position.offset,
-          text: row.source
-            + (row.consumed >= result.text.length && result.nextOffset > position.offset + result.text.length ? '\n' : ''),
-          omitted: row.omitted };
         const exhausted = row.consumed >= result.text.length;
         const offset = exhausted ? result.nextOffset : position.offset + row.consumed;
         position = exhausted && !result.hasMore
@@ -315,7 +249,6 @@ export function toolActivityViewPage(
         position = nextEntry(groups, position);
         break;
     }
-    if (completedRow && transcriptRow !== undefined) transcript.push(transcriptRow);
   }
-  return { rows, transcript, next: position, hasMore: position.group < groups.length };
+  return { rows, heads, next: position, hasMore: position.group < groups.length };
 }

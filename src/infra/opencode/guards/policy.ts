@@ -1,10 +1,5 @@
 import type { OpenCodeGuardOptions, OpenCodeGuardProfile } from '../../../core/models/index.js';
 import {
-  MAX_INSPECTED_BYTES_PER_SOURCE,
-  MAX_TRACKED_SENSITIVE_VALUE_BYTES,
-  MAX_TRACKED_SENSITIVE_VALUES,
-} from '../../../shared/utils/sensitiveText.js';
-import {
   OPENCODE_STREAM_EVENT_LIMIT,
   resolveOpenCodeStreamLimits,
   type OpenCodeStreamLimits,
@@ -55,9 +50,6 @@ export interface ResolvedOpenCodeGuardPolicy {
   exactToolRepeatLimit: number;
   streamLimits: OpenCodeStreamLimits;
   streamEventLimit: number;
-  sensitiveCandidateLimit: number;
-  sensitiveCandidateByteLimit: number;
-  sensitiveSourceScanByteLimit: number;
   toolGuard: ResolvedOpenCodeToolGuardPolicy;
 }
 
@@ -117,9 +109,6 @@ export function resolveOpenCodeGuardPolicy(
       'TAKT_OPENCODE_STREAM_EVENT_LIMIT',
       guards?.eventLimit ?? OPENCODE_STREAM_EVENT_LIMIT,
     ),
-    sensitiveCandidateLimit: MAX_TRACKED_SENSITIVE_VALUES,
-    sensitiveCandidateByteLimit: MAX_TRACKED_SENSITIVE_VALUE_BYTES,
-    sensitiveSourceScanByteLimit: MAX_INSPECTED_BYTES_PER_SOURCE,
     toolGuard: {
       recentWindow: resolvePositiveEnvInt('TAKT_OPENCODE_TOOL_ERROR_WINDOW', 20),
       recentWindowErrorRatePercent: resolvePositiveEnvInt('TAKT_OPENCODE_TOOL_ERROR_WINDOW_RATE', 90),

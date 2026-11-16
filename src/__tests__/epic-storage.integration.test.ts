@@ -101,7 +101,7 @@ describe('workspace Epic storage', () => {
     const errors = vi.fn();
     const notifications = new DaemonNotifications(configDirectory);
     const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
-      notifications, async () => {}, errors);
+      notifications, async () => {}, errors, { readTurns: async () => [] });
     const owner = { kind: 'workspace' as const, workspaceId: workspace.id };
     const turn = { conversationId: conversationId(owner), operationId: verificationRunId, generation: 1 };
     const accept = vi.fn<DaemonIngress['accept']>(async (event) => ({ kind: 'accepted', eventId: event.eventId,
@@ -150,10 +150,10 @@ describe('workspace Epic storage', () => {
     const event = epicEvents(record).find(({ event }) => event.kind === kind)!;
     const create = async () => {
       const notifications = new DaemonNotifications(configDirectory);
-      const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
-        notifications, async () => {}, vi.fn());
-      await conversations.ensure(owner);
       const store = new FileEventStore(configDirectory);
+      const conversations = new DaemonConversations(new ConversationStateStore(configDirectory), new DaemonRouting(configDirectory),
+        notifications, async () => {}, vi.fn(), store);
+      await conversations.ensure(owner);
       const runner = new ControlledTurnRunner();
       const failures = vi.fn();
       const dispatcher = await createDaemonDispatcher({ store, conversations, runner,
