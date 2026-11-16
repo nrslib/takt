@@ -13,7 +13,7 @@ import { measureWidth } from '../shared/utils/grapheme.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../features/tui/terminalColors.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { cwd, DOWN, ENTER, ESC, ManagerClientDouble, mount, promptFrame, QUESTION_MENU, waitFor } from './helpers/manager-tui-fixtures.js';
+import { approveSummary, cwd, DOWN, ENTER, ESC, ManagerClientDouble, mount, promptFrame, QUESTION_MENU, showProposal, typeAndSubmit, waitFor } from './helpers/manager-tui-fixtures.js';
 
 vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
   const actual = await original<typeof import('../features/tui/TranscriptEntryView.js')>();
@@ -804,4 +804,42 @@ it('does not repeat a reply shown live when a later snapshot contains its saved 
   client.change({ items: [...client.getSnapshot().items, savedMessage(operationId, 'live question', 1), savedResult(operationId, 1, { kind: 'reply', message: 'live reply' }),
     savedMessage(next, 'next question', 2), savedResult(next, 2, { kind: 'reply', message: 'next reply' })] });
   await waitFor(() => expect(logLines()).toEqual(['user:live question', 'assistant:live reply', 'user:next question', 'assistant:next reply']));
+});
+
+it('ends the goal proposal request when its live result arrives after the snapshot showed the saved result', async () => {
+  const context = mount('en');
+  const { app, client } = context;
+  await typeAndSubmit(context, '/make-goal');
+  const operationId = await client.operation();
+  const state = client.getSnapshot().state!;
+  client.change({ state: { ...state, running: { operationId, generation: 1, kind: 'message' } } });
+  await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryWorking', 'en')));
+  const result = { kind: 'reply', message: 'Need more detail' } as const;
+  client.change({ state: { ...state, running: null }, items: [...client.getSnapshot().items, savedResult(operationId, 1, result)] });
+  await waitFor(() => expect(logLines()).toEqual(['assistant:Need more detail']));
+  client.output({ kind: 'result', operationId, result });
+  await waitFor(() => expect(logLines()).toEqual(['assistant:Need more detail', `system:${getLabel('manager.goSummaryUnavailable', 'en')}`]));
+  client.change({ state: { ...state, running: { operationId: randomUUID(), generation: 1, kind: 'message' } } });
+  await waitFor(() => expect(app.lastFrame()).toContain('Working'));
+  expect(app.lastFrame()).not.toContain(getLabel('manager.summaryWorking', 'en'));
+});
+
+it('accepts another registration when the live result of an approval arrives after the snapshot showed the saved result', async () => {
+  const context = mount('en');
+  const { app, client } = context;
+  // 実際のクライアントは読取を終えると新しいスナップショットを通知する。
+  client.refresh.mockImplementation(async () => { client.change({}); });
+  await showProposal(context);
+  approveSummary(context);
+  await waitFor(() => expect(app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', 'en')));
+  const operationId = await client.operation();
+  const result = { kind: 'error', code: 'registration_failed', message: 'Registration failed' } as const;
+  client.change({ items: [...client.getSnapshot().items, savedResult(operationId, 1, result)] });
+  await waitFor(() => expect(logLines()).toContain('system:Registration failed'));
+  client.output({ kind: 'result', operationId, result });
+  await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summary.confirmation', 'en')));
+  approveSummary(context);
+  await waitFor(() => expect(client.commands()).toEqual([
+    { kind: 'approve_summary', revision: 4 }, { kind: 'approve_summary', revision: 4 },
+  ]));
 });

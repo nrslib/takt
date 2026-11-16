@@ -78,6 +78,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
   const displayedResults = useRef(new Set<string>());
+  const handledResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
   const interruptedTurn = useRef<{ operationId: string; generation?: number } | null>(null);
   const clock = useRef<{ operationId: string; generation?: number; startedAt: number } | null>(null);
@@ -226,8 +227,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
   /** 結果を会話ログへ一度だけ積む。ライブの配送とスナップショットからの復元で同じ表示にする。 */
-  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): boolean => {
-    if (displayedResults.current.has(operationId)) return false;
+  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
+    if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
@@ -238,11 +239,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       append(message, result.kind === 'reply' ? 'assistant' : 'system');
     }
     if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
-    return true;
   };
   const showResult = (result: OperationResult, operationId: string): void => {
+    // 保存済みの結果がスナップショットから先に表示されていても、ライブの結果を受けた後処理は省かない。
+    if (handledResults.current.has(operationId)) return;
+    handledResults.current.add(operationId);
     const goalOperation = goalOperations.current.get(operationId);
-    if (!appendResult(result, operationId, goalOperation?.goal)) return;
+    appendResult(result, operationId, goalOperation?.goal);
     goalOperations.current.delete(operationId);
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
       ? { goal: goalOperation.goal, retry: true } : null);

@@ -35,14 +35,32 @@ export function orderSnapshotItems(items: ReadonlyMap<string, SnapshotDisplayIte
     conversation.push(item);
   }
   while (next < messages.length) conversation.push(messages[next++]!);
-  // 結果はそのターンの発言とツールの後に置く。どちらもないターンは、受付順で後の発言より前に置く。
-  const results = ordered.filter((item) => item.kind === 'turn_result').sort((left, right) => left.acceptedSequence - right.acceptedSequence);
-  for (const result of results) {
-    const owned = conversation.map(turnOperationId).lastIndexOf(result.operationId);
-    const later = conversation.findIndex((item) => item.kind === 'user_message' && item.acceptedSequence > result.acceptedSequence);
-    conversation.splice(owned >= 0 ? owned + 1 : later >= 0 ? later : conversation.length, 0, result);
-  }
-  return [...ordered.filter((item) => item.kind !== 'tool_history' && item.kind !== 'user_message' && item.kind !== 'turn_result'), ...conversation];
+  return [...ordered.filter((item) => item.kind !== 'tool_history' && item.kind !== 'user_message' && item.kind !== 'turn_result'),
+    ...placeTurnResults(conversation, ordered)];
+}
+
+/** 結果はそのターンの発言とツールの後に置く。どちらもないターンは、受付順で後の発言より前に置く。 */
+function placeTurnResults(conversation: readonly SnapshotDisplayItem[], ordered: readonly SnapshotDisplayItem[]): SnapshotDisplayItem[] {
+  const results = new Map(ordered.flatMap((item) => item.kind === 'turn_result' ? [[item.operationId, item] as const] : []));
+  const lastTurnItems = new Map<string, number>();
+  conversation.forEach((item, index) => {
+    const operationId = turnOperationId(item);
+    if (operationId !== undefined) lastTurnItems.set(operationId, index);
+  });
+  const unowned = [...results.values()].filter((result) => !lastTurnItems.has(result.operationId))
+    .sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+  const placed: SnapshotDisplayItem[] = [];
+  let next = 0;
+  conversation.forEach((item, index) => {
+    if (item.kind === 'user_message') {
+      while (next < unowned.length && unowned[next]!.acceptedSequence < item.acceptedSequence) placed.push(unowned[next++]!);
+    }
+    placed.push(item);
+    const operationId = turnOperationId(item);
+    const result = operationId === undefined ? undefined : results.get(operationId);
+    if (result !== undefined && lastTurnItems.get(result.operationId) === index) placed.push(result);
+  });
+  return [...placed, ...unowned.slice(next)];
 }
 
 function turnOperationId(item: SnapshotDisplayItem): string | undefined {
