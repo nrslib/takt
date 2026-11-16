@@ -18,11 +18,6 @@ export const CI_RESULT_BYTES = 16 * 1024;
 const INPUT_TRUNCATION_MARKER = ' [input truncated]';
 const NAME_TRUNCATION_MARKER = ' [name truncated]';
 
-export function formatToolActivityTime(epochMs: number): string {
-  const time = new Date(epochMs);
-  return [time.getHours(), time.getMinutes(), time.getSeconds()].map((value) => String(value).padStart(2, '0')).join(':');
-}
-
 function canonicalToolName(tool: string): string {
   switch (tool.toLowerCase()) {
     case 'bash': return 'Bash';
@@ -35,27 +30,18 @@ function canonicalToolName(tool: string): string {
   }
 }
 
-function stringInput(input: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
-    const value = input[key];
-    if (Object.hasOwn(input, key) && typeof value === 'string') return value;
-  }
-  return undefined;
-}
-
 function selectedInput(tool: string, input: Record<string, unknown>): string {
+  let keys: readonly string[];
   switch (canonicalToolName(tool)) {
-    case 'Bash': return stringInput(input, ['command']) ?? '';
-    case 'Read': case 'Write': case 'Edit': return stringInput(input, ['file_path', 'filePath', 'path']) ?? '';
-    case 'Grep': case 'Glob': return stringInput(input, ['pattern']) ?? '';
-    default: {
-      const selected = stringInput(input, ['query', 'input', 'command', 'file_path', 'filePath', 'pattern', 'path']);
-      if (selected !== undefined) return selected;
-      // 未知のツールは、入力の最初の値を要約として見せる。
-      const firstKey = Object.keys(input)[0];
-      return firstKey === undefined ? '' : String(input[firstKey] || '');
-    }
+    case 'Bash': keys = ['command']; break;
+    case 'Read': case 'Write': case 'Edit': keys = ['file_path', 'filePath', 'path']; break;
+    case 'Grep': case 'Glob': keys = ['pattern']; break;
+    default: keys = ['query', 'input', 'command', 'file_path', 'filePath', 'pattern', 'path']; break;
   }
+  for (const key of keys) {
+    if (Object.hasOwn(input, key) && typeof input[key] === 'string') return input[key];
+  }
+  return '';
 }
 
 export function projectToolInput(tool: string, input: Record<string, unknown>, source: unknown = input): string {
@@ -77,10 +63,9 @@ export interface ToolActivityResultView {
   sensitiveValues: BoundedSensitiveValues;
 }
 
-/** entry の結果全体を分類し、秘密値を集めてマスクする。出力全体を処理するので、entry が変わったときだけ呼ぶ。 */
 export function toolActivityResultView(entry: ToolActivityEntry): ToolActivityResultView {
   const raw = entry.result === undefined || entry.result === '' ? entry.output : entry.result;
-  const { text, parsed } = classifyToolResult(raw, entry.status !== 'running');
+  const { text, parsed } = classifyToolResult(raw);
   const known = createBoundedSensitiveValues();
   known.collect(entry.input);
   known.collect(raw);
@@ -152,6 +137,10 @@ export function projectToolActivity(
   };
 }
 
+export function toolActivityGroupSummary(first: ToolActivityProjection, count: number): string {
+  return count === 1 ? first.action : `${first.action} ${count}${canonicalToolName(first.tool) === 'Read' ? ' files' : ' operations'}`;
+}
+
 export function groupToolActivities(
   entries: readonly ToolActivityEntry[],
   views?: ReadonlyMap<string, ToolActivityResultView>,
@@ -167,7 +156,7 @@ export function groupToolActivities(
     previousTool = tool;
   }
   for (const group of groups) {
-    if (group.entries.length > 1) group.summary = `${group.entries[0]!.action} ${group.entries.length}${canonicalToolName(group.entries[0]!.tool) === 'Read' ? ' files' : ' operations'}`;
+    if (group.entries.length > 1) group.summary = toolActivityGroupSummary(group.entries[0]!, group.entries.length);
   }
   return groups;
 }

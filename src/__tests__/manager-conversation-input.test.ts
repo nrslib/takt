@@ -27,17 +27,18 @@ function fixture() {
     return hooks.input.mock.calls.at(-1)![0] as (input: string, key: Key) => void;
   } };
 }
-it('routes history controls without changing the draft, completion selection or active turn', () => {
+it('routes Ctrl+O and history paging without changing the draft, completion selection or active turn', () => {
   const f = fixture(); const input = f.bind();
   f.options.editorRef.current = { ...createEditorState('日本語の下書き'), cursor: 3 };
   const editor = structuredClone(f.options.editorRef.current);
-  input('t', { ...key, ctrl: true });
+  input('o', { ...key, ctrl: true });
   input('', { ...key, pageDown: true });
   input('', { ...key, pageUp: true });
   expect(vi.mocked(f.options.browseTools).mock.calls).toEqual([['toggle'], ['next'], ['previous']]);
   expect(f.options.editorRef.current).toEqual(editor);
   expect(f.options.edit).not.toHaveBeenCalled();
   expect(f.options.submit).not.toHaveBeenCalled();
+  expect(f.options.openEpics).not.toHaveBeenCalled();
   expect(f.options.abortTurn).not.toHaveBeenCalled();
   expect(f.options.slashCompletion.reset).not.toHaveBeenCalled();
   input('', { ...key, escape: true });
@@ -90,7 +91,7 @@ it('submits /verify from the TUI without dismissing the pending proposal while t
   expect(f.options.submit).toHaveBeenCalledExactlyOnceWith('/verify');
 });
 
-it('routes Epic navigation before turn interruption and blocks pasted conversation input while browsing', () => {
+it('routes Ctrl+T to Epics before turn interruption and blocks pasted conversation input while browsing', () => {
   const f = fixture();
   f.options.epicsOpen = true;
   const input = f.bind();
@@ -100,7 +101,8 @@ it('routes Epic navigation before turn interruption and blocks pasted conversati
   const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
   paste('Do not modify the draft');
   expect(f.options.edit).not.toHaveBeenCalled();
-  input('o', { ...key, ctrl: true });
+  input('t', { ...key, ctrl: true });
   expect(f.options.openEpics).toHaveBeenCalledOnce();
+  expect(f.options.browseTools).not.toHaveBeenCalled();
   expect(f.options.submit).not.toHaveBeenCalled();
 });

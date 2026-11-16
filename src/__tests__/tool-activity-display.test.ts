@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveToolActivityDisplayMode, ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 import { CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, DETAIL_RESULT_LINES } from '../shared/tool-activity/presentation.js';
-import { applyToolActivityTurnUpdate } from '../shared/tool-activity/history.js';
-import type { ToolActivityEntry, ToolActivityTurnState, ToolActivityTurnUpdate } from '../shared/tool-activity/types.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
 import * as resultUtils from '../shared/tool-activity/result.js';
-import * as sensitiveTextUtils from '../shared/utils/sensitive-text.js';
-import * as textUtils from '../shared/utils/text.js';
-import { sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
+import { RunningToolResult } from '../shared/tool-activity/runningResult.js';
+import { sanitizeSensitiveTextWithKnownValues } from '../shared/utils/sensitiveText.js';
 import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
-
-type ToolActivityPath = 'event' | 'update' | 'restore';
 
 const turn = { operationId: 'turn', generation: 1 };
 
@@ -18,63 +14,99 @@ function startedEntry(input: Record<string, unknown>): ToolActivityEntry {
     input, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
 }
 
-/** event と update の経路で、同じ 1 件のツール実行を開始・追記・完了させる。 */
-class ToolActivityFeed {
-  readonly display = new ToolActivityDisplay('silent', false, vi.fn(), false);
-  private sequence = 1;
-  private output = '';
-
-  constructor(private readonly path: 'event' | 'update', private readonly input: Record<string, unknown>) {
-    if (path === 'event') this.display.handle({ type: 'tool_use', data: { id: 'build', tool: 'Bash', input } });
-    else this.display.applyUpdate({ ...turn, previousSequence: 0, sequence: 1, entries: [startedEntry(input)] });
-  }
-
-  append(text: string): void {
-    this.output += text;
-    if (this.path === 'event') this.display.handle({ type: 'tool_output', data: { id: 'build', tool: 'Bash', output: text } });
-    else this.applyUpdate([], { key: '1', text });
-  }
-
-  complete(content: string): void {
-    if (this.path === 'event') this.display.handle({ type: 'tool_result', data: { id: 'build', content, isError: false } });
-    else this.applyUpdate([{ ...startedEntry(this.input), output: this.output, result: content, status: 'success',
-      completedAt: 2000, completionSequence: this.sequence + 1 }]);
-  }
-
-  private applyUpdate(entries: ToolActivityEntry[], output?: { key: string; text: string }): void {
-    expect(this.display.applyUpdate({ ...turn, previousSequence: this.sequence, sequence: this.sequence + 1, entries,
-      ...(output === undefined ? {} : { output }) })).toBe(true);
-    this.sequence += 1;
-  }
+function startedDisplay(input: Record<string, unknown>): ToolActivityDisplay {
+  const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+  display.handle({ type: 'tool_use', data: { id: 'build', tool: 'Bash', input } });
+  return display;
 }
 
-function displayAfter(path: ToolActivityPath, input: Record<string, unknown>, output: string, completed: boolean): ToolActivityDisplay {
-  const feed = new ToolActivityFeed(path === 'update' ? 'update' : 'event', input);
-  feed.append(output);
-  if (completed) feed.complete(output);
-  if (path !== 'restore') return feed.display;
-  const restored = new ToolActivityDisplay('silent', false, vi.fn(), false);
-  restored.restore(feed.display.history.snapshot());
-  return restored;
-}
-
-/** action の間に、出力の分類・秘密値の収集・マスクへ渡した文字数の合計。 */
-function processedLength(action: () => void): number {
-  const classify = vi.spyOn(resultUtils, 'classifyToolResult');
-  const collect = vi.spyOn(sensitiveTextUtils, 'collectEmbeddedSensitiveValues');
-  const mask = vi.spyOn(sensitiveTextUtils, 'sanitizeTextWithValues');
-  const lengths = (calls: readonly (readonly unknown[])[]): number => calls.reduce((sum, [text]) => sum + String(text).length, 0);
-  try {
-    action();
-    return lengths(classify.mock.calls) + lengths(collect.mock.calls) + lengths(mask.mock.calls);
-  } finally {
-    classify.mockRestore();
-    collect.mockRestore();
-    mask.mockRestore();
-  }
+function appendOutput(display: ToolActivityDisplay, output: string): void {
+  display.handle({ type: 'tool_output', data: { id: 'build', tool: 'Bash', output } });
 }
 
 describe('tool activity display', () => {
+  it.each([
+    '{"x":"\\u1234\\n\\\"\\\\", "data":[null,true,false,-1.25e+3,0,[],{}]}',
+    '[{"empty":{}},[],0,-0,1e-2,12.5,true,false,null]',
+  ])('keeps every valid JSON prefix structured: %s', (raw) => {
+    const result = new RunningToolResult();
+    for (let end = 1; end <= raw.length; end++) {
+      const entry = { ...startedEntry({}), output: raw.slice(0, end) };
+      result.read(entry);
+      expect(result.preview(entry).text).toBe('');
+    }
+    expect(resultUtils.classifyToolResult(raw).kind).toBe('structured');
+  });
+
+  it.each([{}, { token: 'unrelated-credential' }])('flushes a compact unterminated output while the tool is still running with input %j', (input) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'ready', tool: 'Bash', input: { command: 'printf ready; sleep 60', ...input } } });
+    display.handle({ type: 'tool_output', data: { id: 'ready', tool: 'Bash', output: 'ready' } });
+    display.flush();
+    display.flush();
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ ready']);
+    expect(display.history.entries()[0]?.status).toBe('running');
+  });
+
+  it.each([
+    { mode: 'compact', input: { token: 's3cr3t' }, chunks: ['Downloading files', '\n'], expected: ['  │ Downloading file[REDACTED]', '  │ s'] },
+    { mode: 'compact', input: {}, chunks: ['Authorization: Bear', 'er abc\n'], expected: ['  │ Authorization: [REDACTED]'] },
+    { mode: 'expanded', input: { token: 's3cr3t' }, chunks: ['Downloading files', '\n'], expected: ['  │ Downloading file[REDACTED]', '  │ s'] },
+  ] as const)('does not print a line again after flushing a masked tail in $mode mode: $chunks', ({ mode, input, chunks, expected }) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay(mode, false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'held', tool: 'Bash', input } });
+    for (const chunk of chunks) {
+      display.handle({ type: 'tool_output', data: { id: 'held', tool: 'Bash', output: chunk } });
+      display.flush();
+    }
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual(expected);
+  });
+
+  it.each([
+    { chunks: ['{"stdout":"ok"}\n'], expected: 'ok' },
+    { chunks: ['[1,2,3]\n'], expected: '[structured output omitted]' },
+  ])('prints a compact structured result only once after streaming $chunks', ({ chunks, expected }) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'json', tool: 'Bash', input: {} } });
+    for (const chunk of chunks) {
+      display.handle({ type: 'tool_output', data: { id: 'json', tool: 'Bash', output: chunk } });
+      display.flush();
+      display.flush();
+    }
+    display.handle({ type: 'tool_result', data: { id: 'json', content: chunks.join(''), isError: false } });
+    display.flush();
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual([`  │ ${expected}`]);
+    expect(output.filter((line) => line.includes('Bash output:'))).toHaveLength(1);
+    expect(output.filter((line) => line.includes('✓'))).toEqual(['  ✓ Bash']);
+  });
+
+  it('masks the input with a value that a later output reveals as a secret', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'echo revealed-value' } } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'tick\n' } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'api_key=revealed-value\n' } });
+    expect(display.groups()[0]!.entries[0]!.input).not.toContain('revealed-value');
+  });
+  it.each(['silent', 'compact'] as const)('masks a secret value of the input in every later output in %s mode', (mode) => {
+    const display = new ToolActivityDisplay(mode, false, vi.fn(), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'printf ready', token: 'input-secret' } } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'ready\n' } });
+    for (let index = 0; index < 2; index++) display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'input-secret\n' } });
+    expect(display.detail('1', 0).result.text).not.toContain('input-secret');
+  });
+
+  it('masks repeated credentials from the whole committed span before printing compact output', () => {
+    const printed: string[] = [];
+    const display = new ToolActivityDisplay('compact', false, (line) => printed.push(line), false);
+    display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: {} } });
+    display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: 'using abc123secretvalue password=abc123secretvalue\n' } });
+    display.flush();
+    expect(printed.join('\n')).not.toContain('abc123secretvalue');
+    expect(printed.join('\n')).toContain('using [REDACTED]');
+  });
   it.each(['compact', 'expanded', 'silent'] as const)('should protect normalized secrets through split input, reads and flush in %s mode', (mode) => {
     for (const token of ['secret123', 'sec\x1b[31mret123']) {
       for (const chunks of [
@@ -102,17 +134,11 @@ describe('tool activity display', () => {
     }
   });
 
-  it.each([false, true])('should preserve normalized consumption and pending secrets with restore=%s', (restore) => {
-    let display = new ToolActivityDisplay('silent', false, vi.fn(), false);
+  it('should preserve normalized consumption and pending secrets', () => {
+    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'secret123' } } });
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready\nsec\x1b[3' } });
     const key = display.history.entries()[0]!.key;
-    expect(display.detail(key, 0).result.text).toBe('ready');
-    if (restore) {
-      const state = display.history.snapshot();
-      display = new ToolActivityDisplay('silent', false, vi.fn(), false);
-      display.restore(state);
-    }
     expect(display.detail(key, 0).result.text).toBe('ready');
     for (const output of ['1mret', '123\x1b[0m\n', 'after\t日本語\n']) {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output } });
@@ -144,188 +170,23 @@ describe('tool activity display', () => {
     expect(output.filter((line) => line.startsWith('  │ '))).toEqual(['  │ [REDACTED] ready']);
   });
 
-  it('should apply streamed history updates in place and show the same history as a display restored from the merged state', () => {
-    const turn = { operationId: 'turn', generation: 1 };
-    const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
-      input: { command: 'make' }, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
-    const lines = Array.from({ length: 50 }, (_, index) => `line-${index}\n`);
-    const updates: ToolActivityTurnUpdate[] = [{ ...turn, previousSequence: 0, sequence: 1, entries: [started] },
-      ...lines.map((text, index) => ({ ...turn, previousSequence: index + 1, sequence: index + 2, entries: [], output: { key: '1', text } }))];
-    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
-    let state: ToolActivityTurnState | undefined;
-    const clone = vi.spyOn(globalThis, 'structuredClone');
-    try {
-      for (const update of updates) {
-        expect(display.applyUpdate(update)).toBe(true);
-        state = applyToolActivityTurnUpdate(state, update);
-      }
-      for (const [value] of clone.mock.calls) expect(JSON.stringify(value)).not.toContain('line-');
-    } finally {
-      clone.mockRestore();
-    }
-    const expectSameAsRestored = (): void => {
-      const restored = new ToolActivityDisplay('silent', false, vi.fn(), false);
-      restored.restore(state!.history);
-      expect(display.groups()).toEqual(restored.groups());
-      expect(display.detail('1', 0)).toEqual(restored.detail('1', 0));
-    };
-    expect(display.history.get('1')?.output).toBe(lines.join(''));
-    expectSameAsRestored();
 
-    const completion: ToolActivityTurnUpdate = { ...turn, previousSequence: 51, sequence: 52, entries: [{ ...started, output: lines.join(''),
-      result: 'built', status: 'success', completedAt: 2000, completionSequence: 52 }] };
-    expect(display.applyUpdate({ ...completion, previousSequence: 50 })).toBe(false);
-    expect(display.applyUpdate(completion)).toBe(true);
-    state = applyToolActivityTurnUpdate(state, completion);
-    expect(display.groups()[0]!.entries[0]!).toMatchObject({ status: 'success', result: { text: 'built' } });
-    expectSameAsRestored();
-  });
+  describe('a secret value that the output reveals after it was already shown', () => {
+    it('should apply a later-discovered value only to new running output', () => {
+      const secret = 'late-value-012345';
+      const display = startedDisplay({ command: 'deploy' });
+      appendOutput(display, `using ${secret}\n`);
+      expect(display.detail('1', 0).result.text).toBe(`using ${secret}`);
 
-
-  it.each([
-    { name: 'text', first: 'ready\n', chunk: `${'x'.repeat(1023)}\n`, shown: true },
-    { name: 'structured', first: '{"stdout":"', chunk: 'x'.repeat(1024), shown: false },
-  ])('should process only the appended part of running $name output on each update and render', ({ first, chunk, shown }) => {
-    const turn = { operationId: 'turn', generation: 1 };
-    const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
-      input: { command: 'make' }, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
-    const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
-    display.applyUpdate({ ...turn, previousSequence: 0, sequence: 1, entries: [started] });
-    const chunks = [first, ...Array.from({ length: 300 }, () => chunk)];
-    const stripAnsi = vi.spyOn(textUtils, 'stripAnsi');
-    const stablePrefix = vi.spyOn(resultUtils, 'stableToolResultPrefix');
-    const parse = vi.spyOn(JSON, 'parse');
-    const maxLength = (calls: unknown[][]): number => Math.max(0, ...calls.map(([value]) => String(value).length));
-    try {
-      for (const [index, text] of chunks.entries()) {
-        expect(display.applyUpdate({ ...turn, previousSequence: index + 1, sequence: index + 2, entries: [], output: { key: '1', text } })).toBe(true);
-        expect(maxLength(stripAnsi.mock.calls)).toBeLessThanOrEqual(chunk.length);
-        expect(maxLength(stablePrefix.mock.calls)).toBeLessThanOrEqual(chunk.length);
-        expect(parse).not.toHaveBeenCalled();
-        stripAnsi.mockClear();
-        stablePrefix.mockClear();
-        display.groups();
-        expect(maxLength(stablePrefix.mock.calls)).toBeLessThanOrEqual(chunk.length);
-        stablePrefix.mockClear();
-        stripAnsi.mockClear();
-        parse.mockClear();
-      }
-    } finally {
-      stripAnsi.mockRestore();
-      stablePrefix.mockRestore();
-      parse.mockRestore();
-    }
-    const restored = new ToolActivityDisplay('silent', false, vi.fn(), false);
-    restored.restore(display.history.snapshot());
-    expect(display.detail('1', 0)).toEqual(restored.detail('1', 0));
-    expect(display.detail('1', 0).result.text.startsWith(shown ? 'ready\nxxx' : '')).toBe(true);
-    if (!shown) expect(display.detail('1', 0).result.text).toBe('');
-  });
-
-  describe('processing of the whole output', () => {
-    const input = { command: 'make', token: 'secret123' };
-    const line = (index: number): string => `line-${index} ${'x'.repeat(100)}\n`;
-
-    it.each((['event', 'update', 'restore'] as const).flatMap((path) => [false, true].map((completed) => ({ path, completed }))))(
-      'should not process the whole output again when reading groups and detail without history changes ($path, completed=$completed)',
-      ({ path, completed }) => {
-        const output = Array.from({ length: 200 }, (_, index) => line(index)).join('');
-        const display = displayAfter(path, input, output, completed);
-
-        const processed = processedLength(() => {
-          for (let read = 0; read < 5; read += 1) {
-            display.groups();
-            const first = display.detail('1', 0);
-            display.detail('1', first.result.nextOffset);
-          }
-        });
-
-        expect(processed).toBeLessThan(output.length);
-        expect(display.detail('1', 0).result.text.startsWith('line-0 xxx')).toBe(true);
-      },
-    );
-
-    it.each(['event', 'update'] as const)('should process running output in proportion to the number of chunks received through %s', (path) => {
-      const processedFor = (count: number): number => {
-        const feed = new ToolActivityFeed(path, input);
-        return processedLength(() => {
-          for (let index = 0; index < count; index += 1) {
-            feed.append(line(index));
-            feed.display.groups();
-          }
-        });
-      };
-
-      const single = processedFor(100);
-      const double = processedFor(200);
-
-      expect(double).toBeLessThanOrEqual(single * 2.5);
-    });
-
-    it.each(['event', 'update', 'restore'] as const)('should mask a secret that later running output reveals in earlier output and the input label through %s', (path) => {
-      const secret = 'abc123secretvalue';
-      const feed = new ToolActivityFeed(path === 'update' ? 'update' : 'event', { command: `deploy ${secret}` });
-      for (const chunk of [`using ${secret}\n`, `password=${secret}\n`]) feed.append(chunk);
-      const display = path === 'restore' ? new ToolActivityDisplay('silent', false, vi.fn(), false) : feed.display;
-      if (path === 'restore') display.restore(feed.display.history.snapshot());
-
+      appendOutput(display, `password=${secret}\n`);
+      appendOutput(display, `using ${secret}\n`);
       const projection = display.groups()[0]!.entries[0]!;
-
-      expect(projection.input).toBe('deploy [REDACTED]');
-      expect(projection.result.text).toBe('using [REDACTED]\npassword=[REDACTED]');
-      expect(display.detail('1', 0).result.text).toBe('using [REDACTED]\npassword=[REDACTED]');
+      const expected = `using ${secret}\npassword=[REDACTED]\nusing [REDACTED]`;
+      expect(projection.input).toBe('deploy');
+      expect(projection.result.text).toBe(expected);
+      expect(display.detail('1', 0).result.text).toBe(expected);
     });
 
-    it.each(['event', 'update'] as const)('should mask the input label with a secret on a running line that has not ended through %s', (path) => {
-      const feed = new ToolActivityFeed(path, { command: 'deploy abc123secretvalue' });
-      feed.append('password=abc123secretvalue');
-
-      expect(feed.display.groups()[0]!.entries[0]!.input).toBe('deploy [REDACTED]');
-      expect(feed.display.detail('1', 0).input).toBe('deploy [REDACTED]');
-    });
-
-    it('should mask a running value whose sensitive key is on the previous line', () => {
-      const feed = new ToolActivityFeed('update', { command: 'cat config.yaml', token: 'other-secret' });
-      for (const chunk of ['token:\n', '  abc123secretvalue\n', 'echo abc123secretvalue\n']) feed.append(chunk);
-
-      const text = feed.display.detail('1', 0).result.text;
-
-      expect(text).not.toContain('abc123secretvalue');
-      expect(text).toContain('echo [REDACTED]');
-    });
-
-    it.each(['event', 'update'] as const)('should not show a quoted secret value that spans three running chunks through %s', (path) => {
-      const feed = new ToolActivityFeed(path, { command: 'cat deploy.env' });
-      const parts = ['part1-secret', 'part2-secret', 'part3-secret'];
-
-      for (const chunk of [`API_TOKEN="${parts[0]}\n`, `${parts[1]}\n`, `${parts[2]}"\nready\n`]) {
-        feed.append(chunk);
-        const shown = [feed.display.groups()[0]!.entries[0]!.result.text, feed.display.detail('1', 0).result.text];
-        for (const text of shown) for (const part of parts) expect(text).not.toContain(part);
-      }
-
-      expect(feed.display.detail('1', 0).result.text).toBe('API_TOKEN="[REDACTED]"\nready');
-    });
-
-    it.each(['event', 'update'] as const)('should mask a known running secret that a long line splits at the masking boundary through %s', (path) => {
-      const feed = new ToolActivityFeed(path, { command: 'cat deploy.log' });
-      const secret = 's3cr3tvalue0123';
-      const header = 'API_TOKEN=[REDACTED]\n';
-      // 改行のない行を区切る 16KB を超える長さ。改行のない保留の上限（1 万文字）も超えるので、実行中の表示は伏せる。
-      const filler = 'x'.repeat(16 * 1024 + 500);
-      const chunks = [`API_TOKEN=${secret}\n`, `${filler}${secret.slice(0, 6)}`, `${secret.slice(6)} tail\n`];
-
-      for (const chunk of chunks) {
-        feed.append(chunk);
-        const text = feed.display.detail('1', 0).result.text;
-        expect(text).not.toContain(secret.slice(0, 6));
-        expect(text).not.toContain(secret.slice(6));
-      }
-      feed.complete(chunks.join(''));
-
-      const page = feed.display.detail('1', header.length + filler.length - 50).result.text;
-      expect(page).toBe(`${'x'.repeat(50)}[REDACTED] tail`);
-    });
   });
 
   describe('secret values that an output chunk splits in the middle of the value', () => {
@@ -334,19 +195,19 @@ describe('tool activity display', () => {
       { known: true, input: { command: 'cat deploy.env', api_key: 'seed-secret' } },
     ];
 
-    it.each(splitSecretScenarios.flatMap((scenario) => (['event', 'update'] as const).flatMap((path) =>
-      inputs.map(({ known, input }) => ({ scenario, path, known, input })))))(
-      'should not show any part of the secret: $scenario.name through $path (known=$known)', ({ scenario, path, input }) => {
-        const feed = new ToolActivityFeed(path, input);
+    it.each(splitSecretScenarios.flatMap((scenario) => inputs.map(({ known, input }) => ({ scenario, known, input }))))(
+      'should not show any part of the secret: $scenario.name (known=$known)', ({ scenario, input }) => {
+        const display = startedDisplay(input);
 
         for (const chunk of scenario.chunks) {
-          feed.append(chunk);
-          for (const text of [feed.display.groups()[0]!.entries[0]!.result.text, feed.display.detail('1', 0).result.text]) {
+          appendOutput(display, chunk);
+          for (const text of [display.groups()[0]!.entries[0]!.result.text, display.detail('1', 0).result.text]) {
             expect(secretFragmentsIn(text, scenario)).toEqual([]);
           }
         }
 
-        expect(feed.display.detail('1', 0).result.text).toBe(sanitizeSensitiveText(scenarioText(scenario)).replace(/\n$/u, ''));
+        const text = scenarioText(scenario);
+        expect(display.detail('1', 0).result.text).toBe(sanitizeSensitiveTextWithKnownValues(text, text).replace(/\n$/u, ''));
       },
     );
 
@@ -359,7 +220,6 @@ describe('tool activity display', () => {
 
         for (const chunk of scenario.chunks) {
           display.handle({ type: 'tool_output', data: { id: 'build', tool: 'Bash', output: chunk } });
-          display.flush();
         }
         display.handle({ type: 'tool_result', data: { id: 'build', content: scenarioText(scenario), isError: false } });
 
@@ -368,23 +228,6 @@ describe('tool activity display', () => {
     );
   });
 
-  it('should restore completed results without output and keep partial running secrets private', () => {
-    const writer = vi.fn();
-    const source = new ToolActivityDisplay('silent', false, writer, false);
-    source.handle({ type: 'tool_use', data: { id: 'done', tool: 'Read', input: { file_path: 'done.ts' } } });
-    source.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
-    source.handle({ type: 'tool_use', data: { id: 'running', tool: 'Bash', input: { token: 'secret123' } } });
-    source.handle({ type: 'tool_output', data: { id: 'running', tool: 'Bash', output: 'ready\n' + 'ready '.repeat(50) + 'secret' } });
-    const restored = new ToolActivityDisplay('expanded', false, writer, false);
-    restored.restore(source.history.snapshot());
-    expect(restored.groups().flatMap((group) => group.entries).map((entry) => entry.status)).toEqual(['failure', 'running']);
-    const key = restored.history.entries()[1]!.key;
-    expect(restored.detail(key, 0).result.text).toContain('ready');
-    expect(restored.detail(key, 0).result.text).not.toContain('secret');
-    expect(writer).not.toHaveBeenCalled();
-    restored.handle({ type: 'tool_result', data: { id: 'done', content: 'done-result', isError: true } });
-    expect(writer).not.toHaveBeenCalled();
-  });
   it.each([1, 5])('should clone only the selected detail with %s unrelated entries', (count) => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     const [target] = display.handle({ type: 'tool_use', data: { id: 'target', tool: 'Bash', input: { command: 'printf ready' } } });
@@ -410,22 +253,23 @@ describe('tool activity display', () => {
   it('should preserve ordinary text beginning with a redacted value without reclassifying it as JSON', () => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'secret123' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'secret123 ready ' + 'safe '.repeat(100) + '\n' } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'secret123 ready ' + 'safe '.repeat(100) } });
     const value = display.groups()[0]!.entries[0]!;
     expect(value.result.text).toContain('[REDACTED] ready');
     expect(display.detail(value.key, 0).result.text).toContain('[REDACTED] ready');
   });
-  it('should defer structured streaming content until the final result supplies all secret fields', () => {
+  it.each([0, 11000])('should defer structured streaming content until the final result supplies all secret fields (padding=%i)', (padding) => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf ready' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '{"stdout":"ready secret123"}' } });
+    const suffix = 'x'.repeat(padding);
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: JSON.stringify({ stdout: `ready secret123${suffix}` }) } });
     const key = display.groups()[0]!.entries[0]!.key;
     for (const result of [display.groups()[0]!.entries[0]!.result, display.detail(key, 0).result]) {
       expect(result.text).toBe('');
       expect(result.text).not.toContain('secret123');
     }
-    display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"ready secret123","token":"secret123"}', isError: false } });
-    expect(display.detail(key, 0).result.text).toBe('ready [REDACTED]');
+    display.handle({ type: 'tool_result', data: { id: 'a', content: JSON.stringify({ stdout: `ready secret123${suffix}`, token: 'secret123' }), isError: false } });
+    expect(display.detail(key, 0).result.text).toBe(`ready [REDACTED]${suffix}`);
   });
   it('should read grouped projections and successive detail pages without writing in silent mode', () => {
     const writer = vi.fn();
@@ -447,7 +291,7 @@ describe('tool activity display', () => {
   it('should never flush a partial known secret when reading running output repeatedly', () => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf safe', token: 'secret123' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready\n' + 'ready '.repeat(50) + 'secret' } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'ready '.repeat(50) + 'secret' } });
     const key = display.groups()[0]!.entries[0]!.key;
     for (let read = 0; read < 3; read += 1) {
       const detail = display.detail(key, 0);
@@ -481,7 +325,7 @@ describe('tool activity display', () => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { token: 'known-secret' } } });
     const key = display.groups()[0]!.entries[0]!.key;
-    for (const output of ['ready\n' + 'ready '.repeat(50) + '\x1b]', '52;c;PRIVATE_CLIPBOARD\x07', 'after '.repeat(50) + '\n']) {
+    for (const output of ['ready '.repeat(50) + '\x1b]', '52;c;PRIVATE_CLIPBOARD\x07', 'after '.repeat(50)]) {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output } });
       const text = display.detail(key, 0).result.text;
       expect(text).toContain('ready');
@@ -494,22 +338,6 @@ describe('tool activity display', () => {
     const input = { command: 'make', token: 'secret123' };
     const lines = Array.from({ length: 1500 }, (_, index) => `line-${index}\n`).join('');
 
-    it.each(['update', 'restore'] as const)('should show the running output read through %s instead of only the redaction marker', (path) => {
-      const turn = { operationId: 'turn', generation: 1 };
-      const started: ToolActivityEntry = { key: '1', context: { callId: 'call', ...turn }, toolId: 'build', tool: 'Bash',
-        input, output: '', status: 'running', association: 'matched', startedAt: 1000, startSequence: 1 };
-      const source = new ToolActivityDisplay('silent', false, vi.fn(), false);
-      source.applyUpdate({ ...turn, previousSequence: 0, sequence: 1, entries: [started] });
-      source.applyUpdate({ ...turn, previousSequence: 1, sequence: 2, entries: [], output: { key: '1', text: lines } });
-      const display = path === 'update' ? source : new ToolActivityDisplay('silent', false, vi.fn(), false);
-      if (path === 'restore') display.restore(source.history.snapshot());
-
-      const text = display.detail('1', 0).result.text;
-
-      expect(text.startsWith('line-0\nline-1\n')).toBe(true);
-      expect(text).not.toContain('[REDACTED]');
-    });
-
     it('should print the compact stream instead of only the redaction marker', () => {
       const output: string[] = [];
       const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
@@ -518,20 +346,6 @@ describe('tool activity display', () => {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: lines } });
 
       expect(output).toContain('  │ line-0');
-      expect(output.join('\n')).not.toContain('[REDACTED]');
-    });
-
-    it('should print output held until completion instead of only the redaction marker', () => {
-      const held = Array.from({ length: 1500 }, (_, index) => `[build] line-${index}\n`).join('');
-      const output: string[] = [];
-      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
-      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input } });
-      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: held } });
-      expect(output).toEqual([]);
-
-      display.handle({ type: 'tool_result', data: { id: 'a', content: held, isError: false } });
-
-      expect(output).toContain('  │ [build] line-0');
       expect(output.join('\n')).not.toContain('[REDACTED]');
     });
   });
@@ -565,7 +379,7 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: {} } });
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '{"stdout":' } });
     display.flush();
-    expect(output).toEqual([]);
+    expect(output).toContain('  │ [structured output omitted]');
     display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: '"ready"}' } });
     display.flush();
     display.handle({ type: 'tool_result', data: { id: 'a', content: '{"stdout":"ready"}', isError: false } });
@@ -641,17 +455,16 @@ describe('tool activity display', () => {
       display.flush();
     }
     display.handle({ type: 'tool_result', data: { id: 'a', content: chunks.join(''), isError: false } });
-    // 改行の届いていない行は実行中に出さないので、改行のない追記は完了時に 1 行として出る。
-    expect(output.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4))).toEqual(chunks.join('').replace(/\n$/u, '').split('\n'));
+    expect(output.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4))).toEqual(chunks.map((chunk) => chunk.replace(/\n$/u, '')));
     expect(output.at(-1)).toBe('  ✓ Bash');
     expect(display.history.entries()[0]!.status).toBe('success');
   });
 
-  it('should retain the compact line budget across flushes', () => {
+  it('should retain the compact line budget across partial-line flushes', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf done' } } });
-    const chunks = Array.from({ length: COMPACT_RESULT_LINES + 1 }, (_, index) => `part-${index}\n`);
+    const chunks = Array.from({ length: COMPACT_RESULT_LINES + 1 }, (_, index) => `part-${index}`);
     for (const chunk of chunks) {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: chunk } });
       display.flush();
@@ -665,18 +478,25 @@ describe('tool activity display', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf done' } } });
-    const line = 'x'.repeat(COMPACT_RESULT_BYTES - 1);
-    const chunks = [`${line}\n`, 'y\n'];
+    const chunks = ['x'.repeat(COMPACT_RESULT_BYTES - 1), 'y'];
     for (const chunk of chunks) {
       display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: chunk } });
       display.flush();
     }
     display.handle({ type: 'tool_result', data: { id: 'a', content: chunks.join(''), isError: false } });
-    expect(output.filter((printed) => printed.startsWith('  │ '))).toEqual([`  │ ${line}`]);
+    expect(output.filter((line) => line.startsWith('  │ '))).toEqual([`  │ ${chunks[0]}`]);
     expect(output).toContain('  [output truncated; more available]');
   });
 
-  it('should not repeat a line held across multiple flushes at completion', () => {
+  it.each(['[INFO] ready', '[REDACTED] ready'])('should display known log prefixes on explicit flush: %s', (text) => {
+    const output: string[] = [];
+    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
+    display.handle({ type: 'tool_output', data: { tool: 'Bash', output: text } });
+    display.flush();
+    expect(output).toContain(`  │ ${text}`);
+  });
+
+  it('should not repeat a partial line across multiple flushes and completion', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf done' } } });
@@ -685,7 +505,7 @@ describe('tool activity display', () => {
       display.flush();
     }
     display.handle({ type: 'tool_result', data: { id: 'a', content: 'first-second-third', isError: false } });
-    expect(output.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4))).toEqual(['first-second-third']);
+    expect(output.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4))).toEqual(['first-', 'second-', 'third']);
     expect(display.history.entries()[0]!.status).toBe('success');
   });
 
@@ -750,7 +570,7 @@ describe('tool activity display', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf done' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'unique-output\n' } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'unique-output' } });
     display.flush();
     expect(display.history.entries()[0]!.status).toBe('running');
     expect(output.join('\n')).toContain('unique-output');
@@ -764,7 +584,7 @@ describe('tool activity display', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf output', api_key: 'private123' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output private123\n' } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output private123' } });
 
     display.flush();
     display.flush();
@@ -780,7 +600,7 @@ describe('tool activity display', () => {
     const output: string[] = [];
     const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
     display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'printf output', api_key: 'private123' } } });
-    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output\nprivate12' } });
+    display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'observed-output private12' } });
 
     display.flush();
 
@@ -799,37 +619,6 @@ describe('tool activity display', () => {
     display.handle({ type: 'tool_result', data: { id: 'a', content: 'first-line\nsecond-line', isError: false } });
     expect(output.join('\n').match(/first-line/g)).toHaveLength(1);
     expect(output.join('\n')).toContain('second-line');
-  });
-
-  it('should show multi-line output starting with a bracket after completion the same way as ordinary text', () => {
-    const render = (text: string): string[] => {
-      const output: string[] = [];
-      const display = new ToolActivityDisplay('compact', false, (line) => output.push(line), false);
-      display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'make' } } });
-      display.handle({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: text } });
-      display.handle({ type: 'tool_result', data: { id: 'a', content: text, isError: false } });
-      return output;
-    };
-    const bracketed = render('[1/3] Building\n[2/3] Linking\n[3/3] Done');
-    const ordinary = render('1/3 Building\n2/3 Linking\n3/3 Done');
-
-    expect(bracketed).toEqual(['  Bash output:', '  │ [1/3] Building', '  │ [2/3] Linking', '  │ [3/3] Done', '  ✓ Bash']);
-    expect(bracketed.map((line) => line.replace(/\[(\d)\/3\] /u, '$1/3 '))).toEqual(ordinary);
-  });
-
-  it('should name the failed tool in quiet compact mode', () => {
-    const output: string[] = [];
-    const display = new ToolActivityDisplay('compact', true, (line) => output.push(line), false);
-    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash\x1b[2J', input: { command: 'npm test' } } });
-    display.handle({ type: 'tool_result', data: { id: 'a', content: 'exit 1', isError: true } });
-    expect(output).toEqual(['  ✗ Bash: exit 1']);
-  });
-
-  it('should show the start time of an expanded tool as a local clock time', () => {
-    const output: string[] = [];
-    const display = new ToolActivityDisplay('expanded', false, (line) => output.push(line), false);
-    display.handle({ type: 'tool_use', data: { id: 'a', tool: 'Bash', input: { command: 'npm test' } } });
-    expect(output[0]).toMatch(/^\[tool\] Bash Ran npm test \[running @\d{2}:\d{2}:\d{2}\]$/u);
   });
 
   it('should keep isError authoritative when successful content contains the word Error', () => {

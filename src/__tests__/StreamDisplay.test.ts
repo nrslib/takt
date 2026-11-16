@@ -4,8 +4,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { StreamDisplay, type ProgressInfo } from '../shared/ui/index.js';
-import * as resultUtils from '../shared/tool-activity/result.js';
-import * as sensitiveTextUtils from '../shared/utils/sensitive-text.js';
 
 describe('StreamDisplay', () => {
   it.each(['response body', 'response body\n'])('should finish the response line before flushing unfinished tool output for %j', (body) => {
@@ -15,7 +13,7 @@ describe('StreamDisplay', () => {
     const display = new StreamDisplay('coder', false, undefined, 'expanded');
     const handler = display.createHandler();
     handler({ type: 'tool_use', data: { id: 'shell', tool: 'Bash', input: { command: 'printf pending' } } });
-    handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'pending-result\n' } });
+    handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'pending-result' } });
     handler({ type: 'text', data: { text: body } });
     display.flush();
     const rendered = output.join('');
@@ -441,38 +439,6 @@ describe('StreamDisplay', () => {
       }
     });
 
-    it('processes tool output in proportion to the number of chunks when restarting the spinner', () => {
-      vi.useFakeTimers();
-      const processedFor = (count: number): number => {
-        const display = new StreamDisplay('test-agent', false);
-        const handler = display.createHandler();
-        handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: { command: 'make' } } });
-        const classify = vi.spyOn(resultUtils, 'classifyToolResult');
-        const collect = vi.spyOn(sensitiveTextUtils, 'collectEmbeddedSensitiveValues');
-        const mask = vi.spyOn(sensitiveTextUtils, 'sanitizeTextWithValues');
-        const lengths = (calls: readonly (readonly unknown[])[]): number => calls.reduce((sum, [text]) => sum + String(text).length, 0);
-        try {
-          for (let index = 0; index < count; index += 1) {
-            handler({ type: 'tool_output', data: { tool: 'Bash', output: `line-${index} ${'x'.repeat(100)}\n` } });
-          }
-          return lengths(classify.mock.calls) + lengths(collect.mock.calls) + lengths(mask.mock.calls);
-        } finally {
-          classify.mockRestore();
-          collect.mockRestore();
-          mask.mockRestore();
-          display.reset();
-        }
-      };
-      try {
-        const single = processedFor(100);
-        const double = processedFor(200);
-
-        expect(double).toBeLessThanOrEqual(single * 2.5);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it('keeps an empty input preview empty and does not restart it after tool output', () => {
       vi.useFakeTimers();
       const display = new StreamDisplay('test-agent', false);
@@ -668,7 +634,7 @@ describe('StreamDisplay', () => {
       }
     });
 
-    it('names the sanitized failed tool in quiet mode without printing suppressed output', () => {
+    it('preserves the quiet error fallback without storing suppressed tool names', () => {
       const display = new StreamDisplay('test-agent', true);
       const handler = display.createHandler();
       handler({ type: 'tool_use', data: { id: 'tool-1', tool: 'Custom\x1b[2J', input: {} } });
@@ -678,7 +644,7 @@ describe('StreamDisplay', () => {
       expect(consoleLogSpy).toHaveBeenCalledOnce();
       const result = consoleLogSpy.mock.calls[0]!.join(' ');
       expect(result).not.toMatch(/\x1b(?!\[[0-9;]*m)|[\x00-\x1a\x1c-\x1f\x7f-\x9f]/u);
-      expect(result.replace(/\x1b\[[0-9;]*m/g, '')).toBe('  ✗ Custom: failed');
+      expect(result.replace(/\x1b\[[0-9;]*m/g, '')).toBe('  ✗ Tool: failed');
     });
   });
 

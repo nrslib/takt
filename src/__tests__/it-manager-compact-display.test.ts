@@ -152,26 +152,26 @@ describe('manager summary transcript and terminal height', () => {
         data: { id: `tool-${index}`, content: `result-${index}`, isError: false } });
     }
     return new ManagerClientDouble({ items: [{ kind: 'tool_history', history: {
-      operationId, generation: 1, finished: true, history: history.snapshot(),
+      operationId, generation: 1, finished: true, history: { entries: history.entries() },
     } }] });
   }
 
-  it.each(['ja', 'en'] as const)('shows Ctrl+T history guidance and keeps Ctrl+O for Epics in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('shows Ctrl+O history guidance and opens Epics with Ctrl+T in %s', async (lang) => {
     const context = mountTerminal(lang, null, 160, historyClient());
     try {
       const hint = async () => (await context.viewport()).split('\n').find((row) => /Tools:|ツール履歴:/u.test(row));
       await waitFor(async () => {
-        expect(await hint()).toContain('Ctrl+T');
+        expect(await hint()).toContain('Ctrl+O');
         expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand');
       });
-      context.stdin.write('\x14');
+      context.stdin.write('\x0f');
       await waitFor(async () => {
-        expect(await hint()).toContain('Ctrl+T');
+        expect(await hint()).toContain('Ctrl+O');
         expect(await hint()).toContain(lang === 'ja' ? '折りたたみ' : 'collapse');
       });
-      context.stdin.write('\x14');
-      await waitFor(async () => expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand'));
       context.stdin.write('\x0f');
+      await waitFor(async () => expect(await hint()).toContain(lang === 'ja' ? '展開' : 'expand'));
+      context.stdin.write('\x14');
       await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
       expect(context.client.submit).not.toHaveBeenCalled();
     } finally { context.dispose(); }
@@ -211,6 +211,7 @@ describe('manager summary transcript and terminal height', () => {
       return end - start;
     };
     try {
+      context.stdin.write('\x0f');
       await waitFor(async () => { await inspect(1); });
       const wideRows = await inspect(1);
       context.resize(24, 88);
@@ -244,7 +245,7 @@ describe('manager summary transcript and terminal height', () => {
       await waitFor(() => expect(prompt().disabled).toBe(false));
       context.stdin.write('\x1b[200~draft 1\ndraft 2\x1b[201~');
       await waitFor(() => expect(prompt().text).toBe('draft 1\ndraft 2'));
-      context.stdin.write('\x0f');
+      context.stdin.write('\x14');
       await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', 'en')));
       if (view === 'detail') context.stdin.write(ENTER);
       await waitFor(async () => { await inspect(1); });
@@ -271,7 +272,7 @@ describe('manager summary transcript and terminal height', () => {
       context.stdin.write(`\x1b[200~${draft}\x1b[201~`);
       await waitFor(() => expect(prompt().text).toBe(draft));
       const draftCursor = prompt().cursor;
-      context.stdin.write('\x0f');
+      context.stdin.write('\x14');
       await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
       context.stdin.write(ENTER);
       await waitFor(async () => {
@@ -367,7 +368,7 @@ describe('manager summary transcript and terminal height', () => {
     const conversations = new DaemonConversations(new ConversationStateStore(getGlobalConfigDir()),
       new DaemonRouting(getGlobalConfigDir()), new DaemonNotifications(getGlobalConfigDir()), async (_id, output) => {
         if (output.kind !== 'snapshot') context.client.output(output);
-      }, (error) => { throw error; });
+      }, (error) => { throw error; }, h.store);
     const record = conversationRecord(summaryRepository);
     writeLegacyConversation(getGlobalConfigDir(), record);
     h.owner.apply = vi.fn((result) => conversations.apply(result));
@@ -895,7 +896,7 @@ describe('manager polling and answer cancellation', () => {
       await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
       app!.stdout.emit('resize');
-      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O Epic  ^C 終了';
+      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^T Epic  ^C 終了';
       await waitFor(() => {
         const frame = app!.lastFrame()!;
         const rows = frame.split('\n');
@@ -926,7 +927,7 @@ describe('manager polling and answer cancellation', () => {
       expect(rows.at(-1)).toContain(basename(cwd));
       const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
       const hint = rows.slice(promptEnd + 1).join(' ');
-      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^O.*\^C/iu);
+      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^T.*\^C/iu);
       expect(hint).not.toContain('/make-goal');
       expect(hint).not.toMatch(/\^[NP]/u);
       for (const row of rows.slice(promptEnd + 1)) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);

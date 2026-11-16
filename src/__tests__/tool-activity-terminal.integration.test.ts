@@ -91,7 +91,7 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
     const input = { command: 'printf ready', token: 'secret123' };
     for (const content of ['ready', 'secret123 ready']) {
       const id = content === 'ready' ? 'plain' : 'masked';
-      emitToolUse(adapter.handler, 'bash', input, id);
+      emitToolUse(adapter.handler, 'bash', input, id, {});
       emitToolResult(adapter.handler, content, isError, input, id, 'bash', input);
     }
     adapter.flush();
@@ -151,7 +151,7 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
   });
 
   it('should display the filePath emitted by the real OpenCode adapter', () => {
-    emitToolUse(adapter.handler, 'read', { filePath: '日本語.ts' }, 'read-1');
+    emitToolUse(adapter.handler, 'read', { filePath: '日本語.ts' }, 'read-1', {});
     adapter.handler(finish('read-1', 'file-result'));
     adapter.flush();
     expect(visible()).toContain('日本語.ts');
@@ -161,7 +161,7 @@ describe.each(adapters)('$name non-interactive tool activity', ({ create }) => {
 
   it('should flush observed output without inventing completion when no result arrives', () => {
     adapter.handler(start('shell', 'Bash', { command: 'printf pending' }));
-    adapter.handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'observed-while-running\n' } });
+    adapter.handler({ type: 'tool_output', data: { id: 'shell', tool: 'Bash', output: 'observed-while-running' } });
     adapter.flush();
     expect(visible()).toContain('observed-while-running');
     expect(visible()).toContain('[running]');

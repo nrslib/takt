@@ -40,7 +40,7 @@ async function watchSource(onError: (error: unknown) => void) {
   const globalDirectory = join(directory, 'global');
   await registerProject({ globalConfigDirectory: globalDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
   conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
-    new DaemonNotifications(globalDirectory), async () => {}, onError);
+    new DaemonNotifications(globalDirectory), async () => {}, onError, { readTurns: async () => [] });
   source = new FileDaemonWatchSource(conversations, async () => {}, onError);
   return { source, files: new DaemonPersistedFiles(globalDirectory) };
 }

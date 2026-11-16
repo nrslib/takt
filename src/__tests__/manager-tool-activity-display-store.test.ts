@@ -1,113 +1,102 @@
-import { describe, expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { ToolActivityDisplayStore } from '../features/manager/toolActivityDisplayStore.js';
 import type { ConversationClientSnapshot } from '../features/manager/conversationIpcClient.js';
-import type { ConversationState, PortOutput } from '../features/manager/conversationPort.js';
-import type { ToolActivityEntry, ToolActivityTurnState, ToolActivityTurnUpdate } from '../shared/tool-activity/types.js';
+import type { PortOutput } from '../features/manager/conversationPort.js';
+import type { ToolActivityEntry } from '../shared/tool-activity/types.js';
+import { ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
 
-type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
+it('appends committed text and replaces the provisional tail until completion', () => {
+  const state = new Set<() => void>();
+  const outputs = new Set<(event: Exclude<PortOutput, { kind: 'snapshot' }>) => void>();
+  const snapshot: ConversationClientSnapshot = { connection: 'connected', readStatus: 'complete', state: null, items: [], error: null };
+  const store = new ToolActivityDisplayStore({ getSnapshot: () => snapshot,
+    subscribe(listener) { state.add(listener); return () => { state.delete(listener); }; },
+    onOutput(listener) { outputs.add(listener); return () => { outputs.delete(listener); }; } });
+  const detach = store.subscribe(() => {});
+  const emit = (event: Exclude<PortOutput, { kind: 'snapshot' }>) => { for (const listener of outputs) listener(event); };
+  const entry: ToolActivityEntry = { key: '1', toolId: 'tool', tool: 'Bash', input: {}, output: '', status: 'running', association: 'matched' };
+  emit({ kind: 'tool_started', entry });
+  emit({ kind: 'tool_output', key: '1', text: 'first\n', tail: 'draft' });
+  emit({ kind: 'tool_output', key: '1', text: '', tail: 'replacement' });
+  expect(store.getSnapshot().display.detail('1', 0).result.text).toBe('first\nreplacement');
+  emit({ kind: 'tool_output', key: '1', text: 'second\n', tail: '' });
+  emit({ kind: 'tool_completed', entry: { ...entry, output: 'first\nsecond\n', status: 'success' } });
+  expect(store.getSnapshot().display.detail('1', 0).result.text).toBe('first\nsecond');
+  expect(store.getSnapshot().display.history.entries()).toHaveLength(1);
+  detach();
+  expect(outputs.size).toBe(0);
+});
 
-/** 会話クライアントと同じく、差分の配送を先に通知し、その後で確定した状態を通知する。 */
-function fakeClient(initial: ConversationClientSnapshot) {
-  let view = initial;
+it('restores only running snapshot entries for the current operation and generation', () => {
   const listeners = new Set<() => void>();
-  const outputs = new Set<(output: Output) => void>();
-  return {
-    getSnapshot: () => view,
-    subscribe: vi.fn((listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
-    onOutput: vi.fn((listener: (output: Output) => void) => { outputs.add(listener); return () => { outputs.delete(listener); }; }),
-    publish(change: Partial<ConversationClientSnapshot>, output?: Output) {
-      if (output !== undefined) for (const listener of outputs) listener(output);
-      view = { ...view, ...change };
-      for (const listener of listeners) listener();
-    },
-    get listenerCount() { return listeners.size + outputs.size; },
-  };
-}
+  const snapshot: ConversationClientSnapshot = { connection: 'connected', readStatus: 'complete', error: null,
+    state: { conversationId: 'conversation', assignment: { kind: 'repository', repositoryDirectory: '/repo' }, revision: 0,
+      pending: null, approval: null, interrupted: false, running: { operationId: 'current', generation: 2, kind: 'turn' } }, items: [] };
+  snapshot.items = ([['current', 1, 'old-generation'], ['previous', 2, 'old-operation'], ['current', 2, 'active']] as const).map(([operationId, generation, key]) => ({
+    kind: 'tool_history' as const, history: { operationId, generation, finished: false,
+      history: { entries: [{ key, toolId: key, tool: 'Read', input: { file_path: `${key}.ts` }, output: '', status: 'running' as const,
+        association: 'matched' as const, context: { callId: 'call', operationId, generation } }] } },
+  }));
+  const store = new ToolActivityDisplayStore({ getSnapshot: () => snapshot,
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; }, onOutput: () => () => {} });
+  const detach = store.subscribe(() => {});
+  expect(store.getSnapshot().display.history.entries().map((entry) => entry.key)).toEqual(['active']);
+  snapshot.state = { ...snapshot.state!, running: { operationId: 'current', generation: 3, kind: 'turn' } };
+  for (const listener of listeners) listener();
+  expect(store.getSnapshot().display.history.entries()).toEqual([]);
+  detach();
+});
 
-function state(running: { operationId: string; generation: number } | null): ConversationState {
-  return { conversationId: 'conversation', assignment: { kind: 'repository', repositoryDirectory: '/repo' }, revision: 0,
-    pending: null, approval: null, running: running === null ? null : { ...running, kind: 'turn' }, interrupted: false };
-}
+it('keeps tools from earlier turns out of the detail display and keeps the latest turn after it becomes idle', () => {
+  const listeners = new Set<() => void>();
+  const outputs = new Set<(event: Exclude<PortOutput, { kind: 'snapshot' }>) => void>();
+  const state = { conversationId: 'conversation', assignment: { kind: 'repository' as const, repositoryDirectory: '/repo' }, revision: 0,
+    pending: null, approval: null, interrupted: false, running: null };
+  const completed = (operationId: string, key: string): ToolActivityEntry => ({ key, toolId: key, tool: 'Read', input: { file_path: `${key}.ts` },
+    output: '', status: 'success', association: 'matched', context: { callId: 'call', operationId, generation: 1 } });
+  const snapshot: ConversationClientSnapshot = { connection: 'connected', readStatus: 'complete', error: null, state,
+    items: (['first', 'second'] as const).map((operationId) => ({ kind: 'tool_history' as const,
+      history: { operationId, generation: 1, finished: true, history: { entries: [completed(operationId, `${operationId}-tool`)] } } })) };
+  const store = new ToolActivityDisplayStore({ getSnapshot: () => snapshot,
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    onOutput(listener) { outputs.add(listener); return () => { outputs.delete(listener); }; } });
+  const changed = () => { for (const listener of listeners) listener(); };
+  const keys = () => store.getSnapshot().display.history.entries().map((entry) => entry.key);
+  const detach = store.subscribe(() => {});
+  expect(keys()).toEqual(['second-tool']);
 
-function entry(key: string, toolId: string, status: ToolActivityEntry['status'], output = ''): ToolActivityEntry {
-  return { key, toolId, tool: 'Bash', input: { command: toolId }, output, status, association: 'matched', startedAt: 1000, startSequence: Number(key),
-    ...(status === 'running' ? {} : { result: `${toolId}-result`, completedAt: 2000, completionSequence: Number(key) + 1 }) };
-}
+  snapshot.state = { ...state, running: { operationId: 'third', generation: 1, kind: 'turn' } };
+  changed();
+  expect(keys()).toEqual([]);
+  for (const listener of outputs) listener({ kind: 'tool_completed', entry: completed('third', 'third-tool') });
+  snapshot.state = state;
+  changed();
+  expect(keys()).toEqual(['third-tool']);
+  detach();
+});
 
-function history(turn: { operationId: string; generation: number }, sequence: number, entries: ToolActivityEntry[], finished = false): ToolActivityTurnState {
-  return { ...turn, finished, history: { sequence, entries } };
-}
+it('hides JSON output while running and classifies the completed entry', () => {
+  const display = new ToolActivityDisplay('silent', false, () => {}, false, true);
+  const entry: ToolActivityEntry = { key: 'json', toolId: 'tool', tool: 'Bash', input: {}, output: '', status: 'running', association: 'matched' };
+  display.upsert(entry);
+  const text = JSON.stringify(Array.from({ length: 512 }, (_, index) => index));
+  for (let offset = 0; offset < text.length; offset += 7) {
+    display.appendOutput(entry.key, text.slice(offset, offset + 7), '');
+    expect(display.detail(entry.key, 0).result.text).toBe('');
+  }
+  display.upsert({ ...entry, output: text, status: 'success' });
+  expect(display.detail(entry.key, 0).result.text).toBe('[structured output omitted]');
+});
 
-function snapshot(running: { operationId: string; generation: number } | null, tools?: ToolActivityTurnState): ConversationClientSnapshot {
-  return { connection: 'connected', readStatus: 'complete', state: state(running), error: null,
-    items: tools === undefined ? [] : [{ kind: 'tool_history', history: tools }] };
-}
-
-const first = { operationId: 'first', generation: 1 };
-const second = { operationId: 'second', generation: 2 };
-const shownKeys = (store: ToolActivityDisplayStore) => store.getSnapshot().display.groups().flatMap((group) => group.entries.map((value) => value.key));
-
-describe('ToolActivityDisplayStore', () => {
-  it('keeps one display for the running turn, applies each update to it, and publishes a new value per change', () => {
-    const base = history(first, 1, [entry('1', 'build', 'running')]);
-    const client = fakeClient(snapshot(first, base));
-    const store = new ToolActivityDisplayStore(client);
-    // React は通知を受けたその場で getSnapshot を呼び、値が変わったかを確かめる。
-    const listener = vi.fn(() => { store.getSnapshot(); });
-    const unsubscribe = store.subscribe(listener);
-    const before = store.getSnapshot();
-    expect(store.getSnapshot()).toBe(before);
-
-    const update: ToolActivityTurnUpdate = { ...first, previousSequence: 1, sequence: 2, entries: [], output: { key: '1', text: 'compiling\n' } };
-    const applied = history(first, 2, [entry('1', 'build', 'running', 'compiling\n')]);
-    const restore = vi.spyOn(before.display, 'restore');
-    client.publish({ items: [{ kind: 'tool_history', history: applied }] }, { kind: 'tool_history_update', update });
-
-    const after = store.getSnapshot();
-    expect(after).not.toBe(before);
-    expect(after.display).toBe(before.display);
-    expect(restore).not.toHaveBeenCalled();
-    expect(after.display.detail('1', 0).result.text).toBe('compiling');
-    expect(listener).toHaveBeenCalled();
-    unsubscribe();
-    expect(client.listenerCount).toBe(0);
-  });
-
-  it('rebuilds the display from the committed history when an update could not be applied', () => {
-    const client = fakeClient(snapshot(first, history(first, 1, [entry('1', 'build', 'running')])));
-    const store = new ToolActivityDisplayStore(client);
-    const unsubscribe = store.subscribe(() => {});
-    const before = store.getSnapshot();
-    const skipped: ToolActivityTurnUpdate = { ...first, previousSequence: 5, sequence: 6, entries: [entry('1', 'build', 'success')] };
-    client.publish({ items: [{ kind: 'tool_history', history: history(first, 6, [entry('1', 'build', 'success')]) }] },
-      { kind: 'tool_history_update', update: skipped });
-    const after = store.getSnapshot();
-    expect(after.display).not.toBe(before.display);
-    expect(after.display.groups()[0]!.entries[0]).toMatchObject({ key: '1', status: 'success' });
-    unsubscribe();
-  });
-
-  it('does not keep the previous turn, a finished turn running entry, or a disconnected history on screen', () => {
-    const client = fakeClient(snapshot(first, history(first, 2, [entry('1', 'read', 'success'), entry('2', 'build', 'running', 'partial')])));
-    const store = new ToolActivityDisplayStore(client);
-    const unsubscribe = store.subscribe(() => {});
-    expect(shownKeys(store)).toEqual(['1', '2']);
-
-    client.publish({ state: state(null), items: [{ kind: 'tool_history', history: history(first, 2, [entry('1', 'read', 'success')], true) }] });
-    expect(shownKeys(store)).toEqual(['1']);
-
-    client.publish({ state: state(second) });
-    expect(shownKeys(store)).toEqual([]);
-    const ignored: ToolActivityTurnUpdate = { ...first, previousSequence: 2, sequence: 3, entries: [entry('3', 'stale', 'running')] };
-    client.publish({}, { kind: 'tool_history_update', update: ignored });
-    expect(shownKeys(store)).toEqual([]);
-
-    const started: ToolActivityTurnUpdate = { ...second, previousSequence: 0, sequence: 1, entries: [entry('1', 'next', 'running')] };
-    client.publish({ items: [{ kind: 'tool_history', history: history(second, 1, started.entries) }] }, { kind: 'tool_history_update', update: started });
-    expect(store.getSnapshot().display.groups()[0]!.entries[0]).toMatchObject({ key: '1', input: 'next' });
-
-    client.publish({ connection: 'disconnected', state: null, items: [] });
-    expect(shownKeys(store)).toEqual([]);
-    unsubscribe();
-  });
+it('removes terminal control characters from a completed JSON result', () => {
+  const display = new ToolActivityDisplay('silent', false, () => {}, false, true);
+  display.upsert({ key: 'json', toolId: 'tool', tool: 'Bash', input: {}, status: 'success', association: 'matched',
+    output: '{"stdout":"step1\\r\\u001b[2Kstep2\\u001b[2J"}' });
+  expect(display.detail('json', 0).result.text).toBe('step1step2');
+  const texts = [display.detail('json', 0).result.text,
+    ...display.groups().flatMap((group) => [group.summary, ...group.entries.map((item) => item.result.text)])];
+  for (const text of texts) {
+    expect(text).not.toContain('\x1b');
+    expect(text).not.toContain('\r');
+  }
 });

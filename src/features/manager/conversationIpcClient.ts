@@ -9,12 +9,10 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
 import { createTuiConversationPort } from './tuiConversationPort.js';
-import type { ConversationCommand, ConversationOpen, ConversationPort, ConversationState, OutputVersion, PortOutput, Submission } from './conversationPort.js';
+import type { ConversationCommand, ConversationOpen, ConversationPort, ConversationState, PortOutput, Submission } from './conversationPort.js';
 import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from './snapshotChanges.js';
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
-import type { ToolActivityTurnState, ToolActivityTurnUpdate } from '../../shared/tool-activity/types.js';
-import { applyToolActivityTurnUpdate } from '../../shared/tool-activity/history.js';
 
 const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal('response'), requestId: z.string(),
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
@@ -33,7 +31,6 @@ export interface ConversationClientSnapshot {
 type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
 type Request = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 type ActiveRead = { transferId?: string; response?: Promise<void> };
-type PendingToolHistory = { history: ToolActivityTurnState; version: OutputVersion };
 
 export class ConversationIpcClient {
   private socket: Socket | undefined;
@@ -41,7 +38,6 @@ export class ConversationIpcClient {
   private listeners = new Set<() => void>();
   private outputs = new Set<(output: Output) => void>();
   private activity: Extract<Output, { kind: 'activity' }> | undefined;
-  private pendingActivity: Extract<Output, { kind: 'activity' }> | undefined;
   private receiver: ConversationTransferReceiver | undefined;
   private resolved: ConversationOpen | undefined;
   private attachmentId: string | undefined;
@@ -53,11 +49,6 @@ export class ConversationIpcClient {
   private items = new Map<string, SnapshotDisplayItem>();
   private readItems = new Map<string, SnapshotDisplayItem>();
   private removed = new Set<string>();
-  private toolHistorySequence = -1;
-  private currentStateSequence = -1;
-  private pendingToolHistories = new Map<string, PendingToolHistory>();
-  private pendingToolUpdates: Array<{ update: ToolActivityTurnUpdate; version: OutputVersion }> = [];
-  private toolTurnBoundary: { operationId: string; generation: number | undefined; stateSequence: number } | undefined;
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
 
   constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides,
@@ -107,8 +98,7 @@ export class ConversationIpcClient {
   refresh(): Promise<void> {
     if (this.read !== undefined) return this.read.response ?? Promise.resolve();
     if (this.attachmentId === undefined || this.view.connection !== 'connected') return Promise.reject(new Error('Conversation is disconnected'));
-    // ツール履歴は差分配信で追いつくので、起点のない差分が残っているときだけ全体を受け取り直す。
-    return this.requestRead('snapshot', { attachmentId: this.attachmentId, toolHistory: this.pendingToolUpdates.length > 0 }, (value) => {
+    return this.requestRead('snapshot', { attachmentId: this.attachmentId }, (value) => {
       const result = z.object({ read: ConversationReadMetadataSchema }).strict().parse(value);
       this.receiver!.expectRead(result.read);
     });
@@ -131,132 +121,12 @@ export class ConversationIpcClient {
     const previousConnection = this.view.connection;
     this.view = { ...this.view, ...change };
     const running = this.view.state?.running;
-    const tools = this.committedItems.get('tool_history');
-    if (running != null && tools?.kind === 'tool_history'
-      && (tools.history.operationId !== running.operationId || tools.history.generation !== running.generation)) {
-      this.committedItems.delete('tool_history');
-      this.items.delete('tool_history');
-      this.readItems.delete('tool_history');
-      this.view = { ...this.view, items: orderSnapshotItems(this.items) };
-    }
     if (this.view.connection === 'disconnected' || running?.operationId !== this.activity?.operationId
       || running?.generation !== this.activity?.generation) this.activity = undefined;
-    let activityResumed = false;
-    if (this.view.connection === 'disconnected' || change.state === null || change.state?.running === null) {
-      this.pendingActivity = undefined;
-    } else if (this.pendingActivity !== undefined && running?.operationId === this.pendingActivity.operationId
-      && running.generation === this.pendingActivity.generation) {
-      this.activity = this.pendingActivity;
-      this.pendingActivity = undefined;
-      activityResumed = true;
-    }
-    this.applyPendingToolHistories();
     for (const listener of this.listeners) listener();
-    if ((previousConnection !== 'connected' || activityResumed) && this.view.connection === 'connected' && this.activity !== undefined) {
+    if (previousConnection !== 'connected' && this.view.connection === 'connected' && this.activity !== undefined) {
       for (const listener of this.outputs) listener(this.activity);
     }
-  }
-
-  private isPreviousToolTurn(history: ToolActivityTurnState, version: OutputVersion): boolean {
-    const boundary = this.toolTurnBoundary;
-    return boundary !== undefined && version.stateSequence < boundary.stateSequence
-      && (history.operationId !== boundary.operationId || history.generation !== boundary.generation);
-  }
-
-  private acceptToolHistory(history: ToolActivityTurnState, version: OutputVersion, live: boolean): boolean {
-    if (this.isPreviousToolTurn(history, version)) return false;
-    const running = this.view.state?.running;
-    const matchesRunning = running != null && history.operationId === running.operationId
-      && history.generation === running.generation;
-    if (live && version.stateSequence > this.currentStateSequence && !matchesRunning) {
-      const key = JSON.stringify([history.operationId, history.generation]);
-      const previous = this.pendingToolHistories.get(key);
-      if (previous === undefined || history.history.sequence >= previous.history.history.sequence) {
-        this.pendingToolHistories.set(key, { history, version });
-      }
-      return false;
-    }
-    if (running != null && (history.operationId !== running.operationId || history.generation !== running.generation)) return false;
-    const previous = this.committedItems.get('tool_history');
-    const current = previous?.kind === 'tool_history' ? previous.history : undefined;
-    const sameTurn = current?.operationId === history.operationId && current.generation === history.generation;
-    if (!sameTurn && version.stateSequence < this.toolHistorySequence) return false;
-    if (current !== undefined) {
-      if (current.operationId === history.operationId && history.generation < current.generation
-        || sameTurn && (history.history.sequence < current.history.sequence || current.finished && !history.finished)) return false;
-    }
-    if (live) {
-      this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
-      this.removed.delete('tool_history');
-    }
-    // 同じターンの同じ sequence は同じ内容なので、全体を比べずに変化なしとする。
-    if (sameTurn && history.history.sequence === current.history.sequence && history.finished === current.finished) return false;
-    const item = { kind: 'tool_history' as const, history };
-    if (live) {
-      this.committedItems.set('tool_history', item);
-      this.items.set('tool_history', item);
-    }
-    this.readItems.set('tool_history', item);
-    return true;
-  }
-
-  /**
-   * 差分を、同じターンの手元の最新状態（確定済み、実行中表示待ち、読込中の snapshot）に順に適用し、適用した差分を出力する。
-   * 起点が手元にない差分は残し、snapshot の読込後に再度適用する。
-   */
-  private applyToolUpdates(): boolean {
-    let changed = false;
-    while (this.pendingToolUpdates.length > 0) {
-      const { update, version } = this.pendingToolUpdates[0]!;
-      const known = [this.committedItems.get('tool_history'), this.readItems.get('tool_history')]
-        .flatMap((item) => item?.kind === 'tool_history' ? [item.history] : [])
-        .concat([...this.pendingToolHistories.values()].map((pending) => pending.history))
-        .filter((history) => history.operationId === update.operationId && history.generation === update.generation)
-        .sort((left, right) => right.history.sequence - left.history.sequence)[0];
-      if (known !== undefined && (known.finished || known.history.sequence >= update.sequence)) {
-        this.pendingToolUpdates.shift();
-        continue;
-      }
-      const history = applyToolActivityTurnUpdate(known, update);
-      if (history === undefined) break;
-      this.pendingToolUpdates.shift();
-      if (!this.acceptToolHistory(history, version, true)) continue;
-      changed = true;
-      // 表示側は差分だけを手元の表示へ適用する。起点が合わない表示は、更新後の履歴全体から作り直す。
-      for (const listener of this.outputs) listener({ kind: 'tool_history_update', update });
-    }
-    if (changed) this.view = { ...this.view, items: orderSnapshotItems(this.committedItems) };
-    return changed;
-  }
-
-  private receiveToolUpdate(update: ToolActivityTurnUpdate, version: OutputVersion): void {
-    const head = this.pendingToolUpdates[0]?.update;
-    // daemon は差分を順に送るため、別のターンの差分が届いたら、それより前のターンの未適用分は使われない。
-    if (head !== undefined && (head.operationId !== update.operationId || head.generation !== update.generation)) this.pendingToolUpdates = [];
-    this.pendingToolUpdates.push({ update, version });
-    if (this.applyToolUpdates()) this.update({});
-    if (this.pendingToolUpdates.length > 0 && this.read === undefined && this.view.connection === 'connected') {
-      void this.refresh().catch((error: Error) => this.update({ error: error.message }));
-    }
-  }
-
-  private applyPendingToolHistories(): void {
-    const running = this.view.state?.running;
-    let changed = false;
-    for (const [key, pending] of this.pendingToolHistories) {
-      const matchesRunning = running != null && pending.history.operationId === running.operationId
-        && pending.history.generation === running.generation;
-      const finishedWithoutRunning = running == null && pending.history.finished;
-      if ((matchesRunning || finishedWithoutRunning) && this.acceptToolHistory(pending.history, pending.version, true)) {
-        changed = true;
-        this.pendingToolHistories.delete(key);
-        for (const listener of this.outputs) listener({ kind: 'tool_history', history: pending.history });
-      } else if (this.isPreviousToolTurn(pending.history, pending.version)
-        || pending.version.stateSequence <= this.currentStateSequence) {
-        this.pendingToolHistories.delete(key);
-      }
-    }
-    if (changed) this.view = { ...this.view, items: orderSnapshotItems(this.items) };
   }
 
   private async open(): Promise<void> {
@@ -274,57 +144,23 @@ export class ConversationIpcClient {
       this.items.clear();
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
-        state: (next, version) => {
-          this.currentStateSequence = Math.max(this.currentStateSequence, version.stateSequence);
-          const running = next.running;
-          if (running !== null) {
-            this.toolTurnBoundary = { operationId: running.operationId, generation: running.generation, stateSequence: version.stateSequence };
-            const staged = this.readItems.get('tool_history');
-            if (staged?.kind === 'tool_history'
-              && (staged.history.operationId !== running.operationId || staged.history.generation !== running.generation)) this.readItems.delete('tool_history');
-          }
-          this.update({ state: next });
-        },
-        item: (item, _transferId, version) => {
-          if (item.kind === 'tool_history') {
-            if (!this.acceptToolHistory(item.history, version, false)) {
-              const current = this.committedItems.get('tool_history');
-              if (current !== undefined) this.readItems.set('tool_history', current);
-            }
-            this.applyToolUpdates();
-            return;
-          }
+        state: (next) => { this.update({ state: next }); },
+        item: (item) => {
           const key = snapshotItemKey(item);
           this.readItems.set(key, item);
           this.items.set(key, item);
         },
-        remove: (key, _transferId, version) => {
-          if (key !== 'tool_history' || this.toolHistorySequence <= version.stateSequence) this.removed.add(key);
-        },
-        output: (output, version) => {
-          if (output.kind === 'tool_history_update') {
-            this.receiveToolUpdate(output.update, version);
-            return;
-          }
-          if (output.kind === 'tool_history') {
-            if (!this.acceptToolHistory(output.history, version, true)) return;
-            this.update({ items: orderSnapshotItems(this.committedItems) });
-          }
+        remove: (key) => { this.removed.add(key); },
+        output: (output) => {
           if (output.kind === 'activity') {
-            const running = this.view.state?.running;
-            if (running?.operationId !== output.operationId || running.generation !== output.generation) {
-              this.pendingActivity = output;
-              return;
-            }
             this.activity = output;
             if (this.view.connection !== 'connected') return;
           } else if (output.kind === 'result') {
             if (output.operationId === this.activity?.operationId) this.activity = undefined;
-            if (output.operationId === this.pendingActivity?.operationId) this.pendingActivity = undefined;
           }
           for (const listener of this.outputs) listener(output);
         },
-        read: (readStatus, transferId, mode, version) => {
+        read: (readStatus, transferId, mode) => {
           if (readStatus === 'reading') {
             this.readItems.clear();
             this.removed.clear();
@@ -334,17 +170,10 @@ export class ConversationIpcClient {
           } else if (this.read?.transferId === transferId) {
             if (readStatus === 'complete') {
               const next = mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
-              for (const [key, item] of this.readItems) {
-                if (item.kind === 'tool_history' && this.isPreviousToolTurn(item.history, version)) continue;
-                next.set(key, item);
-              }
+              for (const [key, item] of this.readItems) next.set(key, item);
               for (const key of this.removed) next.delete(key);
-              const history = this.committedItems.get('tool_history');
-              if (history !== undefined && this.toolHistorySequence > version.stateSequence) next.set('tool_history', history);
-              this.toolHistorySequence = Math.max(this.toolHistorySequence, version.stateSequence);
               this.committedItems = next;
               this.items = new Map(next);
-              this.applyToolUpdates();
             }
             this.read.transferId = undefined;
             if (this.read.response === undefined) this.read = undefined;
@@ -363,11 +192,6 @@ export class ConversationIpcClient {
     this.socket = socket;
     if (socket.destroyed) throw new Error('Daemon disconnected before opening conversation');
     const decoder = new ConversationFrameDecoder();
-    this.toolHistorySequence = -1;
-    this.currentStateSequence = -1;
-    this.pendingToolHistories.clear();
-    this.pendingToolUpdates = [];
-    this.toolTurnBoundary = undefined;
     this.receiver!.authenticated();
     socket.on('data', (chunk: Buffer) => {
       if (this.socket !== socket || socket.destroyed) return;

@@ -22,5 +22,5 @@ process.on('message', (message: unknown) => {
     if (typeof message === 'object' && message !== null && 'kind' in message && message.kind === 'shutdown' && process.connected) process.disconnect();
   }).catch(fatal);
 });
-process.on('disconnect', () => { void runtime.disconnect().catch(fatal); });
+process.on('disconnect', () => { void runtime.transportClosed().catch(fatal); });
 process.on('SIGTERM', () => { void runtime.disconnect().finally(() => { if (process.connected) process.disconnect(); }).catch(fatal); });

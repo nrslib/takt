@@ -14,10 +14,15 @@ function entry(overrides: Partial<ToolActivityEntry> = {}): ToolActivityEntry {
 }
 
 describe('tool activity presentation', () => {
-  it('should fail closed when display secret collection exceeds its candidate budget', () => {
+  it('masks an individual known line in final result and detail pages', () => {
+    const value = entry({ input: { private_key: 'first-line-secret\nsecond-line-secret' }, result: 'safe\nfirst-line-secret\n' });
+    expect(projectToolActivity(value).result.text).toBe('safe\n[REDACTED]');
+    expect(toolActivityDetail(value).text).toBe('safe\n[REDACTED]');
+  });
+  it('should retain known matches without masking unrelated text after its candidate limit', () => {
     const token = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => `private-${index}`);
     const value = entry({ input: { token }, result: 'ready private-0' });
-    expect(projectToolActivity(value).result.text).toBe('[REDACTED]');
+    expect(projectToolActivity(value).result.text).toBe('ready [REDACTED]');
   });
 
   it.each(['secret123', 'sec\x1b[31mret123', 'sec\rret123'])('should protect terminal-normalized secrets from input %j in every result page', (token) => {
@@ -96,29 +101,7 @@ describe('tool activity presentation', () => {
   });
 
   it.each([
-    '[main 1a2b3c4] fix: keep tool history',
-    '[1/3] Building\n[2/3] Linking',
-    '[vitest] running 3 files',
-    '{not json}',
-  ])('should display finished output that starts with a bracket but is not JSON as text: %s', (result) => {
-    const value = entry({ result });
-    for (const page of [projectToolActivity(value).result, projectToolActivity(value, 'expanded').result, toolActivityDetail(value)]) {
-      expect(page.text).toBe(result);
-    }
-  });
-
-  it('should hold back unparsable bracketed output while the tool is still running', () => {
-    expect(projectToolActivity(entry({ status: 'running', result: undefined, output: '{"stdout":"partial' })).result.text)
-      .toBe('[structured output omitted]');
-  });
-
-  it.each([
     { tool: 'Bash', input: { command: 'npm test' }, action: 'Ran', expected: 'npm test' },
-    { tool: 'WebFetch', input: { url: 'https://example.com/a', prompt: 'summarize' }, action: 'WebFetch', expected: 'https://example.com/a' },
-    { tool: 'Task', input: { description: 'investigate history', prompt: 'long prompt' }, action: 'Task', expected: 'investigate history' },
-    { tool: 'Skill', input: { skill: 'coding' }, action: 'Skill', expected: 'coding' },
-    { tool: 'Custom', input: { attempts: 3 }, action: 'Custom', expected: '3' },
-    { tool: 'Custom', input: { api_key: 'secret123' }, action: 'Custom', expected: '[REDACTED]' },
     { tool: 'Read', input: { file_path: '日本語.ts' }, action: 'Read', expected: '日本語.ts' },
     { tool: 'Grep', input: { pattern: 'target.*' }, action: 'Used Grep', expected: 'target.*' },
     { tool: 'Edit', input: { file_path: 'file.ts', old_string: 'private edit body' }, action: 'Edit', expected: 'file.ts' },

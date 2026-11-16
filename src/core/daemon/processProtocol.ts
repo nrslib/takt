@@ -2,7 +2,6 @@ import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitComman
 import { EpicEventSchema, PatrolEventSchema } from './epicEvent.js';
 import { z } from 'zod/v4';
 import { ConversationActivitySchema, ConversationToolEventSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
-import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
@@ -10,15 +9,11 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
-/** 配送を待つ途中表示の件数。超えた分は表示だけを間引き、ターンは続ける。 */
-export const MAX_PROCESS_PENDING_PROGRESS = 32;
 export { MAX_PROCESS_PROGRESS_BYTES };
 
 const id = z.string().min(1).max(128);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string();
-// 途中表示の大きさはターンの成否に関係しないため、受信側でも拒否せず表示用に切り詰める。
-const progressText = z.string().transform((value) => truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value);
 const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, generation: version.refine((v) => v > 0) }).strict() satisfies z.ZodType<TurnIdentity>;
 const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
@@ -124,7 +119,7 @@ const daemonMessage = z.discriminatedUnion('kind', [
 const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('ready') }).strict(),
   z.object({ ...common, kind: z.literal('turn_progress'), turn: TurnIdentitySchema,
-    message: z.union([progressText, ConversationActivitySchema, z.object({ kind: z.literal('turn_text'), message: progressText }).strict(),
+    message: z.union([z.string(), ConversationActivitySchema, z.object({ kind: z.literal('turn_text'), message: z.string() }).strict(),
       ConversationToolEventSchema]) }).strict(),
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
@@ -134,27 +129,34 @@ export type DaemonProcessMessage = z.infer<typeof daemonMessage>;
 export type TurnProcessMessage = z.infer<typeof childMessage>;
 
 /** Node IPC の送受信双方で使う。JSON で失われる関数・signal などの値と、走査が終わらない循環参照を拒否する。 */
-function assertJsonData(value: unknown, ancestors: Set<object>): void {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
-  if (typeof value === 'number' && Number.isFinite(value)) return;
-  if (typeof value !== 'object' || !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new Error('Process message must contain JSON data');
+function assertJsonData(value: unknown): void {
+  const ancestors = new Set<object>();
+  const work: Array<{ value: unknown; exit: boolean }> = [{ value, exit: false }];
+  while (work.length > 0) {
+    const item = work.pop()!;
+    const current = item.value;
+    if (item.exit) { ancestors.delete(current as object); continue; }
+    if (current === null || typeof current === 'string' || typeof current === 'boolean') continue;
+    if (typeof current === 'number' && Number.isFinite(current)) continue;
+    if (typeof current !== 'object' || !Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype) {
+      throw new Error('Process message must contain JSON data');
+    }
+    if (ancestors.has(current)) throw new Error('Process message must not contain cycles');
+    ancestors.add(current);
+    work.push({ value: current, exit: true });
+    for (const child of Object.values(current)) work.push({ value: child, exit: false });
   }
-  if (ancestors.has(value)) throw new Error('Process message must not contain cycles');
-  ancestors.add(value);
-  for (const child of Object.values(value)) assertJsonData(child, ancestors);
-  ancestors.delete(value);
 }
 
 export function parseDaemonProcessMessage(value: unknown, launchId: string): DaemonProcessMessage {
-  assertJsonData(value, new Set());
+  assertJsonData(value);
   const message = daemonMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;
 }
 
 export function parseTurnProcessMessage(value: unknown, launchId: string): TurnProcessMessage {
-  assertJsonData(value, new Set());
+  assertJsonData(value);
   const message = childMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;

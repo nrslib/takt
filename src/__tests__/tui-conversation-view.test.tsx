@@ -47,7 +47,6 @@ import {
   createSessionImageAttachmentStore,
 } from '../features/interactive/imageAttachments.js';
 import { stripAnsi } from '../shared/utils/text.js';
-import { formatToolActivityTime } from '../shared/tool-activity/presentation.js';
 import { makeProvider } from './test-helpers.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
@@ -2665,7 +2664,7 @@ describe('ConversationView tool history', () => {
     }
   });
 
-  it('should reflow the same compact result at 64, 32 and 64 columns while retaining the Japanese draft cursor', async () => {
+  it('should reflow live compact output at 64, 32 and 64 columns while retaining the Japanese draft cursor', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const stdout = new ResizableOutput(64, 36);
     const stdin = createTestInput();
@@ -2687,7 +2686,7 @@ describe('ConversationView tool history', () => {
       await vi.waitFor(() => expect(conversation.submitCalls).toHaveLength(1));
       const input = conversation.submitCalls[0]!;
       emit(input, { type: 'tool_use', data: { id: 'wrapped', tool: 'Bash', input: { command: 'printf ready' } } });
-      emit(input, { type: 'tool_result', data: { id: 'wrapped', content: 'x'.repeat(97), isError: false } });
+      emit(input, { type: 'tool_output', data: { id: 'wrapped', tool: 'Bash', output: 'x'.repeat(97) + '\n' } });
       stdin.write(`\x1b[200~${draft}\x1b[201~`);
       await flushFrames();
       stdin.write(ARROW_LEFT);
@@ -2790,7 +2789,7 @@ describe('ConversationView tool history', () => {
       stream!({ type: 'tool_use', data: { id: 'provider-tool', tool: 'Bash', input: { command: 'printf ready' } } });
       await flushFrames();
       expect(app.lastFrame()).toContain('printf ready');
-      expect(app.lastFrame()).toContain(`@${formatToolActivityTime(1000)}`);
+      expect(app.lastFrame()).toContain('@1000');
       expect(app.lastFrame()).toContain('… Bash Ran printf ready');
       now = 1250;
       stream!({ type: 'tool_result', data: { id: 'provider-tool', content: 'provider-result-ready', isError: false } });
@@ -2801,7 +2800,8 @@ describe('ConversationView tool history', () => {
       expect(frame).toContain('printf ready');
       expect(frame).toContain('provider-result-ready');
       expect(frame).toMatch(/250\s*ms/u);
-      expect(frame).toContain(`@${formatToolActivityTime(1000)} → @${formatToolActivityTime(1250)}`);
+      expect(frame).toContain('@1000');
+      expect(frame).toContain('@1250');
       expect(frame).toMatch(/✓|success/u);
       const expanded = await press(app, CTRL_O);
       expect(expanded.split('\n').map((row) => row.trim())).toContain('✓ Bash Ran');
@@ -2828,7 +2828,10 @@ describe('ConversationView tool history', () => {
       }
       emit(input, { type: 'tool_use', data: { id: 'search', tool: 'Grep', input: { pattern: 'needle.*' } } });
       await flushFrames();
-      expect(app.lastFrame()).toContain('Read 5 files');
+      for (let index = 0; index < 5; index += 1) {
+        expect(countOccurrences(app.lastFrame() ?? '', `source-${index}.ts`)).toBe(1);
+        expect(countOccurrences(app.lastFrame() ?? '', `read-result-${index}`)).toBe(1);
+      }
       expect(app.lastFrame()).toContain('needle.*');
       const expanded = [await press(app, CTRL_O)];
       for (let page = 0; page < 12; page += 1) expanded.push(await press(app, PAGE_DOWN));
@@ -2836,7 +2839,8 @@ describe('ConversationView tool history', () => {
         expect(expanded.join('\n')).toContain(`source-${index}.ts`);
         expect(expanded.join('\n')).toContain(`read-result-${index}`);
       }
-      expect(await press(app, CTRL_O)).toContain('Read 5 files');
+      const compact = await press(app, CTRL_O);
+      for (let index = 0; index < 5; index += 1) expect(countOccurrences(compact, `read-result-${index}`)).toBe(1);
       assertSafeFrames(app.frames.slice(start), ['secret123']);
     } finally {
       app.unmount();
@@ -2971,6 +2975,7 @@ describe('ConversationView tool history', () => {
   it.each([
     '{"private_blob":{"text":"do-not-display"}}',
     '[{"text":"do-not-display"}]',
+    '{"stdout":"do-not-display',
   ])('should omit unselected structured results in compact and expanded history: %s', async (content) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
@@ -3009,6 +3014,36 @@ describe('ConversationView tool history', () => {
       expect(app.lastFrame()).toContain('progress-ready');
       expect(app.lastFrame()).toContain('[REDACTED]');
       assertSafeFrames(app.frames.slice(start), ['secret123', 'api_key=sec', 'ret123', 'PRIVATE_CLIPBOARD']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should commit completed tool entries once in arrival order before the reply and next submission', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const first = await begin(app, conversation);
+      for (const id of ['first', 'second']) {
+        emit(first, { type: 'tool_use', data: { id, tool: 'Read', input: { file_path: `${id}.ts` } } });
+        emit(first, { type: 'tool_result', data: { id, content: `${id}-result`, isError: false } });
+      }
+      await flushFrames();
+      expect(countOccurrences(app.lastFrame() ?? '', 'first-result')).toBe(1);
+      expect(countOccurrences(app.lastFrame() ?? '', 'second-result')).toBe(1);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'read complete' });
+      await flushFrames();
+      const completed = app.lastFrame() ?? '';
+      expect(countOccurrences(completed, 'first-result')).toBe(1);
+      expect(countOccurrences(completed, 'second-result')).toBe(1);
+      expect(completed.indexOf('first-result')).toBeLessThan(completed.indexOf('second-result'));
+      expect(completed.indexOf('second-result')).toBeLessThan(completed.indexOf('read complete'));
+
+      await press(app, 'next question');
+      const frame = await press(app, ENTER);
+      expect(countOccurrences(frame, 'first-result')).toBe(1);
+      expect(countOccurrences(frame, 'second-result')).toBe(1);
+      expect(frame.indexOf('second-result')).toBeLessThan(frame.indexOf('next question'));
     } finally {
       app.unmount();
     }
@@ -3081,7 +3116,10 @@ describe('ConversationView tool history', () => {
       expect(app.lastFrame()).toContain('fast-b-success');
       emit(input, { type: 'tool_result', toolActivity: { callId: 'attempt-a' }, data: { id: 'same-id', content: 'slow-a-failure', isError: true } });
       await flushFrames();
-      expect(app.lastFrame()).toContain('slow-a-failure');
+      const committed = app.lastFrame() ?? '';
+      expect(countOccurrences(committed, 'slow-a-failure')).toBe(1);
+      expect(countOccurrences(committed, 'fast-b-success')).toBe(1);
+      expect(committed.indexOf('fast-b-success')).toBeLessThan(committed.indexOf('slow-a-failure'));
       emit(input, { type: 'tool_result', toolActivity: { callId: 'attempt-a' }, data: { id: 'same-id', content: 'incorrect-success-replacement', isError: false } });
       const frame = await press(app, CTRL_O);
       expect(frame).toContain('slow-a.ts');
@@ -3156,7 +3194,9 @@ describe('ConversationView tool history', () => {
         stdout.resize(columns, rows);
         await waitForOutput(stdout, () => stdout.frames.length > start, 'resized history frame');
         const screen = await refresh();
-        expect(screen.replace(/\s/gu, '')).toContain('HISTORY_BEFORE_RESIZE');
+        // Completed tools now belong to native scrollback, not the live pane.
+        expect(getTerminalText(terminal).replace(/\s/gu, '')).toContain('HISTORY_BEFORE_RESIZE');
+        expect(screen).toContain('running.ts');
         assertCursor();
         expect(input.abortSignal?.aborted).toBe(false);
         expect(countOccurrences(getTerminalText(terminal), 'COMMITTED_RESPONSE_MARKER')).toBe(1);

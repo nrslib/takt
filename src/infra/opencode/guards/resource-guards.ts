@@ -1,17 +1,11 @@
-import {
-  type BoundedSensitiveValues,
-  type SensitiveBudgetExhaustReason,
-} from '../../../shared/utils/sensitiveText.js';
 import type {
   OpenCodePart,
   OpenCodeStreamEvent,
   OpenCodeToolPart,
 } from '../OpenCodeStreamHandler.js';
-import { computeToolInputHash } from '../tool-call-tuple.js';
 import type { ResolvedOpenCodeGuardPolicy } from './policy.js';
 import type {
   OpenCodeGuard,
-  OpenCodeGuardLifecycleScope,
   OpenCodeGuardVerdict,
 } from './types.js';
 
@@ -140,57 +134,5 @@ export class TrackedIdsGuard implements OpenCodeGuard {
     if (event.type !== 'message.part.delta') return undefined;
     const partId = event.properties.partID;
     return typeof partId === 'string' ? partId : undefined;
-  }
-}
-
-function sensitiveFailure(reason: SensitiveBudgetExhaustReason | undefined): OpenCodeGuardVerdict {
-  const suffix = reason ?? 'unknown';
-  return {
-    action: 'fail',
-    reason: `OpenCode sensitive value budget exceeded: ${suffix}`,
-  };
-}
-
-export class SensitiveBudgetGuard implements OpenCodeGuard {
-  readonly id = 'sensitive-budget';
-  readonly layer = 'integrity' as const;
-  private readonly latestInputHashes = new Map<string, string>();
-
-  constructor(readonly sensitiveValues: BoundedSensitiveValues) {}
-
-  start(scope: OpenCodeGuardLifecycleScope): void {
-    if (scope === 'attempt') this.latestInputHashes.clear();
-  }
-
-  onInitialSource(source: unknown): OpenCodeGuardVerdict | undefined {
-    return this.collect(source);
-  }
-
-  private collect(source: unknown): OpenCodeGuardVerdict | undefined {
-    this.sensitiveValues.collect(source);
-    return this.sensitiveValues.exhausted
-      ? sensitiveFailure(this.sensitiveValues.exhaustReason)
-      : undefined;
-  }
-
-  onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
-    if (event.type !== 'message.part.updated') return undefined;
-    const part = event.properties.part as OpenCodePart;
-    if (part.type !== 'tool') return undefined;
-    const toolPart = part as OpenCodeToolPart;
-    const inputHash = computeToolInputHash(toolPart.state.input);
-    const key = `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;
-    if (inputHash !== undefined && this.latestInputHashes.get(key) === inputHash) {
-      if (toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
-        this.latestInputHashes.delete(key);
-      }
-      return undefined;
-    }
-    if (inputHash !== undefined) this.latestInputHashes.set(key, inputHash);
-    const verdict = this.collect(toolPart.state.input);
-    if (toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
-      this.latestInputHashes.delete(key);
-    }
-    return verdict;
   }
 }

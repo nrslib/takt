@@ -15,8 +15,8 @@ import type { StreamEvent } from '../../shared/types/provider.js';
 import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { ToolActivityView } from './ToolActivityView.js';
-import { createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from './toolActivityViewState.js';
-import { useToolActivityTranscript } from './useToolActivityTranscript.js';
+import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
+import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from './toolActivityViewState.js';
 import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
@@ -274,10 +274,15 @@ export function ConversationView({
   const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   const elapsed = formatElapsedTime(elapsedSeconds);
-  const toolGroups = toolDisplay.groups().map((group) => ({
+  const allToolGroups = toolDisplay.groups().map((group) => ({
     ...group,
     entries: turn === null ? group.entries.filter((entry) => entry.status !== 'running') : group.entries,
   })).filter((group) => group.entries.length > 0);
+  const toolGroups = allToolGroups.flatMap((group) => {
+    if (toolView.expanded) return [group];
+    const entries = group.entries.filter((entry) => entry.status === 'running');
+    return entries.length === 0 ? [] : [{ ...group, summary: toolActivityGroupSummary(entries[0]!, entries.length), entries }];
+  });
   const activeTool = activity.kind === 'tool'
     ? toolGroups.flatMap((group) => group.entries).filter((entry) => entry.status === 'running').at(-1) : undefined;
   const activityLabel = activeTool !== undefined ? activeTool.tool
@@ -364,7 +369,8 @@ export function ConversationView({
   remainingLiveRows -= visibleCompletionCount - visibleCompletionRows;
   const showModelRow = remainingLiveRows > 0;
   remainingLiveRows -= Number(showModelRow);
-  const toolHistoryHeight = toolGroups.length === 0 ? 0 : Math.max(0, remainingLiveRows);
+  const toolHistoryHeight = allToolGroups.length === 0 ? 0
+    : toolGroups.length === 0 ? Math.min(1, Math.max(0, remainingLiveRows)) : Math.max(0, remainingLiveRows);
   const toolLabels = {
     compact: getLabel('tui.ui.toolHistoryCompact', lang),
     expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
@@ -448,10 +454,6 @@ export function ConversationView({
     transcriptRef.current = next;
     setTranscriptView(next);
   }, []);
-  const appendToolTranscript = useCallback((content: string) => {
-    appendTranscript(transcriptEntry('system', content));
-  }, [appendTranscript]);
-  const commitToolTranscript = useToolActivityTranscript(toolDisplay, toolPage.transcript, appendToolTranscript);
 
   const trackPendingWork = useCallback((work: PendingWork) => {
     pendingRef.current.add(work);
@@ -490,13 +492,19 @@ export function ConversationView({
               display.handle(event);
               setActivity({ kind: 'tool' });
               break;
-            case 'tool_result':
-              display.handle(event);
+            case 'tool_result': {
+              const completed = display.history.entries().filter((entry) => entry.status !== 'running');
+              for (const entry of display.handle(event)) {
+                if (entry.status !== 'running' && !completed.some((previous) => previous.key === entry.key)) {
+                  appendTranscript(transcriptEntry('system', completedToolTranscript(entry, columns, toolLabels)));
+                }
+              }
               setActivity((current) => ({
                 kind: current.kind === 'tool' && !display.groups().some((group) => group.entries.some((entry) => entry.status === 'running'))
                   ? 'waiting' : current.kind,
               }));
               break;
+            }
             case 'tool_output':
               display.handle(event);
               setActivity((current) => ({ ...current }));
@@ -551,7 +559,7 @@ export function ConversationView({
       inFlightRef.current = null;
       exit({ kind: 'failed', error });
     }
-  }, [appendTranscript, conversation, exit, submitMode]);
+  }, [appendTranscript, columns, conversation, exit, submitMode, lang]);
 
   /**
    * Opens a turn for `text`, leaving the prompt alone.
@@ -561,7 +569,6 @@ export function ConversationView({
    * would take that half-written line away from them.
    */
   const startSubmission = useCallback((text: string) => {
-    commitToolTranscript();
     // The seeded auto-submit carries no note of its own; its user line is already
     // in the initial transcript, so an empty row would just be noise.
     if (text !== '') {
@@ -584,7 +591,7 @@ export function ConversationView({
       isInstruction: submitMode === 'summarize' || isInstructionRequest(text),
     };
     trackPendingWork({ controller, completion: runSubmission(text, controller, submissionId, display) });
-  }, [appendTranscript, commitToolTranscript, runSubmission, submitMode, trackPendingWork]);
+  }, [appendTranscript, runSubmission, submitMode, trackPendingWork]);
 
   /**
    * Esc while a call is running. The call is aborted, and whatever was typed
@@ -725,14 +732,11 @@ export function ConversationView({
   const submitLine = useCallback((text: string) => {
     const command = conversation.resolveLocalCommand(text);
     if (command) {
-      // A local command line also enters the transcript, so the tool history
-      // shown for the previous turn has to be recorded ahead of it.
-      commitToolTranscript();
       applyLocalCommand(command, text);
       return;
     }
     startSubmission(text);
-  }, [applyLocalCommand, commitToolTranscript, conversation, startSubmission]);
+  }, [applyLocalCommand, conversation, startSubmission]);
 
   /**
    * Sends what was typed while the assistant was answering.

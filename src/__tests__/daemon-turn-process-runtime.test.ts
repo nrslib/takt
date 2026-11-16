@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createTurnProcessRuntime, type TurnIo } from '../features/daemonTurn/processRuntime.js';
-import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_PROGRESS, MAX_PROCESS_PROGRESS_BYTES, type TurnProcessMessage } from '../core/daemon/processProtocol.js';
+import { TURN_PROTOCOL_VERSION, type TurnProcessMessage } from '../core/daemon/processProtocol.js';
 import { deferred, turnStart } from './helpers/daemon-turn.js';
 import { goalInput } from './helpers/goal-fixtures.js';
 import type { TurnOutcome, TurnStart } from '../core/daemon/messages.js';
@@ -20,45 +20,6 @@ function fixture(execute = vi.fn(async (_input: TurnStart, _io: TurnIo): Promise
   return { runtime, messages, wait, initialize, execute, close, onFatal, envelope, transport };
 }
 
-it('drains every tool event in order before finishing even when activity is coalesced behind a slow transport', async () => {
-  const blocked = deferred<void>(); const release = deferred<void>();
-  const content = '日本語の結果\n'.repeat(3000);
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const context = { operationId: input.turn.operationId, generation: input.turn.generation, callId: 'call' };
-    io.progress({ kind: 'tool_event', eventId: 'start', event: {
-      type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity: context,
-    } });
-    for (let index = 0; index < 10; index++) io.progress({ kind: 'thinking' });
-    io.progress({ kind: 'tool_event', eventId: 'result', event: {
-      type: 'tool_result', data: { id: 'tool', content, isError: false }, toolActivity: context,
-    } });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress' && typeof message.message !== 'string'
-      && message.message.kind === 'tool_event' && message.message.eventId === 'start') {
-      blocked.resolve(); await release.promise;
-    }
-  });
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  try {
-    await blocked.promise;
-    expect(f.messages.some((message) => message.kind === 'turn_finished')).toBe(false);
-    release.resolve();
-    expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-    const events = f.messages.flatMap((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
-      && message.message.kind === 'tool_event' ? [message.message] : []);
-    expect(events.map((event) => event.eventId)).toEqual(['start', 'result']);
-    expect(events[1]!.event.data).toMatchObject({ content });
-    expect(f.messages.at(-1)?.kind).toBe('turn_finished');
-    expect(f.onFatal).not.toHaveBeenCalled();
-  } finally { release.resolve(); await f.runtime.disconnect(); }
-});
-
 function sentToolMessages(messages: readonly TurnProcessMessage[]) {
   return messages.flatMap((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
     && message.message.kind === 'tool_event' ? [message.message] : []);
@@ -73,11 +34,6 @@ function sentRequests(messages: readonly TurnProcessMessage[]) {
   return messages.flatMap((message) => message.kind === 'daemon_request' ? [message] : []);
 }
 
-/** 待機中の Promise の後続処理がすべて進み、送信待ちに入るまで待つ。 */
-function settle(): Promise<void> {
-  return new Promise((resolve) => { setImmediate(resolve); });
-}
-
 function blockFirstProgress(f: ReturnType<typeof fixture>, release: Promise<void>): Promise<void> {
   const entered = deferred<void>();
   const send = f.transport.send.getMockImplementation()!;
@@ -87,6 +43,41 @@ function blockFirstProgress(f: ReturnType<typeof fixture>, release: Promise<void
   });
   return entered.promise;
 }
+
+it('releases a blocked send when the IPC transport closes without sending terminal messages on it', async () => {
+  const release = deferred<void>();
+  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
+    io.progress('blocked');
+    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
+  }));
+  await f.initialize();
+  const entered = blockFirstProgress(f, release.promise);
+  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
+  await entered;
+  let outcome: PromiseSettledResult<void> | undefined;
+  const closed = Promise.allSettled([f.runtime.transportClosed()]).then(([result]) => { outcome = result; });
+  try {
+    await vi.waitFor(() => expect(outcome?.status).toBe('rejected'), { timeout: 200 });
+    expect(f.messages.some((message) => message.kind === 'turn_finished' || message.kind === 'shutdown_complete')).toBe(false);
+    expect(f.close).toHaveBeenCalledOnce();
+  } finally { release.resolve(); await closed; }
+});
+
+it('settles an already pending graceful shutdown when the IPC transport closes during its terminal send', async () => {
+  const f = fixture();
+  await f.initialize();
+  const release = deferred<void>();
+  const entered = deferred<void>();
+  f.transport.send.mockImplementation(async (message) => {
+    if (message.kind === 'shutdown_complete') { entered.resolve(); await release.promise; }
+  });
+  const closing = f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
+  await entered.promise;
+  try {
+    const results = await Promise.allSettled([closing, f.runtime.transportClosed()]);
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+  } finally { release.resolve(); }
+});
 
 it('keeps the completed outcome and change when tool history delivery fails', async () => {
   const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
@@ -113,170 +104,6 @@ it('keeps the completed outcome and change when tool history delivery fails', as
     change: { session: { sessionId: 'retained-session' } } } });
   expect(f.onFatal).not.toHaveBeenCalled();
   await f.runtime.disconnect();
-});
-
-it('merges consecutive queued output of the same tool call into one message', async () => {
-  const release = deferred<void>();
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const toolActivity = { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation };
-    io.progress({ kind: 'tool_event', eventId: 'start', event: { type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: {} }, toolActivity } });
-    for (let index = 0; index < MAX_PROCESS_PENDING_PROGRESS * 2; index++) {
-      io.progress({ kind: 'tool_event', eventId: `output-${index}`, event: {
-        type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: `${index}\n` }, toolActivity } });
-    }
-    io.progress({ kind: 'tool_event', eventId: 'result', event: {
-      type: 'tool_result', data: { id: 'tool', content: 'done', isError: false }, toolActivity } });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const entered = blockFirstProgress(f, release.promise);
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  await entered;
-  release.resolve();
-  expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-  const events = sentToolMessages(f.messages).flatMap((message) => message.kind === 'tool_event' ? [message.event] : []);
-  expect(events.map((event) => event.type)).toEqual(['tool_use', 'tool_output', 'tool_result']);
-  expect(events[1]!.data).toMatchObject({ output: Array.from({ length: MAX_PROCESS_PENDING_PROGRESS * 2 }, (_, index) => `${index}\n`).join('') });
-  await f.runtime.disconnect();
-});
-
-it('stops merging queued output of one tool call at the progress text size and drops the rest while the transport is blocked', async () => {
-  const release = deferred<void>();
-  const chunk = `${'o'.repeat(1023)}\n`;
-  const count = 4096;
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const toolActivity = { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation };
-    io.progress({ kind: 'tool_event', eventId: 'start', event: { type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: {} }, toolActivity } });
-    for (let index = 0; index < count; index++) {
-      io.progress({ kind: 'tool_event', eventId: `output-${index}`, event: {
-        type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: chunk }, toolActivity } });
-    }
-    io.progress({ kind: 'tool_event', eventId: 'result', event: {
-      type: 'tool_result', data: { id: 'tool', content: 'done', isError: false }, toolActivity } });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const entered = blockFirstProgress(f, release.promise);
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  await entered;
-  release.resolve();
-  expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-  const events = sentToolMessages(f.messages).map((message) => message.event);
-  const outputs = events.flatMap((event) => event.type === 'tool_output' ? [event.data.output] : []);
-  expect(outputs.length).toBeGreaterThan(0);
-  expect(outputs.length).toBeLessThanOrEqual(MAX_PROCESS_PENDING_PROGRESS);
-  for (const output of outputs) expect(Buffer.byteLength(output)).toBeLessThanOrEqual(MAX_PROCESS_PROGRESS_BYTES);
-  expect(events.map((event) => event.type).at(-1)).toBe('tool_result');
-  expect(f.onFatal).not.toHaveBeenCalled();
-  await f.runtime.disconnect();
-});
-
-it('drops overflowing tool output but keeps every tool start and result without failing the turn', async () => {
-  const release = deferred<void>();
-  const count = MAX_PROCESS_PENDING_PROGRESS + 4;
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const toolActivity = { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation };
-    for (let index = 0; index < count; index++) {
-      io.progress({ kind: 'tool_event', eventId: `start-${index}`, event: {
-        type: 'tool_use', data: { id: `tool-${index}`, tool: 'Bash', input: {} }, toolActivity } });
-      io.progress({ kind: 'tool_event', eventId: `output-${index}`, event: {
-        type: 'tool_output', data: { id: `tool-${index}`, tool: 'Bash', output: 'partial' }, toolActivity } });
-      io.progress({ kind: 'tool_event', eventId: `result-${index}`, event: {
-        type: 'tool_result', data: { id: `tool-${index}`, content: `result-${index}`, isError: false }, toolActivity } });
-    }
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const entered = blockFirstProgress(f, release.promise);
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  await entered;
-  release.resolve();
-  expect(await done).toMatchObject({ outcome: { kind: 'completed', result: { message: 'done' } } });
-  const ids = sentToolMessages(f.messages).map((message) => message.eventId);
-  for (let index = 0; index < count; index++) expect(ids).toContain(`start-${index}`);
-  for (let index = 0; index < count; index++) expect(ids).toContain(`result-${index}`);
-  expect(ids.filter((eventId) => eventId.startsWith('output-')).length).toBeLessThan(count);
-  expect(f.onFatal).not.toHaveBeenCalled();
-  await f.runtime.disconnect();
-});
-
-it('drops every later output chunk of a tool call after one of its chunks was dropped, until the tool result', async () => {
-  const entered = deferred<void>();
-  const release = deferred<void>();
-  const resume = deferred<void>();
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const toolActivity = { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation };
-    const output = (eventId: string, text: string) => io.progress({ kind: 'tool_event', eventId, event: {
-      type: 'tool_output', data: { id: 'deploy', tool: 'Bash', output: text }, toolActivity } });
-    io.progress({ kind: 'turn_text', message: 'blocker' });
-    io.progress({ kind: 'tool_event', eventId: 'start', event: {
-      type: 'tool_use', data: { id: 'deploy', tool: 'Bash', input: { api_key: 'live-secret-0123456789abcdef' } }, toolActivity } });
-    for (let index = 1; index < MAX_PROCESS_PENDING_PROGRESS; index++) io.progress({ kind: 'turn_text', message: String(index) });
-    output('head', 'using live-secr');
-    await resume.promise;
-    output('tail', 'et-0123456789abcdef now\n');
-    io.progress({ kind: 'tool_event', eventId: 'result', event: {
-      type: 'tool_result', data: { id: 'deploy', content: 'using live-secret-0123456789abcdef now\n', isError: false }, toolActivity } });
-    output('next', 'next run\n');
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') { entered.resolve(); await release.promise; }
-  });
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  try {
-    await entered.promise;
-    release.resolve();
-    await vi.waitFor(() => expect(sentTexts(f.messages)).toHaveLength(MAX_PROCESS_PENDING_PROGRESS));
-    resume.resolve();
-    expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-    expect(sentToolMessages(f.messages).map((message) => message.eventId)).toEqual(['start', 'result', 'next']);
-    expect(f.onFatal).not.toHaveBeenCalled();
-  } finally { release.resolve(); resume.resolve(); await f.runtime.disconnect(); }
-});
-
-it('drops a later output chunk without an id in the same call after an output chunk with an id was dropped', async () => {
-  const entered = deferred<void>();
-  const release = deferred<void>();
-  const resume = deferred<void>();
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    const toolActivity = { callId: 'call', operationId: input.turn.operationId, generation: input.turn.generation };
-    io.progress({ kind: 'turn_text', message: 'blocker' });
-    io.progress({ kind: 'tool_event', eventId: 'start', event: {
-      type: 'tool_use', data: { id: 'deploy', tool: 'Bash', input: { api_key: 'live-secret-0123456789abcdef' } }, toolActivity } });
-    for (let index = 1; index < MAX_PROCESS_PENDING_PROGRESS; index++) io.progress({ kind: 'turn_text', message: String(index) });
-    io.progress({ kind: 'tool_event', eventId: 'head', event: {
-      type: 'tool_output', data: { id: 'deploy', tool: 'Bash', output: 'using live-secr' }, toolActivity } });
-    await resume.promise;
-    io.progress({ kind: 'tool_event', eventId: 'tail', event: {
-      type: 'tool_output', data: { tool: 'Bash', output: 'et-0123456789abcdef now\n' }, toolActivity } });
-    io.progress({ kind: 'tool_event', eventId: 'result', event: {
-      type: 'tool_result', data: { id: 'deploy', content: 'using live-secret-0123456789abcdef now\n', isError: false }, toolActivity } });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') { entered.resolve(); await release.promise; }
-  });
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  try {
-    await entered.promise;
-    release.resolve();
-    await vi.waitFor(() => expect(sentTexts(f.messages)).toHaveLength(MAX_PROCESS_PENDING_PROGRESS));
-    resume.resolve();
-    expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-    expect(sentToolMessages(f.messages).map((message) => message.eventId)).toEqual(['start', 'result']);
-  } finally { release.resolve(); resume.resolve(); await f.runtime.disconnect(); }
 });
 
 it('sends a tool result larger than 12 MiB as one progress message', async () => {
@@ -332,41 +159,10 @@ it.each([false, true])('keeps intermediate text ordered behind a slow send and s
     const texts = f.messages.flatMap((message) => message.kind === 'turn_progress' && typeof message.message !== 'string'
       && message.message.kind === 'turn_text' ? [message.message.message] : []);
     expect(texts).toEqual(interrupted ? ['first block'] : ['first block', 'second block']);
+    f.execute.mock.calls[0]![1].progress({ kind: 'turn_text', message: 'after finish' }); await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(f.messages.at(-1)?.kind).toBe('turn_finished');
     expect(f.onFatal).not.toHaveBeenCalled();
   } finally { release.resolve(); finish.resolve(); await f.runtime.disconnect(); }
-});
-
-it('drops text that overflows a blocked transport without failing the turn and resumes text once the queue drains', async () => {
-  const entered = deferred<void>();
-  const release = deferred<void>();
-  const resume = deferred<void>();
-  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    for (let index = 0; index <= MAX_PROCESS_PENDING_PROGRESS; index++) {
-      io.progress({ kind: 'turn_text', message: String(index) });
-    }
-    await resume.promise;
-    io.progress({ kind: 'turn_text', message: 'after drain' });
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') { entered.resolve(); await release.promise; }
-  });
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  try {
-    await entered.promise;
-    expect(sentTexts(f.messages)).toEqual(['0']);
-    release.resolve();
-    await vi.waitFor(() => expect(sentTexts(f.messages)).toHaveLength(MAX_PROCESS_PENDING_PROGRESS));
-    resume.resolve();
-    expect(await done).toMatchObject({ outcome: { kind: 'completed', result: { message: 'done' } } });
-    expect(sentTexts(f.messages)).toEqual([...Array.from({ length: MAX_PROCESS_PENDING_PROGRESS }, (_, index) => String(index)), 'after drain']);
-    expect(f.onFatal).not.toHaveBeenCalled();
-  } finally { release.resolve(); resume.resolve(); await f.runtime.disconnect(); }
 });
 
 it('sends typed activity through the existing progress transport before the final result', async () => {
@@ -390,6 +186,7 @@ it('sends typed activity through the existing progress transport before the fina
   await done;
   expect(f.messages.filter((value) => value.kind === 'turn_progress')).toEqual([
     { ...f.envelope, kind: 'turn_progress', turn: input.turn, message: { kind: 'thinking' } },
+    { ...f.envelope, kind: 'turn_progress', turn: input.turn, message: { kind: 'tool', tool: 'Bash' } },
     { ...f.envelope, kind: 'turn_progress', turn: input.turn, message: { kind: 'responding' } },
   ]);
   expect(f.messages.at(-1)?.kind).toBe('turn_finished');
@@ -426,118 +223,6 @@ it('keeps a completed result and change when text delivery fails, then allows th
   const finished = f.wait('turn_finished');
   await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: next });
   expect(await finished).toMatchObject({ outcome: { kind: 'completed', result: { message: 'next' } } });
-  await f.runtime.disconnect();
-});
-
-it('coalesces repeated activity bursts behind slow sends and drops unsent activity when the turn finishes', async () => {
-  const entered = deferred<TurnIo>();
-  const finish = deferred<void>();
-  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    entered.resolve(io);
-    await finish.promise;
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const gates = [deferred<void>(), deferred<void>(), deferred<void>()];
-  const send = f.transport.send.getMockImplementation()!;
-  const progress = () => f.messages.filter((message) => message.kind === 'turn_progress');
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') await gates[progress().length - 1]!.promise;
-  });
-  const input = turnStart();
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
-  const io = await entered.promise;
-  io.progress({ kind: 'thinking' });
-  for (let wave = 0; wave < 2; wave++) {
-    for (let index = 0; index < MAX_PROCESS_PENDING_PROGRESS * 2; index++) {
-      io.progress({ kind: 'tool', tool: `Tool${index}` });
-      io.progress({ kind: 'waiting' });
-    }
-    io.progress({ kind: 'tool', tool: `Latest${wave}` });
-    expect(progress()).toHaveLength(wave + 1);
-    gates[wave]!.resolve();
-    await vi.waitFor(() => expect(progress()).toHaveLength(wave + 2));
-    expect(progress().at(-1)).toMatchObject({ message: { kind: 'tool', tool: `Latest${wave}` } });
-  }
-  io.progress({ kind: 'responding' });
-  finish.resolve();
-  await settle();
-  // 同じ接続への書き込みは追い越せないため、送信中の表示が終わるまで turn_finished は書き込まない。
-  expect(f.messages.some((message) => message.kind === 'turn_finished')).toBe(false);
-  gates[2]!.resolve();
-  expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-  io.progress({ kind: 'tool', tool: 'TooLate' });
-  await f.runtime.disconnect();
-  expect(progress().map((message) => message.message)).toEqual([
-    { kind: 'thinking' }, { kind: 'tool', tool: 'Latest0' }, { kind: 'tool', tool: 'Latest1' },
-  ]);
-  expect(f.onFatal).not.toHaveBeenCalled();
-});
-
-it('disables failed activity delivery without failing the turn or retrying queued activity', async () => {
-  const entered = deferred<TurnIo>();
-  const finish = deferred<void>();
-  const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    entered.resolve(io);
-    await finish.promise;
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const failed = deferred<void>();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') await failed.promise;
-  });
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  const io = await entered.promise;
-  io.progress({ kind: 'thinking' });
-  io.progress({ kind: 'responding' });
-  failed.reject(new Error('Activity transport unavailable'));
-  await vi.waitFor(() => expect(f.transport.send.mock.settledResults.at(-1)?.type).toBe('rejected'));
-  io.progress({ kind: 'tool', tool: 'Unavailable' });
-  finish.resolve();
-  expect(await done).toMatchObject({ outcome: { kind: 'completed' } });
-  expect(f.messages.filter((message) => message.kind === 'turn_progress')).toHaveLength(1);
-  expect(f.onFatal).not.toHaveBeenCalled();
-  await f.runtime.disconnect();
-});
-
-it('writes turn_finished after the in-flight activity send and sends the reused child next turn activity afterwards', async () => {
-  const finish = deferred<void>();
-  const f = fixture(vi.fn(async (input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
-    io.progress({ kind: 'tool', tool: `Generation${input.turn.generation}` });
-    if (input.turn.generation === 2) await finish.promise;
-    return { kind: 'completed', result: { kind: 'reply', message: 'done' } };
-  }));
-  await f.initialize();
-  const blocked = deferred<void>();
-  const send = f.transport.send.getMockImplementation()!;
-  f.transport.send.mockImplementation(async (message) => {
-    await send(message);
-    if (message.kind === 'turn_progress') await blocked.promise;
-  });
-  const first = turnStart();
-  const done = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: first });
-  const progress = () => f.messages.filter((message) => message.kind === 'turn_progress');
-  await settle();
-  expect(progress()).toHaveLength(1);
-  expect(f.messages.some((message) => message.kind === 'turn_finished')).toBe(false);
-  blocked.resolve();
-  await done;
-  await f.runtime.receive({ ...f.envelope, kind: 'result_committed', turn: first.turn });
-  const second = turnStart(2);
-  const next = f.wait('turn_finished');
-  await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: second });
-  await vi.waitFor(() => expect(progress()).toHaveLength(2));
-  expect(progress()[1]).toMatchObject({ turn: second.turn, message: { kind: 'tool', tool: 'Generation2' } });
-  finish.resolve();
-  await next;
-  expect(f.onFatal).not.toHaveBeenCalled();
   await f.runtime.disconnect();
 });
 
@@ -622,7 +307,7 @@ it('sends an interrupted legacy message larger than one MiB back to the daemon',
   } });
   await f.runtime.receive({ ...f.envelope, kind: 'shutdown' });
 });
-it('sends one state request at a time and sends the next after each reply, including a request larger than 1 MiB', async () => {
+it('sends concurrent state requests and resolves each by its own reply, including a request larger than 1 MiB', async () => {
   const interruptedMessage = 'i'.repeat(2 * 1024 * 1024);
   const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
     const replies = await Promise.all([
@@ -636,10 +321,8 @@ it('sends one state request at a time and sends the next after each reply, inclu
   const input = turnStart();
   const done = f.wait('turn_finished');
   await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input });
-  for (let index = 0; index < 3; index++) {
-    await vi.waitFor(() => expect(sentRequests(f.messages)).toHaveLength(index + 1));
-    await settle();
-    expect(sentRequests(f.messages)).toHaveLength(index + 1);
+  await vi.waitFor(() => expect(sentRequests(f.messages)).toHaveLength(3));
+  for (const index of [2, 0, 1]) {
     await f.runtime.receive({ ...f.envelope, kind: 'daemon_reply', turn: input.turn, requestId: sentRequests(f.messages)[index]!.requestId,
       reply: { kind: 'state_saved', version: index + 1, duplicate: false } });
   }
@@ -651,7 +334,7 @@ it('sends one state request at a time and sends the next after each reply, inclu
   await f.runtime.disconnect();
 });
 
-it('releases the in-flight and waiting state requests when the process disconnects', async () => {
+it('releases every in-flight state request when the process disconnects', async () => {
   const settled: Array<PromiseSettledResult<unknown>> = [];
   const f = fixture(vi.fn(async (_input: TurnStart, io: TurnIo): Promise<TurnOutcome> => {
     settled.push(...await Promise.allSettled(Array.from({ length: 3 }, () => io.request({ kind: 'get_delivery', conversationId: 'manager' }))));
@@ -659,10 +342,10 @@ it('releases the in-flight and waiting state requests when the process disconnec
   }));
   await f.initialize();
   await f.runtime.receive({ ...f.envelope, kind: 'start_turn', input: turnStart() });
-  await vi.waitFor(() => expect(sentRequests(f.messages)).toHaveLength(1));
+  await vi.waitFor(() => expect(sentRequests(f.messages)).toHaveLength(3));
   await f.runtime.disconnect();
   expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
-  expect(sentRequests(f.messages)).toHaveLength(1);
+  expect(sentRequests(f.messages)).toHaveLength(3);
   expect(f.close).toHaveBeenCalledOnce();
   expect(f.messages.filter((value) => value.kind === 'turn_finished')).toHaveLength(1);
   expect(f.onFatal).not.toHaveBeenCalled();

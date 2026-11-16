@@ -1,14 +1,15 @@
 import type { StreamEvent } from '../types/provider.js';
 import { ToolActivityHistory } from '../tool-activity/history.js';
-import { classifyToolResult, StreamingToolOutput } from '../tool-activity/result.js';
+import { classifyToolResult } from '../tool-activity/result.js';
 import { RunningToolResult } from '../tool-activity/runningResult.js';
-import { toolResultSensitiveValues, writeToolResultText } from '../tool-activity/sanitize.js';
-import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, formatToolActivityTime, groupToolActivities,
+import { normalizeToolResultText, toolResultSensitiveValues } from '../tool-activity/sanitize.js';
+import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_LINES, groupToolActivities,
   projectLabel, projectToolActivity, toolActivityDetail, toolActivityResultView, type ToolActivityResultView } from '../tool-activity/presentation.js';
-import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityHistoryState, ToolActivityProjection,
-  ToolActivityTurnUpdate } from '../tool-activity/types.js';
+import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../tool-activity/types.js';
+import { RETAINED_TOOL_OUTPUT_BYTES } from '../tool-activity/outputLimit.js';
 import { truncateUtf8 } from '../utils/utf8.js';
-import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import { createBoundedSensitiveValues, createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import { REDACTED_VALUE } from '../utils/sensitive-text.js';
 import { truncate } from './LogManager.js';
 
 interface StreamOutputState {
@@ -20,13 +21,21 @@ interface StreamOutputState {
   omitted: boolean;
   omissionPrinted: boolean;
   headerTool: string;
-  output: StreamingToolOutput;
+  consumed: number;
+  /** 実行中の flush で仮に表示した、まだ確定していない末尾。 */
+  previewed: string;
 }
 
-/** 完了した entry は、最終結果だけが持つ秘密値（JSON の項目名で判る値など）も照合に使う。 */
-function toolOutputSensitiveSource(entry: ToolActivityEntry): unknown {
-  return entry.status === 'running' ? entry.input
-    : [entry.input, entry.result, classifyToolResult(entry.result ?? '', true).parsed];
+/** 実行中の一覧と詳細では、仮の表示の末尾で伏せた部分（書きかけの値や既知の値の先頭部分）を出さずに保留する。 */
+function withoutHeldTail(preview: string): string {
+  return preview.endsWith(REDACTED_VALUE) ? preview.slice(0, -REDACTED_VALUE.length) : preview;
+}
+
+/** 追記だけの端末出力で、仮に印字した末尾が確定した文字列と食い違っても、印字済みの部分を印字し直さない。 */
+function unprinted(printed: string, text: string): string {
+  let shared = 0;
+  while (shared < printed.length && printed[shared] === text[shared]) shared++;
+  return shared === 0 ? text : text.slice(shared).replace(/^\n/u, '');
 }
 
 export function resolveToolActivityDisplayMode(
@@ -41,15 +50,16 @@ export class ToolActivityDisplay {
   private readonly streams = new Map<string, StreamOutputState>();
   private readonly completed = new Map<string, ToolActivityEntry['status']>();
   private readonly displayedResults = new Map<string, { text: string; bytes: number; lines: number; truncated: boolean }>();
-  /** 表示用の結果。実行中の entry は追記分だけで更新し、完了した entry は完了時に一度だけ作る。 */
+  /** 通常TUIの未マスク出力は、分割された秘密値を確定前に表示しない。 */
   private readonly runningResults = new Map<string, RunningToolResult>();
-  private readonly completedResults = new Map<string, ToolActivityResultView>();
+  private readonly previews = new Map<string, string>();
 
   constructor(
     readonly mode: ToolActivityDisplayMode,
     private readonly quiet: boolean,
     private readonly writeLine: (text: string) => void,
     private readonly showCompactStarts: boolean,
+    private readonly committedOutput = false,
   ) {}
 
   handle(event: StreamEvent): ToolActivityEntry[] {
@@ -59,8 +69,8 @@ export class ToolActivityDisplay {
     for (const entry of entries) {
       if (event.type === 'tool_use') {
         if (this.mode === 'expanded' || (this.showCompactStarts && !this.quiet)) {
-          const value = projectToolActivity(entry, this.mode);
-          this.writeLine(`[tool] ${value.tool} ${value.action} ${value.input} [running @${formatToolActivityTime(entry.startedAt!)}]`);
+          const value = projectToolActivity(entry, this.mode, this.resultView(entry));
+          this.writeLine(`[tool] ${value.tool} ${value.action} ${value.input} [running @${entry.startedAt}]`);
         }
       } else if (event.type === 'tool_output') {
         if (this.mode === 'compact' && !this.quiet) this.stream(entry, event.data.tool);
@@ -71,43 +81,33 @@ export class ToolActivityDisplay {
     return entries;
   }
 
-  restore(state: ToolActivityHistoryState): void {
-    this.history.restore(state);
-    this.streams.clear();
-    this.completed.clear();
-    this.displayedResults.clear();
-    this.runningResults.clear();
-    this.completedResults.clear();
-    for (const entry of this.history.entries()) {
-      this.updateResult(entry);
-      if (entry.status !== 'running') this.completed.set(entry.key, entry.status);
-    }
+  upsert(entry: ToolActivityEntry): void {
+    this.history.upsert(entry);
+    this.updateResult(entry);
   }
 
-  /** 受け取った差分を、履歴全体を作り直さずに適用する。起点が一致しなければ何もせず false を返す。 */
-  applyUpdate(update: ToolActivityTurnUpdate): boolean {
-    const entries = this.history.applyUpdate(update);
-    if (entries === undefined) return false;
-    for (const entry of entries) {
-      this.updateResult(entry);
-      if (entry.status !== 'running') this.completed.set(entry.key, entry.status);
-    }
-    return true;
+  appendOutput(key: string, text: string, tail: string): void {
+    const entry = this.history.appendOutput(key, text, RETAINED_TOOL_OUTPUT_BYTES);
+    if (entry === undefined) return;
+    this.previews.set(key, tail);
+    this.updateResult(entry);
   }
 
-  /** 変わった entry の表示用の結果を更新する。結果が訂正されたときも、完了した entry として作り直す。 */
+  /** daemon の確定済み出力には、通常TUI向けの再マスクを適用しない。 */
   private updateResult(entry: ToolActivityEntry): void {
     if (entry.status !== 'running') {
       this.runningResults.delete(entry.key);
-      this.completedResults.set(entry.key, toolActivityResultView(entry));
+      this.previews.delete(entry.key);
       return;
     }
-    let result = this.runningResults.get(entry.key);
-    if (result === undefined) {
-      result = new RunningToolResult();
-      this.runningResults.set(entry.key, result);
+    if (!this.committedOutput) {
+      let result = this.runningResults.get(entry.key);
+      if (result === undefined) {
+        result = new RunningToolResult();
+        this.runningResults.set(entry.key, result);
+      }
+      result.read(entry);
     }
-    result.read(entry);
   }
 
   private runningResult(entry: ToolActivityEntry): RunningToolResult {
@@ -117,10 +117,14 @@ export class ToolActivityDisplay {
   }
 
   private resultView(entry: ToolActivityEntry): ToolActivityResultView {
-    if (entry.status === 'running') return this.runningResult(entry).view();
-    const view = this.completedResults.get(entry.key);
-    if (view === undefined) throw new Error(`Completed tool activity ${entry.key} has no result`);
-    return view;
+    if (entry.status !== 'running') return toolActivityResultView(entry);
+    if (this.committedOutput) {
+      const result = classifyToolResult(entry.output + (this.previews.get(entry.key) ?? ''));
+      // 読み切れていない JSON は、完了して分類できるまで表示しない（main と同じ）。
+      return { text: result.kind !== 'text' ? '' : result.text, sensitiveValues: createBoundedSensitiveValues() };
+    }
+    const preview = this.runningResult(entry).preview(entry);
+    return { ...preview, text: withoutHeldTail(preview.text) };
   }
 
   /** 秘密値を伏せたツール名。保持している結果の秘密値を使い、出力全体を処理し直さない。 */
@@ -137,7 +141,8 @@ export class ToolActivityDisplay {
     const entry = this.history.get(key);
     if (entry === undefined) throw new RangeError('Unknown tool activity key');
     const view = this.resultView(entry);
-    return { ...projectToolActivity(entry, 'expanded', view), result: toolActivityDetail(entry, offset, undefined, undefined, view) };
+    return { ...projectToolActivity(entry, 'expanded', view),
+      result: toolActivityDetail(entry, offset, undefined, undefined, view) };
   }
 
   flush(): void {
@@ -145,9 +150,8 @@ export class ToolActivityDisplay {
     for (const entry of this.history.entries()) {
       if (entry.status !== 'running') continue;
       if (this.mode === 'expanded' && entry.output !== '') {
-        // テキストの出力は、redactor が確定した行だけを出す。出力全体をマスクし直すと、改行の届いていない行の途中まで出てしまう。
-        const isReadableText = classifyToolResult(entry.output, false).kind === 'text';
-        const value = projectToolActivity(entry, 'expanded', isReadableText ? this.runningResult(entry).view() : undefined);
+        const classified = classifyToolResult(entry.output);
+        const value = projectToolActivity(entry, 'expanded', classified.kind === 'structured' ? undefined : this.runningResult(entry).preview(entry));
         if (!this.displayedResults.has(entry.key)) this.writeLine(`  ${value.tool} output: [running]`);
         this.writeExpandedResult(value);
       } else if (this.mode === 'compact' && !this.quiet) {
@@ -161,7 +165,7 @@ export class ToolActivityDisplay {
       redactor: createSensitiveTextStreamRedactor(), pending: '', printed: '',
       printedLines: 0, printedBytes: 0,
       omitted: false, omissionPrinted: false,
-      headerTool: projectToolActivity({ ...entry, tool: tool || entry.tool }).tool, output: new StreamingToolOutput(),
+      headerTool: projectLabel(tool || entry.tool, this.resultView(entry).sensitiveValues), consumed: 0, previewed: '',
     };
   }
 
@@ -171,11 +175,20 @@ export class ToolActivityDisplay {
       state = this.newStream(entry, tool);
       this.streams.set(entry.key, state);
     }
-    if (state.omitted) return;
-    const appended = state.output.read(entry.output);
-    if (appended === '') return;
-    state.pending += writeToolResultText(state.redactor, appended, entry.input);
+    const result = classifyToolResult(entry.output);
+    if (result.kind !== 'text' || state.omitted) return;
+    const text = normalizeToolResultText(result.text);
+    state.pending += this.unpreviewed(state, state.redactor.write(text.slice(state.consumed), toolResultSensitiveValues(entry.input)));
+    state.consumed = text.length;
     this.drain(state, false);
+  }
+
+  /** flush で仮に表示した部分は、確定したときに表示し直さない。 */
+  private unpreviewed(state: StreamOutputState, committed: string): string {
+    if (state.previewed === '' || committed === '') return committed;
+    const previewed = state.previewed;
+    state.previewed = '';
+    return unprinted(previewed, committed);
   }
 
   private drain(state: StreamOutputState, flush: boolean): void {
@@ -206,7 +219,7 @@ export class ToolActivityDisplay {
       this.writeStreamOmission(state);
       return;
     }
-    const result = classifyToolResult(entry.output, entry.status !== 'running');
+    const result = classifyToolResult(entry.output);
     if (result.kind === 'pending') return;
     if (result.kind === 'structured') {
       const value = projectToolActivity(entry);
@@ -221,12 +234,19 @@ export class ToolActivityDisplay {
       } else state.printed = value.result.text;
       return;
     }
-    // 実行中に保留した出力（`[` で始まるテキストなど）は、完了時にここで初めて redactor へ渡る。
-    // 実行中は redactor が確定した行だけを出し、改行の届いていない行は完了まで出さない。
-    const sensitiveSource = toolOutputSensitiveSource(entry);
-    const written = writeToolResultText(state.redactor, state.output.readRest(result.text), sensitiveSource);
-    state.pending += entry.status === 'running' ? written
-      : written + state.redactor.flush(toolResultSensitiveValues(sensitiveSource));
+    const source = toolResultSensitiveValues(entry.input);
+    const text = normalizeToolResultText(result.text);
+    const written = state.redactor.write(text.slice(state.consumed), source);
+    state.consumed = text.length;
+    if (entry.status === 'running') {
+      // 改行の来ていない行は確定させず、マスクした仮の表示だけを出す。
+      state.pending += this.unpreviewed(state, written);
+      const preview = state.redactor.preview(source);
+      state.pending += unprinted(state.previewed, preview);
+      state.previewed = preview;
+    } else {
+      state.pending += this.unpreviewed(state, written + state.redactor.flush(source));
+    }
     this.drain(state, true);
   }
 
@@ -234,21 +254,23 @@ export class ToolActivityDisplay {
     if (this.completed.get(entry.key) === entry.status) return;
     this.completed.set(entry.key, entry.status);
     if (this.mode === 'compact') this.flushStream(entry);
-    const value = projectToolActivity(entry, this.mode === 'expanded' ? 'expanded' : 'compact', this.resultView(entry));
+    const mode = this.mode === 'expanded' ? 'expanded' : 'compact';
+    const value = projectToolActivity(entry, mode, this.resultView(entry));
     const failed = value.status === 'failure';
     if (this.mode === 'compact' && this.quiet && !failed) return;
+    const name = this.mode === 'compact' && this.quiet ? 'Tool' : value.tool;
     const symbol = failed ? '✗' : '✓';
     const suppressed = entry.tool === 'AskUserQuestion' && !failed;
     if (this.mode === 'expanded') {
       const duration = value.durationMs === undefined ? '' : ` (${value.durationMs} ms)`;
-      this.writeLine(`  ${symbol} ${value.tool} ${value.action} ${value.input}${duration} [${value.status}]`);
+      this.writeLine(`  ${symbol} ${name} ${value.action} ${value.input}${duration} [${value.status}]`);
       if (!suppressed) this.writeExpandedResult(value);
     } else {
       const state = this.streams.get(entry.key);
       const alreadyPrinted = state?.printed.replace(/\n$/u, '') === value.result.text;
       const firstLine = value.result.text.split('\n', 1)[0] ?? '';
       const preview = suppressed || alreadyPrinted ? '' : truncate(firstLine || (failed ? 'Unknown error' : ''), failed ? 70 : 60);
-      this.writeLine(`  ${symbol} ${value.tool}${failed ? ':' : ''}${preview === '' ? '' : ` ${preview}`}`);
+      this.writeLine(`  ${symbol} ${name}${failed ? ':' : ''}${preview === '' ? '' : ` ${preview}`}`);
       if (value.result.truncated || state?.omitted) {
         if (state === undefined) this.writeLine('  [output truncated; more available]');
         else this.writeStreamOmission(state);
@@ -288,8 +310,7 @@ export class ToolActivityDisplay {
       });
       return;
     }
-    const remaining = value.result.text.startsWith(previous.text)
-      ? value.result.text.slice(previous.text.length).replace(/^\n/u, '') : value.result.text;
+    const remaining = unprinted(previous.text, value.result.text);
     const remainingLines = CI_RESULT_LINES - previous.lines;
     const remainingBytes = Math.max(0, CI_RESULT_BYTES - previous.bytes - (previous.lines > 0 ? 1 : 0));
     const lines = remaining.split('\n');

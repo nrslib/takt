@@ -62,7 +62,7 @@ async function fixture(mode: boolean, verdict?: 'failed' | 'error') {
   const received: Array<{ id: string; output: PortOutput }> = [];
   const failures = vi.fn();
   const conversations = new DaemonConversations(state, new DaemonRouting(directory), new DaemonNotifications(directory),
-    async (id, output) => { received.push({ id, output }); }, failures);
+    async (id, output) => { received.push({ id, output }); }, failures, eventStore);
   const progress = vi.spyOn(conversations, 'progress');
   const artifacts = { runDirectory: join(repository, '.takt/runs/verify-test'),
     specifications: { quint: join(repository, '.takt/runs/verify-test/spec.qnt') },

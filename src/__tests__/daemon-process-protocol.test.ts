@@ -23,7 +23,7 @@ describe('daemon turn process protocol', () => {
     for (const event of [
       { type: 'tool_use', data: { id: toolId, tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity },
       { type: 'tool_output', data: { id: toolId, tool: 'Read', output: 'stream' }, toolActivity },
-      { type: 'tool_result', data: { completedToolIds: [toolId, 'second'], content: '日'.repeat(MAX_PROCESS_PROGRESS_BYTES), isError: true }, toolActivity },
+      { type: 'tool_result', data: { id: toolId, completedToolIds: [toolId, 'second'], content: '日'.repeat(MAX_PROCESS_PROGRESS_BYTES), isError: true }, toolActivity },
     ]) {
       const message = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool_event', eventId: 'event', event } };
       expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
@@ -84,12 +84,12 @@ describe('daemon turn process protocol', () => {
     }
   });
 
-  it('truncates intermediate text over the display limit at a UTF-8 boundary and rejects extra fields', () => {
+  it('accepts intermediate text over the display limit as received and rejects extra fields', () => {
     const value = { ...common, kind: 'turn_progress', turn,
       message: { kind: 'turn_text', message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) } };
     expect(parseTurnProcessMessage(value, common.launchId)).toEqual(value);
-    expect(parseTurnProcessMessage({ ...value, message: { kind: 'turn_text', message: 'あ'.repeat(Math.ceil(MAX_PROCESS_PROGRESS_BYTES / 3)) } }, common.launchId))
-      .toEqual({ ...value, message: { kind: 'turn_text', message: 'あ'.repeat(Math.floor(MAX_PROCESS_PROGRESS_BYTES / 3)) } });
+    const over = { ...value, message: { kind: 'turn_text', message: 'あ'.repeat(Math.ceil(MAX_PROCESS_PROGRESS_BYTES / 3)) } };
+    expect(parseTurnProcessMessage(over, common.launchId)).toEqual(over);
     expect(() => parseTurnProcessMessage({ ...value, message: { kind: 'turn_text', message: 'safe', input: { command: 'private' } } }, common.launchId)).toThrow();
   });
 
@@ -313,13 +313,6 @@ describe('daemon turn process protocol', () => {
     expect(() => parseDaemonProcessMessage(value, common.launchId)).toThrow();
   });
 
-  it('truncates an intermediate progress string over the display limit instead of rejecting it', () => {
-    const progress = { ...common, kind: 'turn_progress', turn, message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) };
-    expect(parseTurnProcessMessage(progress, common.launchId)).toEqual(progress);
-    expect(parseTurnProcessMessage({ ...progress, message: 'あ'.repeat(MAX_PROCESS_PROGRESS_BYTES) }, common.launchId))
-      .toEqual({ ...progress, message: 'あ'.repeat(Math.floor(MAX_PROCESS_PROGRESS_BYTES / 3)) });
-  });
-
   it('accepts business messages larger than 12 MiB in both directions, including JSON escaping', () => {
     const notification = { ...request, request: { kind: 'notify_director', notificationId: 'n', message: 'a'.repeat(13 * 1024 * 1024) } };
     expect(parseTurnProcessMessage(notification, common.launchId)).toEqual(notification);
@@ -347,6 +340,22 @@ describe('daemon turn process protocol', () => {
       connectedPorts: Array.from({ length: 33 }, (_, index) => `port-${index}`),
     } };
     expect(parseDaemonProcessMessage(delivery, common.launchId)).toEqual(delivery);
+  });
+
+  it('validates deeply nested tool input without recursion and still distinguishes a cycle', () => {
+    const root: Record<string, unknown> = {};
+    let leaf = root;
+    for (let depth = 0; depth < 20_000; depth++) {
+      const next: Record<string, unknown> = {}; leaf.next = next; leaf = next;
+    }
+    const message = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool_event', eventId: 'deep',
+      event: { type: 'tool_use', toolActivity: { callId: 'call', operationId: turn.operationId, generation: turn.generation }, data: { id: 'tool', tool: 'Read', input: root } } } };
+    expect(() => parseTurnProcessMessage(message, common.launchId)).not.toThrow();
+    leaf.next = root;
+    let failure: unknown;
+    try { parseTurnProcessMessage(message, common.launchId); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(RangeError);
   });
 
   it('accepts deep and wide JSON data and shared references but rejects non-JSON values and cycles', () => {

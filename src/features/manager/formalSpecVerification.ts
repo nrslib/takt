@@ -13,9 +13,10 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { AgentResponse } from '../../core/models/response.js';
-import { createTurnActivityReporter } from './turnActivity.js';
+import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
 import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 
 function assertSuccess(response: AgentResponse): void {
   if (response.status === 'done') return;
@@ -25,6 +26,7 @@ function assertSuccess(response: AgentResponse): void {
 
 export async function verifyManagerConversation(
   cwd: string, plan: ManagerConversationPlan, input: ManagerTurnInput, configuration: ResolvedFormalSpecConfiguration & { repositoryDirectory: string },
+  identify: (event: ToolActivityEvent) => ToolActivityEvent,
 ) {
   const { ctx } = plan;
   const unchanged = { summary: null, sessionId: input.sessionId, assignment: input.assignment };
@@ -35,13 +37,7 @@ export async function verifyManagerConversation(
     sessionId: input.sessionId, abortSignal: input.abortSignal,
     permissionMode: 'readonly' as const, internalAgentIsolation: 'strict-readonly' as const,
     callerManagedSession: true as const,
-    onStream: (event: Parameters<typeof reporter.onStream>[0]) => {
-      input.onProviderOutput?.();
-      if (!input.abortSignal.aborted) reporter.onStream(event);
-      if (!input.abortSignal.aborted && (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output')) {
-        input.onToolEvent?.(event);
-      }
-    },
+    onStream: (raw: Parameters<typeof reporter.onStream>[0]) => { reportManagerStream(raw, identify, reporter, input); },
   };
   const generator = ctx.provider.setup({ name: 'manager', systemPrompt: [
     buildFormalSpecGenerationSystemPrompt(ctx.lang),

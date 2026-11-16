@@ -154,7 +154,7 @@ it.each(retiredObservations)('applies and settles the saved $kind result across 
     const settlementFailure = new Error('Settlement unavailable');
     if (restart === 0) vi.spyOn(store, 'markSettled').mockRejectedValueOnce(settlementFailure);
     const owner = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
-      new DaemonNotifications(directory), async () => {}, errors);
+      new DaemonNotifications(directory), async () => {}, errors, store);
     const apply = vi.spyOn(owner, 'apply');
     const runner = new ControlledTurnRunner();
     const dispatcher = await createDaemonDispatcher({ store, conversations: owner, runner,
@@ -185,7 +185,7 @@ it('does not issue stalled observations for real pending inquiries after weeks o
   await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
   const errors = vi.fn();
   const conversations = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
-    new DaemonNotifications(directory), async () => {}, errors);
+    new DaemonNotifications(directory), async () => {}, errors, { readTurns: async () => [] });
   const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Pending human answer',
     status: 'pending', recipient: 'human', createdAt: '2020-01-01T00:00:00Z' };
   const inquiryPath = join(directory, 'projects', projectKey(repository), 'inquiries', `${question.id}.json`);

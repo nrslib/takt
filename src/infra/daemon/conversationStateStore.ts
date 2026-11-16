@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { opendir, rm } from 'node:fs/promises';
+import { opendir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
@@ -10,7 +10,8 @@ import { ApprovalSchema, ConversationAgentOverridesSchema, ConversationIdSchema,
   PendingSummarySchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
 import { appendPrivateFile, ensurePrivateDirectory, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
-import { ToolActivityEntrySchema, ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
+import { ManagerToolActivityEntrySchema } from '../../shared/tool-activity/schema.js';
+import { limitToolOutput, SAVED_TOOL_OUTPUT_BYTES } from '../../shared/tool-activity/outputLimit.js';
 import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 const MAX_RECEIPTS = 32;
@@ -33,8 +34,7 @@ const receipt = z.union([
   z.object({ turn: StoredTurnSchema, change: ConversationChangeSchema, version }).strict(),
   z.object({ turn: StoredTurnSchema, change: receiptChange, version }).strict(),
 ]);
-// ツール履歴を会話ファイルに持っていた形式も読めるようにする。その履歴は使わず、次の保存で消える。
-const metadata = z.object({ version, receipts: z.array(receipt), toolHistory: z.unknown().optional() }).strict().superRefine((value, context) => {
+const metadata = z.object({ version, receipts: z.array(receipt) }).strict().superRefine((value, context) => {
   const operations = new Set<string>();
   if (value.version < value.receipts.length) context.addIssue({ code: 'custom', message: 'Conversation receipt count does not match version' });
   for (const [index, entry] of value.receipts.entries()) {
@@ -44,19 +44,12 @@ const metadata = z.object({ version, receipts: z.array(receipt), toolHistory: z.
     operations.add(entry.change.operationId);
   }
 });
-type StoredMetadata = Omit<z.infer<typeof metadata>, 'toolHistory'>;
 interface StoredConversation {
   record: ConversationRecord;
-  metadata: StoredMetadata;
+  metadata: z.infer<typeof metadata>;
 }
-// ツール履歴ファイルは 1 行 1 記録。ターンの開始、変わった entry、確定の順に並ぶ。
-// 以前は change にイベント ID も書いていた。そのファイルも読めるようにし、イベント ID は使わない。
-const toolHistoryRecord = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('turn'), operationId: id, generation: version }).strict(),
-  z.object({ kind: z.literal('change'), eventIds: z.array(id).optional(), sequence: version, entries: z.array(ToolActivityEntrySchema) }).strict(),
-  z.object({ kind: z.literal('finished') }).strict(),
-]);
-type ToolHistoryRecord = z.infer<typeof toolHistoryRecord>;
+const completedToolRecord = z.object({ kind: z.literal('completed'),
+  entry: ManagerToolActivityEntrySchema.refine((entry) => entry.status !== 'running') }).strict();
 
 function receiptChangeFor(change: ConversationChange): z.infer<typeof receiptChange> | ConversationChange {
   const { interruptedMessage, ...fields } = change;
@@ -95,9 +88,9 @@ export class ConversationStateStore {
     const { daemonState, ...raw } = value as Record<string, unknown>;
     const record = ConversationRecordSchema.parse(raw);
     if (record.id !== id) throw new Error('Stored conversation identity mismatch');
-    const parsed = daemonState === undefined ? { version: 0, receipts: [] } : metadata.parse(daemonState);
-    if (parsed.receipts.some((entry) => entry.turn.conversationId !== id)) throw new Error('Conversation receipt belongs to another conversation');
-    return { record, metadata: { version: parsed.version, receipts: parsed.receipts } };
+    const state = daemonState === undefined ? { version: 0, receipts: [] } : metadata.parse(daemonState);
+    if (state.receipts.some((entry) => entry.turn.conversationId !== id)) throw new Error('Conversation receipt belongs to another conversation');
+    return { record, metadata: state };
   }
 
   private state(stored: StoredConversation): ConversationTurnState {
@@ -115,52 +108,42 @@ export class ConversationStateStore {
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
   }
 
-  async readToolHistory(id: string): Promise<ToolActivityTurnState | undefined> {
+  async readToolHistories(id: string): Promise<ToolActivityTurnState[]> {
     const content = await readEntirePrivateFile(this.toolHistoryPath(id));
-    if (content === undefined) return undefined;
+    if (content === undefined) return [];
     const lines = content.toString('utf8').split('\n');
-    // 改行で終わっていない最後の行は、追記の途中で止まった記録なので読まない。
     lines.pop();
-    const [header, ...records] = lines.map((line) => toolHistoryRecord.parse(JSON.parse(line)));
-    if (header?.kind !== 'turn') throw new Error('Tool history file does not start with its turn');
-    const entries = new Map<string, ToolActivityEntry>();
-    let sequence = 0;
-    let finished = false;
-    for (const record of records) {
-      if (record.kind === 'turn' || finished) throw new Error('Invalid tool history record order');
-      if (record.kind === 'finished') { finished = true; continue; }
-      sequence = record.sequence;
-      for (const entry of record.entries) entries.set(entry.key, entry);
+    const turns = new Map<string, ToolActivityTurnState>();
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      let raw: unknown;
+      // mainのセッションJSONL読取と同じく、途切れたJSON行は読み飛ばす。
+      try { raw = JSON.parse(line) as unknown; }
+      catch { continue; }
+      const parsed = completedToolRecord.safeParse(raw);
+      if (!parsed.success) continue;
+      const entry = parsed.data.entry;
+      const { operationId, generation } = entry.context;
+      if (operationId === undefined || generation === undefined) continue;
+      const key = JSON.stringify([operationId, generation]);
+      let turn = turns.get(key);
+      if (turn === undefined) {
+        turn = { operationId, generation, finished: true, history: { entries: [] } };
+        turns.set(key, turn);
+      }
+      if (!turn.history.entries.some((saved) => saved.key === entry.key)) turn.history.entries.push(entry);
     }
-    return ToolActivityTurnStateSchema.parse({ operationId: header.operationId, generation: header.generation, finished,
-      history: { entries: [...entries.values()], sequence } });
+    return [...turns.values()];
   }
 
-  /** 新しいターンの履歴を始める。前のターンの履歴は置き換わる。 */
-  async startToolHistory(turn: TurnIdentity): Promise<void> {
-    const record: ToolHistoryRecord = { kind: 'turn', operationId: turn.operationId, generation: turn.generation };
-    await writePrivateFile(this.toolHistoryPath(turn.conversationId), `${JSON.stringify(record)}\n`);
-  }
-
-  /** startToolHistory 後の変更を、履歴全体を読み書きせずに追記する。 */
-  async appendToolHistory(conversationId: string, change: { sequence: number; entries: ToolActivityEntry[] }): Promise<void> {
-    const record: ToolHistoryRecord = { kind: 'change', sequence: change.sequence, entries: change.entries };
-    await appendPrivateFile(this.toolHistoryPath(conversationId), `${JSON.stringify(record)}\n`);
-  }
-
-  /** 確定した履歴で、追記してきたファイルを置き換える。 */
-  async writeToolHistory(conversationId: string, state: ToolActivityTurnState): Promise<void> {
-    const saved = ToolActivityTurnStateSchema.parse(state);
-    const records: ToolHistoryRecord[] = [
-      { kind: 'turn', operationId: saved.operationId, generation: saved.generation },
-      { kind: 'change', sequence: saved.history.sequence, entries: saved.history.entries },
-      ...(saved.finished ? [{ kind: 'finished' as const }] : []),
-    ];
-    await writePrivateFile(this.toolHistoryPath(conversationId), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
-  }
-
-  async removeToolHistory(conversationId: string): Promise<void> {
-    await rm(this.toolHistoryPath(conversationId), { force: true });
+  async appendCompletedTool(turn: TurnIdentity, entry: ToolActivityEntry): Promise<void> {
+    const hasResult = entry.result !== undefined && entry.result !== '';
+    const output = hasResult ? '' : limitToolOutput(entry.output, SAVED_TOOL_OUTPUT_BYTES);
+    const result = entry.result === undefined ? undefined : limitToolOutput(entry.result, SAVED_TOOL_OUTPUT_BYTES);
+    const record = completedToolRecord.parse({ kind: 'completed', entry: { ...entry, output, ...(result === undefined ? {} : { result }) } });
+    await ensurePrivateDirectory(this.toolHistoryDirectory);
+    // 前の追記が途中で失敗していても、新しい記録を同じ行へ連結しない。
+    await appendPrivateFile(this.toolHistoryPath(turn.conversationId), `\n${JSON.stringify(record)}\n`);
   }
 
   async *iterate(): AsyncGenerator<ConversationRecord> {
@@ -237,7 +220,7 @@ export class ConversationStateStore {
         const savedChange = receiptChangeFor(change);
         const receipts = [...stored.metadata.receipts, { turn: identity, change: savedChange, version: nextVersion }].slice(-MAX_RECEIPTS);
         while (receipts.length > 1 && Buffer.byteLength(JSON.stringify(receipts)) > MAX_RECEIPT_BYTES) receipts.shift();
-        await this.write({ record: checked.data, metadata: { version: nextVersion,
+        await this.write({ record: checked.data, metadata: { ...stored.metadata, version: nextVersion,
           receipts } }, signal);
         return committed = { kind: 'state_saved', version: nextVersion, duplicate: false };
       }, { signal, timeoutMs: 5000 });

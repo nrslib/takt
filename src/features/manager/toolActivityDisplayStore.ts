@@ -1,86 +1,68 @@
 import type { ConversationIpcClient } from './conversationIpcClient.js';
-import type { ToolActivityTurnUpdate } from '../../shared/tool-activity/types.js';
 import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 
 type ToolActivityClient = Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput'>;
-
 export function toolTurnKey(turn: { operationId: string; generation?: number }): string {
   return JSON.stringify([turn.operationId, turn.generation]);
 }
+export interface ShownToolActivity { readonly display: ToolActivityDisplay; readonly ready: boolean }
 
-/** 表示中のツール履歴。display は差分の適用で中身が変わるので、変わるたびに新しい値として公開する。 */
-export interface ShownToolActivity {
-  readonly display: ToolActivityDisplay;
-}
-
-interface Shown {
-  readonly turn: string | undefined;
-  readonly withRunning: boolean;
-  readonly value: ShownToolActivity;
-}
-
-function emptyDisplay(): ToolActivityDisplay {
-  return new ToolActivityDisplay('silent', false, () => {}, false);
-}
-
-/**
- * 会話クライアントが確定したツール履歴を、表示用の ToolActivityDisplay として持ち続ける外部ストア。
- * 差分は手元の表示へ適用し、ターンの切り替え・再接続・確定で起点が合わなくなったときだけ、確定した履歴全体から作り直す。
- */
 export class ToolActivityDisplayStore {
-  private shown: Shown = { turn: undefined, withRunning: false, value: { display: emptyDisplay() } };
+  private value: ShownToolActivity = { display: new ToolActivityDisplay('silent', false, () => {}, false, true), ready: false };
   private readonly listeners = new Set<() => void>();
   private detach: (() => void) | undefined;
+  /** 表示中のターン。idle になっても、次のターンが始まるまで直前のターンを表示する（main と同じ）。 */
+  private shown: string | undefined;
+  private initialReadComplete = false;
 
   constructor(private readonly client: ToolActivityClient) {}
 
+  getSnapshot = (): ShownToolActivity => this.value;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     if (this.detach === undefined) {
-      const unsubscribeState = this.client.subscribe(() => this.notify());
-      const unsubscribeOutput = this.client.onOutput((output) => {
-        if (output.kind === 'tool_history_update') this.apply(output.update);
+      const observe = (): void => {
+        const snapshot = this.client.getSnapshot();
+        if (snapshot.connection !== 'connected') this.initialReadComplete = false;
+        else if (snapshot.readStatus === 'complete') this.initialReadComplete = true;
+        const ready = snapshot.connection === 'connected' && this.initialReadComplete;
+        const running = snapshot.state?.running;
+        const turn = running == null ? undefined : toolTurnKey(running);
+        const entries = this.value.display.history.entries();
+        if (!ready || turn !== undefined && turn !== this.shown) {
+          this.shown = turn;
+          this.value = { display: new ToolActivityDisplay('silent', false, () => {}, false, true), ready };
+        } else if (turn === undefined && entries.some((entry) => entry.status === 'running')) {
+          const display = new ToolActivityDisplay('silent', false, () => {}, false, true);
+          for (const entry of entries) if (entry.status !== 'running') display.upsert(entry);
+          this.value = { display, ready };
+        } else this.value = { ...this.value, ready };
+        if (ready && snapshot.readStatus === 'complete') {
+          const histories = snapshot.items.flatMap((item) => item.kind === 'tool_history' ? [item.history] : []);
+          const history = turn === undefined ? histories.at(-1) : histories.find((candidate) => toolTurnKey(candidate) === turn);
+          if (history !== undefined && (this.shown === undefined || this.shown === toolTurnKey(history))) {
+            this.shown = toolTurnKey(history);
+            for (const entry of history.history.entries) {
+              if (entry.status === 'running' && turn === undefined) continue;
+              if (this.value.display.history.get(entry.key) === undefined) this.value.display.upsert(entry);
+            }
+          }
+        }
+        this.notify();
+      };
+      const state = this.client.subscribe(observe);
+      const output = this.client.onOutput((event) => {
+        if (event.kind === 'tool_started') this.value.display.upsert(event.entry);
+        else if (event.kind === 'tool_output') this.value.display.appendOutput(event.key, event.text, event.tail ?? '');
+        else if (event.kind === 'tool_completed') this.value.display.upsert(event.entry);
+        else return;
+        this.value = { ...this.value };
+        this.notify();
       });
-      this.detach = () => { unsubscribeState(); unsubscribeOutput(); };
+      this.detach = () => { state(); output(); };
+      observe();
     }
-    return () => {
-      this.listeners.delete(listener);
-      if (this.listeners.size > 0) return;
-      this.detach?.();
-      this.detach = undefined;
-    };
+    return () => { this.listeners.delete(listener); if (this.listeners.size === 0) { this.detach?.(); this.detach = undefined; this.initialReadComplete = false; } };
   };
-
-  /** クライアントの現在の状態に合う表示を返す。表示が合っていれば同じ値を返す。 */
-  getSnapshot = (): ShownToolActivity => {
-    const snapshot = this.client.getSnapshot();
-    const running = snapshot.state?.running;
-    const tools = snapshot.items.find((item) => item.kind === 'tool_history')?.history;
-    const history = tools !== undefined && (running == null
-      || tools.operationId === running.operationId && tools.generation === running.generation) ? tools : undefined;
-    const turn = history === undefined ? undefined : toolTurnKey(history);
-    const withRunning = history !== undefined && !history.finished && running != null;
-    const shown = this.shown;
-    // クライアントは差分を配送してから確定した状態を公開するので、その間は表示の方が先に進んでいる。
-    if (shown.turn === turn && shown.withRunning === withRunning
-      && (history === undefined || shown.value.display.history.currentSequence >= history.history.sequence)) return shown.value;
-    const display = emptyDisplay();
-    if (history !== undefined) {
-      display.restore({ ...history.history, entries: history.history.entries.filter((entry) => entry.status !== 'running' || withRunning) });
-    }
-    this.shown = { turn, withRunning, value: { display } };
-    return this.shown.value;
-  };
-
-  private apply(update: ToolActivityTurnUpdate): void {
-    const shown = this.shown;
-    // 起点が合わない差分は適用しない。確定した履歴が届いた時点で、getSnapshot が履歴全体から作り直す。
-    if (!shown.withRunning || shown.turn !== toolTurnKey(update) || !shown.value.display.applyUpdate(update)) return;
-    this.shown = { ...shown, value: { display: shown.value.display } };
-    this.notify();
-  }
-
-  private notify(): void {
-    for (const listener of this.listeners) listener();
-  }
+  private notify(): void { for (const listener of this.listeners) listener(); }
 }

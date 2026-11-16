@@ -36,7 +36,7 @@ The bottom status line shows the assignment name, counts of ongoing goals (activ
 Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
 ```text
-Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^O Epics  ^C Exit
+Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^T Epics  ^C Exit
 Assignment: takt | Ongoing 1 / Pending 0
 ```
 
@@ -153,7 +153,7 @@ A running verification left after restart is neither treated as success nor auto
 
 ### Reading Epics in the TUI
 
-Press `Ctrl+O` for the Epic list, use `↑↓` to choose, and `Enter` for details. Active, completed, and aborted Epics remain available. The list shows objectives, states, completed-member counts, current evidence, and verification or invalidation summaries. Details show repository and goal identities, fixed targetSha values, member states, verification results and history, invalidation reasons, and result-confirmation or recovery work. When unassignment prevents reading a member's current state, it is shown as unavailable while saved history remains.
+Press `Ctrl+T` for the Epic list, use `↑↓` to choose, and `Enter` for details. Active, completed, and aborted Epics remain available. The list shows objectives, states, completed-member counts, current evidence, and verification or invalidation summaries. Details show repository and goal identities, fixed targetSha values, member states, verification results and history, invalidation reasons, and result-confirmation or recovery work. When unassignment prevents reading a member's current state, it is shown as unavailable while saved history remains.
 
 Scroll long details with `↑↓`, `PageUp`/`PageDown`, or `Home`/`End`. `Esc` returns from details to the list and from the list to the conversation. `Ctrl+R`/`Ctrl+G` switches to the existing menus while retaining your unsent conversation draft. Within Epic browsing, `Enter` and `Esc` navigate rather than sending a message or interrupting the running turn.
 

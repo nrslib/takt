@@ -6,6 +6,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import type { DaemonIngress } from '../core/daemon/ports.js';
 import type { ConversationSnapshot } from '../core/daemon/messages.js';
 import type { Admission } from '../core/daemon/events.js';
+import type { SnapshotRead } from '../features/manager/conversationPort.js';
 import { ToolActivityHistory } from '../shared/tool-activity/history.js';
 
 function gate<T>() {
@@ -20,14 +21,15 @@ async function fixture() {
     revision: 3, stateSequence: 5, operationId: '11111111-1111-4111-8111-111111111111', generation: 7, mode: 'initial', complete: vi.fn(), cancel: vi.fn(),
     turnState: { version: 1, assignment: selected.assignment, session: { provider: 'mock', model: null, sessionId: null }, revision: 3, pending: null, approval: null },
     items: (async function* () { yield { kind: 'state' as const, state: { conversationId: selected.conversationId, assignment: selected.assignment,
-      revision: 3, pending: null, approval: null, running: { operationId: '11111111-1111-4111-8111-111111111111', kind: 'message' }, interrupted: false } }; })() });
+      revision: 3, pending: null, approval: null, running: { operationId: '11111111-1111-4111-8111-111111111111', kind: 'message', generation: 7 }, interrupted: false } }; })() });
+  const loadSnapshot = vi.fn(async () => snapshot());
   const ingress: DaemonIngress = { accept: vi.fn().mockResolvedValue({ kind: 'accepted', eventId: 'event', operationId: 'queued', acceptedSequence: 2 }),
-    snapshot: vi.fn(async () => snapshot()), control: vi.fn().mockResolvedValue({ kind: 'interrupted' }) };
+    snapshot: vi.fn(async (_id, request) => { const read = await loadSnapshot(); request?.capture?.(read); return read; }), control: vi.fn().mockResolvedValue({ kind: 'interrupted' }) };
   const port = createDaemonConversationInput({ ingress, resolveAssignment: async (assignment) => assignment });
   const opened = await port.open({ ...selected, agentOverrides: { provider: 'codex', model: 'selected-model' } }, delivery);
   const submit = (text: string, requestId: string) => port.submit({ attachmentId: opened.attachmentId, requestId, speaker: selected.speaker,
     command: { kind: 'message', text } });
-  return { port, ingress, selected, opened, submit, delivery };
+  return { port, ingress, loadSnapshot, selected, opened, submit, delivery };
 }
 it('admits messages while an earlier save is paused and permits snapshot and interruption independently', async () => {
   const f = await fixture();
@@ -56,8 +58,8 @@ it.each(['tui', 'slack'] as const)('exposes tool history through live output and
   const source = new ToolActivityHistory();
   source.apply({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: { command: 'private-tool-input' } },
     toolActivity: { callId: 'call', operationId: snapshot.operationId!, generation: snapshot.generation! } });
-  const history = { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false, history: source.snapshot() };
-  vi.mocked(f.ingress.snapshot).mockImplementation(async () => ({ ...snapshot, items: (async function* () {
+  const history = { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false, history: { entries: source.entries() } };
+  f.loadSnapshot.mockImplementation(async () => ({ ...snapshot, items: (async function* () {
     yield { kind: 'tool_history' as const, history };
   })() }));
   const delivery = { deliver: vi.fn(async () => ({ kind: 'delivered' as const })) };
@@ -66,50 +68,16 @@ it.each(['tui', 'slack'] as const)('exposes tool history through live output and
   for await (const item of opened.read.items) items.push(item);
   opened.read.complete();
   expect(items.filter((item) => item.kind === 'tool_history')).toEqual(port === 'tui' ? [{ kind: 'tool_history', history }] : []);
-  const output = { kind: 'tool_history' as const, history };
+  const entry = history.history.entries[0]!;
+  const outputs = [
+    { kind: 'tool_started' as const, entry },
+    { kind: 'tool_output' as const, key: entry.key, text: 'private-tool-output\n', tail: 'private-tool-tail' },
+    { kind: 'tool_completed' as const, entry: { ...entry, status: 'success' as const, result: 'private-result-marker' } },
+  ];
   const version = { revision: 3, stateSequence: 6, operationId: history.operationId };
-  await f.port.deliver(f.selected.conversationId, output, version);
-  const update = { kind: 'tool_history_update' as const, update: { operationId: history.operationId, generation: history.generation,
-    previousSequence: 0, sequence: history.history.sequence, entries: history.history.entries } };
-  await f.port.deliver(f.selected.conversationId, update, { ...version, stateSequence: 7 });
-  if (port === 'tui') {
-    expect(delivery.deliver.mock.calls).toEqual([[f.selected.conversationId, output, version],
-      [f.selected.conversationId, update, { ...version, stateSequence: 7 }]]);
-  } else expect(delivery.deliver).not.toHaveBeenCalled();
-  f.port.close();
-});
-
-it('sends tool history on open and on a requested read but not on periodic refreshes, without removing it from the client', async () => {
-  const f = await fixture(); f.opened.read.cancel();
-  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
-  const source = new ToolActivityHistory();
-  const toolActivity = { callId: 'call', operationId: snapshot.operationId!, generation: snapshot.generation! };
-  const states = Array.from({ length: 6 }, (_, index) => {
-    source.apply({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: `${index}\n` }, toolActivity });
-    return { operationId: snapshot.operationId!, generation: snapshot.generation!, finished: false, history: source.snapshot() };
-  });
-  let current = 0;
-  vi.mocked(f.ingress.snapshot).mockImplementation(async () => {
-    const history = states[current]!;
-    return { ...snapshot, items: (async function* () { yield { kind: 'tool_history' as const, history }; })() };
-  });
-  const delivery = { deliver: vi.fn(async () => ({ kind: 'delivered' as const })) };
-  const read = async (value: Awaited<ReturnType<typeof f.port.snapshot>>) => {
-    const items = [];
-    for await (const item of value.items) items.push(item);
-    value.complete();
-    return items.filter((item) => item.kind === 'tool_history' || item.kind === 'remove' && item.key === 'tool_history');
-  };
-  const opened = await f.port.open(f.selected, delivery);
-  expect(await read(opened.read)).toEqual([{ kind: 'tool_history', history: states[0] }]);
-  for (const index of [1, 2, 3]) {
-    current = index;
-    expect(await read(await f.port.snapshot(opened.attachmentId))).toEqual([]);
-  }
-  current = 4;
-  expect(await read(await f.port.snapshot(opened.attachmentId, { toolHistory: true }))).toEqual([{ kind: 'tool_history', history: states[4] }]);
-  current = 5;
-  expect(await read(await f.port.snapshot(opened.attachmentId))).toEqual([]);
+  for (const output of outputs) await f.port.deliver(f.selected.conversationId, output, version);
+  if (port === 'tui') expect(delivery.deliver.mock.calls).toEqual(outputs.map((output) => [f.selected.conversationId, output, version]));
+  else expect(delivery.deliver).not.toHaveBeenCalled();
   f.port.close();
 });
 
@@ -120,7 +88,7 @@ it('delivers activity only to TUI attachments of the same conversation', async (
   const slackOpen = await f.port.open({ ...f.selected, binding: { ...f.selected.binding, port: 'slack' } }, slack);
   const otherSelected = await createTuiConversationPort('/config', other).resolve({ kind: 'repository', repositoryDirectory: '/other' });
   const snapshot = await f.ingress.snapshot(f.selected.conversationId);
-  vi.mocked(f.ingress.snapshot).mockResolvedValueOnce({ ...snapshot, conversationId: otherSelected.conversationId,
+  f.loadSnapshot.mockResolvedValueOnce({ ...snapshot, conversationId: otherSelected.conversationId,
     turnState: { ...snapshot.turnState, assignment: otherSelected.assignment },
     items: (async function* () { yield { kind: 'state' as const, state: {
       conversationId: otherSelected.conversationId, assignment: otherSelected.assignment,
@@ -148,13 +116,17 @@ it('replays only the latest activity once after a new TUI finishes its initial r
   await f.port.deliver(f.selected.conversationId, { ...output, activity: { kind: 'thinking' } }, { ...version, stateSequence: 6 });
   const tui = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
   const slack = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
+  const queued: SnapshotRead[] = [];
+  const enqueueSnapshot = (read: SnapshotRead): void => { queued.push(read); };
   for (const [port, delivery] of [['tui', tui], ['slack', slack]] as const) {
-    const opened = await f.port.open({ ...f.selected, binding: { ...f.selected.binding, port } }, delivery);
+    const opened = await f.port.open({ ...f.selected, binding: { ...f.selected.binding, port } }, delivery, enqueueSnapshot);
+    const read = queued.at(-1)!;
     expect(delivery.deliver).not.toHaveBeenCalled();
-    for await (const _item of opened.read.items) { /* 初期状態の配送完了を再現する。 */ }
-    opened.read.complete();
-    opened.read.complete();
-    const refresh = await f.port.snapshot(opened.attachmentId);
+    for await (const _item of read.items) { /* 初期状態の配送完了を再現する。 */ }
+    read.complete();
+    read.complete();
+    await f.port.snapshot(opened.attachmentId, { enqueueSnapshot });
+    const refresh = queued.at(-1)!;
     for await (const _item of refresh.items) { /* 定期更新では再送しない。 */ }
     refresh.complete();
   }
@@ -181,14 +153,16 @@ it.each(['pending', 'result', 'running', 'generation', 'cancelled', 'detached'] 
         result: { kind: 'reply', message: 'done' } }, version);
     } else if (change === 'generation') {
       const snapshot = await f.ingress.snapshot(f.selected.conversationId);
-      vi.mocked(f.ingress.snapshot).mockResolvedValueOnce({ ...snapshot, generation: 8 });
+      f.loadSnapshot.mockResolvedValueOnce({ ...snapshot, generation: 8 });
     }
     const delivery = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
-    const opened = await f.port.open(f.selected, delivery);
-    for await (const _item of opened.read.items) { /* 初期状態の配送完了を再現する。 */ }
-    if (change === 'cancelled') opened.read.cancel();
+    const queued: SnapshotRead[] = [];
+    const opened = await f.port.open(f.selected, delivery, (read) => { queued.push(read); });
+    const [read] = queued;
+    for await (const _item of read!.items) { /* 初期状態の配送完了を再現する。 */ }
+    if (change === 'cancelled') read!.cancel();
     if (change === 'detached') f.port.detach(opened.attachmentId);
-    opened.read.complete();
+    read!.complete();
     expect(delivery.deliver).not.toHaveBeenCalled();
     f.port.close();
   },
@@ -197,13 +171,15 @@ it.each(['pending', 'result', 'running', 'generation', 'cancelled', 'detached'] 
 it('does not replay an activity that was already delivered while the initial snapshot was being read', async () => {
   const f = await fixture();
   const delivery = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
-  const opened = await f.port.open(f.selected, delivery);
+  const queued: SnapshotRead[] = [];
+  await f.port.open(f.selected, delivery, (read) => { queued.push(read); });
   const output = { kind: 'activity' as const, operationId: '11111111-1111-4111-8111-111111111111', generation: 7,
     activity: { kind: 'tool' as const, tool: 'CurrentTool' } };
   const version = { revision: 3, stateSequence: 6, operationId: output.operationId };
   await f.port.deliver(f.selected.conversationId, output, version);
-  for await (const _item of opened.read.items) { /* 初期状態の配送完了を再現する。 */ }
-  opened.read.complete();
+  const [read] = queued;
+  for await (const _item of read!.items) { /* 初期状態の配送完了を再現する。 */ }
+  read!.complete();
   expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
   f.port.close();
 });
@@ -217,17 +193,22 @@ it('replays cached activity after a cancelled initial read succeeds on retry, wi
   const version = { revision: 3, stateSequence: 6, operationId: output.operationId };
   await f.port.deliver(f.selected.conversationId, output, version);
   const delivery = { deliver: vi.fn().mockResolvedValue({ kind: 'delivered' }) };
-  const opened = await f.port.open(f.selected, delivery);
-  for await (const _item of opened.read.items) { /* 最後のフレームの配送失敗を再現する。 */ }
-  opened.read.cancel();
-  opened.read.complete();
+  const queued: SnapshotRead[] = [];
+  const enqueueSnapshot = (read: SnapshotRead): void => { queued.push(read); };
+  const opened = await f.port.open(f.selected, delivery, enqueueSnapshot);
+  const initial = queued.at(-1)!;
+  for await (const _item of initial.items) { /* 最後のフレームの配送失敗を再現する。 */ }
+  initial.cancel();
+  initial.complete();
   expect(delivery.deliver).not.toHaveBeenCalled();
-  const retry = await f.port.snapshot(opened.attachmentId);
+  await f.port.snapshot(opened.attachmentId, { enqueueSnapshot });
+  const retry = queued.at(-1)!;
   for await (const _item of retry.items) { /* 再取得した状態の配送完了を再現する。 */ }
   retry.complete();
   retry.complete();
   expect(delivery.deliver).toHaveBeenCalledExactlyOnceWith(f.selected.conversationId, output, version);
-  const refresh = await f.port.snapshot(opened.attachmentId);
+  await f.port.snapshot(opened.attachmentId, { enqueueSnapshot });
+  const refresh = queued.at(-1)!;
   for await (const _item of refresh.items) { /* 定期更新では再送しない。 */ }
   refresh.complete();
   expect(delivery.deliver).toHaveBeenCalledOnce();
@@ -255,7 +236,7 @@ it('admits approval with its revision and routes inquiry answers to the human qu
   const snapshot = await f.ingress.snapshot(f.selected.conversationId);
   snapshot.turnState.pending = { revision: 3, repositoryDirectory: '/repo',
     summary: { objective: 'Current proposal', outOfScope: [], acceptanceCriteria: ['Ready'], constraints: [] } };
-  vi.mocked(f.ingress.snapshot).mockResolvedValueOnce(snapshot);
+  f.loadSnapshot.mockResolvedValueOnce(snapshot);
   await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'approval', speaker: f.selected.speaker,
     command: { kind: 'approve_summary', revision: 3, requirePending: true } });
   expect(f.ingress.accept).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'human_command',
@@ -297,7 +278,7 @@ it('does not resend a rejected director message or submit after cancellation', a
   expect(request).toHaveBeenCalledOnce();
 });
 
-it('limits progress per attachment while always delivering final results to both slow and fast attachments', async () => {
+it('awaits each progress delivery and delivers the final result to both slow and fast attachments', async () => {
   const f = await fixture();
   const stalled = gate<void>();
   const slow = { deliver: vi.fn(async () => { await stalled.promise; return { kind: 'delivered' as const }; }) };
@@ -309,26 +290,7 @@ it('limits progress per attachment while always delivering final results to both
   await Promise.resolve(); await Promise.resolve();
   const final = f.port.deliver(f.selected.conversationId, { kind: 'result', operationId: version.operationId,
     result: { kind: 'reply', message: 'final' } }, version);
-  expect(slow.deliver).toHaveBeenCalledTimes(33);
+  expect(slow.deliver).toHaveBeenCalledTimes(41);
   expect(f.delivery.deliver).toHaveBeenLastCalledWith(f.selected.conversationId, expect.objectContaining({ kind: 'result' }), version);
   stalled.resolve(); await Promise.all([...progress, final]); f.port.close();
-});
-
-it('forwards the latest activity even when the attachment has reached its progress limit', async () => {
-  const f = await fixture();
-  const stalled = gate<void>();
-  f.delivery.deliver.mockImplementation(async (_id, output) => {
-    if (output.kind === 'progress') await stalled.promise;
-    return { kind: 'delivered' };
-  });
-  const version = { revision: 3, stateSequence: 6, operationId: '11111111-1111-4111-8111-111111111111' };
-  const progress = Array.from({ length: 40 }, () => f.port.deliver(f.selected.conversationId,
-    { kind: 'progress', operationId: version.operationId, message: 'progress' }, version));
-  const activity = { kind: 'activity' as const, operationId: version.operationId, generation: 7,
-    activity: { kind: 'tool' as const, tool: 'LatestTool' } };
-  try {
-    await f.port.deliver(f.selected.conversationId, activity, { ...version, stateSequence: 7 });
-    expect(f.delivery.deliver).toHaveBeenCalledTimes(33);
-    expect(f.delivery.deliver).toHaveBeenLastCalledWith(f.selected.conversationId, activity, { ...version, stateSequence: 7 });
-  } finally { stalled.resolve(); await Promise.all(progress); f.port.close(); }
 });

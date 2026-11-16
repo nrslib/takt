@@ -69,12 +69,38 @@ async function open() {
   return { ...attachment, outputs, completed, submit: (text: string) => fixture.input.submit({ attachmentId: attachment.attachmentId, requestId: randomUUID(), speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text } }) };
 }
 
-type WrittenToolHistoryRecord = { kind: 'turn' } | { kind: 'change'; entries: ToolActivityEntry[] } | { kind: 'finished' };
+type WrittenToolHistoryRecord = { kind: 'completed'; entry: ToolActivityEntry };
 function writtenToolHistory(path: string, content: string | Uint8Array): WrittenToolHistoryRecord[] {
   if (!path.endsWith(join('conversation-tool-history', `${id}.jsonl`))) return [];
   const text = typeof content === 'string' ? content : Buffer.from(content).toString('utf8');
   return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as WrittenToolHistoryRecord);
 }
+
+it('restores an accepted message after detaching and settling before reattachment', async () => {
+  const release = deferred<void>();
+  execute.mockImplementationOnce(async (value) => {
+    await release.promise;
+    return { message: value.prompt, summary: null, sessionId: 'persisted-session', assignment: value.assignment };
+  });
+  const port = await open();
+  try {
+    const admission = await port.submit('message completed while disconnected');
+    if (admission.kind !== 'accepted') throw new Error('Expected acceptance');
+    fixture.input.detach(port.attachmentId);
+    release.resolve();
+    await fixture.settled();
+    const next = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
+      speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
+      async deliver() { return { kind: 'delivered' }; },
+    });
+    const items = []; for await (const item of next.read.items) items.push(item);
+    next.read.complete();
+    expect(items.filter((item) => item.kind === 'user_message')).toEqual([
+      { kind: 'user_message', operationId: admission.operationId, message: 'message completed while disconnected', acceptedSequence: 1, pending: false },
+    ]);
+    fixture.input.detach(next.attachmentId);
+  } finally { release.resolve(); }
+});
 
 it('persists the session and applies the human response to the current proposal', async () => {
   const port = await open();
@@ -86,7 +112,7 @@ it('persists the session and applies the human response to the current proposal'
   expect((await fixture.store.read(id))!.state.session.contextKey).toBe('test');
 });
 
-it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change without repeating the provider after a history %s failure', async (failure) => {
+it.each(['result', 'delivery'] as const)('preserves the acquired change without repeating the provider after a history %s failure', async (failure) => {
   const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
     options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } });
@@ -98,8 +124,7 @@ it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change
   resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
   const append = privateFiles.appendPrivateFile; let failed = false;
   vi.spyOn(privateFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
-    if (failure !== 'delivery' && !failed && writtenToolHistory(path, content).some((record) => record.kind === 'change'
-      && record.entries.some((entry) => failure === 'start' ? entry.status === 'running' : entry.status === 'success'))) {
+    if (failure !== 'delivery' && !failed && writtenToolHistory(path, content).some((record) => record.kind === 'completed' && record.entry.status === 'success')) {
       failed = true; throw new Error('Injected publication failure');
     }
     await append(path, content);
@@ -108,7 +133,7 @@ it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change
   const attachment = await fixture.input.open({ conversationId: id, assignment: { kind: 'repository', repositoryDirectory: repository },
     speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: randomUUID(), counterpart: { namespace: 'local', id: 'operator' } } }, {
     async deliver(_id, output) {
-      if (failure === 'delivery' && output.kind === 'tool_history_update' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
+      if (failure === 'delivery' && output.kind === 'tool_completed' && !failed) { failed = true; throw new Error('Injected delivery failure'); }
       if (output.kind === 'result') completed.resolve(output);
       return { kind: 'delivered' };
     },
@@ -120,48 +145,18 @@ it.each(['start', 'result', 'delivery'] as const)('preserves the acquired change
   const result = await completed.promise;
   await expect(fixture.settled()).rejects.toThrow();
   expect(failed).toBe(true);
-  expect(result.result).toMatchObject(failure === 'delivery' ? { kind: 'reply', message: 'done' } : { kind: 'error', code: 'failed' });
+  expect(result.result).toMatchObject({ kind: 'reply', message: 'done' });
   expect((await fixture.store.read(id))!.state.session.sessionId).toBe('acquired-session');
   const records = await fixture.events.restore();
   const pending = []; for await (const event of records.pending) pending.push(event);
   expect(pending).toHaveLength(0);
   expect(fixture.dispatcher.activeTurnCount).toBe(0);
   expect(call).toHaveBeenCalledOnce();
-  if (failure === 'delivery') {
-    const snapshot = await fixture.conversations.snapshot(id);
-    const items = []; for await (const item of snapshot.items) items.push(item);
-    snapshot.complete();
-    expect(items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { finished: true,
-      history: { entries: [{ status: 'success', result: 'ready' }] } } });
-  }
-});
-
-it('releases the running state and delivers the result when finishing the tool history fails', async () => {
-  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
-    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
-    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } });
-    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(), sessionId: 'acquired-session',
-      structuredOutput: { message: 'done', summary: null } };
-  });
-  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
-    provider: makeProvider({ setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
-  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
-  const write = privateFiles.writePrivateFile;
-  vi.spyOn(privateFiles, 'writePrivateFile').mockImplementation(async (path, content, signal) => {
-    if (writtenToolHistory(path, content).some((record) => record.kind === 'finished')) throw new Error('Injected finish failure');
-    await write(path, content, signal);
-  });
-  const port = await open();
-  expect(await port.submit('Read once')).toMatchObject({ kind: 'accepted' });
-  await expect(fixture.settled()).rejects.toThrow();
-  expect(fixture.failures).toContainEqual(expect.objectContaining({ message: 'Injected finish failure' }));
-  expect(port.outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: expect.objectContaining({ kind: 'reply', message: 'done' }) }));
-  expect(port.outputs).toContainEqual(expect.objectContaining({ kind: 'pending', state: expect.objectContaining({ running: null }) }));
-  const snapshot = await fixture.conversations.snapshot(id);
+  const snapshot = await fixture.conversations.snapshot(id, { toolHistory: true });
   const items = []; for await (const item of snapshot.items) items.push(item);
   snapshot.complete();
-  expect(items.find((item) => item.kind === 'state')).toMatchObject({ state: { running: null } });
-  expect((await fixture.store.read(id))!.state.session.sessionId).toBe('acquired-session');
+  expect(items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { finished: true,
+    history: { entries: [{ status: 'success', result: 'ready' }] } } });
 });
 
 it.each([1, 2])('replaces persisted history after the daemon restarts its generation counter following %s completed turns', async (previousTurns) => {
@@ -180,22 +175,23 @@ it.each([1, 2])('replaces persisted history after the daemon restarts its genera
   for (let index = 0; index < previousTurns; index++) {
     await first.submit(`Previous turn ${index}`); await fixture.settled();
   }
-  const previous = (await fixture.store.readToolHistory(id))!;
+  const previous = (await fixture.store.readToolHistories(id)).at(-1)!;
   expect(previous.history.entries).toMatchObject([{ result: `result-${previousTurns}`, status: 'success' }]);
   await fixture.close();
   fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
   const second = await open(); await second.submit('New turn after restart'); await fixture.settled();
-  const current = (await fixture.store.readToolHistory(id))!;
+  const current = (await fixture.store.readToolHistories(id)).at(-1)!;
   expect(current.operationId).not.toBe(previous.operationId);
   expect(previous.generation).toBe(previousTurns);
   expect(current.generation).toBe(1);
   expect(current).toMatchObject({ finished: true, history: { entries: [{ toolId: 'reused-tool', result: `result-${previousTurns + 1}`, status: 'success' }] } });
   expect(current.history.entries).toHaveLength(1);
-  const snapshot = await fixture.conversations.snapshot(id);
+  const snapshot = await fixture.conversations.snapshot(id, { toolHistory: true });
   const items = [];
   for await (const item of snapshot.items) items.push(item);
   snapshot.complete();
-  expect(items.find((item) => item.kind === 'tool_history')).toEqual({ kind: 'tool_history', history: current });
+  expect(items.find((item) => item.kind === 'tool_history' && item.history.operationId === current.operationId))
+    .toMatchObject({ kind: 'tool_history', history: current });
   expect((await fixture.store.read(id))!.state.session.sessionId).toBe('restored-session');
   expect(call).toHaveBeenCalledTimes(previousTurns + 1);
 });

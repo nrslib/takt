@@ -212,7 +212,7 @@ it.each(['empty', 'draft', 'proposal'] as const)('opens Epic browsing and restor
   } else await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
   const before = context.app.lastFrame();
   const pending = client.getSnapshot().state?.pending;
-  context.app.stdin.write('\x0f');
+  context.app.stdin.write('\x14');
   await waitFor(() => {
     expect(context.app.lastFrame()).toContain(getLabel('manager.epics.listTitle', 'en'));
     expect(context.app.lastFrame()).toContain(getLabel('manager.epics.workspaceRequired', 'en'));

@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import {
-  createToolActivityViewState, excludeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
-  mergeToolActivityTranscript,
+  createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
   type ToolActivityViewLabels,
 } from '../features/tui/toolActivityViewState.js';
 import type { ToolActivityGroup, ToolActivityProjection } from '../shared/tool-activity/types.js';
@@ -73,19 +72,17 @@ describe('tool activity view state', () => {
     }
   });
 
-  it('reads the detail of each entry once while laying out an expanded page', () => {
+  it('lays out the input and results of each entry in an expanded page', () => {
     const display = new ToolActivityDisplay('silent', false, vi.fn(), false);
     for (const id of ['first', 'second']) {
       display.handle({ type: 'tool_use', data: { id, tool: 'Bash', input: { command: `printf ${id} ${'long-argument '.repeat(8)}` } } });
       display.handle({ type: 'tool_result', data: { id, content: Array.from({ length: 8 }, (_, index) => `${id}-${index}`).join('\n'), isError: false } });
     }
     const groups = display.groups();
-    const detail = vi.spyOn(display, 'detail');
 
     const page = toolActivityViewPage(display, groups, toggleToolActivityView(createToolActivityViewState()), 30, 60, labels);
 
     expect(page.rows).toEqual(expect.arrayContaining(['first-0', 'first-7', 'second-0', 'second-7']));
-    expect(detail.mock.calls.map(([key]) => key)).toEqual(groups.flatMap((group) => group.entries.map((entry) => entry.key)));
   });
 
   it('moves from the latest position when consecutive page requests reuse an old render', () => {
@@ -100,164 +97,22 @@ describe('tool activity view state', () => {
     expect(thirdState.previous.at(-1)).toEqual(secondState.position);
     expect(moveToolActivityView(thirdState, stalePage, 'previous').position).toEqual(secondState.position);
   });
-
-  it.each([false, true])('retains the complete input after narrow, wide and expanded headers with expanded first=%s', (expandedFirst) => {
-    const { reader, groups } = fixture('ready');
-    const command = 'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    groups[0]!.entries[0]!.input = command;
-    const initial = createToolActivityViewState();
-    const expanded = toggleToolActivityView(initial);
-    const pages = [
-      ...(expandedFirst ? [toolActivityViewPage(reader, groups, expanded, 40, 1, labels)] : []),
-      toolActivityViewPage(reader, groups, initial, 40, 1, labels),
-      toolActivityViewPage(reader, groups, initial, 80, 1, labels),
-      toolActivityViewPage(reader, groups, expanded, 40, 1, labels),
-      toolActivityViewPage(reader, groups, initial, 40, 1, labels),
-    ];
-    expect(pages[expandedFirst ? 1 : 0]!.rows[0]).toMatch(/…$/u);
-    const retained = pages.reduce((ranges, page) => mergeToolActivityTranscript(ranges, page.transcript ?? []), [] as NonNullable<typeof pages[0]['transcript']>[number][]);
-    expect(retained.map((range) => range.text)).toEqual([`✓ Bash Ran ${command}`]);
-    expect(reader.detail).not.toHaveBeenCalled();
-  });
-  it('preserves an ellipsis from the original input across narrow and wide display', () => {
-    const { reader, groups } = fixture('ready');
-    groups[0]!.entries[0]!.input = "printf '途中…完了'";
-    const state = createToolActivityViewState();
-    const narrow = toolActivityViewPage(reader, groups, state, 19, 1, labels);
-    const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
-    expect(mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []).map((range) => range.text))
-      .toEqual(["✓ Bash Ran printf '途中…完了'"]);
-  });
-  it('retains full timestamps after a compact row and all finite expanded pages', () => {
-    const { reader, groups } = fixture('ready');
-    Object.assign(groups[0]!.entries[0]!, { startedAt: 1794440000000, completedAt: 1794440000250 });
-    const initial = createToolActivityViewState();
-    const compact = toolActivityViewPage(reader, groups, initial, 32, 2, labels);
-    expect(compact.rows[1]).toMatch(/…$/u);
-    let retained = mergeToolActivityTranscript([], compact.transcript ?? []);
-    let state = toggleToolActivityView(initial);
-    for (let index = 0; index < 30; index++) {
-      const page = toolActivityViewPage(reader, groups, state, 32, 2, labels);
-      retained = mergeToolActivityTranscript(retained, page.transcript ?? []);
-      if (!page.hasMore) break;
-      state = moveToolActivityView(state, page, 'next');
-    }
-    const timing = retained.filter((range) => range.key === JSON.stringify(['a', 'time'])).map((range) => range.text);
-    expect(timing).toHaveLength(1);
-    expect(timing[0]).toMatch(/^success @\d{2}:\d{2}:\d{2} → @\d{2}:\d{2}:\d{2} \(250 ms\) completion #2$/u);
-  });
-  it.each(['group', 'groupOmission', 'omission'] as const)('separates display omission from the source of %s rows', (section) => {
-    const { reader, groups } = fixture('ready');
-    const entry = groups[0]!.entries[0]!;
-    groups[0]!.entries.push({ ...entry, key: 'b' });
-    groups[0]!.summary = 'Ran 200 operations with details';
-    const guide = { ...labels, more: 'Continue to see additional results…' };
-    const initial = createToolActivityViewState();
-    const state = { ...initial, position: { ...initial.position, section } };
-    const narrow = toolActivityViewPage(reader, groups, state, 16, 1, guide);
-    const wide = toolActivityViewPage(reader, groups, state, 80, 1, guide);
-    const retained = mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []);
-    expect(narrow.transcript![0]!.omitted).toBe(true);
-    expect(narrow.transcript![0]!.text).toBe(wide.rows[0]!.slice(0, 15));
-    expect(retained.map((range) => range.text)).toEqual(wide.rows);
-    expect(retained[0]!.omitted).toBe(false);
-    expect(mergeToolActivityTranscript(retained, narrow.transcript ?? [])).toEqual(retained);
-    expect(reader.detail).not.toHaveBeenCalled();
-  });
   it('stores only the visible prefix and keeps an undisplayed wide grapheme out of the source range', () => {
     const { reader, groups } = fixture('ready');
     const initial = createToolActivityViewState();
     const page = toolActivityViewPage(reader, groups, initial, 10, 1, labels);
     expect(page.rows).toEqual(['✓ Bash Ra…']);
-    expect(page.transcript).toEqual([{ key: JSON.stringify(['a', 'header']), offset: 0, text: '✓ Bash Ra', omitted: true }]);
     const input = { ...initial, expanded: true, position: { ...initial.position, section: 'input' as const } };
     groups[0]!.entries[0]!.input = '日本語';
     const tiny = toolActivityViewPage(reader, groups, input, 1, 1, labels);
     expect(tiny.rows).toEqual(['…']);
-    expect(tiny.transcript).toEqual([{ key: JSON.stringify(['a', 'input']), offset: 0, text: '', omitted: true }]);
-  });
-  it('removes the omission marker when an equally long complete range is later displayed', () => {
-    const partial = [{ key: 'header', offset: 0, text: 'visible', omitted: true }];
-    const complete = [{ key: 'header', offset: 0, text: 'visible', omitted: false }];
-    expect(mergeToolActivityTranscript(partial, complete)).toEqual(complete);
-    expect(mergeToolActivityTranscript(complete, partial)).toEqual(complete);
   });
   it('preserves the rendered spaces for tabs in compact headers across widths', () => {
     const { reader, groups } = fixture('ready');
     groups[0]!.entries[0]!.input = 'printf\tready';
     const state = createToolActivityViewState();
-    const narrow = toolActivityViewPage(reader, groups, state, 16, 1, labels);
     const wide = toolActivityViewPage(reader, groups, state, 80, 1, labels);
-    const retained = mergeToolActivityTranscript(narrow.transcript ?? [], wide.transcript ?? []);
-    expect(retained.map((range) => range.text)).toEqual(wide.rows);
     expect(wide.rows).toEqual(['✓ Bash Ran printf ready']);
-    expect(narrow.transcript![0]!.text + '…').toBe(narrow.rows[0]);
-  });
-  it('retains overlapping visible result ranges once across modes, reflow and preceding entry removal', () => {
-    const { reader, groups } = fixture('one\ntwo\nthree\nfour\nunseen');
-    const initial = createToolActivityViewState();
-    const prefix = { summary: 'Used Grep', entries: [{ ...groups[0]!.entries[0]!, key: 'unfinished', tool: 'Grep', action: 'Used Grep', status: 'running' as const }] };
-    const first = toolActivityViewPage(reader, [prefix, ...groups], initial, 80, 10, labels);
-    const compact = toolActivityViewPage(reader, groups, initial, 80, 5, labels);
-    const expanded = toolActivityViewPage(reader, groups, toggleToolActivityView(initial), 80, 7, labels);
-    const narrow = toolActivityViewPage(reader, groups, toggleToolActivityView(initial), 4, 12, labels);
-    const retained = [first, compact, expanded, narrow].reduce((ranges, page) => mergeToolActivityTranscript(ranges, page.transcript ?? []), [] as NonNullable<typeof first.transcript>[number][]);
-    const result = retained.filter((range) => range.key === JSON.stringify(['a', 'result'])).map((range) => range.text).join('');
-    expect(result).toContain('one\ntwo\nthree\nfour');
-    expect(result.split('one')).toHaveLength(2);
-    expect(result).not.toContain('unseen');
-    expect(retained.some((range) => range.key.includes('unfinished'))).toBe(false);
-  });
-  it('keeps identical results from different entries and preserves gaps between separately viewed ranges', () => {
-    const ranges = mergeToolActivityTranscript([], [
-      { key: 'tool-2/result', offset: 0, text: 'ready', omitted: false },
-      { key: 'tool-3/result', offset: 0, text: 'ready', omitted: false },
-      { key: 'tool-2/result', offset: 10, text: 'tail', omitted: false },
-    ]);
-    expect(mergeToolActivityTranscript(ranges, [{ key: 'tool-2/result', offset: 2, text: 'ady', omitted: false }])).toEqual(ranges);
-    expect(ranges.filter((range) => range.text === 'ready')).toHaveLength(2);
-    expect(ranges.filter((range) => range.key === 'tool-2/result').map((range) => range.offset)).toEqual([0, 10]);
-  });
-  it('returns only transcript text that has not already been appended', () => {
-    const committed = [{ key: 'tool/result', offset: 0, text: 'shown', omitted: false }];
-    expect(excludeToolActivityTranscript([
-      { key: 'tool/result', offset: 0, text: 'shown again', omitted: false },
-      { key: 'other/result', offset: 0, text: 'separate', omitted: false },
-    ], committed)).toEqual([
-      { key: 'tool/result', offset: 5, text: ' again', omitted: false },
-      { key: 'other/result', offset: 0, text: 'separate', omitted: false },
-    ]);
-  });
-  it('keeps the incoming text when a retained range ends at the same position with different text', () => {
-    const previous = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
-    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: 'error', omitted: false }]))
-      .toEqual([{ key: 'tool/result', offset: 0, text: 'error', omitted: false }]);
-    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 2, text: 'set', omitted: false }]))
-      .toEqual([{ key: 'tool/result', offset: 0, text: 'reset', omitted: false }]);
-  });
-  it.each([
-    ['longer', 'permission denied'],
-    ['shorter', 'err'],
-  ])('replaces a retained result with a %s corrected result', (_length, corrected) => {
-    const previous = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
-    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: corrected, omitted: false }]))
-      .toEqual([{ key: 'tool/result', offset: 0, text: corrected, omitted: false }]);
-  });
-  it('drops a retained range after a corrected result even when the corrected text does not reach it', () => {
-    const previous = [
-      { key: 'tool/result', offset: 0, text: 'a'.repeat(100), omitted: false },
-      { key: 'tool/result', offset: 150, text: 'b'.repeat(100), omitted: false },
-    ];
-    expect(mergeToolActivityTranscript(previous, [{ key: 'tool/result', offset: 0, text: 'c'.repeat(50), omitted: false }]))
-      .toEqual([{ key: 'tool/result', offset: 0, text: 'c'.repeat(50), omitted: false }]);
-  });
-  it('retains updated text when a committed range has the same position and length', () => {
-    const committed = [{ key: 'tool/result', offset: 0, text: 'ready', omitted: false }];
-    expect(excludeToolActivityTranscript([
-      { key: 'tool/result', offset: 0, text: 'error', omitted: false },
-    ], committed)).toEqual([
-      { key: 'tool/result', offset: 0, text: 'error', omitted: false },
-    ]);
   });
   it('finishes the page safely when the selected unfinished entry is removed at turn termination', () => {
     const { reader, groups } = fixture('completed-result');
@@ -267,21 +122,7 @@ describe('tool activity view state', () => {
     const state = { ...initial, position: { ...initial.position, entry: 1, section: 'header' as const } };
     expect(toolActivityViewPage(reader, groups, state, 80, 2, labels).rows[0]).toContain('… Bash');
     groups[0]!.entries.pop();
-    expect(toolActivityViewPage(reader, groups, state, 80, 2, labels)).toMatchObject({ rows: [], transcript: [], hasMore: false });
-  });
-  it('identifies only displayed completed rows for transcript retention without reading unseen detail', () => {
-    const { reader, groups } = fixture('unvisited-detail');
-    const completed = groups[0]!.entries[0]!;
-    completed.result = { text: 'completed-result', nextOffset: 16, hasMore: false, truncated: false };
-    groups.push({ summary: 'running', entries: [{ ...completed, key: 'running', status: 'running',
-      input: 'unfinished-input', result: { text: 'unfinished-output', nextOffset: 17, hasMore: false, truncated: false } }] });
-    const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 20, labels);
-    expect(page.rows).toContain('unfinished-output');
-    expect(page.transcript?.map((row) => row.text)).toEqual(page.rows.slice(0, 3));
-    expect(page.transcript?.map((row) => row.text)).toContain('completed-result');
-    const bounded = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 1, labels);
-    expect(bounded.transcript?.map((row) => row.text)).toEqual(bounded.rows);
-    expect(reader.detail).not.toHaveBeenCalled();
+    expect(toolActivityViewPage(reader, groups, state, 80, 2, labels)).toMatchObject({ rows: [], hasMore: false });
   });
   it.each([
     ['x', 96], ['x', 97], ['日', 48], ['日', 49],
@@ -348,8 +189,7 @@ describe('tool activity view state', () => {
     const { reader, groups } = fixture('one\ntwo\nthree\nfour');
     const page = toolActivityViewPage(reader, groups, createToolActivityViewState(), 100, 10, labels);
     expect(page.rows).toContain('✓ Bash Ran printf ready');
-    expect(page.rows.some((row) => /^success @\d{2}:\d{2}:\d{2} → @\d{2}:\d{2}:\d{2} \(250 ms\) completion #2$/u.test(row))).toBe(true);
-    expect(page.rows.join('\n')).not.toContain('@1000');
+    expect(page.rows).toContain('success @1000 → @1250 (250 ms) completion #2');
     expect(page.rows.slice(-4)).toEqual(['one', 'two', 'three', 'more']);
     expect(reader.detail).not.toHaveBeenCalled();
   });

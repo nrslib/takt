@@ -8,7 +8,7 @@ interface PendingSend<T> {
 
 /**
  * 1 つの接続への送信を直列化する。前の書き込みの完了 callback を待ってから次を書き込み、
- * 呼び出し元は自分の送信が完了するまで待つ。送信が滞っても、送り手の側に未送信のメッセージを積み上げない。
+ * 呼び出し元は自分の送信が完了するまで待つ。
  */
 export class SerialSender<T> {
   private readonly waiting: Array<PendingSend<T>> = [];

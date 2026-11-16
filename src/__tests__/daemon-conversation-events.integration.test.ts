@@ -100,6 +100,54 @@ it('releases fixture initialization protection after both successful and failed 
   await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce(), { timeout: 3000 });
 });
 
+it.each([true, false])('tries unsaved completed tools once during idle shutdown (save recovers=%s)', async (recovers) => {
+  const logged: string[] = [];
+  const restore = installDaemonErrorLog(async (message) => { logged.push(message); });
+  cleanups.push(async () => { restore(); });
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const startLoop = watchLoop.startWatchLoop;
+  let checkIdle!: () => Promise<void>;
+  vi.spyOn(watchLoop, 'startWatchLoop').mockImplementation((interval, check, onError) => {
+    if (interval !== 500) return startLoop(interval, check, onError);
+    checkIdle = () => check(new AbortController().signal);
+    return { wake() {}, async drain() {}, async close() {} };
+  });
+  const f = await fixture();
+  const toolEvent = (call: Awaited<ReturnType<typeof f.runner.started>>, event: { type: 'tool_use'; data: { id: string; tool: string; input: Record<string, unknown> } }
+    | { type: 'tool_result'; data: { id: string; content: string; isError: boolean } }) => f.dispatcher.post({ kind: 'turn_progress', turn: call.turn,
+    message: { kind: 'tool_event', eventId: randomUUID(), event: { ...event, toolActivity: { callId: 'call', operationId: call.turn.operationId, generation: call.turn.generation } } } });
+  accepted(await f.post('failed-history'));
+  const first = await f.runner.started(1);
+  await toolEvent(first, { type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'retained.ts' } } });
+  const failure = new Error('History unavailable');
+  const append = vi.spyOn(f.conversations.store, 'appendCompletedTool').mockRejectedValueOnce(failure);
+  if (!recovers) append.mockRejectedValue(failure);
+  await toolEvent(first, { type: 'tool_result', data: { id: 'tool', content: 'retained', isError: false } });
+  await f.runner.finish(first); await f.dispatcher.drain();
+  f.input.detach(f.opened.attachmentId);
+  const reopened = await f.input.open({ conversationId: f.id, assignment: { kind: 'repository', repositoryDirectory: f.repository },
+    speaker: { namespace: 'local', id: 'operator' }, binding: { port: 'tui', key: 'reconnect', counterpart: { namespace: 'local', id: 'operator' } } },
+  { async deliver() { return { kind: 'delivered' }; } });
+  const histories = [];
+  for await (const item of reopened.read.items) if (item.kind === 'tool_history') histories.push(item.history);
+  reopened.read.complete(); f.input.detach(reopened.attachmentId);
+  expect(histories).toMatchObject([{ history: { entries: [{ status: 'success', input: { file_path: 'retained.ts' } }] } }]);
+  expect(await new ConversationStateStore(f.directory).readToolHistories(f.id)).toEqual([]);
+  now += 500; await checkIdle();
+  await vi.waitFor(() => expect(f.runner.closed).toBe(true), { timeout: 3000 });
+  await f.close();
+  expect(append).toHaveBeenCalledTimes(2);
+  const restarted = await new ConversationStateStore(f.directory).readToolHistories(f.id);
+  if (recovers) {
+    expect(restarted).toMatchObject([{ operationId: first.turn.operationId,
+      history: { entries: [{ status: 'success', input: { file_path: 'retained.ts' } }] } }]);
+    expect(restarted.flatMap((history) => history.history.entries)).toHaveLength(1);
+  } else expect(restarted).toEqual([]);
+  expect(logged.filter((message) => message === failure.message)).toHaveLength(recovers ? 1 : 2);
+  await f.stopped;
+});
+
 it.each([0, 1])('compares idle shutdown during snapshot preparation with %s initializing connections', async (initializing) => {
   let now = Date.now();
   vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -127,11 +175,10 @@ it.each([0, 1])('compares idle shutdown during snapshot preparation with %s init
     const reached = deferred<void>();
     const resume = deferred<void>();
     const snapshot = daemon.dispatcher.snapshot.bind(daemon.dispatcher);
-    vi.spyOn(daemon.dispatcher, 'snapshot').mockImplementation(async (id) => {
-      const saved = await snapshot(id);
+    vi.spyOn(daemon.dispatcher, 'snapshot').mockImplementation(async (id, request) => {
       reached.resolve();
       await resume.promise;
-      return saved;
+      return snapshot(id, request);
     });
     const opening = daemon.input.open({ conversationId: conversationId(assignment), assignment,
       speaker: { namespace: 'local', id: 'operator' },
@@ -177,7 +224,7 @@ it.each([
   const store = new StandaloneInquiryStore(f.directory, owner);
   const question = await store.create({ body,
     operation: { toolName: 'takt_ask_standalone_question', args: '{}', cwd: f.repository } });
-  const before = await f.conversations.snapshot(f.id);
+  const before = await f.conversations.snapshot(f.id, { toolHistory: false });
   const pending = [];
   for await (const item of before.items) if (item.kind === 'inquiry') pending.push(item.inquiry.question.id);
   before.complete();
@@ -229,7 +276,7 @@ it.each([
   expect(execute).toHaveBeenCalledOnce();
   expect(turnData(execute.mock.calls[0]![0].prompt)).toEqual({ goalId: null, ...expected.inquiryAnswer });
   expect(await readdir(inbox)).toEqual([]);
-  const after = await f.conversations.snapshot(f.id);
+  const after = await f.conversations.snapshot(f.id, { toolHistory: false });
   const remaining = [];
   for await (const item of after.items) if (item.kind === 'inquiry') remaining.push(item.inquiry.question.id);
   after.complete();
@@ -962,7 +1009,7 @@ it('persists a blocked notification for a large goal after an unattached turn pr
   const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
   expect(saved.notifications).toEqual([expect.objectContaining({ id: admission.operationId, kind: 'blocked', severity: 'error' })]);
   expect(f.outputs).toHaveLength(outputCount);
-  const snapshot = await f.conversations.snapshot(f.id);
+  const snapshot = await f.conversations.snapshot(f.id, { toolHistory: false });
   const items = [];
   for await (const item of snapshot.items) items.push(item);
   snapshot.complete();
@@ -1818,7 +1865,7 @@ it('delivers one patrol result to the connected TUI without displaying inspectio
   expect(f.outputs.filter((output) => output.kind === 'result')).toEqual([
     { kind: 'result', operationId: turn.turn.operationId, result: { kind: 'reply', message } },
   ]);
-  const snapshot = await f.conversations.snapshot(f.id);
+  const snapshot = await f.conversations.snapshot(f.id, { toolHistory: false });
   const messages: string[] = [];
   for await (const item of snapshot.items) if (item.kind === 'display_event') messages.push(item.event.message);
   snapshot.complete();

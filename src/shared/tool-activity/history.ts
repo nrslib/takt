@@ -1,6 +1,6 @@
+import { limitToolOutput } from './outputLimit.js';
 import type { StreamCallContext, StreamEvent } from '../types/provider.js';
-import type { ToolActivityEntry, ToolActivityHistoryState, ToolActivityTurnState, ToolActivityTurnUpdate } from './types.js';
-import { ToolActivityHistoryStateSchema } from './schema.js';
+import type { ToolActivityEntry } from './types.js';
 
 function sameContext(left: StreamCallContext | undefined, right: StreamCallContext | undefined): boolean {
   return left?.callId === right?.callId
@@ -8,77 +8,32 @@ function sameContext(left: StreamCallContext | undefined, right: StreamCallConte
     && left?.generation === right?.generation;
 }
 
-// 文字列は変更できないので複製しない。途中出力のたびに累積した出力全体を複製しないためでもある。
-function copyEntry(entry: ToolActivityEntry): ToolActivityEntry {
-  return { ...entry, input: structuredClone(entry.input), ...(entry.context === undefined ? {} : { context: { ...entry.context } }) };
-}
-
-function applyHistoryUpdate(history: ToolActivityHistoryState, update: ToolActivityTurnUpdate): ToolActivityHistoryState | undefined {
-  if (history.sequence !== update.previousSequence) return undefined;
-  const entries = new Map(history.entries.map((entry) => [entry.key, entry]));
-  for (const entry of update.entries) entries.set(entry.key, entry);
-  if (update.output !== undefined) {
-    const entry = entries.get(update.output.key);
-    if (entry?.status !== 'running') return undefined;
-    entries.set(entry.key, { ...entry, output: entry.output + update.output.text });
-  }
-  return { entries: [...entries.values()], sequence: update.sequence };
-}
-
-/**
- * previousSequence の状態に差分を適用する。差分の起点が手元の状態と一致しなければ undefined を返す。
- * 新しいターンの最初の差分（previousSequence が 0）は、手元に状態がなくても適用できる。
- */
-export function applyToolActivityTurnUpdate(state: ToolActivityTurnState | undefined, update: ToolActivityTurnUpdate): ToolActivityTurnState | undefined {
-  const sameTurn = state?.operationId === update.operationId && state.generation === update.generation;
-  const base: ToolActivityTurnState | undefined = sameTurn ? state
-    : update.previousSequence === 0 ? { operationId: update.operationId, generation: update.generation, finished: false,
-      history: { entries: [], sequence: 0 } } : undefined;
-  if (base === undefined || base.finished) return undefined;
-  const history = applyHistoryUpdate(base.history, update);
-  return history === undefined ? undefined : { ...base, history };
-}
-
 export class ToolActivityHistory {
   private items: ToolActivityEntry[] = [];
   private sequence = 0;
-  private nextKey = 1;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  get currentSequence(): number {
-    return this.sequence;
-  }
-
   entries(): ToolActivityEntry[] {
-    return this.items.map(copyEntry);
-  }
-
-  snapshot(): ToolActivityHistoryState {
-    return { entries: this.entries(), sequence: this.sequence };
-  }
-
-  restore(state: ToolActivityHistoryState): void {
-    const restored = ToolActivityHistoryStateSchema.parse(state);
-    this.items = structuredClone(restored.entries);
-    this.sequence = restored.sequence;
-    this.nextKey = this.items.reduce((maximum, entry) => Math.max(maximum, Number(entry.key)), 0) + 1;
+    return structuredClone(this.items);
   }
 
   get(key: string): ToolActivityEntry | undefined {
     const entry = this.items.find((item) => item.key === key);
-    return entry === undefined ? undefined : copyEntry(entry);
+    return entry === undefined ? undefined : structuredClone(entry);
   }
 
-  /** 受け取った差分を適用し、変わった entry を返す。起点が一致しなければ何もせず undefined を返す。 */
-  applyUpdate(update: ToolActivityTurnUpdate): ToolActivityEntry[] | undefined {
-    const next = applyHistoryUpdate({ entries: this.items, sequence: this.sequence }, update);
-    if (next === undefined) return undefined;
-    const changed = new Set([...update.entries.map((entry) => entry.key), ...(update.output === undefined ? [] : [update.output.key])]);
-    this.items = next.entries.map((entry) => changed.has(entry.key) ? copyEntry(entry) : entry);
-    this.sequence = next.sequence;
-    for (const key of changed) this.nextKey = Math.max(this.nextKey, Number(key) + 1);
-    return this.items.filter((entry) => changed.has(entry.key)).map(copyEntry);
+  upsert(entry: ToolActivityEntry): void {
+    const position = this.items.findIndex((item) => item.key === entry.key);
+    if (position < 0) this.items.push(structuredClone(entry));
+    else this.items[position] = structuredClone(entry);
+  }
+
+  appendOutput(key: string, text: string, limit: number): ToolActivityEntry | undefined {
+    const entry = this.items.find((item) => item.key === key);
+    if (entry === undefined || entry.status !== 'running') return undefined;
+    entry.output = limitToolOutput(entry.output + text, limit);
+    return structuredClone(entry);
   }
 
   apply(event: StreamEvent): ToolActivityEntry[] {
@@ -92,7 +47,7 @@ export class ToolActivityHistory {
       entry.startedAt = receivedAt;
       entry.startSequence = sequence;
       entry.association = 'matched';
-      return [copyEntry(entry)];
+      return [structuredClone(entry)];
     }
     if (event.type !== 'tool_result' && event.type !== 'tool_output') return [];
 
@@ -122,7 +77,7 @@ export class ToolActivityHistory {
         entry.completedAt = receivedAt;
         entry.completionSequence = sequence;
       }
-      changed.push(copyEntry(entry));
+      changed.push(structuredClone(entry));
     }
     return changed;
   }
@@ -137,7 +92,7 @@ export class ToolActivityHistory {
 
   private add(tool: string, toolId: string | undefined, context: StreamCallContext | undefined): ToolActivityEntry {
     const entry: ToolActivityEntry = {
-      key: String(this.nextKey++), tool, toolId,
+      key: String(this.items.reduce((maximum, entry) => Math.max(maximum, Number(entry.key)), 0) + 1), tool, toolId,
       context: context === undefined ? undefined : { ...context },
       input: {}, output: '', status: 'running', association: 'unmatched',
     };

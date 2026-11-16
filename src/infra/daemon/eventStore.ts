@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
 import type { TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
-import type { EventStore, StoredEvent } from '../../core/daemon/ports.js';
+import type { ConversationTurns, EventStore, StoredEvent } from '../../core/daemon/ports.js';
 import type { ConversationAssignment } from '../conversations/schema.js';
 import { AcceptedEventSchema, EventRecordSchema, EventRecordWriteSchema, isRetiredWatchEvent, storedStandaloneInboxAnswer, TurnResultSchema, StoredTurnSchema, type EventRecord } from './eventRecord.js';
 import { ensurePrivateDirectory, hasCode, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
@@ -15,7 +15,7 @@ import { DaemonPersistedFiles } from './persistedFiles.js';
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
-export class FileEventStore implements EventStore {
+export class FileEventStore implements EventStore, ConversationTurns {
   private readonly directory: string;
   private readonly ids = new Map<string, string>();
   private readonly requests = new Map<string, string>();
@@ -85,6 +85,26 @@ export class FileEventStore implements EventStore {
     this.sequences.set(event.acceptedSequence, event.eventId);
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
+  }
+
+  readTurns(conversationId: string): ReturnType<ConversationTurns['readTurns']> {
+    return this.exclusive(async () => {
+      await this.refresh();
+      const turns: Awaited<ReturnType<ConversationTurns['readTurns']>>[number][] = [];
+      // Completed turns and background-turn order must survive missed live
+      // delivery. Read durable events without keeping a separate history index.
+      for await (const entry of await opendir(this.directory)) {
+        if (!entry.name.endsWith('.json')) continue;
+        const record = await this.read(join(this.directory, entry.name));
+        const { event } = record;
+        if (event.conversationId !== conversationId) continue;
+        const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
+          && event.event.command.display !== false ? event.event.command.text : undefined;
+        turns.push({ operationId: event.operationId, ...(message === undefined ? {} : { message }),
+          acceptedSequence: event.acceptedSequence, pending: record.state === 'queued' });
+      }
+      return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+    });
   }
 
   private async refresh(): Promise<void> {

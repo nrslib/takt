@@ -41,7 +41,7 @@ async function readRegularFile(path: string, read: (file: FileHandle, size: numb
 export async function readPrivateFile(path: string, maxBytes: number): Promise<Buffer | undefined> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid file capacity');
   return readRegularFile(path, async (file, initialSize) => {
-    if (initialSize > maxBytes) throw new Error(`Private file exceeds capacity: ${path}`);
+    if (initialSize > maxBytes) throw new Error(`Invalid or oversized private file: ${path}`);
     const chunks: Buffer[] = [];
     let size = 0;
     while (true) {
@@ -60,9 +60,9 @@ export async function readEntirePrivateFile(path: string): Promise<Buffer | unde
   return readRegularFile(path, (file) => file.readFile());
 }
 
-/** writePrivateFile で作成済みのファイルの末尾へ追記する。ファイルがなければ作らずに失敗する。 */
+/** 完了したJSONL記録を追記する。初回のファイルは所有者だけが読める権限で作る。 */
 export async function appendPrivateFile(path: string, content: string): Promise<void> {
-  const file = await open(path, constants.O_WRONLY | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0));
+  const file = await open(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
   try {
     await file.writeFile(content);
     await file.sync();

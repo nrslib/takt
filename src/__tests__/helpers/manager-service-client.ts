@@ -11,8 +11,6 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import type { ConversationCommand, ConversationDelivery, OperationResult, OutputVersion, PortOutput, SnapshotRead, Submission } from '../../features/manager/conversationPort.js';
 import { ConversationError } from '../../features/manager/conversationErrors.js';
 import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from '../../features/manager/snapshotChanges.js';
-import { applyToolActivityTurnUpdate } from '../../shared/tool-activity/history.js';
-import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 /** UI tests use the real service/executor; transport validation belongs to client tests. */
 export class ManagerServiceClient {
@@ -27,8 +25,6 @@ export class ManagerServiceClient {
   private stateSequence = -1;
   private committedItems = new Map<string, SnapshotDisplayItem>();
   private pendingOutputs: Array<{ output: Exclude<PortOutput, { kind: 'snapshot' }>; version?: OutputVersion }> = [];
-  private liveToolHistory: ToolActivityTurnState | undefined;
-  private toolHistoryBehind = false;
   readonly results: OperationResult[] = [];
   private readonly actor = { namespace: 'local', id: 'operator' };
   private service!: Awaited<ReturnType<typeof conversationDaemon>>['input'];
@@ -50,39 +46,8 @@ export class ManagerServiceClient {
     if (output.kind === 'pending' || output.kind === 'running') {
       if (version === undefined || version.stateSequence > this.stateSequence) {
         this.stateSequence = version?.stateSequence ?? this.stateSequence;
-        const tools = this.committedItems.get('tool_history');
-        const running = output.state.running;
-        const changedHistory = tools?.kind === 'tool_history' && running !== null
-          && (tools.history.operationId !== running.operationId || tools.history.generation !== running.generation);
-        if (changedHistory) {
-          this.committedItems.delete('tool_history');
-        }
-        this.update({ state: output.state, ...(changedHistory ? { items: orderSnapshotItems(this.committedItems) } : {}) });
+        this.update({ state: output.state });
       }
-    }
-    if (output.kind === 'tool_history_update') {
-      const { update } = output;
-      const committed = this.committedItems.get('tool_history');
-      const known = [this.liveToolHistory, committed?.kind === 'tool_history' ? committed.history : undefined]
-        .filter((history) => history?.operationId === update.operationId && history.generation === update.generation)
-        .sort((left, right) => right!.history.sequence - left!.history.sequence)[0];
-      const history = applyToolActivityTurnUpdate(known, update);
-      if (history === undefined) {
-        // 実クライアントと同じく、起点のない差分が届いたら次の再取得でツール履歴の全体を受け取り直す。
-        this.toolHistoryBehind = true;
-        return;
-      }
-      // 実クライアントと同じく、適用した差分を表示側へ渡してから履歴を更新する。
-      this.liveToolHistory = history;
-      this.committedItems.set('tool_history', { kind: 'tool_history', history });
-      for (const listener of this.outputs) listener(output);
-      this.update({ items: orderSnapshotItems(this.committedItems) });
-      return;
-    }
-    if (output.kind === 'tool_history') {
-      this.liveToolHistory = output.history;
-      this.committedItems.set('tool_history', output);
-      this.update({ items: orderSnapshotItems(this.committedItems) });
     }
     if (output.kind === 'result') this.results.push(output.result);
     for (const listener of this.outputs) listener(output);
@@ -163,15 +128,6 @@ export class ManagerServiceClient {
       const next = read.mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
       for (const [key, item] of updates) next.set(key, item);
       for (const key of removed) next.delete(key);
-      // 読込中に届いた差分や確定の方が新しければ、古い snapshot で戻さない。確定しても sequence は変わらない。
-      const snapshotHistory = next.get('tool_history');
-      const live = this.liveToolHistory;
-      if (snapshotHistory?.kind === 'tool_history' && live !== undefined && live.operationId === snapshotHistory.history.operationId
-        && live.generation === snapshotHistory.history.generation
-        && (live.history.sequence > snapshotHistory.history.history.sequence
-          || live.history.sequence === snapshotHistory.history.history.sequence && live.finished && !snapshotHistory.history.finished)) {
-        next.set('tool_history', { kind: 'tool_history', history: live });
-      }
       read.complete();
       this.committedItems = next;
       this.update({ items: orderSnapshotItems(next), readStatus: 'complete', error: null });
@@ -207,16 +163,12 @@ export class ManagerServiceClient {
     const generation = this.readGeneration;
     const attachmentId = this.attachmentId;
     let loadFailed = false;
-    const toolHistory = this.toolHistoryBehind;
-    // 読込中に起点のない差分が届いて捨てた場合は、次の再取得でもう一度ツール履歴の全体を受け取る。
-    this.toolHistoryBehind = false;
     try {
-      await this.read(() => this.service.snapshot(attachmentId, { toolHistory }).catch((error: unknown) => {
+      await this.read(() => this.service.snapshot(attachmentId).catch((error: unknown) => {
         loadFailed = true;
         throw error;
       }));
     } catch (error) {
-      if (toolHistory) this.toolHistoryBehind = true;
       if (generation !== this.readGeneration || !loadFailed) return;
       if (error instanceof ConversationError && error.code === 'invalid_assignment') await this.open();
       else throw error;

@@ -1,5 +1,4 @@
 export const REDACTED_VALUE = '[REDACTED]';
-export const SENSITIVE_TEXT_BOUNDARY_WINDOW = 256;
 
 const SENSITIVE_KEY_CHAR_PATTERN = String.raw`[A-Za-z0-9_.-]`;
 const SENSITIVE_KEY_WORD_PATTERN = String.raw`api[_-]?key|token|password|secret|credentials?|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key`;
@@ -78,90 +77,17 @@ const CURL_SHORT_USER_COMPACT_REGEX = new RegExp(
 const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi;
 const KNOWN_TOKEN_REGEX = /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
 const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
-const POTENTIAL_TOKEN_SUFFIX_REGEX = /(?:^|[^A-Za-z0-9_])(?:s|sk|sk-[A-Za-z0-9_-]*|g|gh|ghp|ghp_[A-Za-z0-9_]*|x|xo|xox|xox[baprs]|xox[baprs]-[A-Za-z0-9-]*)$/;
-const SENSITIVE_KEY_FRAGMENTS = [
-  'api',
-  'api_key',
-  'api-key',
-  'token',
-  'password',
-  'secret',
-  'credential',
-  'access',
-  'access_token',
-  'access-token',
-  'access_key',
-  'access-key',
-  'refresh',
-  'refresh_token',
-  'refresh-token',
-  'private',
-  'private_key',
-  'private-key',
-  'authorization',
-  'proxy-authorization',
-  'proxy_authorization',
-  'cookie',
-  'set-cookie',
-  'set_cookie',
-  'session',
-  'session_id',
-  'session-id',
-] as const;
-// 引用符で囲んだ代入やオプションの値。閉じた値は 1 つ目の選択肢が引用符まで消費するので、2 つ目の選択肢に一致するのは閉じていない引用符だけになる。
-const SENSITIVE_QUOTED_ASSIGNMENT_REGEX = new RegExp(
-  String.raw`(?:${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*|(?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(?:${SENSITIVE_QUOTED_VALUE_PATTERN}|(["']))`,
-  'gi',
-);
-// 値がまだ始まっていない代入、認証ヘッダ、オプション。区切りやオプションの後ろの空白は改行を含むので、値は次の行から始まりうる。
-const TRAILING_SENSITIVE_KEY_REGEX = new RegExp(
-  String.raw`(?:(?:${SENSITIVE_ASSIGNMENT_KEY_PATTERN}|\b(?:${SENSITIVE_HEADER_KEY_PATTERN}))\s*[:=]|(?<!-)--(?:${SENSITIVE_KEY_PATTERN}|(?:proxy-)?user)|(?<!\S)-u)$`,
-  'i',
-);
-const PRIVATE_KEY_BEGIN_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g;
-const TRAILING_ASSIGNMENT_REGEX = /(?:^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)\s*[:=]\s*(?:(?:bearer|basic)\s*)?[^\r\n]*$/i;
-const TRAILING_KEY_FRAGMENT_REGEX = /[A-Za-z0-9_.-]+$/;
-
-interface QuotedSensitiveValues {
-  /** 閉じた値の範囲。改行をまたぐ値もある。 */
-  closed: { start: number; end: number }[];
-  /** 閉じていない値の代入の位置。 */
-  unclosedStart: number | undefined;
-}
-
-function quotedSensitiveValues(text: string): QuotedSensitiveValues {
-  const closed: QuotedSensitiveValues['closed'] = [];
-  for (const match of text.matchAll(SENSITIVE_QUOTED_ASSIGNMENT_REGEX)) {
-    // 閉じていない引用符の後ろには閉じる引用符がないので、それより後の代入はすべてこの値の中にある。
-    if (match[1] !== undefined) return { closed, unclosedStart: match.index };
-    closed.push({ start: match.index, end: match.index + match[0].length });
-  }
-  return { closed, unclosedStart: undefined };
-}
-
-function unterminatedPrivateKeyStart(text: string): number | undefined {
-  const lastMatch = [...text.matchAll(PRIVATE_KEY_BEGIN_REGEX)].at(-1);
-  if (lastMatch === undefined) return undefined;
-  return text.slice(lastMatch.index).includes(`-----END ${lastMatch[1]}-----`) ? undefined : lastMatch.index;
-}
-
-/** text の end より前が、末尾の空白を除いて値の始まっていないキー名で終わっていれば、その位置を返す。 */
-function trailingSensitiveKeyStart(text: string, end: number): number | undefined {
-  let trimmedEnd = end;
-  while (trimmedEnd > 0 && /\s/u.test(text[trimmedEnd - 1]!)) trimmedEnd -= 1;
-  const windowStart = Math.max(0, trimmedEnd - SENSITIVE_TEXT_BOUNDARY_WINDOW);
-  const match = TRAILING_SENSITIVE_KEY_REGEX.exec(text.slice(windowStart, trimmedEnd));
-  return match === null ? undefined : windowStart + match.index;
-}
-
-function lineStart(text: string, index: number): number {
-  return index === 0 ? 0 : text.lastIndexOf('\n', index - 1) + 1;
-}
 
 interface HttpHeaderValue {
   start: number;
+  credentialStart: number;
   end: number;
   scheme: string | undefined;
+}
+
+export interface SensitiveRange {
+  readonly start: number;
+  readonly end: number;
 }
 
 type ShellHeaderQuote = "'" | '"' | '\\"';
@@ -190,7 +116,7 @@ function* httpHeaderValues(text: string): Generator<HttpHeaderValue> {
       : enclosingQuote === '"' || enclosingQuote === "'" ? enclosingQuote : undefined;
     const end = httpHeaderValueEnd(text, credentialStart, shellQuote);
     if (end > start) {
-      yield { start, end, scheme: scheme?.[1] };
+      yield { start, credentialStart, end, scheme: scheme?.[1] };
     }
     // Consumed values can contain header-like text; never restart a scan inside them.
     headers.lastIndex = end;
@@ -267,65 +193,6 @@ export function isSensitiveKeyName(key: string): boolean {
   return SENSITIVE_KEY_NAME_REGEX.test(key);
 }
 
-export function hasPotentialSensitiveTextSuffix(text: string): boolean {
-  const lastLine = text.slice(text.lastIndexOf('\n') + 1);
-  if (
-    (lastLine !== '' && '-----BEGIN '.startsWith(lastLine))
-    || /^-----BEGIN [A-Z0-9 ]*$/.test(lastLine)
-    || (lastLine.startsWith('-----BEGIN ') && !lastLine.endsWith('-----'))
-    || unterminatedPrivateKeyStart(text) !== undefined
-    || quotedSensitiveValues(text).unclosedStart !== undefined
-  ) {
-    return true;
-  }
-  if (POTENTIAL_TOKEN_SUFFIX_REGEX.test(text)) {
-    return true;
-  }
-  const assignment = TRAILING_ASSIGNMENT_REGEX.exec(text);
-  if (assignment?.[1] !== undefined && isSensitiveKeyName(assignment[1])) {
-    return true;
-  }
-  const trailingKey = TRAILING_KEY_FRAGMENT_REGEX.exec(text)?.[0].toLowerCase();
-  if (trailingKey === undefined) {
-    return false;
-  }
-  if (trailingKey.length > SENSITIVE_TEXT_BOUNDARY_WINDOW) {
-    return false;
-  }
-  const start = Math.max(0, trailingKey.length - 32);
-  for (let index = start; index < trailingKey.length; index += 1) {
-    const suffix = trailingKey.slice(index);
-    if (SENSITIVE_KEY_FRAGMENTS.some((fragment) => fragment.startsWith(suffix))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * 改行で終わるテキストの末尾で秘密値の値が閉じていなければ、その値を持つ代入の行頭を返す。
- * 値が閉じていないのは、キー名の後ろの引用符が閉じていないとき、キー名の後ろで値がまだ始まっていないとき、
- * 秘密鍵のブロックが終わっていないとき、呼び出し側が保留する値（heldValueStart から始まる値）があるとき。
- * これらの値は次の行へ続くので、行頭より後ろを先に確定すると、続きの行はキー名のない文字列になり伏せられない。
- */
-export function openSensitiveValueLineStart(text: string, heldValueStart: number | undefined): number | undefined {
-  const quoted = quotedSensitiveValues(text);
-  const starts = [heldValueStart, quoted.unclosedStart, unterminatedPrivateKeyStart(text), trailingSensitiveKeyStart(text, text.length)]
-    .filter((start): start is number => start !== undefined);
-  if (starts.length === 0) return undefined;
-  let start = lineStart(text, Math.min(...starts));
-  // 保留を始める行が前の行から続く値の途中なら、その値のキー名の行まで戻す。
-  // 続く値は、改行をまたいで閉じた引用符付きの値と、前の行の末尾のキー名の後ろの値。
-  for (let previous = -1; previous !== start;) {
-    previous = start;
-    const enclosing = quoted.closed.find((value) => value.start < start && start < value.end);
-    if (enclosing !== undefined) start = lineStart(text, enclosing.start);
-    const key = trailingSensitiveKeyStart(text, start);
-    if (key !== undefined) start = lineStart(text, key);
-  }
-  return start;
-}
-
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
   addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
   for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
@@ -334,7 +201,7 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     // Embedded credentials stay within the assignment's quote boundary.
     collectHttpHeaderSensitiveValues(stripMatchingQuotes(quotedValue), values);
   }
-  addMatches(text, SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
+  for (const match of bareAssignments(text)) addSensitiveValue(values, match[2]!);
   addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
@@ -358,7 +225,10 @@ function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): vo
 export function addSensitiveValue(values: Set<string>, rawValue: string, key?: string): void {
   const value = stripMatchingQuotes(rawValue.trim());
   if (value.length === 0) return;
-  values.add(value);
+  // Multiline values are matched line by line, so each line stays maskable on its own.
+  for (const line of value.split(/\r?\n/u)) {
+    if (line.length > 0) values.add(line);
+  }
   const authorizationValue = /^(?:Bearer|Basic)\s+(.+)$/i.exec(value);
   if (authorizationValue?.[1]) {
     values.add(authorizationValue[1]);
@@ -369,11 +239,7 @@ export function addSensitiveValue(values: Set<string>, rawValue: string, key?: s
 }
 
 export function sanitizeTextWithValues(text: string, sensitiveValues: ReadonlySet<string>): string {
-  let sanitized = text;
-  for (const value of [...sensitiveValues].sort((a, b) => b.length - a.length)) {
-    sanitized = replaceKnownSensitiveValue(sanitized, value);
-  }
-  return sanitizeSensitiveText(sanitized);
+  return sanitizeSensitiveText(maskSensitiveRanges(text, knownValueRanges(text, sensitiveValues)));
 }
 
 function addMatches(
@@ -428,14 +294,97 @@ function stripMatchingQuotes(value: string): string {
     : value;
 }
 
-function replaceKnownSensitiveValue(text: string, value: string): string {
-  if (value.length >= 4) {
-    return text.split(value).join(REDACTED_VALUE);
+// Bare matches inside a quoted assignment would extend past its closing `\"`
+// (e.g. `token=\"x-secret==\"` yields `=\`), and masking ranges would then eat the escape.
+function* bareAssignments(text: string): Generator<RegExpExecArray> {
+  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
+  let quotedAssignment = quotedAssignments.next().value;
+  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX)) {
+    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
+      quotedAssignment = quotedAssignments.next().value;
+    }
+    if (quotedAssignment === undefined || quotedAssignment.index > match.index) yield match;
   }
-  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const bounded = new RegExp(
-    String.raw`(?<![\p{L}\p{N}_])${escaped}(?![\p{L}\p{N}_])`,
-    'gu',
-  );
-  return text.replace(bounded, REDACTED_VALUE);
+}
+
+/** Finds the same values as sanitizeSensitiveText, on the original text. */
+export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
+  const ranges: SensitiveRange[] = [];
+  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
+    const quoteWidth = match[2]!.startsWith('\\"') ? 2 : 1;
+    ranges.push({ start: match.index + match[1]!.length + quoteWidth, end: match.index + match[0].length - quoteWidth });
+  }
+  const valueMatches = [
+    bareAssignments(text),
+    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX),
+    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX),
+    text.matchAll(SENSITIVE_OPTION_VALUE_REGEX),
+    text.matchAll(SENSITIVE_QUERY_VALUE_REGEX),
+  ];
+  for (const matches of valueMatches) {
+    for (const match of matches) {
+      const start = match.index + match[1]!.length;
+      ranges.push({ start, end: start + match[2]!.length });
+    }
+  }
+  for (const { credentialStart, end } of httpHeaderValues(text)) ranges.push({ start: credentialStart, end });
+  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
+    ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length - 1 });
+  }
+  for (const pattern of [CURL_USER_EQUALS_REGEX, CURL_USER_SPACE_REGEX]) {
+    for (const match of text.matchAll(pattern)) ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length });
+  }
+  for (const match of text.matchAll(CURL_SHORT_USER_COMPACT_REGEX)) {
+    ranges.push({ start: match.index + match[1]!.length + match[2]!.length, end: match.index + match[0].length });
+  }
+  for (const pattern of [KNOWN_TOKEN_REGEX, PEM_PRIVATE_KEY_REGEX]) {
+    for (const match of text.matchAll(pattern)) ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  for (const range of knownValueRanges(text, values)) ranges.push(range);
+  return ranges;
+}
+
+function knownValueRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
+  const ranges = substringSensitiveRanges(text, [...values].filter((value) => value.length >= 4));
+  for (const value of values) {
+    if (value.length === 0 || value.length >= 4) continue;
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const bounded = new RegExp(
+      String.raw`(?<![\p{L}\p{N}_])${escaped}(?![\p{L}\p{N}_])`,
+      'gu',
+    );
+    for (const match of text.matchAll(bounded)) ranges.push({ start: match.index, end: match.index + value.length });
+  }
+  return ranges;
+}
+
+export function substringSensitiveRanges(text: string, values: Iterable<string>): SensitiveRange[] {
+  const ranges: SensitiveRange[] = [];
+  for (const value of values) {
+    if (value === '') continue;
+    for (let start = text.indexOf(value); start >= 0; start = text.indexOf(value, start + 1)) ranges.push({ start, end: start + value.length });
+  }
+  return ranges;
+}
+
+function mergedRanges(ranges: readonly SensitiveRange[]): SensitiveRange[] {
+  const ordered = [...ranges].filter((range) => range.end > range.start).sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: SensitiveRange[] = [];
+  for (const range of ordered) {
+    const previous = merged.at(-1);
+    if (previous !== undefined && range.start <= previous.end) merged[merged.length - 1] = { start: previous.start, end: Math.max(previous.end, range.end) };
+    else merged.push(range);
+  }
+  return merged;
+}
+
+export function maskSensitiveRanges(text: string, ranges: readonly SensitiveRange[]): string {
+  const parts: string[] = [];
+  let copied = 0;
+  for (const range of mergedRanges(ranges)) {
+    parts.push(text.slice(copied, range.start), REDACTED_VALUE);
+    copied = range.end;
+  }
+  parts.push(text.slice(copied));
+  return parts.join('');
 }

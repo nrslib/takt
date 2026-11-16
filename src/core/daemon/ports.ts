@@ -7,7 +7,8 @@ import type { ConversationProgress } from '../../shared/types/conversation-activ
 export interface DaemonIngress {
   accept(input: EventInput): Promise<Admission>;
   control(event: ControlEvent): Promise<ControlReceipt>;
-  snapshot(conversationId: string): Promise<ConversationSnapshot>;
+  /** ツール履歴と発言は、画面に送る読取（toolHistory: true）だけに含める。 */
+  snapshot(conversationId: string, request?: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot>;
 }
 
 /** A が B に保存させ、再起動時に A が未終了分だけ復元する。running は人の入力を中断し、other を再配信する。 */
@@ -43,13 +44,17 @@ export interface TurnQueues {
   pending(conversationId: string): readonly AcceptedEvent[];
 }
 
+export interface ConversationTurns {
+  readTurns(conversationId: string): Promise<readonly { operationId: string; message?: string; acceptedSequence: number; pending: boolean }[]>;
+}
+
 /** daemon の保存所有者。apply は turn と change.operationId で冪等にする。 */
 export interface ConversationOwner {
+  begin(turn: TurnIdentity): Promise<void>;
   inquiry(notice: import('./messages.js').InquiryNotice): Promise<void>;
   apply(result: TurnResult): Promise<void>;
   progress(turn: TurnIdentity, message: ConversationProgress, signal: AbortSignal): Promise<void>;
-  // 実行中ターンの識別情報は、それを所有する dispatcher が付ける。
-  snapshot(conversationId: string): Promise<Omit<ConversationSnapshot, 'operationId' | 'generation'>>;
+  snapshot(conversationId: string, request: { toolHistory: boolean; capture?: (snapshot: ConversationSnapshot) => void }): Promise<ConversationSnapshot>;
 }
 
 /** C が実装し、A′ が開始・中断を送る。start は待たず、終了は必ず bus.post(turn_finished) で通知する。 */

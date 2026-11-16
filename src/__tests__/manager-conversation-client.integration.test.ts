@@ -26,6 +26,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { removeDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { writeLegacyConversation, conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationId } from '../infra/conversations/identity.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -40,8 +41,7 @@ import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
-import { formatToolActivityTime } from '../shared/tool-activity/presentation.js';
-import { ToolActivityDisplay } from '../shared/ui/ToolActivityDisplay.js';
+import { stripAnsi } from '../shared/utils/text.js';
 import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
 import { abortEpic, addEpicMember, completeEpic, createEpic, getEpic, recordEpicVerificationResult,
   startEpicVerification, updateEpicDefinition } from '../infra/epics/index.js';
@@ -130,7 +130,16 @@ function currentToolPage() {
   return props!;
 }
 
-function toolRows(): string { return currentToolPage().page.rows.join('\n'); }
+function committedToolRows(): string {
+  const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  const user = entries.map((entry) => entry.role).lastIndexOf('user');
+  return entries.slice(user + 1).filter((entry) => /^[✓✗] /u.test(entry.content)).map((entry) => entry.content).join('\n');
+}
+
+function toolRows(): string {
+  const page = currentToolPage();
+  return page.state.expanded ? page.page.rows.join('\n') : [committedToolRows(), ...page.page.rows].filter(Boolean).join('\n');
+}
 
 async function browseToolPage(app: ReturnType<typeof render>, key: string): Promise<string> {
   const before = currentToolPage();
@@ -139,8 +148,8 @@ async function browseToolPage(app: ReturnType<typeof render>, key: string): Prom
   return toolRows();
 }
 
-it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after publication'].map((timing) => ({ phase, timing }))))(
-  'keeps current history when a snapshot starts $timing of the $phase event', async ({ phase, timing }) => {
+it.each(['before publication', 'after publication'])(
+  'keeps completed history when a snapshot starts %s of the completion event', async (timing) => {
   const firstDone = deferred<void>(); const secondDone = deferred<void>();
   const startSecondTool = deferred<void>(); const secondResult = deferred<void>(); let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
@@ -162,25 +171,21 @@ it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after pub
     const operationId = client.getSnapshot().state!.running!.operationId;
     vi.spyOn(daemonFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
       if (path.endsWith(`/conversation-tool-history/${client.getSnapshot().state!.conversationId}.jsonl`)
-        && content.includes(operationId) && content.includes('turn-2.ts') && (phase === 'start' ? !content.includes('ready') : content.includes('ready'))) {
+        && content.includes(operationId) && content.includes('turn-2.ts') && content.includes('ready')) {
         saving.resolve(); await publish.promise;
       }
       await append(path, content);
     });
-    startSecondTool.resolve(); if (phase === 'result') secondResult.resolve(); await saving.promise;
-    const entered = deferred<void>();
-    const snapshot = fixture.conversations.snapshot.bind(fixture.conversations);
-    vi.spyOn(fixture.conversations, 'snapshot').mockImplementation((id) => {
-      const pending = snapshot(id); entered.resolve(); return pending;
-    });
+    startSecondTool.resolve(); secondResult.resolve(); await saving.promise;
+    const snapshot = vi.spyOn(service, 'snapshot');
     const refreshing = timing === 'before publication' ? refreshSnapshot(client, connections[0]!) : undefined;
-    if (refreshing !== undefined) await entered.promise;
+    if (refreshing !== undefined) await waitFor(() => expect(snapshot).toHaveBeenCalled());
     publish.resolve();
     if (refreshing !== undefined) await refreshing;
     else await refreshSnapshot(client, connections[0]!);
     await waitFor(() => expect(toolRows()).toContain('turn-2.ts'));
-    expect(client.getSnapshot().items.find((item) => item.kind === 'tool_history')).toMatchObject({ history: { operationId } });
-    if (phase === 'result') expect(toolRows()).toContain('ready');
+    expect(client.getSnapshot().items.find((item) => item.kind === 'tool_history' && item.history.operationId === operationId)).toMatchObject({ history: { operationId } });
+    expect(toolRows()).toContain('ready');
     secondResult.resolve();
     secondDone.resolve(); await fixture.settled();
     await waitFor(() => expect(toolRows()).toContain('ready'));
@@ -190,7 +195,7 @@ it.each(['start', 'result'].flatMap((phase) => ['before publication', 'after pub
   } finally { publish.resolve(); firstDone.resolve(); startSecondTool.resolve(); secondResult.resolve(); secondDone.resolve(); await fixture.settled(); }
 });
 
-it('removes the previous live history after a tool-free turn and keeps its displayed transcript on reconnect', async () => {
+it('keeps the previous tool history after a tool-free turn and its displayed transcript on reconnect', async () => {
   const finish = deferred<void>(); let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     if (invocation++ === 0) {
@@ -207,13 +212,46 @@ it('removes the previous live history after a tool-free turn and keeps its displ
     finish.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
     await client.submit({ kind: 'message', text: 'No tools this turn' }); await fixture.settled();
     await refreshSnapshot(client, connections[0]!);
-    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(1);
     connections[0]!.socket.destroy(); await waitFor(() => expect(connections).toHaveLength(2));
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
-    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(0);
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(1);
     const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
     expect(text.split('previous-result')).toHaveLength(2);
   } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('restores a tool-free human turn before later background tools on attachment and reconnect', async () => {
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (++invocation === 2) {
+      options.onStream!({ type: 'tool_use', data: { id: 'background', tool: 'Read', input: { file_path: 'background.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'background', content: 'background-tool-result', isError: false } });
+    }
+    return toolReply();
+  }));
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Earlier tool-free question' }); await fixture.settled();
+  expect(await fixture.dispatcher.accept({ eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationRecord(repository).id,
+    source: 'daemon', occurredAt: new Date().toISOString(), event: { kind: 'director_message', text: 'Inspect in background',
+      directorConversationId: conversationId({ kind: 'daemon' }) } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  client.close(); client = new ConversationIpcClient(assignment);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const assertOrder = (): void => {
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    const question = entries.findIndex((entry) => entry.role === 'user' && entry.content === 'Earlier tool-free question');
+    const tool = entries.findIndex((entry) => entry.content.includes('background-tool-result'));
+    expect(question).toBeGreaterThanOrEqual(0);
+    expect(tool).toBeGreaterThan(question);
+    expect(entries.filter((entry) => entry.content.includes('background-tool-result'))).toHaveLength(1);
+    expect(entries.filter((entry) => entry.content === 'Earlier tool-free question')).toHaveLength(1);
+  };
+  await waitFor(assertOrder);
+  connections[0]!.socket.destroy();
+  await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+  await waitFor(assertOrder);
 });
 
 it('appends the previous tool transcript before the next user message', async () => {
@@ -248,7 +286,40 @@ it('appends the previous tool transcript before the next user message', async ()
   } finally { secondTurn.resolve(); await fixture.settled(); }
 });
 
-it('applies each streamed tool output to the displayed history without rebuilding it from the whole history', async () => {
+it.each(['human', 'background'] as const)('keeps a queued accepted message in snapshot state without overtaking the %s turn', async (kind) => {
+  const release = deferred<void>();
+  let calls = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const current = ++calls;
+    if (current === 1) {
+      await release.promise;
+      options.onStream!({ type: 'tool_use', data: { id: 'first', tool: 'Read', input: { file_path: 'first.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'first', content: 'first tool result', isError: false } });
+    }
+    return toolReply(current === 1 ? 'first reply' : 'second reply');
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  const log = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.flatMap((entry) =>
+    entry.role === 'user' || entry.content === 'first reply' || entry.content === 'second reply' ? [entry.content]
+      : entry.content.includes('first tool result') ? ['tool'] : []);
+  try {
+    if (kind === 'human') await client.submit({ kind: 'message', text: 'first input' });
+    else await fixture.dispatcher.accept({ eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationRecord(repository).id,
+      source: 'daemon', occurredAt: new Date().toISOString(), event: { kind: 'director_message', text: 'Inspect', directorConversationId: conversationId({ kind: 'daemon' }) } });
+    await fixture.executing(1);
+    const next = await client.submit({ kind: 'message', text: 'next input' });
+    expect(next.kind).toBe('accepted');
+    await client.refresh(); await complete();
+    expect(client.getSnapshot().items).toContainEqual(expect.objectContaining({ kind: 'user_message', message: 'next input', pending: true }));
+    expect(log()).not.toContain('next input');
+    release.resolve(); await fixture.settled();
+    await waitFor(() => expect(log()).toEqual([...(kind === 'human' ? ['first input'] : []), 'tool', 'first reply', 'next input', 'second reply']));
+    await client.refresh(); await complete();
+    expect(log().filter((message) => message === 'next input')).toHaveLength(1);
+  } finally { release.resolve(); await fixture.settled(); }
+});
+
+it('displays each streamed tool output in the history', async () => {
   const finish = deferred<void>();
   const lines = ['streamed-line-0', 'streamed-line-1', 'streamed-line-2'];
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
@@ -261,11 +332,9 @@ it('applies each streamed tool output to the displayed history without rebuildin
     return toolReply();
   }));
   await client.connect(); await complete(); await snapshotView();
-  const restore = vi.spyOn(ToolActivityDisplay.prototype, 'restore');
   try {
     await client.submit({ kind: 'message', text: 'Run the long tool' });
     await waitFor(() => expect(toolRows()).toContain(lines.at(-1)));
-    expect(restore).toHaveBeenCalledOnce();
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
@@ -287,12 +356,12 @@ it.each([1, 2])('retains each of %s identical completed results once after unfin
     finish.resolve(); await fixture.settled();
     await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
     await waitFor(() => expect(toolRows()).not.toContain('background'));
-    await browseToolPage(app, '\x14');
+    await browseToolPage(app, '\x0f');
     while (currentToolPage().page.hasMore) await browseToolPage(app, '\x1b[6~');
     const columns = vi.spyOn(app.stdout, 'columns', 'get');
     columns.mockReturnValue(40); app.stdout.emit('resize');
     await waitFor(() => { for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(40); });
-    await browseToolPage(app, '\x14');
+    await browseToolPage(app, '\x0f');
     await client.submit({ kind: 'message', text: 'Advance to the next turn' }); await fixture.settled();
     await waitFor(() => {
       const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
@@ -318,19 +387,19 @@ it.each([
   columns.mockReturnValue(40); app.stdout.emit('resize');
   try {
     await client.submit({ kind: 'message', text: 'Show the command' });
-    await waitFor(() => {
-      expect(toolRows()).toContain('success');
-      const header = toolRows().split('\n').find((row) => row.startsWith('✓ Bash'))!;
-      expect(header).toBeDefined(); expect(measureWidth(header)).toBeLessThanOrEqual(40);
-      if (command.length > 40) expect(header).toMatch(/…$/u);
-    });
+    await waitFor(() => expect(committedToolRows()).toContain('success'));
+    const committed = committedToolRows();
+    for (const row of committed.split('\n')) expect(measureWidth(row)).toBeLessThanOrEqual(40);
     columns.mockReturnValue(80); app.stdout.emit('resize');
-    await waitFor(() => expect(toolRows()).toContain(`✓ Bash Ran ${command}`));
+    expect(committedToolRows()).toBe(committed);
+    await browseToolPage(app, '\x0f');
+    expect(toolRows()).toContain(command);
+    await browseToolPage(app, '\x0f');
     finish.resolve(); await fixture.settled();
     await client.submit({ kind: 'message', text: 'Advance to another turn' }); await fixture.settled();
     await waitFor(() => {
       const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
-      expect(text.split('\n').filter((line) => line === `✓ Bash Ran ${command}`)).toHaveLength(1);
+      expect(text.split(committed)).toHaveLength(2);
     });
   } finally { finish.resolve(); await fixture.settled(); }
 });
@@ -352,14 +421,16 @@ it('retains the received start and completion times once after compact display a
   try {
     await client.submit({ kind: 'message', text: 'Show exact times' });
     await waitFor(() => expect(toolRows()).toMatch(/success @.*…/u));
+    await client.refresh(); await complete();
+    const committed = committedToolRows();
     const item = client.getSnapshot().items.find((value) => value.kind === 'tool_history');
     expect(item?.kind).toBe('tool_history');
     if (item?.kind !== 'tool_history') throw new Error('Missing received tool history');
     const entry = item.history.history.entries[0]!;
     expect(entry.startedAt).toEqual(expect.any(Number)); expect(entry.completedAt).toEqual(expect.any(Number));
-    const timing = `success @${formatToolActivityTime(entry.startedAt!)} → @${formatToolActivityTime(entry.completedAt!)} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms) ${getLabel('tui.ui.toolHistoryCompletion', 'en')} #${entry.completionSequence}`;
+    const timing = `success @${entry.startedAt} → @${entry.completedAt} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms)`;
     const observed: string[] = [];
-    await browseToolPage(app, '\x14');
+    await browseToolPage(app, '\x0f');
     for (let page = 0; page < 30; page++) {
       observed.push(...currentToolPage().page.rows);
       if (!currentToolPage().page.hasMore) break;
@@ -371,7 +442,7 @@ it('retains the received start and completion times once after compact display a
     await client.submit({ kind: 'message', text: 'Advance after viewing the times' }); await fixture.settled();
     await waitFor(() => {
       const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
-      expect(text.split('\n').filter((line) => line === timing)).toHaveLength(1);
+      expect(text.split(committed)).toHaveLength(2);
     });
   } finally { finish.resolve(); await fixture.settled(); }
 });
@@ -396,12 +467,12 @@ it.each([5, 6])('fits a %s line draft and expanded results while resizing the sa
     app.stdin.write('\x1b[200~' + draft + '\x1b[201~');
     await waitFor(() => expect(app.lastFrame()).toContain(lines.at(-1)!));
     app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
-    await browseToolPage(app, '\x14');
+    await browseToolPage(app, '\x0f');
     const columns = vi.spyOn(app.stdout, 'columns', 'get');
     for (const width of [80, 40, 80]) {
       columns.mockReturnValue(width); app.stdout.emit('resize');
       await waitFor(() => {
-        const frame = app.lastFrame()!; const start = frame.indexOf('✓ Bash');
+        const frame = app.lastFrame()!; const start = frame.lastIndexOf('✓ Bash');
         expect(start).toBeGreaterThanOrEqual(0);
         const live = frame.slice(start).trimEnd().split('\n');
         for (const line of lines) expect(live.join('\n')).toContain(line);
@@ -439,7 +510,7 @@ it.each([false, true])('retains one timed tool entry across duplicate delivery, 
     expect(await client.submit({ kind: 'message', text: 'Track one tool' })).toMatchObject({ kind: 'accepted' });
     await waitFor(() => expect(toolRows()).toContain('running @'));
     expect(toolRows()).toContain('printf history-ready');
-    const startedAt = toolRows().match(/@(\d{2}:\d{2}:\d{2})/u)![1];
+    const startedAt = toolRows().match(/@(\d+)/u)![1];
     result.resolve();
     await waitFor(() => expect(toolRows()).toContain(isError ? 'failure' : 'success'));
     const completed = toolRows();
@@ -571,12 +642,39 @@ it.each([false, true])('restores a tool result completed during disconnection on
   } finally { finish.resolve(); reconnect.resolve(); await fixture.settled(); }
 });
 
-it('discards an unfinished old tool when the same conversation advances and reconnects', async () => {
+it('restores an accepted message after disconnect before its start notification and never appends it twice', async () => {
+  const reached = deferred<void>(); const release = deferred<void>();
+  const markStarted = fixture.events.markStarted.bind(fixture.events);
+  vi.spyOn(fixture.events, 'markStarted').mockImplementationOnce(async (...args) => {
+    reached.resolve(); await release.promise; return markStarted(...args);
+  });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const live = vi.fn(); const detach = client.onOutput(live);
+  const messages = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+    .filter((entry) => entry.role === 'user' && entry.content === 'Accepted before disconnect');
+  try {
+    const accepted = await client.submit({ kind: 'message', text: 'Accepted before disconnect' }, () => connections[0]!.socket.destroy());
+    expect(accepted.kind).toBe('accepted');
+    await reached.promise;
+    expect(live.mock.calls.flatMap(([output]) => output.kind === 'user_message' ? [output] : [])).toEqual([]);
+    await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+    await waitFor(() => expect(messages()).toHaveLength(1));
+    expect(client.getSnapshot().items).toContainEqual(expect.objectContaining({ kind: 'user_message', message: 'Accepted before disconnect' }));
+    release.resolve(); await fixture.settled();
+    await client.refresh(); await complete();
+    expect(live.mock.calls.flatMap(([output]) => output.kind === 'user_message' ? [output] : [])).toHaveLength(1);
+    expect(messages()).toHaveLength(1);
+  } finally { release.resolve(); detach(); await fixture.settled(); }
+});
+
+it('restores the current running tool without output and excludes the old turn after reconnect', async () => {
   const finishes = [deferred<void>(), deferred<void>()];
   let invocation = 0;
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     const index = invocation++;
     options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: index === 0 ? 'stale.ts' : 'current.ts' } } });
+    options.onStream!({ type: 'tool_output', data: { id: 'reused', tool: 'Read', output: 'streamed before disconnect\n' } });
     await finishes[index]!.promise;
     return toolReply();
   }));
@@ -593,12 +691,30 @@ it('discards an unfinished old tool when the same conversation advances and reco
     connections[0]!.socket.destroy();
     await waitFor(() => expect(connections).toHaveLength(2));
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
-    expect(toolRows()).toContain('current.ts');
-    expect(toolRows()).toContain('running');
+    expect(currentToolPage().page.rows.join('\n')).toContain('current.ts');
+    expect(currentToolPage().page.rows.join('\n')).not.toContain('streamed before disconnect');
+    expect(client.getSnapshot().state?.running).not.toBeNull();
     expect(toolRows()).not.toContain('stale.ts');
     const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
     expect(transcript.filter((entry) => JSON.stringify(entry).includes('stale.ts'))).toEqual([]);
   } finally { for (const value of finishes) value.resolve(); await fixture.settled(); }
+});
+
+it('reads completed tool history on refresh without duplicating the conversation log', async () => {
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'refresh.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'read', content: 'persisted-result', isError: false } });
+    return toolReply();
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  await client.submit({ kind: 'message', text: 'Run a tool' }); await fixture.settled();
+  await waitFor(() => expect(committedToolRows()).toContain('persisted-result'));
+  const committed = committedToolRows();
+  await waitFor(() => expect(client.getSnapshot().items.some((item) => item.kind === 'tool_history'
+    && item.history.history.entries.some((entry) => entry.result === 'persisted-result'))).toBe(true));
+  await client.refresh(); await complete();
+  expect(committedToolRows()).toBe(committed);
+
 });
 
 it.each([
@@ -608,6 +724,7 @@ it.each([
   ['allowed JSON', '{"stdout":"ready secret123","api\\u005fkey":"secret123"}', 'ready [REDACTED]'],
   ['unknown JSON field', '{"private_blob":{"text":"非公開本文"}}', '[structured output omitted]'],
   ['JSON array', '[{"text":"非公開本文"}]', '[structured output omitted]'],
+  ['incomplete JSON', '{"stdout":"非公開本文', '[structured output omitted]'],
 ])('sanitizes %s in the manager compact and expanded view before and after reconnect', async (_name, content, expected) => {
   const finish = deferred<void>();
   let invocation = 0;
@@ -621,7 +738,7 @@ it.each([
   const connections = observeIpcConnections();
   await client.connect(); await complete(); const app = await snapshotView();
   const check = () => {
-    const rows = currentToolPage().page.rows;
+    const rows = toolRows().split('\n');
     expect(rows).toContain(expected);
     for (const row of rows) for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b', '{', '}']) {
       expect(row).not.toContain(forbidden);
@@ -630,15 +747,16 @@ it.each([
   try {
     await client.submit({ kind: 'message', text: 'Show a safe result' });
     await waitFor(check);
-    const saved = await fixture.store.readToolHistory(client.getSnapshot().state!.conversationId);
-    expect(saved?.history.entries[0]?.result).toBe(content.replaceAll('secret123', '[REDACTED]'));
-    await browseToolPage(app, '\x14'); check();
+    const saved = (await fixture.store.readToolHistories(client.getSnapshot().state!.conversationId)).at(-1);
+    expect(saved?.history.entries[0]?.result).toBe(stripAnsi(content).replaceAll('secret123', '[REDACTED]'));
+    expect(JSON.stringify(saved)).not.toContain('secret123');
+    await browseToolPage(app, '\x0f'); check();
     expect(currentToolPage().state.expanded).toBe(true);
     connections[0]!.socket.destroy();
     await waitFor(() => expect(connections).toHaveLength(2));
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
     check();
-    await browseToolPage(app, '\x14'); check();
+    await browseToolPage(app, '\x0f'); check();
     expect(currentToolPage().state.expanded).toBe(false);
     finish.resolve(); await fixture.settled();
     await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
@@ -652,7 +770,7 @@ it.each([
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it('groups five completed reads and exposes every path and result through bounded detail pages', async () => {
+it('commits each of five completed reads to the log and exposes every path and result through bounded detail pages', async () => {
   const finish = deferred<void>();
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     for (let index = 0; index < 5; index++) {
@@ -665,11 +783,11 @@ it('groups five completed reads and exposes every path and result through bounde
   await client.connect(); await complete(); const app = await snapshotView();
   try {
     await client.submit({ kind: 'message', text: 'Read five files' });
-    await waitFor(() => expect(toolRows()).toContain('Read 5 files'));
+    await waitFor(() => expect(committedToolRows().match(/✓ Read/gu)).toHaveLength(5));
     const compactResults = toolRows().match(/read-result-\d/gu) ?? [];
     expect(compactResults.length).toBeGreaterThanOrEqual(1);
-    expect(compactResults.length).toBeLessThanOrEqual(3);
-    const pages = [await browseToolPage(app, '\x14')];
+    expect(compactResults).toHaveLength(5);
+    const pages = [await browseToolPage(app, '\x0f')];
     for (let page = 0; page < 30 && currentToolPage().page.hasMore; page++) {
       pages.push(await browseToolPage(app, '\x1b[6~'));
     }
@@ -682,7 +800,7 @@ it('groups five completed reads and exposes every path and result through bounde
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it('keeps start order and matches a delayed background failure after a later tool succeeds', async () => {
+it('commits concurrent tools in completion delivery order and matches a delayed background failure', async () => {
   const finish = deferred<void>();
   useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     options.onStream!({ type: 'tool_use', data: { id: 'background', tool: 'Bash', input: { command: 'background-command' } } });
@@ -697,21 +815,23 @@ it('keeps start order and matches a delayed background failure after a later too
     await client.submit({ kind: 'message', text: 'Wait for background completion' });
     await waitFor(() => expect(toolRows()).toContain('background-failure'));
     const rows = toolRows();
-    const first = rows.indexOf('✗ Bash'); const second = rows.indexOf('✓ Grep');
+    const first = rows.indexOf('✓ Grep'); const second = rows.indexOf('✗ Bash');
     expect(first).toBeGreaterThanOrEqual(0); expect(second).toBeGreaterThan(first);
-    const background = rows.slice(first, second); const later = rows.slice(second);
+    const later = rows.slice(first, second); const background = rows.slice(second);
     expect(background).toContain('✗ Bash Ran background-command');
     expect(later).toContain('✓ Grep Used Grep later-search');
     expect(background).toContain('background-command'); expect(background).toContain('failure');
     expect(background).toContain('background-failure'); expect(background).not.toContain('later-success');
     expect(later).toContain('later-search'); expect(later).toContain('success');
     expect(later).toContain('later-success'); expect(later).not.toContain('background-failure');
-    expect(Number(background.match(/completion #(\d+)/u)![1])).toBeGreaterThan(Number(later.match(/completion #(\d+)/u)![1]));
+    const completed = (await fixture.store.readToolHistories(client.getSnapshot().state!.conversationId)).at(-1);
+    const entries = completed!.history.entries;
+    expect(entries.map((entry) => entry.toolId)).toEqual(['later', 'background']);
     expect(app.lastFrame()).toContain('background-failure');
     expect(app.lastFrame()).toContain('later-success');
     expect(app.lastFrame()).toContain('✗ Bash Ran');
     expect(app.lastFrame()).toContain('✓ Grep Used Grep');
-    const expanded = await browseToolPage(app, '\x14');
+    const expanded = await browseToolPage(app, '\x0f');
     expect(expanded.split('\n')).toContain('✗ Bash Ran');
     expect(expanded.split('\n')).toContain('✓ Grep Used Grep');
     expect(expanded).toContain('background-command');
@@ -741,7 +861,7 @@ it('keeps the selected slash completion and running turn while toggling and pagi
     app.stdin.write('\x1b[B');
     await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify'));
     const running = client.getSnapshot().state!.running;
-    for (const key of ['\x14', '\x1b[6~', '\x1b[5~', '\x14']) {
+    for (const key of ['\x0f', '\x1b[6~', '\x1b[5~', '\x0f']) {
       await browseToolPage(app, key);
       expect(app.lastFrame()).toContain('❯ /verify');
       expect(client.getSnapshot().state!.running).toEqual(running);
@@ -779,7 +899,7 @@ it('preserves a Japanese draft and insertion point while paging a long result to
     await waitFor(() => expect(app.lastFrame()).toContain('日本語下書き'));
     app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
     const running = { ...client.getSnapshot().state!.running! };
-    const pages = [await browseToolPage(app, '\x14')];
+    const pages = [await browseToolPage(app, '\x0f')];
     for (let page = 0; page < 100 && currentToolPage().page.hasMore; page++) {
       pages.push(await browseToolPage(app, '\x1b[6~'));
       expect(currentToolPage().page.rows.length).toBeLessThan(24);
@@ -833,7 +953,7 @@ it.each([32, 40])('reserves wrapped control hints and the draft before filling t
     await waitFor(() => expect(toolRows()).toContain('result-line-0'));
     app.stdin.write('日本語の下書き');
     await waitFor(() => expect(app.lastFrame()).toContain('日本語の下書き'));
-    await browseToolPage(app, '\x14');
+    await browseToolPage(app, '\x0f');
     const previousHeight = currentToolPage().height;
     vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(width); app.stdout.emit('resize');
     await waitFor(() => {
@@ -841,7 +961,7 @@ it.each([32, 40])('reserves wrapped control hints and the draft before filling t
       expect(currentToolPage().state.expanded).toBe(true);
       expect(currentToolPage().page.hasMore).toBe(true);
       const frame = app.lastFrame()!;
-      const start = frame.indexOf('✓ Bash');
+      const start = frame.lastIndexOf('✓ Bash');
       expect(start).toBeGreaterThanOrEqual(0);
       const liveRows = frame.slice(start).trimEnd().split('\n');
       for (const row of liveRows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
@@ -964,6 +1084,7 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
     expect(activities().at(-1).activity).toEqual({ kind: 'responding' });
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
       { role: 'assistant', content: prose },
+      { role: 'system', content: expect.stringContaining('private-result-marker') },
       { role: 'assistant', content: 'Final activity reply' }]);
     const delivered = outputs.mock.calls.map(([output]) => output);
     expect(delivered.filter((output) => output.kind === 'turn_text').map((output) => output.message)).toEqual([
@@ -1001,24 +1122,35 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
 });
 
 it('does not transfer text after interruption during its conversation read', async () => {
-  const controller = new AbortController();
-  const entered = deferred<void>();
-  const release = deferred<void>();
+  const finish = deferred<void>();
+  execute.mockImplementationOnce(async (input) => {
+    await finish.promise;
+    return { message: 'Held read turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
   const outputs = vi.fn(); client.onOutput(outputs);
   await client.connect(); await complete();
-  const conversationId = client.getSnapshot().state!.conversationId;
-  const read = fixture.store.read.bind(fixture.store);
-  vi.spyOn(fixture.store, 'read').mockImplementationOnce(async (id) => {
-    entered.resolve(); await release.promise; return read(id);
-  });
-  const progress = fixture.conversations.progress({ conversationId, operationId: randomUUID(), generation: 1 },
-    { kind: 'turn_text', message: '本文を配送しない' }, controller.signal);
   try {
+    await client.submit({ kind: 'message', text: 'Hold the conversation read' });
+    await fixture.executing(1);
+    await waitFor(() => expect(client.getSnapshot().state?.running).not.toBeNull());
+    const state = client.getSnapshot().state!;
+    const turn = { conversationId: state.conversationId, operationId: state.running!.operationId, generation: state.running!.generation! };
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const read = fixture.store.read.bind(fixture.store);
+    vi.spyOn(fixture.store, 'read').mockImplementationOnce(async (id) => { entered.resolve(); await release.promise; return read(id); });
+    // 会話の区間を読取で止めている間に中断し、止めを解いた後に本文が配送されないことを確かめる。
+    const refreshing = fixture.conversations.refresh(turn.conversationId);
     await entered.promise;
+    const controller = new AbortController();
+    const interrupted = fixture.conversations.progress(turn, { kind: 'turn_text', message: '本文を配送しない' }, controller.signal);
     controller.abort();
-    release.resolve(); await progress;
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'turn_text')).toEqual([]);
-  } finally { release.resolve(); await progress; }
+    release.resolve();
+    await Promise.all([refreshing, interrupted]);
+    await fixture.conversations.progress(turn, { kind: 'turn_text', message: '中断していない本文' }, new AbortController().signal);
+    await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_text', message: '中断していない本文' })));
+    expect(outputs.mock.calls.flatMap(([output]) => output.kind === 'turn_text' ? [output.message] : [])).toEqual(['中断していない本文']);
+  } finally { finish.resolve(); await fixture.settled(); }
 });
 
 it('suppresses patrol text while showing its Bash description and elapsed time on the connected screen', async () => {
@@ -1093,12 +1225,10 @@ it('keeps already displayed text but suppresses buffered and late text after int
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it.each([false, true])('displays next-turn text once after an interrupted turn with its running state delayed=%s', async (delayed) => {
+it('displays next-turn text once after an interrupted turn on the same FIFO connection', async () => {
   const finishFirst = deferred<void>();
   const emitText = deferred<void>();
   const finishNext = deferred<void>();
-  const reading = deferred<void>();
-  const releaseRunning = deferred<void>();
   const message = '次のターンを調べています。';
   execute.mockImplementationOnce(async (input) => {
     input.onText!('中断前に表示する文');
@@ -1128,28 +1258,15 @@ it.each([false, true])('displays next-turn text once after an interrupted turn w
     await waitFor(() => expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true }));
     await waitFor(() => expect(app.lastFrame()).toContain('Turn interrupted'));
 
-    const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
-    vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
-      const read = await snapshot(id);
-      reading.resolve();
-      await releaseRunning.promise;
-      return read;
-    });
     const accepted = await client.submit({ kind: 'message', text: 'Start the next turn' });
     expect(accepted.kind).toBe('accepted');
     if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
-    await reading.promise;
-    if (!delayed) {
-      releaseRunning.resolve();
-      await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
-    }
+    await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
     emitText.resolve();
     await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'turn_text', operationId: accepted.operationId, message,
     })));
-    if (delayed) expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true });
     await waitFor(() => expect(textEntries()).toEqual([{ role: 'assistant', content: message }]));
-    releaseRunning.resolve();
     await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
     expect(textEntries()).toHaveLength(1);
     finishNext.resolve(); await fixture.settled();
@@ -1159,7 +1276,7 @@ it.each([false, true])('displays next-turn text once after an interrupted turn w
     expect(transcript().findIndex((entry) => entry.content === message))
       .toBeLessThan(transcript().findIndex((entry) => entry.content === 'Next turn completed'));
   } finally {
-    finishFirst.resolve(); emitText.resolve(); releaseRunning.resolve(); finishNext.resolve(); await fixture.settled();
+    finishFirst.resolve(); emitText.resolve(); finishNext.resolve(); await fixture.settled();
   }
 });
 
@@ -1241,7 +1358,7 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
     finishNext.resolve();
     await finished.promise;
     const settling = await readState();
-    expect(settling).toMatchObject({ operationId: null, state: { running: { operationId: accepted.operationId } } });
+    expect(settling).toMatchObject({ operationId: accepted.operationId, state: { running: { operationId: accepted.operationId } } });
     expect(apply).not.toHaveBeenCalled();
     expect(outputs).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_text', message }));
     expect(assistantEntries()).toEqual([...initialEntries, { role: 'assistant', content: '中断前に表示する文' }]);
@@ -1262,7 +1379,7 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
     }).toEqual({
       startedInterrupted: false,
       settlingInterrupted: false,
-      clientBeforeText: { operationId: refreshBeforeText ? null : accepted.operationId, interrupted: false },
+      clientBeforeText: { operationId: accepted.operationId, interrupted: false },
       entries: [
         ...initialEntries,
         { role: 'assistant', content: '中断前に表示する文' },
@@ -1277,98 +1394,24 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
   }
 });
 
-it('shows the latest early activity when a connected TUI finally receives the delayed running state', async () => {
-  const reading = deferred<void>();
-  const releaseRunning = deferred<void>();
-  const finish = deferred<void>();
-  const outputs = vi.fn(); client.onOutput(outputs);
-  const connections = observeIpcConnections();
-  await client.connect(); await complete();
-  const app = await snapshotView();
-  const observed = vi.fn();
-  const receiver = new ConversationTransferReceiver(client.getSnapshot().state!.conversationId, {
-    state: vi.fn(), item: vi.fn(), remove: vi.fn(), output: observed, read: vi.fn(),
-  });
-  receiver.authenticated();
-  const decoder = new frames.ConversationFrameDecoder();
-  const transfers = new Set<string>();
-  connections[0]!.socket.on('data', (chunk: Buffer) => {
-    for (const frame of decoder.decode(chunk)) {
-      const envelope = frame as { output?: { kind: string; purpose?: string; transferId: string } };
-      const output = envelope.output;
-      if (output === undefined) continue;
-      if (output.kind === 'transfer_start' && output.purpose === 'output') transfers.add(output.transferId);
-      if (transfers.has(output.transferId)) receiver.receive(frame);
-      if (output.kind === 'transfer_end' || output.kind === 'transfer_error') transfers.delete(output.transferId);
-    }
-  });
-  const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
-  vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
-    const read = await snapshot(id);
-    reading.resolve();
-    await releaseRunning.promise;
-    return read;
-  });
-  execute.mockImplementationOnce(async (input) => {
-    input.onActivity!({ kind: 'thinking' });
-    input.onActivity!({ kind: 'tool', tool: 'EarlyTool' });
-    await finish.promise;
-    return { message: 'Early activity turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
-  });
-  try {
-    const accepted = await client.submit({ kind: 'message', text: 'Start with delayed running' });
-    expect(accepted.kind).toBe('accepted');
-    if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
-    await reading.promise;
-    await waitFor(() => expect(observed).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'activity', activity: { kind: 'tool', tool: 'EarlyTool' },
-    }), expect.anything()));
-    expect(client.getSnapshot().state!.running).toBeNull();
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([]);
-    expect(app.lastFrame()).not.toContain('EarlyTool');
-
-    releaseRunning.resolve();
-
-    await waitFor(() => expect(app.lastFrame()).toContain('EarlyTool'));
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([[expect.objectContaining({
-      operationId: accepted.operationId, activity: { kind: 'tool', tool: 'EarlyTool' },
-    })]]);
-    finish.resolve();
-    await fixture.settled();
-    await waitFor(() => {
-      expect(app.lastFrame()).toContain('Early activity turn completed');
-      expect(app.lastFrame()).not.toContain('EarlyTool');
-    });
-  } finally { releaseRunning.resolve(); finish.resolve(); await fixture.settled(); }
-});
-
 it('restores current activity for a late TUI and after reconnect, then forgets it when the turn ends', async () => {
   const finish = deferred<void>();
-  const readingThinking = deferred<void>();
-  const releaseThinking = deferred<void>();
-  let holdThinking = false;
-  const read = fixture.store.read.bind(fixture.store);
-  vi.spyOn(fixture.store, 'read').mockImplementation(async (id) => {
-    if (holdThinking) {
-      holdThinking = false;
-      readingThinking.resolve();
-      await releaseThinking.promise;
-    }
-    return read(id);
-  });
   execute.mockImplementationOnce(async (input) => {
-    holdThinking = true;
     input.onActivity!({ kind: 'thinking' });
     input.onActivity!({ kind: 'tool', tool: 'ReconnectTool' });
     await finish.promise;
     return { message: 'Reconnected turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
   });
   const connections = observeIpcConnections();
+  const firstOutputs = vi.fn();
+  client.onOutput(firstOutputs);
   await client.connect(); await complete();
   const beforeTurn = Date.now();
   await client.submit({ kind: 'message', text: 'Start before attaching' });
   await fixture.executing(1);
-  await readingThinking.promise;
+  await waitFor(() => expect(firstOutputs).toHaveBeenCalledWith(expect.objectContaining({
+    kind: 'activity', activity: { kind: 'tool', tool: 'ReconnectTool' },
+  })));
   await waitFor(() => expect(client.getSnapshot().state?.running?.startedAt).toBeGreaterThanOrEqual(beforeTurn));
   const startedAt = client.getSnapshot().state!.running!.startedAt;
   expect(startedAt).toBeLessThanOrEqual(Date.now());
@@ -1382,9 +1425,6 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
     expect(client.getSnapshot().state?.running?.startedAt).toBe(startedAt);
     await waitFor(() => expect(activities()).toHaveLength(1));
     expect(activities()[0]).toMatchObject({ activity: { kind: 'tool', tool: 'ReconnectTool' } });
-    releaseThinking.resolve();
-    await fixture.dispatcher.drain();
-    expect(activities()).toHaveLength(1);
     // 接続完了後にマウントしても、初期配送の現在値を表示できる。
     const app = await snapshotView();
     await waitFor(() => expect(app.lastFrame()).toContain('ReconnectTool'));
@@ -1409,7 +1449,7 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
     expect(activities()).toHaveLength(2);
     expect(app.lastFrame()).not.toContain('ReconnectTool');
-  } finally { releaseThinking.resolve(); finish.resolve(); await fixture.settled(); }
+  } finally { finish.resolve(); await fixture.settled(); }
 });
 
 it('restores cached activity after an initial transfer fails and a snapshot retry succeeds', async () => {
@@ -1511,8 +1551,8 @@ it.each([
       return { kind: 'accepted', operationId: randomUUID() };
     });
     const snapshot = service.snapshot.bind(service);
-    vi.spyOn(service, 'snapshot').mockImplementation((id) => {
-      const reading = snapshot(id).then(async (read) => {
+    vi.spyOn(service, 'snapshot').mockImplementation((id, request) => {
+      const reading = snapshot(id, request).then(async (read) => {
         if (++reads >= 2) readsEntered.release();
         await released.promise; return read;
       });
@@ -1651,10 +1691,10 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
   await client.connect(); await complete();
   const entered = gate(); const released = gate();
   const snapshot = service.snapshot.bind(service);
-  vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+  vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
     const read = await snapshot(id);
-    if (phase === 'transfer') return heldRead(read, entered, released);
-    entered.release(); await released.promise; return read;
+    if (phase === 'transfer') { const held = heldRead(read, entered, released); request?.enqueueSnapshot?.(held); return held; }
+    entered.release(); await released.promise; request?.enqueueSnapshot?.(read); return read;
   });
   const registration = vi.spyOn(goalService, 'registerReservedGoal').mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
     const goal = { ...goalRecord(), id, objective, outOfScope, acceptanceCriteria, constraints }; saveGoal(goal); return goal;
@@ -1677,12 +1717,18 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
     expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
-    // The server finishes the current input batch before accepting another one.
-    if (phase === 'response') released.release();
-    expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
     const record = conversationRecord(repository);
     await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
       .toMatchObject({ revision: 4, state: 'registered' }));
+    let answered = false;
+    const submitted = (submissions.mock.results[0]!.value as Promise<unknown>).then((value) => { answered = true; return value; });
+    if (phase === 'transfer') {
+      // 応答も同じ接続の FIFO に積まれるため、送り始めた読取が終わるまで受理の応答は届かない。
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(answered).toBe(false);
+    }
+    released.release();
+    expect(await submitted).toMatchObject({ kind: 'accepted' });
     expect(registration).toHaveBeenCalledOnce();
   } finally { released.release(); await refreshing.catch(() => {}); app.unmount(); }
 });
@@ -1691,8 +1737,7 @@ it('does not send approval before the initial transfer ends and enables it on th
   const entered = gate(); const released = gate();
   const open = service.open.bind(service);
   vi.spyOn(service, 'open').mockImplementation(async (...args) => {
-    const opened = await open(...args);
-    return { ...opened, read: heldRead(opened.read, entered, released) };
+    return open(args[0], args[1], (read, attachmentId) => args[2]?.(heldRead(read, entered, released), attachmentId));
   });
   await client.connect();
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
@@ -1744,13 +1789,14 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
       await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
       saveGoal(goal);
       const snapshot = service.snapshot.bind(service);
-      vi.spyOn(service, 'snapshot').mockImplementation(async (id) => heldRead(await snapshot(id), entered, released));
+      vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
+        const held = heldRead(await snapshot(id), entered, released); request?.enqueueSnapshot?.(held); return held;
+      });
       refreshing = client.refresh();
     } else {
       const open = service.open.bind(service);
       vi.spyOn(service, 'open').mockImplementation(async (...args) => {
-        const opened = await open(...args);
-        return { ...opened, read: heldRead(opened.read, entered, released) };
+        return open(args[0], args[1], (read, attachmentId) => args[2]?.(heldRead(read, entered, released), attachmentId));
       });
       const index = connection.mock.calls.findIndex(([bytes]) => String(bytes).includes('"method":"open"'));
       (connection.mock.contexts[index] as net.Socket).destroy();
@@ -1787,9 +1833,9 @@ it.each([
   const connection = vi.spyOn(net.Socket.prototype, 'write');
   const notifications = gate();
   const open = service.open.bind(service);
-  vi.spyOn(service, 'open').mockImplementation((input, delivery) => open(input, {
+  vi.spyOn(service, 'open').mockImplementation((input, delivery, enqueueSnapshot) => open(input, {
     deliver: async (...args) => { await notifications.promise; return delivery.deliver(...args); },
-  }));
+  }, enqueueSnapshot));
   const pending = { ...conversationRecord(repository).pending!, revision: 5,
     summary: { objective: 'Latest proposal five', outOfScope: [], acceptanceCriteria: ['Latest accepted'], constraints: [] } };
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: {
@@ -1832,9 +1878,9 @@ it.each([
       command: { kind: 'message', text: 'Produce the next proposal' } });
     await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending, running: null }));
     expect(client.getSnapshot().state?.pending?.revision).toBe(4);
-    vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+    vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
       const read = await snapshot(id); const wait = gate(); reads.push({ read, release: wait.release });
-      await wait.promise; trace.push({ kind: 'snapshot_resolved', transferId: read.transferId }); return read;
+      await wait.promise; trace.push({ kind: 'snapshot_resolved', transferId: read.transferId }); request?.enqueueSnapshot?.(read); return read;
     });
     const openWrite = connection.mock.calls.findIndex(([bytes]) => String(bytes).includes('"method":"open"'));
     const socket = connection.mock.contexts[openWrite] as net.Socket;
@@ -2395,12 +2441,13 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   saveGoal(updated);
   const released = vi.fn();
   const snapshot = service.snapshot.bind(service);
-  vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+  vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
     const read = await snapshot(id);
-    return { ...read, items: (async function* () {
+    const observed = { ...read, items: (async function* () {
       try { yield* read.items; }
       finally { released(); }
     })() };
+    request?.enqueueSnapshot?.(observed); return observed;
   });
   const write = frames.writeConversationFrame;
   let failedTransfer: string | undefined;
@@ -2545,7 +2592,7 @@ async function openEpicDetail(app: ReturnType<typeof render>, objective: string,
   Object.defineProperty(app.stdout, 'rows', { configurable: true, value: 80 });
   app.stdout.emit('resize');
   await waitFor(() => expect(app.lastFrame()).toContain('╭'));
-  app.stdin.write('\x0f');
+  app.stdin.write('\x14');
   await waitFor(() => expect(app.lastFrame()).toContain(objective));
   app.stdin.write('\r');
   await waitFor(() => expect(app.lastFrame()).toContain(targetSha));
