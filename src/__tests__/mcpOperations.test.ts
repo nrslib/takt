@@ -526,12 +526,24 @@ describe('MCP goal pull request state', () => {
   });
 
   it('reads pull request status only for goals in the requested page', async () => {
-    const goals = [prGoal(0), prGoal(1), prGoal(2), prGoal(3)];
+    const goals = [0, 1, 2, 3].map((index) => ({ ...prGoal(index),
+      pullRequest: { number: 2000 + index, url: `https://github.com/example/project/pull/${2000 + index}` } }));
     goalDoubles.list.mockResolvedValue({ goals, errors: [] });
     readGoalPullRequestStatus.mockResolvedValue(available('OPEN'));
     const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', offset: 1, limit: 2 }, deps)).content));
     expect(listed.goals.map((goal: { id: string }) => goal.id)).toEqual([goals[1]!.id, goals[2]!.id]);
-    expect(readGoalPullRequestStatus.mock.calls.map(([, goal]) => goal.id)).toEqual([goals[1]!.id, goals[2]!.id]);
+    expect(readGoalPullRequestStatus.mock.calls.map(([, goal]) => goal.pullRequest?.number)).toEqual([2001, 2002]);
+  });
+
+  it('passes only the pull request reference and branch fields to the status read when listing', async () => {
+    goalDoubles.list.mockResolvedValue({ goals: [prGoal()], errors: [] });
+    readGoalPullRequestStatus.mockResolvedValue(available('OPEN'));
+    const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo' }, deps)).content));
+    expect(listed.goals[0].pullRequest).toEqual({ ...pullRequest, state: 'open' });
+    expect(readGoalPullRequestStatus).toHaveBeenCalledTimes(1);
+    expect(readGoalPullRequestStatus.mock.calls[0]![1]).toEqual({
+      pullRequest, branch: goalRecord().branch, integrationBranch: goalRecord().integrationBranch,
+    });
   });
 });
 

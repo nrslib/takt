@@ -63,10 +63,16 @@ const PULL_REQUEST_STATES: Record<PrMergeStatus['state'], GoalPullRequestState> 
   OPEN: 'open', MERGED: 'merged', CLOSED: 'closed',
 };
 
+type GoalPullRequestTarget = Pick<Goal, 'pullRequest' | 'branch' | 'integrationBranch'>;
+
+async function goalPullRequestState(cwd: string, target: GoalPullRequestTarget, deps: McpOperationDependencies, signal: AbortSignal | undefined): Promise<GoalPullRequestState | undefined> {
+  if (target.pullRequest === undefined) return undefined;
+  const status = await (deps.readGoalPullRequestStatus ?? defaultReadGoalPullRequestStatus)(cwd, target, signal);
+  return status?.status === 'available' ? PULL_REQUEST_STATES[status.pullRequest.state] : undefined;
+}
+
 async function goalResponse(cwd: string, goal: Goal, deps: McpOperationDependencies, signal: AbortSignal | undefined) {
-  if (goal.pullRequest === undefined) return goalSummary(goal);
-  const status = await (deps.readGoalPullRequestStatus ?? defaultReadGoalPullRequestStatus)(cwd, goal, signal);
-  return goalSummary(goal, status?.status === 'available' ? PULL_REQUEST_STATES[status.pullRequest.state] : undefined);
+  return goalSummary(goal, await goalPullRequestState(cwd, goal, deps, signal));
 }
 
 export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies, signal?: AbortSignal): Promise<CallToolResult> {
@@ -75,11 +81,20 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
     let totalCount = 0;
     const offset = input.offset ?? 0;
     const limit = input.limit ?? 50;
-    const { goals: pageGoals, errors } = await new GoalStore(input.cwd).list((goal) => {
+    const { goals: pageEntries, errors } = await new GoalStore(input.cwd).list((goal) => {
       const index = totalCount++;
-      return index >= offset && index < offset + limit ? goal : undefined;
+      if (index < offset || index >= offset + limit) return undefined;
+      return {
+        summary: goalSummary(goal),
+        target: { pullRequest: goal.pullRequest, branch: goal.branch, integrationBranch: goal.integrationBranch },
+      };
     });
-    const goals = await Promise.all(pageGoals.map((goal) => goalResponse(input.cwd, goal, deps, signal)));
+    const goals = await Promise.all(pageEntries.map(async (entry) => {
+      const state = await goalPullRequestState(input.cwd, entry.target, deps, signal);
+      return state === undefined || entry.target.pullRequest === undefined
+        ? entry.summary
+        : { ...entry.summary, pullRequest: { ...entry.target.pullRequest, state } };
+    }));
     const errorOffset = input.errorOffset ?? 0;
     const selectedErrors = errors.slice(errorOffset, errorOffset + limit)
       .map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) }));
