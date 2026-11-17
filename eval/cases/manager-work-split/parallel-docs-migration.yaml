@@ -101,6 +101,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 45
@@ -140,6 +141,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 保存と読み込みの土台を用意する
@@ -163,6 +165,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 45
@@ -352,6 +355,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42
@@ -391,6 +395,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Provide the storage and loading foundation
@@ -414,6 +419,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42

@@ -151,6 +151,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -228,6 +229,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: 既存の項目と出力操作を使って CSV を生成する。
@@ -251,6 +253,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -284,6 +287,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -317,6 +321,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -350,6 +355,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -383,6 +389,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -416,6 +423,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -449,6 +457,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 65
@@ -734,6 +743,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -811,6 +821,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: Generate CSV using the existing fields and export operation.
@@ -834,6 +845,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -867,6 +879,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -900,6 +913,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -933,6 +947,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -966,6 +981,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -999,6 +1015,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -1032,6 +1049,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60

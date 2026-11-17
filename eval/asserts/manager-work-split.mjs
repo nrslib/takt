@@ -69,6 +69,7 @@ const caseWriteTools = {
   'single-operation-request': new Set(['takt_ask_goal_question']),
   'migration-no-downtime': new Set(['takt_enqueue_goal_task']),
   'unidentified-goal': new Set(),
+  'running-subworkflow-progress': new Set(),
   'external-contract-limit': new Set(['takt_ask_goal_question']),
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
   'paused-requeue': new Set(['takt_requeue_goal_task']),
@@ -103,6 +104,7 @@ const caseCommonTools = Object.fromEntries([...pauseRequeueCases, ...pauseRecord
 caseCommonTools['unidentified-goal'] = new Set();
 caseCommonTools['csv-export-scope-conversation'] = new Set();
 caseCommonTools['search-index-scope-conversation'] = new Set();
+caseCommonTools['running-subworkflow-progress'] = new Set();
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
 function parseEnvelope(output) {
@@ -284,6 +286,10 @@ export default function assertManagerWorkSplit(output, context) {
   if (['migration-method-event', 'migration-method-conversation', 'unidentified-goal',
     'csv-export-scope-conversation', 'search-index-scope-conversation'].includes(caseId)) {
     return result(true, 'Question content and withholding answer-dependent work are graded by llm-rubric');
+  }
+  if (caseId === 'running-subworkflow-progress') {
+    return result(true,
+      'No writing tool is allowed for this progress question; the subworkflow step and its execution count are graded by llm-rubric');
   }
   if (caseId === 'single-operation-request') {
     const blocked = parsed.calls.filter(({ tool, arguments: args }) => tool === 'takt_notify_goal' && args.kind === 'blocked');

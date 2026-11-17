@@ -150,6 +150,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -227,6 +228,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: オンライン時の送信と失敗表示を実装する。
@@ -250,6 +252,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -283,6 +286,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -316,6 +320,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -349,6 +354,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -382,6 +388,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -415,6 +422,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -448,6 +456,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -732,6 +741,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -809,6 +819,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: Implement online sending and failure reporting.
@@ -832,6 +843,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -865,6 +877,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -898,6 +911,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -931,6 +945,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -964,6 +979,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -997,6 +1013,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47
@@ -1030,6 +1047,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: default, step: review, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 47

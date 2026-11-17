@@ -158,6 +158,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 49
@@ -197,6 +198,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 進捗の保存形式をバージョン2にする
@@ -220,6 +222,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 49
@@ -246,6 +249,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 63
@@ -285,6 +289,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 再起動後に保存された進捗を読み、一覧へ渡す
@@ -308,6 +313,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 63
@@ -547,6 +553,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 34
@@ -586,6 +593,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Change saved progress to version 2
@@ -609,6 +617,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 34
@@ -635,6 +644,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 57
@@ -674,6 +684,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Read saved progress after restart and pass it to the list
@@ -697,6 +708,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 57

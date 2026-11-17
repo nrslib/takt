@@ -152,6 +152,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 56
@@ -197,6 +198,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: 売上 CSV の読み込みと入力検証を実装する
@@ -220,6 +222,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 56
@@ -609,6 +612,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 42
@@ -654,6 +658,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: Implement sales CSV loading and validation
@@ -677,6 +682,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T00:14:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: csv-import-replay, step: implement, startedAt: 2026-10-11T00:14:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 42
