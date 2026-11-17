@@ -2179,8 +2179,8 @@ describe('goal PR publication and merge through manager MCP', () => {
       const list = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(get.isError).toBeUndefined();
       expect(list.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(get.content))).toMatchObject({ goal: { id: goalId, pullRequest } });
-      expect(JSON.parse(firstTextContent(list.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, pullRequest })] });
+      expect(JSON.parse(firstTextContent(get.content))).toMatchObject({ goal: { id: goalId, pullRequest: { ...pullRequest, state: 'open' } } });
+      expect(JSON.parse(firstTextContent(list.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, pullRequest: { ...pullRequest, state: 'open' } })] });
     });
   });
 
