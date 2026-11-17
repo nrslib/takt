@@ -83,6 +83,13 @@ describe('buildRepositoryIdentityEnv', () => {
         Gh_Enterprise_Token: 'x',
         Gh_Host: 'ghe.example.com',
       })).toEqual({ GH_REPO: 'ghe.example.com/owner/repo' });
+      expect(buildRepositoryIdentityEnv(server, 'github', {
+        Gh_Enterprise_Token: 'x',
+        Gh_Host: 'other.example.com',
+      })).toEqual({});
+      expect(buildRepositoryIdentityEnv(server, 'github', {
+        Gh_Enterprise_Token: 'x',
+      })).toEqual({});
     });
 
     it.each(['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])('skips an Enterprise Server host when %s is set without GH_HOST', (key) => {
