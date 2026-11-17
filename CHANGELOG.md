@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.76.1] - 2026-11-17
+
+### Fixed
+
+- Codex steps that keep working across many context compactions, such as long reviews, are no longer stopped by the compaction recovery limit (#2070). The limit now counts only consecutive recoveries that are compacted again without calling any tool; a recovery that calls a tool resets the count.
+
 ## [0.76.0] - 2026-11-17
 
 ### Added
