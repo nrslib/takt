@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub / GitLab auto-detection also recognises subdomains of `ghe.com` and self-hosted hostnames with exactly one label equal to `github` or `gitlab`, such as `github.example.com` or `gitlab.example.com`. `vcs_provider` still takes precedence; hostnames with both labels or neither stay undetected.
+
 ### Fixed
 
 - Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone. Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.

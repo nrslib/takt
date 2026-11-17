@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub / GitLab の自動検出が、`ghe.com` のサブドメインと、ラベルのうち `github` か `gitlab` の一方にちょうど一致するものがあるセルフホストのホスト名（`github.example.com`、`gitlab.example.com` など）も認識するようになりました。`vcs_provider` が引き続き優先され、両方を含むホスト名やどちらも含まないホスト名は検出しません。
+
 ### Fixed
 
 - プロジェクトルートが shallow clone のとき、worktree タスクが `Git clone failed` で失敗する問題を修正しました。Git はエラーメッセージにリポジトリのパスを引用符付きで含める（"reference repository '<path>' is shallow"）ため、`--reference` なしの通常クローンへのフォールバックが動作していませんでした。引用符付きと引用符なしの両方の表記を判定するようにしました。
