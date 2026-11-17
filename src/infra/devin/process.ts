@@ -71,6 +71,7 @@ export type DevinExecError = Error & {
   sessionId?: string;
   stderr?: string;
   signal?: NodeJS.Signals | null;
+  partialOutput?: string;
 };
 
 export interface DevinProcessExit {
@@ -124,6 +125,7 @@ export function createExecError(
     sessionId?: string;
     stderr?: string;
     signal?: NodeJS.Signals | null;
+  partialOutput?: string;
     name?: string;
   } = {},
 ): DevinExecError {
@@ -136,6 +138,7 @@ export function createExecError(
   error.sessionId = params.sessionId;
   error.stderr = params.stderr;
   error.signal = params.signal;
+  error.partialOutput = params.partialOutput;
   return error;
 }
 

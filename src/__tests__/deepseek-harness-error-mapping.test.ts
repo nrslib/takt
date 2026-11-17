@@ -20,6 +20,7 @@ const runtimeBehavior = vi.hoisted(() => ({
   runError: undefined as unknown,
   closeError: undefined as unknown,
   notifications: [] as unknown[],
+  finalResponse: 'ok',
   startCount: 0,
   runCount: 0,
   closeCount: 0,
@@ -106,7 +107,7 @@ const DeepSeekHarness = class {
         type: 'turn/end', data: { reason: { kind: 'completed' } },
       } } });
     }
-    return { sessionId: this.id, finalResponse: 'ok', finishReason: 'completed' };
+    return { sessionId: this.id, finalResponse: runtimeBehavior.finalResponse, finishReason: 'completed' };
   }
 
   /** Simulate cleanup, optionally write a proven-exit receipt, then inject the configured close failure. */
@@ -174,6 +175,7 @@ import {
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
 import * as runtimeStateModule from '../infra/deepseek-harness/runtime-state.js';
+import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
@@ -276,6 +278,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeStateBehavior.failBarrierPublication = false;
     runtimeStateBehavior.failPatchDisposal = false;
     runtimeBehavior.notifications = [];
+    runtimeBehavior.finalResponse = 'ok';
     runtimeBehavior.startCount = 0;
     runtimeBehavior.runCount = 0;
     runtimeBehavior.closeCount = 0;
@@ -500,7 +503,7 @@ describe('DeepSeek Harness SDK error mapping', () => {
       onStream: (streamEvent) => events.push(streamEvent),
     });
 
-    expect(response).toMatchObject({ status: 'done', content: 'ok', sessionId });
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
     expect(events.map((streamEvent) => streamEvent.type)).toEqual([
       'init',
       'text',
@@ -521,6 +524,343 @@ describe('DeepSeek Harness SDK error mapping', () => {
       content: 'README content',
       isError: false,
     });
+  });
+
+  const toolEndedTurnNotifications = (sessionId: string, afterToolCall: readonly string[] = []): unknown[] => {
+    const event = (value: Record<string, unknown>) => ({
+      method: 'session.event',
+      params: { sessionId, event: value },
+    });
+    return [
+      { method: 'session.started', params: { sessionId } },
+      event({
+        type: 'assistant/message',
+        data: {
+          message: {
+            content: [
+              { type: 'text', text: 'Note: editing retry.ts next.' },
+              { type: 'tool-call', id: 'edit-1', name: 'Edit', arguments: '{"path":"retry.ts"}' },
+              ...afterToolCall.map((text) => ({ type: 'text', text })),
+            ],
+          },
+        },
+      }),
+      event({
+        type: 'tool/result',
+        data: {
+          message: {
+            source: { callId: 'edit-1' },
+            content: [{ type: 'tool-result', content: [{ type: 'text', text: 'edited' }], isError: false }],
+          },
+        },
+      }),
+      event({ type: 'turn/end', data: { reason: { kind: 'completed' } } }),
+    ];
+  };
+
+  it('returns an empty done result with the session ID when a completed turn ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    // The SDK's finalResponse joins every text block of the last assistant message, including the note before its tool call.
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '', sessionId });
+    expect(response.error).toBeUndefined();
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'tool_use', 'tool_result', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Note: editing retry.ts next.' });
+    expect(events.at(-1)?.data).toEqual({ result: '', success: true, sessionId });
+  });
+
+  it('keeps a completed turn with neither assistant text nor a tool call as a provider error', async () => {
+    runtimeBehavior.notifications = [{
+      method: 'session.event',
+      params: { sessionId: 'error-mapping-session', event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+    }];
+    runtimeBehavior.finalResponse = '';
+
+    const response = await callDeepSeekHarness('worker', 'say nothing', { cwd: temporaryRoot });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR,
+    });
+  });
+
+  it('answers with the text after the last tool call of the last assistant message', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId, ['Edited retry.ts.']);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.Edited retry.ts.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'edit retry.ts', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Edited retry.ts.', sessionId });
+    expect(events.filter((streamEvent) => streamEvent.type === 'text').map((streamEvent) => streamEvent.data))
+      .toEqual([{ text: 'Note: editing retry.ts next.Edited retry.ts.' }]);
+    expect(events.at(-1)?.data).toEqual({ result: 'Edited retry.ts.', success: true, sessionId });
+  });
+
+  it('answers with the SDK finalResponse when no assistant message was observed', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = 'Final answer.';
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'answer', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: 'Final answer.', sessionId });
+    expect(events.map((streamEvent) => streamEvent.type)).toEqual(['init', 'text', 'result']);
+    expect(events[1]?.data).toEqual({ text: 'Final answer.' });
+  });
+
+  it('keeps a credential split by the tool call out of the answer and the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = Math.floor(credential.length / 2);
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/message',
+        data: { message: { content: [
+          { type: 'text', text: `Key ${credential.slice(0, split)}` },
+          { type: 'tool-call', id: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+          { type: 'text', text: `${credential.slice(split)} is configured.` },
+        ] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `Key ${credential} is configured.`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the key', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', sessionId });
+    expect(response.content).toMatch(/ is configured\.$/);
+    for (const fragment of [credential.slice(0, split), credential.slice(split), 'Key ']) {
+      expect(response.content).not.toContain(fragment);
+    }
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+  });
+
+  it('masks a credential assignment split by a tool call even when it is not a configured secret', async () => {
+    const sessionId = 'error-mapping-session';
+    const suffix = 'rivateValue987654321';
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/message',
+        data: { message: { content: [
+          { type: 'text', text: 'password=p' },
+          { type: 'tool-call', id: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+          { type: 'text', text: suffix },
+        ] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `password=p${suffix}`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response).toMatchObject({ status: 'done', content: '[REDACTED]', sessionId });
+    expect(response.content).not.toContain(suffix);
+    expect(JSON.stringify(events)).not.toContain(`password=p${suffix}`);
+    expect(JSON.stringify(events)).not.toContain(suffix);
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('masks a credential split across assistant chunks and a standalone tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    const fragment = 'rivateValue987654321';
+    const suffix = `${fragment} is configured.\n`;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 'password=p' } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: suffix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = `password=p${suffix}`;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(response.content).toContain('password=[REDACTED] is configured.');
+    expect(JSON.stringify(events)).not.toContain(fragment);
+    expect(events.at(-1)?.data).toEqual({ result: response.content, success: true, sessionId });
+  });
+
+  it('masks an unregistered credential continued by short chunks after a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    const fragments = ['password=p', 'riv', 'ateValue987654321\n'];
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[0] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[1] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: fragments[2] } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = fragments.join('');
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(fragments[1]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!);
+    expect(JSON.stringify(events)).not.toContain(fragments[2]!.trim());
+    expect(response.content.trim()).toBe('password=[REDACTED]');
+  });
+
+  it('keeps both halves of a configured credential split across ordinary chunks out of the stream', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = process.env.DEEPSEEK_API_KEY!;
+    const split = credential.length - 1;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: credential.slice(0, split) } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: `${credential.slice(split)}\n` } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(credential.slice(0, split));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(split));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('keeps the tool boundary until a configured credential split across several later chunks is resolved', async () => {
+    const sessionId = 'error-mapping-session';
+    const credential = 'opaqueValue987654321';
+    process.env.DEEPSEEK_API_KEY = credential;
+    const prefix = credential.slice(0, -5);
+    const middle = credential.slice(-5, -3);
+    const suffix = `${credential.slice(-3)}\n`;
+    runtimeBehavior.notifications = [
+      { method: 'session.started', params: { sessionId } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: prefix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'tool/call', data: { callId: 'read-1', name: 'Read', arguments: '{"path":"README.md"}' },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'reasoning-delta', text: 'analysis' } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: middle } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: {
+        type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: suffix } },
+      } } },
+      { method: 'session.event', params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } },
+    ];
+    runtimeBehavior.finalResponse = credential;
+    const events: StreamEvent[] = [];
+
+    const response = await callDeepSeekHarness('worker', 'report the credential', {
+      cwd: temporaryRoot,
+      onStream: (streamEvent) => events.push(streamEvent),
+    });
+
+    expect(response.status).toBe('done');
+    expect(JSON.stringify(events)).not.toContain(prefix);
+    expect(JSON.stringify(events)).not.toContain(middle);
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-5));
+    expect(JSON.stringify(events)).not.toContain(credential.slice(-3));
+    expect(events.at(-1)?.data).toEqual({ result: '[REDACTED]', success: true, sessionId });
+  });
+
+  it('continues the same session instead of a fresh retry when Phase 1 ends with a tool call', async () => {
+    const sessionId = 'error-mapping-session';
+    runtimeBehavior.notifications = toolEndedTurnNotifications(sessionId);
+    runtimeBehavior.finalResponse = 'Note: editing retry.ts next.';
+    const requestedSessionIds: (string | undefined)[] = [];
+
+    const recovered = await runPhase1WithEmptyRecovery({
+      instruction: 'edit retry.ts',
+      initialSessionId: undefined,
+      execute: (attempt) => {
+        if (attempt.reason === 'empty_continuation') {
+          runtimeBehavior.notifications = [
+            {
+              method: 'session.event',
+              params: { sessionId, event: {
+                type: 'assistant/message',
+                data: { message: { content: [{ type: 'text', text: 'Edit complete.' }] } },
+              } },
+            },
+            {
+              method: 'session.event',
+              params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+            },
+          ];
+          runtimeBehavior.finalResponse = 'Edit complete.';
+        }
+        requestedSessionIds.push(attempt.sessionId);
+        return callDeepSeekHarness('worker', attempt.instruction, { cwd: temporaryRoot, sessionId: attempt.sessionId });
+      },
+      discardSession: vi.fn(),
+    });
+
+    expect(recovered.response).toMatchObject({ status: 'done', content: 'Edit complete.', sessionId });
+    expect(recovered.finalAttempt).toMatchObject({ reason: 'empty_continuation', sessionId });
+    expect(requestedSessionIds).toEqual([undefined, sessionId]);
+    expect(runtimeBehavior.runCount).toBe(2);
   });
 
   it('reports cleanup failure with a fixed diagnostic and prevents later runtime creation', async () => {

@@ -125,6 +125,7 @@ import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { createRetryConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
 import { formatStepPreviews } from '../features/interactive/interactive-summary.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockConfirm = vi.mocked(confirm);
@@ -359,7 +360,7 @@ describe('E2E: Retry mode with failure context injection', () => {
         Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
         expect((await runTaskRetryMode(tmpDir, context, display)).action).toBe('cancel');
         expectSafeIntro(consoleLog.mock.calls.flat().map(String).find((line) => line.includes('##'))!);
-        expect(capture.systemPrompts).toContain(original.strategy.systemPrompt);
+        expect(capture.systemPrompts).toContain(withProgressNotesGuidance(original.strategy.systemPrompt, lang));
         restoreStdin();
         setupRawStdin([]);
         Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });

@@ -26,6 +26,7 @@ import type { InternalAgentIsolation, StreamCallback, StreamEvent } from '../../
 import type { McpServerConfig, PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import { parseTaskStateReferenceMarker } from '../../shared/task-state-reference.js';
 import {
   providerSupportsAllowedTools,
@@ -339,11 +340,11 @@ export async function callAIWithRetry(
       );
     }
 
-    const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+    const resolvedSystemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(
       systemPrompt,
       ctx.lang,
       ctx.provider.getRuntimeInstructions(),
-    );
+    ), ctx.lang);
     const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
     const hasImageAttachments = options.imageAttachments !== undefined && options.imageAttachments.length > 0;
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput
@@ -472,7 +473,11 @@ export async function callAIWithRetry(
     const firstAttempt = await callProvider(agent, sessionId, display);
     const response = firstAttempt.response;
     display?.flush();
-    const success = response.status !== 'blocked' && response.status !== 'error';
+    const emptyResponse = response.status === 'done'
+      && response.structuredOutput === undefined
+      && response.content.trim().length === 0
+      && firstAttempt.usedTools;
+    const success = response.status !== 'blocked' && response.status !== 'error' && !emptyResponse;
     const rejectedSession = !success && sessionId !== undefined
       && ctx.providerType !== 'deepseek-harness'
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
@@ -488,6 +493,7 @@ export async function callAIWithRetry(
     if (!abortController.signal.aborted
       && !forceExitRequested
       && !success
+      && !emptyResponse
       && canRetrySession
       // DeepSeek has no stale-session recovery. Retrying an unsupported
       // constraint without an ID cannot make that same constraint supported.
@@ -547,8 +553,10 @@ export async function callAIWithRetry(
     }
     return {
       result: {
-        content: success ? response.content : (response.error ?? response.content)
-          + (startFreshNextTurn
+        content: success
+          ? response.content
+          : (response.error ?? (emptyResponse ? 'The AI returned an empty response' : response.content))
+            + (startFreshNextTurn
             ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
             : ''),
         sessionId: startFreshNextTurn || rejectedSession ? undefined : response.sessionId,

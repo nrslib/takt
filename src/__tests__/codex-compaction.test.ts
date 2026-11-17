@@ -73,6 +73,27 @@ describe('Codex rollout compaction detection', () => {
     await expect(detectCodexCompaction(observation, sessionId)).resolves.toBe(true);
   });
 
+  it('requires a compacted record after explicit new_context rather than treating the call as completion', async () => {
+    const sessionId = 'explicit-context-session';
+    const directory = join(codexHome, 'sessions', '2026', '11', '12');
+    mkdirSync(directory, { recursive: true });
+    const rolloutPath = join(directory, `rollout-2026-11-12T12-00-00-${sessionId}.jsonl`);
+    writeFileSync(rolloutPath, rolloutLine('event_msg'));
+    const observation = createCodexRolloutObservation(
+      { CODEX_HOME: codexHome },
+      sessionId,
+      new Date(2026, 10, 12, 12, 1, 0),
+    );
+    appendFileSync(rolloutPath, `${JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'new_context', arguments: '{}', call_id: 'call-context' },
+    })}\n`);
+
+    await expect(detectCodexCompaction(observation, sessionId)).resolves.toBe(false);
+    appendFileSync(rolloutPath, rolloutLine('compacted'));
+    await expect(detectCodexCompaction(observation, sessionId)).resolves.toBe(true);
+  });
+
   it('finds an existing session rollout below the effective HOME', async () => {
     const sessionId = 'existing-home-session';
     const directory = join(codexHome, '.codex', 'sessions', '2026', '11', '12');

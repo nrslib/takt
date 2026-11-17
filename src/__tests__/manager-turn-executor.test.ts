@@ -6,6 +6,8 @@ import { makeProvider } from './test-helpers.js';
 import { diagnosticLoggingSuppressed, withoutDiagnosticLogging } from '../shared/utils/diagnostic-context.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import { MAX_PROCESS_PROGRESS_BYTES } from '../core/daemon/processProtocol.js';
+import type { Provider } from '../infra/providers/types.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -20,6 +22,16 @@ function fixture() {
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
+
+it('adds the progress notes guidance without changing the manager prompt that requires goal work-log records', () => {
+  const setup = vi.fn<Provider['setup']>(() => ({ call: vi.fn<ProviderAgent['call']>() }));
+  const managerPrompt = 'Record each operation and its evidence with takt_record_goal_work_log in the same turn.';
+
+  createManagerTurnExecutor('/repository', { ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup }) },
+    strategy: { systemPrompt: managerPrompt } });
+
+  expect(setup).toHaveBeenCalledWith({ name: 'manager', systemPrompt: withProgressNotesGuidance(managerPrompt, 'en') });
+});
 
 it('forwards tool identities and batched results with a separate call identity for each provider call', async () => {
   const f = fixture();

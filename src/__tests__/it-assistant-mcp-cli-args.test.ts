@@ -331,8 +331,7 @@ describe('assistant MCP tool permissions in Cursor and Copilot CLI arguments', (
       const cwd = writeRuntime(undefined);
       const options = new OptionsBuilder(
         { projectCwd: cwd, provider, model: `${provider}-model`, mcpAssignment },
-        () => cwd, () => cwd, () => undefined, () => join(cwd, 'reports'), () => 'en', () => 'workflow',
-      ).buildAgentOptions(workflowStepOf(requiredPermissionMode));
+        () => cwd, () => cwd, () => undefined, () => join(cwd, 'reports'), () => 'en', () => 'workflow', () => undefined, () => 'task', () => ({ kind: 'not_a_git_repository' as const }),).buildAgentOptions(workflowStepOf(requiredPermissionMode));
       return { cwd, options };
     }
 

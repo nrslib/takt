@@ -12,8 +12,8 @@ type BaseRefCandidate = {
 const TAKT_COMMIT_PREFIX = 'takt:';
 const log = createLogger('branchGitResolver');
 
-export function resolveMergeBase(gitCwd: string, baseRef: string, branch: string): string {
-  return runGit(gitCwd, ['merge-base', baseRef, branch]);
+export function resolveMergeBase(gitCwd: string, baseRef: string, branch: string, env?: NodeJS.ProcessEnv): string {
+  return runGit(gitCwd, ['merge-base', baseRef, branch], env);
 }
 
 function buildPriorityRefs(defaultBranch: string, branch: string): string[] {

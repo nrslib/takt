@@ -25,7 +25,7 @@ import type {
 } from '../../models/types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
-import type { RunPaths } from '../run/run-paths.js';
+import { resolveReportDirectory, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
@@ -244,6 +244,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   const getReviewScope = createTaskReviewScopeResolver({
     getCwd: params.getCwd,
     getPrContext: () => params.options.prContext,
+    getReportDir: () => resolveReportDirectory(params.getCwd(), params.getReportDir()),
   });
   const failureDir = join(params.runPaths.runRootAbs, 'failures');
   const runContextRoot = join(params.runPaths.runRootAbs, 'context');

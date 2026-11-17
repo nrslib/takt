@@ -101,7 +101,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
           && event.event.command.display !== false ? event.event.command.text : undefined;
         turns.push({ operationId: event.operationId, ...(message === undefined ? {} : { message }),
-          acceptedSequence: event.acceptedSequence, pending: record.state === 'queued' });
+          acceptedSequence: event.acceptedSequence, pending: record.state === 'queued',
+          ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}) });
       }
       return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
     });

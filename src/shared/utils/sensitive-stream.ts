@@ -38,6 +38,19 @@ function pendingSensitiveValueRanges(text: string): SensitiveRange[] {
       .map((range) => ({ start: range.start, end: text.length })));
 }
 
+function knownValuePrefixSuffixRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
+  const ranges: SensitiveRange[] = [];
+  for (const value of values) {
+    for (let length = Math.min(value.length - 1, text.length); length > 0; length--) {
+      if (text.endsWith(value.slice(0, length))) {
+        ranges.push({ start: text.length - length, end: text.length });
+        break;
+      }
+    }
+  }
+  return ranges;
+}
+
 /** Complete value-bearing lines and closed PEM blocks become append-only output. */
 export class SensitiveTextStreamBuffer {
   readonly sensitiveValues = createBoundedSensitiveValues();
@@ -94,15 +107,11 @@ export class SensitiveTextStreamBuffer {
     // previewだけの発見を、確定済みの候補へ持ち越さない。
     const values = createBoundedSensitiveValues();
     values.collect(this.sensitiveValues);
-    const ranges = [...maskingRanges(text, values), ...pendingSensitiveValueRanges(text)];
-    for (const value of values.values) {
-      for (let length = Math.min(value.length - 1, text.length); length > 0; length--) {
-        if (text.endsWith(value.slice(0, length))) {
-          ranges.push({ start: text.length - length, end: text.length });
-          break;
-        }
-      }
-    }
+    const ranges = [
+      ...maskingRanges(text, values),
+      ...pendingSensitiveValueRanges(text),
+      ...knownValuePrefixSuffixRanges(text, values.values),
+    ];
     return sliceUtf8(maskSensitiveRanges(text, ranges), 0, SENSITIVE_PREVIEW_BYTES, true).content;
   }
 
@@ -110,7 +119,14 @@ export class SensitiveTextStreamBuffer {
     const text = this.pending.slice(0, end);
     this.pending = this.pending.slice(end);
     this.pemLabel = undefined;
-    return { text, ranges: [...maskingRanges(text, this.sensitiveValues), ...substringSensitiveRanges(text, substringValues)] };
+    return {
+      text,
+      ranges: [
+        ...maskingRanges(text, this.sensitiveValues),
+        ...substringSensitiveRanges(text, substringValues),
+        ...knownValuePrefixSuffixRanges(text, this.sensitiveValues.values),
+      ],
+    };
   }
 }
 

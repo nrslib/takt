@@ -103,6 +103,7 @@ function deps(input: {
         workflowName: 'test-workflow',
         currentStep: step.name,
       })),
+      buildProgressNotesRequest: vi.fn(),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd: input.cwd,
         resolvedExecution: {
@@ -205,7 +206,7 @@ describe('companion StepExecutor lifecycle', () => {
       companionEnabled: false,
       companionDiffReader: reader,
       emitEvent,
-    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
     expect(result.response.status).toBe('done');
     expect(workflowState.companion).toBeUndefined();
@@ -642,7 +643,7 @@ describe('companion StepExecutor lifecycle', () => {
       const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
 
       const result = await new StepExecutor(executorDeps)
-        .runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+        .runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
       expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
         buildProviderCallCallbacks: expect.any(Function),
@@ -781,7 +782,7 @@ describe('companion StepExecutor lifecycle', () => {
       companionFixPolicy: 'loop',
       companionDiffReader,
       emitEvent,
-    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
     try {
       await vi.waitFor(() => {
@@ -871,7 +872,7 @@ describe('companion StepExecutor lifecycle', () => {
       });
 
       await new StepExecutor(executorDeps)
-        .runNormalStep(step, state(), 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+        .runNormalStep(step, state(), 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
       const executionUnitKeys = vi.mocked(executorDeps.optionsBuilder.buildProviderCallCallbacks)
         .mock.calls.map((call) => call[3]);
@@ -972,7 +973,7 @@ describe('companion StepExecutor lifecycle', () => {
         companionEnabled: true,
         companionDiffReader: reviewableDiffReader(),
         emitEvent,
-      })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+      })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
       expect(result.response).toMatchObject({ status: 'done', content: 'implemented' });
       const coderCalls = executeAgentMock.mock.calls.filter(([persona]) => persona === 'coder');
@@ -1093,7 +1094,7 @@ describe('companion StepExecutor lifecycle', () => {
       companionEnabled: true,
       companionDiffReader: reviewableDiffReader(),
       emitEvent,
-    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
     const executeAgentMock = vi.mocked(executeAgent);
     expect(result.response).toMatchObject({ status: 'done', content: 'retry review complete' });
@@ -1202,7 +1203,7 @@ describe('companion StepExecutor lifecycle', () => {
       companionEnabled: true,
       companionDiffReader: reviewableDiffReader(),
       emitEvent,
-    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [] });
+    })).runNormalStep(step, workflowState, 'task', 5, vi.fn(), { text: 'Implement.', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } });
 
     expect(result.response).toMatchObject({ status: 'done', content: 'completion retry complete' });
     expect(vi.mocked(executeAgent).mock.calls.filter(([persona]) => persona === 'coder'))

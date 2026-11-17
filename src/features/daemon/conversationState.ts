@@ -6,18 +6,23 @@ import { eventGoalReference } from '../../core/daemon/events.js';
 import { DaemonPersistedFiles } from '../../infra/daemon/persistedFiles.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
 import type { ConversationTurns, ConversationOwner } from '../../core/daemon/ports.js';
-import type { ConversationSnapshot, TurnIdentity, TurnResult, TurnStart } from '../../core/daemon/messages.js';
+import type { ConversationSnapshot, TurnIdentity, TurnOutcome, TurnResult, TurnStart } from '../../core/daemon/messages.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { DaemonDisplayFiles } from '../../infra/daemon/displayFiles.js';
 import { DaemonNotifications } from '../../infra/daemon/notifications.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
-import type { ConversationState, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
+import type { ConversationState, OperationResult, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
 import { conversationProjection } from './conversationProjection.js';
 import { DaemonRouting } from './routing.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 import { ToolTurn } from './toolTurn.js';
 import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+
+/** 配送する結果と読取で戻す結果を同じ形にし、再表示がライブ表示と食い違わないようにする。 */
+function operationResultOf(outcome: Exclude<TurnOutcome, { kind: 'deferred' }>): OperationResult {
+  return outcome.kind === 'completed' ? outcome.result : { kind: 'error', code: outcome.kind, message: outcome.message ?? 'Turn interrupted' };
+}
 
 interface RunningTurn {
   readonly state: NonNullable<ConversationState['running']> & { generation: number };
@@ -141,8 +146,7 @@ export class DaemonConversations implements ConversationOwner {
         revision: current.state.revision, pending: current.state.pending, approval: current.state.approval, running: null,
         interrupted: outcome.kind === 'interrupted' } }, this.version(result.conversationId, current.state.revision, result.operationId));
       if (outcome.kind !== 'deferred') this.send(result.conversationId, { kind: 'result', operationId: result.operationId,
-        result: outcome.kind === 'completed' ? outcome.result : { kind: 'error', code: outcome.kind, message: outcome.message ?? 'Turn interrupted' } },
-        this.version(result.conversationId, current.state.revision, result.operationId));
+        result: operationResultOf(outcome) }, this.version(result.conversationId, current.state.revision, result.operationId));
       return { current };
     });
     if (result.outcome.kind === 'failed' && current.state.assignment.kind !== 'daemon') {
@@ -284,11 +288,14 @@ export class DaemonConversations implements ConversationOwner {
       }
     }
     if (withTools) {
-      for (const turn of await this.turns.readTurns(id)) {
+      for (const { outcome, ...saved } of await this.turns.readTurns(id)) {
         for (const item of items) {
-          if (item.kind === 'tool_history' && item.history.operationId === turn.operationId) item.acceptedSequence = turn.acceptedSequence;
+          if (item.kind === 'tool_history' && item.history.operationId === saved.operationId) item.acceptedSequence = saved.acceptedSequence;
         }
-        if (turn.message !== undefined) items.push({ kind: 'user_message', ...turn, message: turn.message });
+        if (saved.message !== undefined) items.push({ kind: 'user_message', ...saved, message: saved.message });
+        if (outcome !== undefined && outcome.kind !== 'deferred') {
+          items.push({ kind: 'turn_result', operationId: saved.operationId, acceptedSequence: saved.acceptedSequence, result: operationResultOf(outcome) });
+        }
       }
     }
     const frozen = structuredClone(items);
