@@ -7,8 +7,9 @@ import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TasksFileSchema, type TasksFileData } from '../infra/task/schema.js';
 import { executionIdentity } from '../core/worker-pool/remoteProtocol.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { sanitizeRemoteFailureReason } from '../core/worker-pool/remoteFailure.js';
 
-const doubles = vi.hoisted(() => ({ git: vi.fn(), text: vi.fn(), sequence: vi.fn(), sha: vi.fn(), goal: vi.fn(), event: vi.fn() }));
+const doubles = vi.hoisted(() => ({ git: vi.fn(), text: vi.fn(), sequence: vi.fn(), sha: vi.fn(), goal: vi.fn(), event: vi.fn(), updateGoal: vi.fn() }));
 vi.mock('../infra/goals/git-command.js', () => ({ runGoalGit: doubles.git, resolveGoalBranchSha: doubles.sha, goalGitText: doubles.text }));
 vi.mock('../infra/task/remoteExecutionStore.js', () => ({ RemoteExecutionStore: class {
   constructor(_cwd: string, private readonly id: string) {}
@@ -18,7 +19,7 @@ vi.mock('../infra/task/remoteExecutionStore.js', () => ({ RemoteExecutionStore: 
     if (sequence !== await doubles.sequence()) throw new Error('Remote final log sequence has not been saved');
   }
 } }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = doubles.goal; } }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = doubles.goal; update = doubles.updateGoal; } }));
 vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: doubles.event }));
 vi.mock('../infra/workflow/live-intervention-store.js', () => ({ LiveInterventionFileStore: class {
@@ -31,6 +32,7 @@ beforeEach(() => {
   doubles.sequence.mockResolvedValue(2);
   doubles.text.mockResolvedValue('b'.repeat(40));
   doubles.goal.mockReturnValue(goalRecord());
+  doubles.updateGoal.mockImplementation(async (_id, update) => update(goalRecord()));
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -49,6 +51,52 @@ function fixture(previousGeneration = 0) {
   const claim = { kind: 'claim' as const, taskName: 'T', workerId: 'w1', registrationGeneration: randomUUID(), requestId: 'r1', leaseExpiresAt: 60_000 };
   return { lifecycle, claim, store, state: () => state };
 }
+
+it('persists one retry deadline and clears checkpoint ownership when restarting from the original SHA', async () => {
+  const f = fixture();
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  const assignment = executionIdentity(claim.assignment);
+  await f.lifecycle.request({ kind: 'fail', assignment, reason: 'lost' }, 1);
+  new TaskRetryService('/project', '/project/.takt/tasks.yaml', f.store).requeueTask('T', ['failed'], { startStep: 'verify', sourceRunSlug: 'old-run' });
+  await f.lifecycle.request({ kind: 'retry-state', assignment, waitUntil: 61000 }, 1);
+  await f.lifecycle.request({ kind: 'retry-state', assignment, waitUntil: 62000 }, 1);
+  expect(f.state().tasks[0]!.remote_assignment?.retryWaitUntil).toBe(61000);
+  await f.lifecycle.request({ kind: 'retry-state', assignment, restartReason: 'Worker w1 registration was removed' }, 1);
+  expect(f.state().tasks[0]).toMatchObject({ status: 'pending', remote_assignment: {
+    retryReservation: false, workLocation: null, originalSha: 'a'.repeat(40), restartReason: 'Worker w1 registration was removed' } });
+  expect(f.state().tasks[0]!.source_run_slug).toBeUndefined();
+  expect(f.state().tasks[0]!.start_step).toBeUndefined();
+  expect(doubles.updateGoal).toHaveBeenCalledOnce();
+});
+
+it('requires the current cleanup ID before acknowledging removal of a failed workspace', async () => {
+  const f = fixture();
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  const assignment = executionIdentity(claim.assignment);
+  await f.lifecycle.request({ kind: 'fail', assignment, reason: 'failed' }, 1);
+  const cleanupId = randomUUID();
+  f.store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, deletion: { id: cleanupId, owner_pid: process.pid } })) }));
+  expect(await f.lifecycle.request({ kind: 'cleanup', assignment, cleanupId: randomUUID() }, 1)).toEqual({ kind: 'updated', record: null });
+  expect(f.state().tasks[0]!.remote_assignment?.retryReservation).toBe(true);
+  await f.lifecycle.request({ kind: 'cleanup', assignment, cleanupId }, 1);
+  expect(f.state().tasks[0]!.deletion?.remote_ack).toBe(true);
+  expect(f.state().tasks[0]!.remote_assignment?.retryReservation).toBe(false);
+});
+
+it('keeps a queued remote retry out of local claims while preserving its reservation', async () => {
+  const f = fixture();
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  await f.lifecycle.request({ kind: 'fail', assignment: executionIdentity(claim.assignment), reason: 'failed' }, 1);
+  new TaskRetryService('/project', '/project/.takt/tasks.yaml', f.store).requeueTask('T', ['failed']);
+  const before = f.state();
+  const local = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', f.store);
+  expect(local.claimTask('T', 'builtin')).toEqual({ kind: 'declined' });
+  expect(local.claimNextTasks(1)).toEqual([]);
+  expect(f.state()).toEqual(before);
+});
 
 it('claims a remote task without a PID and persists the full assignment with running status', async () => {
   const f = fixture();
@@ -228,17 +276,91 @@ it('saves a remote stop request without a local PID and keeps the same execution
   expect(doubles.event).not.toHaveBeenCalled();
 });
 
-it.each(['requeue', 'retry'] as const)('refuses remote %s before changing the failed task or its assignment', async (operation) => {
+it.each(['fail', 'finish'] as const)('reserves the original worker after a remote %s and restores the reservation', async (kind) => {
   const f = fixture();
   const claim = await f.lifecycle.request(f.claim, 1);
   if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
-  await f.lifecycle.request({ kind: 'fail', assignment: executionIdentity(claim.assignment), reason: 'Connection lost' }, 1);
-  const before = structuredClone(f.state());
+  const identity = executionIdentity(claim.assignment);
+  await f.lifecycle.request(kind === 'fail'
+    ? { kind, assignment: identity, reason: 'Connection lost' }
+    : { kind, assignment: identity, success: false, reason: 'Provider failed', now: 1 }, 1);
+  expect(f.state().tasks[0]).toMatchObject({ status: 'failed', remote_assignment: {
+    executionId: identity.executionId, workerName: 'w1', retryReservation: true,
+  } });
+  const restored = new RemoteTaskLifecycle('/project', f.store, vi.fn());
+  expect(restored.records()).toEqual([expect.objectContaining({ status: 'failed', assignment: expect.objectContaining({
+    executionId: identity.executionId, retryReservation: true,
+  }) })]);
+});
+
+it.each([undefined, 'verify'])('queues a remote retry with startStep=%s while retaining its worker and source run', async (startStep) => {
+  const f = fixture(6);
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  await f.lifecycle.request({ kind: 'fail', assignment: executionIdentity(claim.assignment), reason: 'Provider failed' }, 1);
+  const failed = structuredClone(f.state().tasks[0]!);
   const service = new TaskRetryService('/project', '/project/.takt/tasks.yaml', f.store);
-  const retry = () => operation === 'requeue' ? service.requeueFailedTask('T')
-    : service.startReExecution('T', ['failed'], 'retry');
-  expect(retry).toThrow(/remote/i);
-  expect(f.state()).toEqual(before);
+  expect(service.requeueTask('T', ['failed'], { startStep, sourceRunSlug: failed.run_slug,
+    retryNote: 'Use the corrected instructions' })).toBe('/project/.takt/tasks.yaml');
+  expect(f.state().tasks[0]).toMatchObject({ status: 'pending', assignment_generation: 7,
+    source_run_slug: failed.run_slug, start_step: startStep, retry_note: 'Use the corrected instructions',
+    remote_assignment: { executionId: claim.assignment.executionId, originalSha: claim.assignment.originalSha,
+      workerId: 'w1', registrationGeneration: claim.assignment.registrationGeneration, retryReservation: true } });
+  expect(f.state().tasks[0]!.owner_pid).toBeNull();
+  expect(f.lifecycle.records()).toEqual([expect.objectContaining({ status: 'pending',
+    assignment: expect.objectContaining({ retryReservation: true, workerName: 'w1' }) })]);
+});
+
+it('reports provider authentication failure with the worker name to the manager', async () => {
+  const f = fixture();
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  await f.lifecycle.request({ kind: 'finish', assignment: executionIdentity(claim.assignment), success: false,
+    reason: 'OpenAI authentication failed: missing API key', now: 1 }, 1);
+  const failure = f.state().tasks[0]!.failure!.error;
+  expect(failure).toContain('OpenAI authentication failed');
+  expect(failure).toContain('w1');
+  expect(doubles.event).toHaveBeenCalledWith('/project', expect.objectContaining({
+    result: expect.objectContaining({ success: false, failureReason: failure }),
+  }));
+});
+
+it.each(['a', 'ordinary-distributed-key'])('keeps one worker prefix in manager failures after redacting %s', async (secret) => {
+  const f = fixture();
+  const claim = await f.lifecycle.request(f.claim, 1);
+  if (claim.kind !== 'claim' || claim.assignment === null) throw new Error('Expected claim');
+  const reason = sanitizeRemoteFailureReason('w1', `OpenAI authentication failed: supplied value ${secret}9`, [secret]);
+  await f.lifecycle.request({ kind: 'finish', assignment: executionIdentity(claim.assignment), success: false, reason, now: 1 }, 1);
+  const failure = f.state().tasks[0]!.failure!.error;
+  expect(failure).toBe(reason);
+  expect(failure.match(/Worker w1:/g)).toHaveLength(1);
+  expect(failure).toContain('OpenAI');
+  expect(failure).toContain('[REDACTED]9');
+  expect(failure.includes(secret)).toBe(false);
+  expect(doubles.event).toHaveBeenCalledWith('/project', expect.objectContaining({
+    result: expect.objectContaining({ success: false, failureReason: reason }),
+  }));
+});
+
+it('rejects completion from the failed attempt after the same task starts a new execution', async () => {
+  const f = fixture(6);
+  const first = await f.lifecycle.request(f.claim, 1);
+  if (first.kind !== 'claim' || first.assignment === null) throw new Error('Expected claim');
+  await f.lifecycle.request({ kind: 'fail', assignment: executionIdentity(first.assignment), reason: 'Provider failed' }, 1);
+  new TaskRetryService('/project', '/project/.takt/tasks.yaml', f.store).requeueFailedTask('T');
+  const next = await f.lifecycle.request({ ...f.claim, requestId: 'second-pull' }, 1);
+  if (next.kind !== 'claim' || next.assignment === null) throw new Error('Expected second claim');
+  expect(next.assignment.assignmentGeneration).toBe(8);
+  expect(next.assignment.executionId).not.toBe(first.assignment.executionId);
+  const running = structuredClone(f.state());
+  doubles.event.mockClear();
+  doubles.text.mockClear();
+  expect(await f.lifecycle.request({ kind: 'finish', assignment: executionIdentity(first.assignment), success: true, now: 1,
+    artifacts: { branch: first.assignment.branch, sha: 'b'.repeat(40),
+      runSlug: `remote-${first.assignment.executionId}`, finalLogSequence: 2 } }, 1)).toEqual({ kind: 'updated', record: null });
+  expect(f.state()).toEqual(running);
+  expect(doubles.text).not.toHaveBeenCalled();
+  expect(doubles.event).not.toHaveBeenCalled();
 });
 
 it('preserves the failure after expiry and refuses a delayed completion', async () => {

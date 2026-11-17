@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, readFile } from 'node:fs/promises';
+import { mkdir, open, readFile, lstat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod/v4';
@@ -13,6 +13,8 @@ import { RemoteExecutionInputSchema } from './remoteExecutionInput.js';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { envVarNameFromPath } from '../../infra/config/env/config-env-overrides.js';
 import { applyRemoteOpenCodeEnvironment } from './remoteExecutionEnvironment.js';
+import { createSensitiveTextStreamRedactor } from '../../shared/utils/sensitiveText.js';
+import { sanitizeRemoteFailureReason } from '../../core/worker-pool/remoteFailure.js';
 
 const resultSchema = z.object({ kind: z.literal('result'), success: z.boolean(), reason: z.string().optional(),
   ...RemoteExecutionResultFields,
@@ -25,10 +27,20 @@ export function createRemoteTaskExecutor(environment: NodeJS.ProcessEnv): Remote
   for (const provider of ['codex', 'claude', 'cursor', 'copilot', 'kiro', 'devin']) {
     delete childEnvironment[envVarNameFromPath(`${provider}_cli_path`)];
   }
-  return { async execute(assignment, signal, port) {
-    const root = join(getGlobalConfigDir(), 'worker-executions', assignment.executionId);
+  const workspace = (id: string): string => join(getGlobalConfigDir(), 'worker-executions', z.string().uuid().parse(id));
+  return { async workspace(assignment, operation) {
+    const root = workspace(assignment.workLocation ?? assignment.executionId);
+    if (operation === 'remove') {
+      await rm(root, { recursive: true, force: true });
+      return false;
+    }
+    try { return (await lstat(join(root, 'clone', '.git'))).isDirectory(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  }, async execute(assignment, signal, port) {
+    const root = assignment.workLocation === null ? workspace(assignment.executionId)
+      : join(workspace(assignment.workLocation), 'attempts', assignment.executionId);
     const inputDirectory = join(root, 'input');
-    const cloneDirectory = join(root, 'clone');
+    const cloneDirectory = join(assignment.workLocation === null ? root : workspace(assignment.workLocation), 'clone');
     const controlDirectory = join(root, 'control');
     const temporaryDirectory = join(root, 'tmp');
     const manifestResponse = await port.request({ kind: 'input-manifest' });
@@ -58,7 +70,13 @@ export function createRemoteTaskExecutor(environment: NodeJS.ProcessEnv): Remote
       } finally { await file.close(); }
     }
     const input = RemoteExecutionInputSchema.parse(JSON.parse(await readFile(join(inputDirectory, 'execution.json'), 'utf8')) as unknown);
-    const executionEnvironment = applyRemoteOpenCodeEnvironment(childEnvironment, input.openCode);
+    const credentials = await port.request({ kind: 'credentials' });
+    if (credentials.kind !== 'credentials') throw new Error('Remote credentials response is missing');
+    if (credentials.error !== undefined) throw new Error(credentials.error);
+    const secretSource = { credentials: credentials.environment };
+    const executionEnvironment = { ...applyRemoteOpenCodeEnvironment(childEnvironment, input.openCode), ...credentials.environment,
+      TAKT_REMOTE_CREDENTIAL_NAMES: JSON.stringify(Object.keys(credentials.environment)),
+      TAKT_REMOTE_GIT_ORIGIN: assignment.origin };
     signal.throwIfAborted();
     const entrypoint = new URL(import.meta.url.endsWith('.ts') ? './remoteTaskProcess.ts' : './remoteTaskProcess.js', import.meta.url);
     const managed = spawnManagedProcess(process.execPath, [...process.execArgv, fileURLToPath(entrypoint)], {
@@ -67,7 +85,9 @@ export function createRemoteTaskExecutor(environment: NodeJS.ProcessEnv): Remote
     }, undefined);
     const child = managed.child;
     let failureOutput = '';
-    child.stderr?.on('data', (bytes: Buffer) => { failureOutput = (failureOutput + bytes.toString('utf8')).slice(-8192); });
+    const redactor = createSensitiveTextStreamRedactor();
+    child.stderr?.on('data', (bytes: Buffer) => { failureOutput = (failureOutput + redactor.write(bytes.toString('utf8'), secretSource)).slice(-8192); });
+    child.stderr?.once('end', () => { failureOutput = (failureOutput + redactor.flush(secretSource)).slice(-8192); });
     let acknowledgedControl = 0;
     let partialControl: { sequence: number; offset: number; size: number; sha256: string; chunks: Buffer[] } | undefined;
     let stopped = false;
@@ -145,9 +165,9 @@ export function createRemoteTaskExecutor(environment: NodeJS.ProcessEnv): Remote
       await replication;
       const finalLogSequence = await sender.flush();
       await port.request({ kind: 'controls', acknowledgedSequence: acknowledgedControl });
-      return { success: completed.success, reason: completed.reason, interrupted: completed.interrupted,
+      return { success: completed.success, reason: completed.reason === undefined ? undefined : sanitizeRemoteFailureReason(assignment.workerName, completed.reason, Object.values(credentials.environment)), interrupted: completed.interrupted,
         retryable: completed.retryable, workflowResult: completed.workflowResult,
-        prUrl: completed.prUrl, prFailed: completed.prFailed, prError: completed.prError,
+        prUrl: completed.prUrl, prFailed: completed.prFailed, prError: completed.prError === undefined ? undefined : sanitizeRemoteFailureReason(assignment.workerName, completed.prError, Object.values(credentials.environment)),
         ...(completed.sha === undefined ? {} : { artifacts: { branch: assignment.branch, sha: completed.sha,
           runSlug: manifest.runSlug, finalLogSequence } }) };
     } finally {

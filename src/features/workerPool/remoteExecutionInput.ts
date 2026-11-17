@@ -22,6 +22,7 @@ import { createWorkflowCallResolver, createWorkflowExecutionContext } from '../t
 import { resolveTaskSpecForExecution, stageTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
 import { portableRemoteConfiguration } from './remoteMcpConfiguration.js';
 import { captureRemoteOpenCodeEnvironment, RemoteOpenCodeEnvironmentSchema } from './remoteExecutionEnvironment.js';
+import { remoteCredentialConfigOverrides } from './remoteCredentials.js';
 
 const origin = z.enum(['default', 'cli', 'env', 'local', 'global']);
 const traceEntry = z.object({ origin, fileValue: z.unknown().optional(), fileOrigin: z.enum(['local', 'global']).optional() }).strict();
@@ -29,6 +30,7 @@ const traceSchema = z.record(z.string(), traceEntry);
 type SerializedTrace = z.infer<typeof traceSchema>;
 const objectSchema = z.record(z.string(), z.unknown());
 export const RemoteExecutionInputSchema = z.object({ version: z.literal(1), runSlug: RemoteRunSlugSchema,
+  resumeSource: z.object({ sourceRunSlug: z.string().optional(), resumeMode: z.enum(['requeue', 'retry', 'instruct']) }).optional(),
   task: z.string().min(1), taskConfig: TaskExecutionConfigSchema, hasTaskSpec: z.boolean(),
   project: objectSchema, global: objectSchema, projectTrace: traceSchema, globalTrace: traceSchema,
   openCode: RemoteOpenCodeEnvironmentSchema,
@@ -56,7 +58,7 @@ export function withRemoteExecutionConfig<T>(input: RemoteExecutionInput, projec
   const worker = loadGlobalConfig();
   const credentials = Object.fromEntries(Object.entries(worker).filter(([key]) => /(?:ApiKey|Token)$/.test(key)));
   return withConfigSnapshot({ projectDir, additionalProjectDirs: [cloneDir], project: input.project as ProjectConfig,
-    global: { ...input.global, ...credentials } as GlobalConfig,
+    global: { ...input.global, ...credentials, ...remoteCredentialConfigOverrides(process.env) } as GlobalConfig,
     projectTrace: deserializeTrace(input.projectTrace), globalTrace: deserializeTrace(input.globalTrace) }, action);
 }
 
@@ -99,6 +101,7 @@ export function prepareRemoteExecutionInput(cwd: string, task: TaskRecord, execu
     prompt = spec.taskPrompt;
   }
   const input = RemoteExecutionInputSchema.parse({ version: 1, runSlug, task: prompt, taskConfig,
+    ...(task.resume_mode === undefined ? {} : { resumeSource: { sourceRunSlug: task.source_run_slug, resumeMode: task.resume_mode } }),
     hasTaskSpec: task.task_dir !== undefined,
     openCode: captureRemoteOpenCodeEnvironment(process.env),
     ...portable });

@@ -8,6 +8,8 @@ import { WORKER_FRAME_MAX_BYTES, WORKER_LEASE_MS, WORKER_PROTOCOL_VERSION, Remot
 import { WorkerRegistry, WORKER_PULL_RESPONSES_DIRECTORY } from '../../infra/worker-pool/workerRegistry.js';
 import { readPrivateFile, writePrivateFile } from '../../infra/daemon/privateFile.js';
 import type { TaskDispatcher } from '../daemon/taskDispatcher.js';
+import type { RemoteCredentialsConfig } from '../../core/models/daemon-config-schema.js';
+import { resolveRemoteCredentials } from './remoteCredentials.js';
 
 const savedResponseSchema = z.object({ workerId: z.string(), registrationGeneration: z.string(),
   requestId: z.string(), assignment: RemoteAssignmentSchema.nullable() }).strict();
@@ -30,7 +32,7 @@ export class RemoteWorkerRuntime {
 
   constructor(private readonly input: { directory: string;
     dispatcher: Pick<TaskDispatcher, 'setRemoteWorkers' | 'restore' | 'dispatch' | 'remoteRecords' | 'hasProjectSnapshot' | 'hasCompleteSnapshot' | 'project' | 'pull' | 'decline' | 'release'>;
-    version: string; now(): number }) {
+    version: string; now(): number; credentials?: RemoteCredentialsConfig }) {
     this.registry = new WorkerRegistry(input.directory);
     this.responseDirectory = join(input.directory, WORKER_PULL_RESPONSES_DIRECTORY);
   }
@@ -72,6 +74,30 @@ export class RemoteWorkerRuntime {
       !this.input.dispatcher.hasProjectSnapshot(record.assignment.projectId))];
     if (!this.input.dispatcher.hasCompleteSnapshot()) throw new Error('Worker pool project assignments could not be restored');
     for (const record of this.records) {
+      if (record.cleanupId !== undefined && !record.cleanupAcknowledged) {
+        const connection = this.connections.get(record.assignment.workerId);
+        if (connection?.registration.registrationGeneration === record.assignment.registrationGeneration) {
+          connection.sink.send({ ...this.envelope(record.assignment), kind: 'workspace', assignment: record.assignment,
+            operation: 'remove', cleanupId: record.cleanupId });
+        }
+      }
+      if (record.status === 'pending' && record.assignment.retryReservation) {
+        const assignment = record.assignment;
+        const removed = !registered.some((worker) => worker.name === assignment.workerId
+          && worker.registrationGeneration === assignment.registrationGeneration);
+        const connection = this.connections.get(assignment.workerId);
+        const connected = connection?.registration.registrationGeneration === assignment.registrationGeneration;
+        const deadline = assignment.retryWaitUntil ?? this.input.now() + WORKER_LEASE_MS;
+        const restartReason = removed ? `Worker ${assignment.workerName} registration was removed`
+          : !connected && deadline <= this.input.now() ? `Connection to worker ${assignment.workerName} was lost for 60 seconds` : undefined;
+        if (restartReason !== undefined || !connected && assignment.retryWaitUntil === undefined) {
+          const result = await this.project(assignment.projectId, { kind: 'retry-state', assignment: executionIdentity(assignment),
+            ...(restartReason === undefined ? { waitUntil: deadline } : { restartReason }) });
+          if (result.kind === 'updated' && result.record !== null) { this.updateRecord(result.record); this.input.dispatcher.release(assignment); }
+        } else if (connected && !assignment.retryReady) {
+          connection.sink.send({ ...this.envelope(assignment), kind: 'workspace', assignment, operation: 'inspect' });
+        }
+      }
       if (record.status !== 'running') continue;
       const assignment = record.assignment;
       const removed = !registered.some((worker) => worker.name === assignment.workerId
@@ -111,7 +137,8 @@ export class RemoteWorkerRuntime {
     this.input.dispatcher.setRemoteWorkers(registered.flatMap((registration) => {
       const connection = this.connections.get(registration.name);
       return connection?.canExecute === true && connection.registration.registrationGeneration === registration.registrationGeneration
-        ? [{ name: registration.name, kind: 'remote' as const, concurrency: registration.concurrency }] : [];
+        ? [{ name: registration.name, kind: 'remote' as const, concurrency: registration.concurrency,
+          registrationGeneration: registration.registrationGeneration }] : [];
     }));
   }
 
@@ -167,9 +194,34 @@ export class RemoteWorkerRuntime {
             if (record === undefined || await this.renew(record.assignment) === undefined) stop.push(active);
           }
           sink.send({ ...envelope, kind: 'heartbeat', stop });
+        } else if (request.kind === 'workspace') {
+          if (request.assignment.workerId !== request.workerId || request.assignment.registrationGeneration !== request.registrationGeneration) {
+            throw new WorkerRejectedError('Workspace assignment does not belong to this worker');
+          }
+          if (request.error !== undefined || request.operation === 'remove' && request.exists) return;
+          const result = await this.project(request.assignment.projectId, request.operation === 'remove'
+            ? { kind: 'cleanup', assignment: request.assignment, cleanupId: request.cleanupId ?? '' }
+            : { kind: 'retry-state', assignment: request.assignment, ...(request.exists ? { ready: true }
+              : { restartReason: `Worker ${request.workerId} workspace was lost` }) });
+          if (result.kind === 'updated' && result.record !== null) this.updateRecord(result.record);
         } else if (request.kind === 'execution') {
           if (request.assignment.workerId !== request.workerId || request.assignment.registrationGeneration !== request.registrationGeneration) {
             throw new WorkerRejectedError('Execution assignment does not belong to this worker');
+          }
+          if (request.command.kind === 'credentials') {
+            const record = this.records.find((record) => record.status === 'running' && sameExecution(record.assignment, request.assignment)
+              && record.assignment.leaseExpiresAt > this.input.now());
+            if (record === undefined) throw new WorkerRejectedError('Remote credential assignment is no longer valid');
+            try {
+              const environment = resolveRemoteCredentials(this.input.credentials, process.env);
+              if (Object.values(environment).some((value) => value.includes(token))) throw new Error('Worker connection token cannot be used as a task credential');
+              sink.send({ ...envelope, kind: 'execution', response: { kind: 'credentials',
+                environment } });
+            } catch (error) {
+              sink.send({ ...envelope, kind: 'execution', response: { kind: 'credentials', environment: {},
+                error: error instanceof Error ? error.message : 'Remote credential resolution failed' } });
+            }
+            return;
           }
           const result = await this.project(request.assignment.projectId, { kind: 'execution', assignment: request.assignment,
             now: this.input.now(), command: request.command });

@@ -118,6 +118,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
     logEvent: vi.fn(),
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));

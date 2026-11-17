@@ -12,6 +12,7 @@ export interface RemoteExecutionPort {
 }
 
 export interface RemoteTaskExecutor {
+  workspace?(assignment: RemoteAssignment, operation: 'inspect' | 'remove'): Promise<boolean>;
   execute(assignment: RemoteAssignment, signal: AbortSignal, port: RemoteExecutionPort): Promise<{
     success: boolean; reason?: string; artifacts?: RemoteArtifacts; interrupted?: boolean; retryable?: boolean;
     workflowResult?: 'completed' | 'aborted' | 'exceeded' | 'error';
@@ -106,6 +107,20 @@ export async function runRemoteWorker(input: {
       ending = true; transport?.close(); finish(); return;
     }
     switch (message.kind) {
+      case 'workspace': {
+        void (async () => {
+          await running.get(message.assignment.executionId)?.operation;
+          let exists = false;
+          let error: string | undefined;
+          try {
+            if (input.executor?.workspace === undefined) throw new Error('Worker cannot manage execution workspaces');
+            exists = await input.executor.workspace(message.assignment, message.operation);
+          } catch (failure) { error = sanitizeSensitiveText(failure instanceof Error ? failure.message : String(failure)); }
+          if (connected && !ending) transport!.send({ ...envelope(), kind: 'workspace', assignment: executionIdentity(message.assignment),
+            operation: message.operation, cleanupId: message.cleanupId, exists, error });
+        })();
+        break;
+      }
       case 'connected':
         connected = true;
         concurrency = message.concurrency;

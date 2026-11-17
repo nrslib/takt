@@ -45,12 +45,13 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
   if (options.task.kind !== 'failed') {
     throw new Error(`Failed task retry persistence requires failed task. received: ${options.task.kind}`);
   }
-  if ((options.freshStart === true) !== (options.worktreePath === undefined)) {
+  const remote = options.task.remoteAssignment !== undefined;
+  if (!remote && (options.freshStart === true) !== (options.worktreePath === undefined)) {
     throw new Error('Fresh clone retry and worktree path disagree.');
   }
 
   const assertWorktree = (): void => {
-    if (options.freshStart) return;
+    if (remote || options.freshStart) return;
     const worktreePath = options.worktreePath;
     if (worktreePath === undefined) {
       throw new Error('Worktree path is not set for task retry.');
@@ -63,7 +64,7 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
     }
   };
   assertWorktree();
-  await checkQueuedTaskProviders(options.projectDir,
+  if (!remote) await checkQueuedTaskProviders(options.projectDir,
     options.freshStart ? { ...options.task, kind: 'pending' } : options.task,
     {}, terminalProviderConfirmation(), undefined, {
       workflow: options.workflow,

@@ -110,6 +110,9 @@ export class BuiltinProjectRuntime implements WorkerProject {
       return { concurrency: this.config!.concurrency, available,
         ...(remoteRecords.length === 0 ? {} : { remoteRecords }),
         tasks: tasks.map((task) => ({ taskName: task.name, mergeTask: task.merge_task === true,
+          ...(task.remote_assignment === undefined ? {} : { remoteOnly: true,
+            ...(task.remote_assignment.retryReservation ? { retryWorker: task.remote_assignment.workerName,
+              retryReady: task.remote_assignment.retryReady === true } : {}) }),
           ...(origin === undefined ? {} : { origin }) })),
       };
     } catch (error) { return this.acquisitionFailed(error); }
@@ -185,7 +188,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
       let record;
       try { record = this.store.read().tasks.find((task) => task.name === taskName && task.status === 'pending'); }
       catch (error) { return this.acquisitionFailed(error); }
-      if (record === undefined || record.goal_id === undefined || record.deletion !== undefined) return { kind: 'declined' };
+      if (record === undefined || record.goal_id === undefined || record.deletion !== undefined || record.remote_assignment !== undefined) return { kind: 'declined' };
       let pending: TaskInfo;
       try { pending = toTaskInfo(this.cwd, this.runner.getTasksFilePath(), record); }
       catch {

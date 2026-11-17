@@ -23,7 +23,7 @@ export class TaskDispatcher implements WorkerPullPort {
     onError(error: unknown): void;
   }) {}
 
-  get activeTaskCount(): number { return this.active.size; }
+  get activeTaskCount(): number { return [...this.active.values()].filter((entry) => !entry.retryReservation).length; }
 
   project(projectId: string): WorkerProject | undefined { return this.hosts.get(projectId); }
 
@@ -54,7 +54,7 @@ export class TaskDispatcher implements WorkerPullPort {
     if (this.closing !== undefined) return undefined;
     const worker = [...this.input.workers.map((adapter) => adapter.worker), ...this.remoteWorkers].find((worker) => worker.name === workerName);
     if (worker === undefined) throw new Error(`Unknown worker: ${workerName}`);
-    const assignment = scheduleWorkerPool({ workers: [worker],
+    const assignment = scheduleWorkerPool({ workers: [...this.input.workers.map((adapter) => adapter.worker), ...this.remoteWorkers], requestedWorker: worker.name,
       projects: [...this.work].map(([projectId, work]) => ({ projectId, concurrency: work.concurrency })),
       pendingTasks: [...this.work].flatMap(([projectId, work]) => work.available
         ? work.tasks.map((task) => ({ ...task, projectId })) : []), activeAssignments: [...this.active.values()],
@@ -123,11 +123,16 @@ export class TaskDispatcher implements WorkerPullPort {
         const work = await host.inspect();
         if (!('kind' in work)) {
           this.work.set(cwd, { ...work, tasks: [...work.tasks] });
+          for (const [key, assignment] of this.active) {
+            if (assignment.projectId === cwd && assignment.retryReservation) this.active.delete(key);
+          }
           for (const record of work.remoteRecords ?? []) {
             const assignment = record.assignment;
             const key = JSON.stringify([assignment.projectId, assignment.taskName]);
-            if (record.status === 'running') this.active.set(key, {
+            if (record.status === 'running' || assignment.retryReservation) this.active.set(key, {
               projectId: assignment.projectId, taskName: assignment.taskName, workerName: assignment.workerName,
+              retryReservation: record.status !== 'running',
+              registrationGeneration: assignment.registrationGeneration,
             });
             else if (this.active.get(key)?.workerName === assignment.workerName) this.active.delete(key);
           }

@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RemoteExecutionStore, remoteExecutionDirectory, remoteFilePath } from '../infra/task/remoteExecutionStore.js';
@@ -27,13 +27,45 @@ import { RemoteTaskLifecycle } from '../infra/task/remoteTaskLifecycle.js';
 import { TaskStore } from '../infra/task/store.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import * as spawn from '../shared/utils/spawn.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
+import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { writeReportFile } from '../core/workflow/report-writer.js';
 
 const directories: string[] = [];
 afterEach(() => {
+  setExecutionSecrets([]);
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
   invalidateGlobalConfigCache();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it('redacts distributed credentials before saving both previous-response snapshots', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'remote-snapshots-')); directories.push(cwd);
+  const paths = buildRunPaths(cwd, 'remote-snapshot');
+  mkdirSync(paths.contextPreviousResponsesAbs, { recursive: true });
+  setExecutionSecrets(['fake-snapshot-credential']);
+  const executor = new StepExecutor({ getCwd: () => cwd, getReportDir: () => paths.reportsAbs,
+    getRunPaths: () => paths } as unknown as StepExecutorDeps);
+  const state = createInitialState({ name: 'test', initialStep: 'work', maxSteps: 1, steps: [] }, { projectCwd: cwd });
+  executor.persistPreviousResponseSnapshot(state, 'work', 1, 'output fake-snapshot-credential');
+  expect(readFileSync(state.previousResponseSourcePath!, 'utf8')).toBe('output [REDACTED]');
+  expect(readFileSync(join(paths.contextPreviousResponsesAbs, 'latest.md'), 'utf8')).toBe('output [REDACTED]');
+});
+
+it('redacts distributed values in reports and their archived history before transfer', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'remote-reports-')); directories.push(directory);
+  setExecutionSecrets(['fake-report-distributed-value']);
+  writeReportFile(directory, 'auth.md', 'first fake-report-distributed-value');
+  writeReportFile(directory, 'auth.md', 'second fake-report-distributed-value');
+  expect(readFileSync(join(directory, 'auth.md'), 'utf8')).toBe('second [REDACTED]');
+  const files = (root: string): string[] => readdirSync(root, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? files(join(root, entry.name)) : [join(root, entry.name)]);
+  const history = files(directory).filter((path) => path !== join(directory, 'auth.md'));
+  expect(history.map((path) => readFileSync(path, 'utf8'))).toContain('first [REDACTED]');
+  expect(files(directory).some((path) => readFileSync(path, 'utf8').includes('fake-report-distributed-value'))).toBe(false);
 });
 
 it.each([
@@ -546,6 +578,7 @@ it('does not retain the previous assignment environment in the same executor', a
       project: {}, global: {}, projectTrace: {}, globalTrace: {},
       runtime: { profileOrigins: [], assignmentOrigins: {} } }));
     const port: RemoteExecutionPort = { async request(command) {
+      if (command.kind === 'credentials') return { kind: 'credentials', environment: {} };
       if (command.kind === 'input-manifest') return { kind: 'input-manifest', manifest: { version: 1,
         runSlug: `remote-${f.executionId}`, directories: [], files: [{ path: 'execution.json', size: bytes.length,
           sha256: createHash('sha256').update(bytes).digest('hex') }] } };
@@ -560,6 +593,65 @@ it('does not retain the previous assignment environment in the same executor', a
   expect(environments[1]).not.toHaveProperty('TAKT_OPENCODE_STREAM_EVENT_LIMIT');
   expect(environments[1]).toMatchObject({ MCP_WORKER_AUTH: 'worker-auth' });
   expect(worker.TAKT_OPENCODE_STREAM_EVENT_LIMIT).toBe('100');
+});
+
+it('classifies raw child authentication errors before redacting the network result', async () => {
+  vi.spyOn(spawn, 'spawnManagedProcess').mockImplementation(() => {
+    const child = Object.assign(new EventEmitter(), {
+      connected: true,
+      send(message: { kind: string }) {
+        queueMicrotask(() => {
+          if (message.kind === 'start') child.emit('message', { kind: 'result', success: false,
+            reason: 'OpenAI authentication failed: supplied value a9', prError: 'GitHub authentication failed: supplied value a9' });
+          else if (message.kind === 'stop') { child.connected = false; child.emit('close', 0); }
+        });
+      },
+      kill: vi.fn(),
+    });
+    return { child, terminate: vi.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof spawn.spawnManagedProcess>;
+  });
+  const f = fixture();
+  directories.push(join(getGlobalConfigDir(), 'worker-executions', f.executionId));
+  const assignment = RemoteAssignmentSchema.parse({ workerId: 'w1', workerName: 'w1', registrationGeneration: randomUUID(),
+    projectId: f.cwd, taskName: 'T', executionId: f.executionId, assignmentGeneration: 1, requestId: 'claim',
+    originalSha: 'a'.repeat(40), origin: '/unused-origin', branch: 'result', leaseExpiresAt: Date.now() + 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const bytes = Buffer.from(JSON.stringify({ version: 1, runSlug: `remote-${f.executionId}`, task: 'Work',
+    taskConfig: { workflow: 'root' }, hasTaskSpec: false, openCode: {}, project: {}, global: {}, projectTrace: {}, globalTrace: {},
+    runtime: { profileOrigins: [], assignmentOrigins: {} } }));
+  const port: RemoteExecutionPort = { async request(command) {
+    if (command.kind === 'credentials') return { kind: 'credentials', environment: { OPENAI_API_KEY: 'a' } };
+    if (command.kind === 'input-manifest') return { kind: 'input-manifest', manifest: { version: 1,
+      runSlug: `remote-${f.executionId}`, directories: [], files: [{ path: 'execution.json', size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] } };
+    if (command.kind === 'input-chunk') return { kind: 'input-chunk', data: bytes.toString('base64') };
+    if (command.kind === 'controls') return { kind: 'controls', controls: [] };
+    throw new Error('Unexpected execution command');
+  } };
+  const result = await createRemoteTaskExecutor({}).execute(assignment, new AbortController().signal, port);
+  expect(result.success).toBe(false);
+  for (const reason of [result.reason, result.prError]) {
+    expect(reason).toMatch(/^Worker w1:/);
+    expect(reason).toContain('[REDACTED]9');
+    expect(reason?.includes('a')).toBe(false);
+  }
+});
+
+it('inspects and removes only the assignment workspace, including its nested retry attempts', async () => {
+  const f = fixture();
+  const assignment = RemoteAssignmentSchema.parse({ workerId: 'w1', workerName: 'w1', registrationGeneration: randomUUID(),
+    projectId: f.cwd, taskName: 'T', executionId: f.executionId, assignmentGeneration: 1, requestId: 'claim',
+    originalSha: 'a'.repeat(40), origin: '/unused-origin', branch: 'result', leaseExpiresAt: 1,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
+  const root = join(getGlobalConfigDir(), 'worker-executions', f.executionId); directories.push(root);
+  mkdirSync(join(root, 'clone', '.git'), { recursive: true });
+  mkdirSync(join(root, 'attempts', randomUUID(), 'input'), { recursive: true });
+  const executor = createRemoteTaskExecutor({});
+  expect(await executor.workspace!(assignment, 'inspect')).toBe(true);
+  expect(await executor.workspace!({ ...assignment, executionId: randomUUID(), workLocation: assignment.executionId }, 'remove')).toBe(false);
+  expect(existsSync(root)).toBe(false);
+  expect(await executor.workspace!(assignment, 'inspect')).toBe(false);
+  await expect(executor.workspace!({ ...assignment, workLocation: '../outside' }, 'remove')).rejects.toThrow();
 });
 
 it('rejects a corrupt transferred file before starting the task process', async () => {

@@ -183,7 +183,8 @@ export async function startDaemon(options: {
       if (failures.length > 0) throw new AggregateError(failures, 'Worker pool shutdown failed');
     } };
     if (global.daemon?.remote_worker !== undefined) {
-      remoteWorkers = new RemoteWorkerRuntime({ directory, dispatcher: pool, version: options.owner.version, now: Date.now });
+      remoteWorkers = new RemoteWorkerRuntime({ directory, dispatcher: pool, version: options.owner.version, now: Date.now,
+        credentials: global.daemon.remote_worker.credentials });
       await remoteWorkers.restore();
       workerServer = await createWorkerServer({ ...global.daemon.remote_worker, runtime: remoteWorkers, onError: reportDaemonError });
     }

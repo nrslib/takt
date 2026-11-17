@@ -64,11 +64,11 @@ export function buildUsageEventRecord(
 ): UsageEventLogRecord {
   const payload = buildUsageEventPayload(params.usage);
   return {
-    run_id: normalizeMetadata(meta.runId),
-    session_id: normalizeMetadata(meta.sessionId),
+    run_id: normalizeMetadata(meta.runId, []),
+    session_id: normalizeMetadata(meta.sessionId, []),
     provider: meta.provider,
-    provider_model: normalizeMetadata(meta.providerModel),
-    step: normalizeMetadata(meta.step),
+    provider_model: normalizeMetadata(meta.providerModel, []),
+    step: normalizeMetadata(meta.step, []),
     step_type: meta.stepType,
     timestamp: (params.timestamp ?? new Date()).toISOString(),
     success: params.success,

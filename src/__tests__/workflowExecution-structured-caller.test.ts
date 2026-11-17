@@ -277,6 +277,7 @@ vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/provider-events.jsonl',
     logEvent: vi.fn(),
+    flush: vi.fn(),
   }),
   isProviderEventsEnabled: vi.fn().mockReturnValue(false),
 }));

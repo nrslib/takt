@@ -8,6 +8,28 @@ function pendingTasks(projectId: string, count: number) {
 }
 
 describe('worker pool scheduling', () => {
+  it('prioritizes a fresh remote restart over earlier ordinary pending tasks', () => {
+    expect(scheduleWorkerPool({ workers: [{ name: 'w2', kind: 'remote', concurrency: 1 }],
+      projects: [{ projectId: 'R1', concurrency: 1 }], pendingTasks: [...pendingTasks('R1', 1),
+        { ...pendingTasks('R1', 1)[0]!, taskName: 'restart', remoteOnly: true }], activeAssignments: [],
+    })).toEqual([{ projectId: 'R1', taskName: 'restart', workerName: 'w2' }]);
+  });
+  it('does not charge an old registration reservation to a newly registered worker with the same name', () => {
+    expect(scheduleWorkerPool({ workers: [{ name: 'w1', kind: 'remote', concurrency: 1, registrationGeneration: 'new' }],
+      projects: [{ projectId: 'R1', concurrency: 1 }], pendingTasks: pendingTasks('R1', 1),
+      activeAssignments: [{ projectId: 'R1', taskName: 'failed', workerName: 'w1', retryReservation: true, registrationGeneration: 'old' }],
+    })).toEqual([{ projectId: 'R1', taskName: 'R1-0', workerName: 'w1' }]);
+  });
+  it('keeps the project slot for a connected remote retry even when builtin pulls first', () => {
+    const retry = { projectId: 'R1', taskName: 'retry', mergeTask: false, origin: 'https://example.test/repo',
+      retryWorker: 'w1', retryReady: true, remoteOnly: true };
+    const input = { workers: [{ name: 'builtin', kind: 'builtin' as const, concurrency: 1 },
+      { name: 'w1', kind: 'remote' as const, concurrency: 1 }], projects: [{ projectId: 'R1', concurrency: 1 }],
+      pendingTasks: [...pendingTasks('R1', 1), retry], activeAssignments: [{ projectId: 'R1', taskName: 'retry', workerName: 'w1', retryReservation: true }] };
+    expect(scheduleWorkerPool({ ...input, requestedWorker: 'builtin' })).toEqual([]);
+    expect(scheduleWorkerPool({ ...input, requestedWorker: 'w1' })).toEqual([{ projectId: 'R1', taskName: 'retry', workerName: 'w1' }]);
+    expect(scheduleWorkerPool({ ...input, pendingTasks: [{ ...retry, retryReady: false }], requestedWorker: 'w1' })).toEqual([]);
+  });
   it.each([
     { workerCount: 1, workerConcurrency: 1, projectConcurrency: 3, expected: 1 },
     { workerCount: 2, workerConcurrency: 1, projectConcurrency: 3, expected: 2 },
