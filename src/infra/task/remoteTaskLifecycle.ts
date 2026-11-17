@@ -3,6 +3,7 @@ import { RemoteAssignmentSchema, sameExecution, type RemoteProjectRequest, type 
   type RemoteTaskRecord } from '../../core/worker-pool/remoteProtocol.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import { GoalStore } from '../goals/store.js';
+import { appendGoalWorkLog } from '../goals/workLog.js';
 import { isGoalPaused } from '../goals/state.js';
 import { runGoalGit, resolveGoalBranchSha, goalGitText } from '../goals/git-command.js';
 import { saveManagerEvent } from '../goals/events.js';
@@ -11,6 +12,7 @@ import type { TaskRecord } from './schema.js';
 import { resolveTaskContent } from './mapper.js';
 import { buildTerminalTaskRecord } from './taskRecordMutations.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { sanitizeRemoteFailureReason } from '../../core/worker-pool/remoteFailure.js';
 import { RemoteExecutionStore } from './remoteExecutionStore.js';
 import { RemoteExecutionControls } from './remoteExecutionControls.js';
 import { LiveInterventionFileStore } from '../workflow/live-intervention-store.js';
@@ -20,8 +22,9 @@ import { REMOTE_CHUNK_BYTES } from '../../core/worker-pool/remoteExecutionProtoc
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 function remoteRecord(task: TaskRecord): RemoteTaskRecord | undefined {
-  if (task.remote_assignment === undefined || task.status === 'pending' || task.status === 'exceeded') return undefined;
+  if (task.remote_assignment === undefined || task.status === 'exceeded') return undefined;
   return { assignment: task.remote_assignment, status: task.status,
+    ...(task.deletion === undefined ? {} : { cleanupId: task.deletion.id, cleanupAcknowledged: task.deletion.remote_ack === true }),
     ...(task.failure === undefined ? {} : { failureReason: task.failure.error }) };
 }
 
@@ -51,6 +54,36 @@ export class RemoteTaskLifecycle {
     const startedAt = performance.now();
     if (request.kind === 'claim') return this.claim(request, concurrency);
     if (request.kind === 'execution') return this.execution(request);
+    if (request.kind === 'retry-state' || request.kind === 'cleanup') {
+      let updated: RemoteTaskRecord | null = null;
+      this.store.update((current) => ({ tasks: current.tasks.map((task) => {
+        const assignment = task.remote_assignment;
+        if (assignment === undefined || !sameExecution(assignment, request.assignment)) return task;
+        if (request.kind === 'cleanup') {
+          if (task.status === 'running' || task.deletion?.id !== request.cleanupId) return task;
+          const next = { ...task, deletion: { ...task.deletion, remote_ack: true },
+            remote_assignment: { ...assignment, retryReservation: false } };
+          updated = remoteRecord(next)!;
+          return next;
+        }
+        if (task.status !== 'pending' || task.deletion !== undefined || !assignment.retryReservation) return task;
+        const restart = request.restartReason !== undefined;
+        const next = { ...task, remote_assignment: { ...assignment,
+          ...(request.ready === undefined ? {} : { retryReady: request.ready }),
+          ...(request.waitUntil === undefined ? {} : { retryWaitUntil: assignment.retryWaitUntil ?? request.waitUntil }),
+          ...(restart ? { retryReservation: false, retryReady: false, restartReason: request.restartReason, workLocation: null } : {}),
+        }, ...(restart ? { source_run_slug: undefined, resume_mode: undefined, start_step: undefined, resume_point: undefined,
+          restart_point: undefined, source_resume_point: undefined } : {}) };
+        updated = remoteRecord(next)!;
+        return next;
+      }) }), request.kind === 'cleanup' ? { deletionId: request.cleanupId } : undefined);
+      if (updated !== null && request.kind === 'retry-state' && request.restartReason !== undefined) {
+        const task = this.store.read().tasks.find((task) => task.name === request.assignment.taskName)!;
+        if (task.goal_id !== undefined) await new GoalStore(this.cwd).update(task.goal_id,
+          (goal) => appendGoalWorkLog(goal, { summary: `${task.name}: restarted from original SHA: ${request.restartReason}` }));
+      }
+      return { kind: 'updated', record: updated };
+    }
     let received: RemoteArtifacts | undefined;
     let receiptFailure: string | undefined;
     if (request.kind === 'finish') {
@@ -95,9 +128,14 @@ export class RemoteTaskLifecycle {
         }
         const prFailed = request.kind === 'finish' && request.success && request.prFailed === true && receiptFailure === undefined;
         const success = request.kind === 'finish' && request.success && !prFailed && receiptFailure === undefined;
-        const reason = sanitizeSensitiveText(request.kind === 'fail' ? request.reason
-          : receiptFailure ?? (prFailed ? request.prError ?? 'Failed to create pull request.' : request.reason) ?? 'Remote workflow execution failed');
+        const detail = request.kind === 'fail' ? request.reason
+          : receiptFailure ?? (prFailed ? request.prError ?? 'Failed to create pull request.' : request.reason) ?? 'Remote workflow execution failed';
+        const reason = request.kind === 'finish'
+          ? sanitizeRemoteFailureReason(assignment.workerName, detail, []) : sanitizeSensitiveText(detail);
+        const goal = task.goal_id === undefined ? undefined : new GoalStore(this.cwd).getSync(task.goal_id);
         const next = buildTerminalTaskRecord(task, {
+          remote_assignment: { ...assignment, workLocation: assignment.workLocation ?? assignment.executionId,
+            retryReservation: !success && goal?.executionStatus !== 'aborted' },
           status: success ? 'completed' : prFailed ? 'pr_failed' : 'failed', completed_at: new Date().toISOString(), owner_pid: null,
           failure: success ? undefined : prFailed ? { error: `PR creation failed: ${reason}` }
             : { error: reason, retryable: request.kind === 'finish' && request.retryable === true },
@@ -136,6 +174,7 @@ export class RemoteTaskLifecycle {
     }
     const store = new RemoteExecutionStore(this.cwd, request.assignment.executionId);
     const command = request.command;
+    if (command.kind === 'credentials') throw new Error('Credentials are owned by the daemon');
     if (command.kind === 'input-manifest') return { kind: 'execution', response: { kind: command.kind, manifest: await store.inputManifest() } };
     if (command.kind === 'input-chunk') return { kind: 'execution', response: { kind: command.kind, data: await store.inputChunk(command.path, command.offset) } };
     if (command.kind === 'intervention-delivery') {
@@ -194,10 +233,13 @@ export class RemoteTaskLifecycle {
     if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return { kind: 'claim', assignment: null };
     try { resolveTaskContent(this.cwd, record); }
     catch { return { kind: 'unreadable', taskName: request.taskName }; }
-    const originalSha = await resolveGoalBranchSha(this.cwd, record.base_branch ?? goal.branch, undefined);
+    const previous = record.remote_assignment;
+    if (previous?.retryReservation && (previous.workerId !== request.workerId
+      || previous.registrationGeneration !== request.registrationGeneration)) return { kind: 'claim', assignment: null };
+    const originalSha = previous?.originalSha ?? await resolveGoalBranchSha(this.cwd, record.base_branch ?? goal.branch, undefined);
     const executionId = randomUUID();
     this.prepareInput(record, executionId);
-    await runGoalGit(this.cwd, ['push', 'origin', `${originalSha}:${toLocalBranchRef(record.base_branch ?? goal.branch)}`], 16 * 1024, undefined);
+    if (previous === undefined) await runGoalGit(this.cwd, ['push', 'origin', `${originalSha}:${toLocalBranchRef(record.base_branch ?? goal.branch)}`], 16 * 1024, undefined);
     let unreadable = false;
     const saved = withGoalExecutionLock(this.cwd, () => this.store.update((current) => {
       const task = current.tasks.find((task) => task.name === request.taskName);
@@ -210,12 +252,14 @@ export class RemoteTaskLifecycle {
       const assignment = RemoteAssignmentSchema.parse({ projectId: this.cwd, taskName: task.name,
         workerId: request.workerId, workerName: request.workerId, registrationGeneration: request.registrationGeneration,
         requestId: request.requestId, executionId, assignmentGeneration: (task.assignment_generation ?? 0) + 1,
-        originalSha, origin, branch: task.branch ?? `takt/remote-${executionId}`,
+        originalSha, origin, branch: previous === undefined ? task.branch ?? `takt/remote-${executionId}` : `takt/remote-${executionId}`,
         leaseExpiresAt: request.leaseExpiresAt, lastAcknowledgedLogSequence: 0, controlSequence: 0,
-        workLocation: null, retryReservation: false });
+        workLocation: previous?.retryReservation ? previous.workLocation : null, retryReservation: false,
+        ...(previous?.restartReason === undefined ? {} : { restartReason: previous.restartReason }) });
       return { tasks: current.tasks.map((candidate) => candidate !== task ? candidate : {
         ...task, status: 'running', execution_id: executionId, worker_name: request.workerId, waiting_reason: undefined,
         assignment_generation: assignment.assignmentGeneration, remote_assignment: assignment,
+        branch: assignment.branch,
         started_at: new Date().toISOString(), completed_at: null, owner_pid: null, owner_start_time: null,
         run_slug: `remote-${executionId}`, completion: undefined, stop_request: undefined,
       }) };

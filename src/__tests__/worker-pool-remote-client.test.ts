@@ -21,7 +21,8 @@ function fixture(withExecutor = true) {
   });
   const finishers: ((result: { success: boolean }) => void)[] = [];
   const signals: AbortSignal[] = [];
-  const executor = { execute: vi.fn(async (_assignment: RemoteAssignment, signal: AbortSignal) => {
+  const executor = { workspace: vi.fn(async (_assignment: RemoteAssignment, operation: 'inspect' | 'remove') => operation === 'inspect'),
+    execute: vi.fn(async (_assignment: RemoteAssignment, signal: AbortSignal) => {
     signals.push(signal);
     return new Promise<{ success: boolean }>((resolve) => {
       finishers.push(resolve);
@@ -47,6 +48,25 @@ function fixture(withExecutor = true) {
   };
   return { identity, connections, finishers, signals, executor, controller, result, envelope, connected, assign };
 }
+
+it.each(['inspect', 'remove'] as const)('waits for the previous executor to settle before workspace %s and ACK', async (operation) => {
+  const f = fixture();
+  try {
+    f.connected(0, []);
+    const assignment = f.assign('failed');
+    await vi.advanceTimersByTimeAsync(0);
+    const connection = f.connections[0]!;
+    connection.receive({ ...f.envelope(), kind: 'workspace', assignment, operation });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.executor.workspace).not.toHaveBeenCalled();
+    expect(connection.send.mock.calls.some(([message]) => message.kind === 'workspace')).toBe(false);
+    f.finishers[0]!({ success: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.executor.workspace).toHaveBeenCalledWith(assignment, operation);
+    expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ kind: 'workspace', operation,
+      assignment: executionIdentity(assignment), exists: operation === 'inspect' }));
+  } finally { f.controller.abort(); await f.result; }
+});
 
 it.each([false, true])('announces executor availability on every connection with executor=%s', async (withExecutor) => {
   const f = fixture(withExecutor);

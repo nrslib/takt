@@ -23,6 +23,10 @@ import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
 import { RemoteControlReceiver } from '../../infra/task/remoteControlReceiver.js';
 import type { GoalTaskResult } from '../../infra/goals/schema.js';
+import { setExecutionSecrets, redactExecutionSecrets } from '../../shared/utils/execution-secrets.js';
+
+setExecutionSecrets((JSON.parse(process.env.TAKT_REMOTE_CREDENTIAL_NAMES ?? '[]') as string[])
+  .flatMap((name) => process.env[name] === undefined ? [] : [process.env[name]!]));
 
 const startSchema = z.object({ kind: z.literal('start'), assignment: RemoteAssignmentSchema,
   inputDirectory: z.string(), cloneDirectory: z.string(), controlDirectory: z.string() }).strict();
@@ -46,10 +50,12 @@ async function run(input: z.infer<typeof startSchema>): Promise<void> {
   let publishedSha: string | undefined;
   let workflowResult: GoalTaskResult['workflowResult'] = 'error';
   try {
-    await goalGitText(process.cwd(), ['clone', '--no-checkout', '--no-local', '--', assignment.origin, cloneDirectory], controller.signal);
-    await goalGitText(cloneDirectory, ['fetch', '--no-tags', 'origin', assignment.originalSha], controller.signal);
-    await goalGitText(cloneDirectory, ['checkout', '-b', assignment.branch, assignment.originalSha], controller.signal);
-    if (await goalGitText(cloneDirectory, ['rev-parse', 'HEAD'], controller.signal) !== assignment.originalSha) throw new Error('Remote clone does not match its fixed SHA');
+    if (assignment.workLocation === null) {
+      await goalGitText(process.cwd(), ['clone', '--no-checkout', '--no-local', '--', assignment.origin, cloneDirectory], controller.signal);
+      await goalGitText(cloneDirectory, ['fetch', '--no-tags', 'origin', assignment.originalSha], controller.signal);
+      await goalGitText(cloneDirectory, ['checkout', '-b', assignment.branch, assignment.originalSha], controller.signal);
+      if (await goalGitText(cloneDirectory, ['rev-parse', 'HEAD'], controller.signal) !== assignment.originalSha) throw new Error('Remote clone does not match its fixed SHA');
+    } else await goalGitText(cloneDirectory, ['checkout', '-b', assignment.branch], controller.signal);
     // Runtime state is transferred separately from the task's source changes.
     mkdirSync(join(cloneDirectory, '.git', 'info'), { recursive: true });
     appendFileSync(join(cloneDirectory, '.git', 'info', 'exclude'), '\n/.takt/\n');
@@ -74,6 +80,8 @@ async function run(input: z.infer<typeof startSchema>): Promise<void> {
           startStep: configuration.taskConfig.start_step, retryNote: configuration.taskConfig.retry_note,
           resumePoint: configuration.taskConfig.resume_point, restartPoint: configuration.taskConfig.restart_point,
           sourceResumePoint: configuration.taskConfig.source_resume_point,
+          resumeSource: configuration.resumeSource,
+          reportContentSanitizer: redactExecutionSecrets,
           onLiveInterventionDelivery(instructionIds, context) { process.send?.({ kind: 'intervention-delivered', instructionIds, context }); },
           handleSigint: false, abortSignal: controller.signal, outputMode: 'silent',
         }, config.ignoreExceed ? { ignoreIterationLimit: true } : undefined,
@@ -100,11 +108,13 @@ async function run(input: z.infer<typeof startSchema>): Promise<void> {
       }
       const reason = controller.signal.aborted ? String(controller.signal.reason instanceof Error ? controller.signal.reason.message : controller.signal.reason)
         : result.reason;
+      // The parent classifies failures before redaction and owns the result sent over the network.
       process.send?.({ kind: 'result', success: result.success && !controller.signal.aborted,
         interrupted: result.interrupted === true || controller.signal.aborted,
         retryable: controller.signal.reason instanceof GoalPausedError,
         workflowResult: controller.signal.aborted ? 'aborted' : workflowResult,
-        reason, sha, prUrl: prResult.prUrl, prFailed: prResult.prFailed, prError: prResult.prError });
+        reason, sha, prUrl: prResult.prUrl,
+        prFailed: prResult.prFailed, prError: prResult.prError });
     });
   } catch (error) {
     process.send?.({ kind: 'result', success: false, sha: publishedSha,

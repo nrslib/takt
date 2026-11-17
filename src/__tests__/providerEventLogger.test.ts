@@ -9,6 +9,7 @@ import {
 import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
 import type { ProviderType } from '../core/workflow/index.js';
 import type { StreamEvent } from '../shared/types/provider.js';
+import { setExecutionSecrets } from '../shared/utils/execution-secrets.js';
 
 describe('providerEventLogger', () => {
   let tempDir: string;
@@ -18,6 +19,7 @@ describe('providerEventLogger', () => {
   });
 
   afterEach(() => {
+    setExecutionSecrets([]);
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -26,6 +28,60 @@ describe('providerEventLogger', () => {
     expect(isProviderEventsEnabled({})).toBe(false);
     expect(isProviderEventsEnabled({ logging: {} })).toBe(false);
     expect(isProviderEventsEnabled({ logging: { providerEvents: false } })).toBe(false);
+  });
+
+  it.each([
+    ['FAKE_VALUE', 'a9 [REDACTED]'],
+    ['a', '[REDACTED]9 FAKE_VALUE'],
+  ])('preserves event context while redacting %s in the same provider response', (secret, expected) => {
+    setExecutionSecrets([secret]);
+    const logger = createProviderEventLogger({ logsDir: tempDir, sessionId: 'session-a', runId: 'run-a', enabled: true });
+    logger.logEvent({ provider: 'claude', providerModel: 'model-a', step: 'analyze' },
+      { type: 'result', data: { result: 'a9 FAKE_VALUE', sessionId: 'session-a', success: false } });
+    const saved = JSON.parse(readFileSync(logger.filepath, 'utf8'));
+    expect(saved).toMatchObject({ provider: 'claude', provider_model: 'model-a', step: 'analyze',
+      run_id: 'run-a', event_type: 'result', session_id: 'session-a',
+      data: { result: expected, sessionId: 'session-a', success: false } });
+  });
+
+  it.each(['text', 'thinking', 'tool_output'] as const)('redacts a distributed credential split across %s events before storage', (type) => {
+    setExecutionSecrets(['arbitrary-distributed-value']);
+    const logger = createProviderEventLogger({ logsDir: tempDir, sessionId: 'split', runId: 'run', enabled: true });
+    const context = { provider: 'mock' as const, providerModel: 'mock', step: 'work' };
+    const field = type === 'text' ? 'text' : type === 'thinking' ? 'thinking' : 'output';
+    const event = (value: string): StreamEvent => type === 'text' ? { type, data: { text: value } }
+      : type === 'thinking' ? { type, data: { thinking: value } } : { type, data: { tool: 'Read', id: 'call', output: value } };
+    logger.logEvent(context, event('before arbitrary-'));
+    expect(readFileSync(logger.filepath, 'utf8')).not.toContain('arbitrary-');
+    logger.logEvent(context, event('distributed-value after'));
+    logger.flush();
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.map((record) => record.data[field]).join('')).toBe('before [REDACTED] after');
+  });
+
+  it('preserves large benign stream output and flushes its tail on the result event', () => {
+    setExecutionSecrets(['arbitrary-distributed-value']);
+    const logger = createProviderEventLogger({ logsDir: tempDir, sessionId: 'large', runId: 'run', enabled: true });
+    const context = { provider: 'mock' as const, providerModel: 'mock', step: 'work' };
+    const text = 'normal output '.repeat(2000);
+    logger.logEvent(context, { type: 'text', data: { text } });
+    logger.logEvent(context, { type: 'result', data: { result: 'done', sessionId: 'session', success: true } });
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.filter((record) => record.event_type === 'text').map((record) => record.data.text).join('')).toBe(text);
+  });
+
+  it.each(['z', 'xy', 'abc', 'D'])('redacts short value %s across chunks without changing event identifiers', (secret) => {
+    setExecutionSecrets([secret]);
+    const logger = createProviderEventLogger({ logsDir: tempDir, sessionId: 'session', runId: 'run', enabled: true });
+    const context = { provider: 'mock' as const, providerModel: 'model', step: 'work' };
+    const split = Math.max(1, secret.length - 1);
+    logger.logEvent(context, { type: 'text', data: { text: 'before ' + secret.slice(0, split) } });
+    logger.logEvent(context, { type: 'text', data: { text: secret.slice(split) + '123 end' } });
+    logger.flush();
+    const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(records.map((record) => record.data.text).join('')).toBe('before [REDACTED]123 end');
+    for (const record of records) expect(record).toMatchObject({ provider: 'mock', provider_model: 'model',
+      event_type: 'text', run_id: 'run', step: 'work' });
   });
 
   it('should enable provider events only when explicitly true', () => {

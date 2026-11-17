@@ -117,6 +117,8 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
   const summary: Record<string, unknown> = {
     name: task.name,
     ...(task.workerName === undefined ? {} : { workerName: task.workerName }),
+    ...(task.remoteAssignment?.retryReservation ? { retryReservation: { workerName: task.remoteAssignment.workerName } } : {}),
+    ...(task.remoteAssignment?.restartReason === undefined ? {} : { restartReason: task.remoteAssignment.restartReason }),
     ...(task.waitingReason === undefined ? {} : { waitingReason: task.waitingReason }),
     ...(task.executionId === undefined ? {} : { executionId: task.executionId }),
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),

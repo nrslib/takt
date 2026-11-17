@@ -24,6 +24,7 @@ import { listTaktTasks, getTaktRun, tellTaktRun } from '../features/mcp/operatio
 import { stopTaktGoalTask } from '../features/mcp/goalTaskStopOperations.js';
 import { pauseTaktGoal, abortTaktGoal } from '../features/mcp/goalExecutionOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from '../features/mcp/goalTaskRetryOperations.js';
+import { removeTaktGoalTask } from '../features/mcp/goalTaskRemovalOperations.js';
 import { mergeTaktGoalTask } from '../features/mcp/goalIntegrationOperations.js';
 import { packageVersion } from '../shared/package-info.js';
 import { RemoteAssignmentSchema, executionIdentity, sameExecution, WorkerRejectedError, WorkerRequestSchema, WorkerResponseSchema,
@@ -38,6 +39,7 @@ import { DaemonLogger } from '../infra/daemon/logger.js';
 import { installDaemonErrorLog } from '../infra/daemon/diagnostics.js';
 import { AsyncCommand } from '../infra/daemon/command.js';
 import { parse as parseYaml } from 'yaml';
+import type { RemoteCredentialsConfig } from '../core/models/daemon-config-schema.js';
 
 interface WorkerEvent { kind: string; pid?: number; assignment?: RemoteAssignment; executionId?: string; reason?: string; response?: WorkerResponse }
 // These acceptance tests require the OS to deny daemon paths in every descendant, including Git.
@@ -48,6 +50,13 @@ function storedText(directory: string): string {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? storedText(path) : entry.isFile() ? readFileSync(path, 'utf8') : '';
   }).join('\n');
+}
+
+function filesContaining(directory: string, value: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.name !== '.git').flatMap((entry) => {
+    const path = join(directory, entry.name);
+    return entry.isDirectory() ? filesContaining(path, value) : entry.isFile() && readFileSync(path, 'utf8').includes(value) ? [path] : [];
+  });
 }
 
 it('keeps communication failures retryable while returning a terminal reason for authentication rejection', async () => {
@@ -230,7 +239,7 @@ it.each(connectionFailureCases)('preserves the same TCP connection during $entry
   }
 });
 
-async function fixture(options: { origin?: string; version?: string } = {}) {
+async function fixture(options: { origin?: string; version?: string; workerConcurrency?: number; credentials?: RemoteCredentialsConfig } = {}) {
   const directory = getGlobalConfigDir();
   const logger = new DaemonLogger(directory);
   const restoreLog = installDaemonErrorLog((message) => logger.write('error', message));
@@ -244,6 +253,8 @@ async function fixture(options: { origin?: string; version?: string } = {}) {
   writeFileSync(join(project, '.takt/workflows/remote-fixture.yaml'),
     'name: remote-fixture\nsteps:\n  - name: work\n    instruction: Complete the task\n    rules:\n      - condition: done\n        next: COMPLETE\n');
   writeFileSync(join(directory, 'config.yaml'), 'provider: mock\ndaemon:\n  builtin_worker:\n    concurrency: 0\n  remote_worker:\n    host: 127.0.0.1\n    port: 0\n');
+  if (options.credentials !== undefined) writeFileSync(join(directory, 'config.yaml'), JSON.stringify({ provider: 'mock', daemon: {
+    builtin_worker: { concurrency: 0 }, remote_worker: { host: '127.0.0.1', port: 0, credentials: options.credentials } } }));
   const git = (...args: string[]) => {
     const result = spawnSync('git', ['-C', project, ...args], { env: process.env, encoding: 'utf8' });
     if (result.status !== 0) throw new Error(result.stderr);
@@ -261,7 +272,7 @@ async function fixture(options: { origin?: string; version?: string } = {}) {
   if (identity === undefined) throw new Error('Test process identity is unavailable');
   const owner = { pid: process.pid, identity, version: options.version ?? packageVersion, cliPath: daemonEntryPath() };
   const registry = new WorkerRegistry(directory);
-  const registered = await registry.add('w1', 2);
+  const registered = await registry.add('w1', options.workerConcurrency ?? 2);
   let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
   let controller: AbortController | undefined;
   let targetPort = 0;
@@ -318,7 +329,7 @@ async function fixture(options: { origin?: string; version?: string } = {}) {
   const disconnect = () => { blocked = true; for (const socket of sockets) socket.destroy(); };
   await start();
   const store = new TaskStore(project);
-  return { project, task, store, directory, registry, registered, originalSha, origin: options.origin ?? bareOrigin, start, disconnect, requests, responses, turnRunners,
+  return { project, task, store, directory, registry, registered, originalSha, bareOrigin, origin: options.origin ?? bareOrigin, start, disconnect, requests, responses, turnRunners,
     get port() { return targetPort; },
     get refusedConnections() { return refusedConnections; },
     interceptRequests(callback: (request: WorkerRequest) => void) { interceptRequest = callback; },
@@ -516,6 +527,220 @@ MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
 
 interface RealCall { executionId: string; number: number; pid: number; cwd: string; denied: string; prompt: string }
 
+function credentialWorker(f: Awaited<ReturnType<typeof fixture>>, missing = false, authenticationError = false) {
+  writeFileSync(join(f.project, '.takt/workflows/remote-fixture.yaml'),
+    'name: remote-fixture\nsteps:\n  - name: work\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+  let observations = '';
+  const worker = f.cliWorker(f.registered.token, { forbiddenDirectories: [f.directory], prepare(home, config) {
+    observations = join(home, 'auth-observations'); mkdirSync(observations);
+    mkdirSync(config, { recursive: true });
+    writeFileSync(join(config, 'config.yaml'), JSON.stringify({ provider: 'mock', openai_api_key: missing ? undefined : 'worker-config-value' }));
+    writeFileSync(join(home, '.gitconfig'), '[user]\n  name = Auth test\n  email = auth@example.test\n'
+      + (f.origin.startsWith('https:') ? `[url "${f.bareOrigin}"]\n  insteadOf = ${f.origin}\n` : ''));
+    const moduleUrl = (name: string) => JSON.stringify(pathToFileURL(join(process.cwd(), 'dist', name)).href);
+    const hook = join(home, 'auth-provider.mjs');
+    writeFileSync(hook, `
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
+import { join, basename } from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { MockProvider } from ${moduleUrl('infra/providers/mock.js')};
+import { loadGlobalConfig } from ${moduleUrl('infra/config/index.js')};
+import { buildSafeGitEnvironment } from ${moduleUrl('infra/task/git-environment.js')};
+import { writeReportFile } from ${moduleUrl('core/workflow/report-writer.js')};
+import { createProviderEventLogger } from ${moduleUrl('core/logging/providerEventLogger.js')};
+const observations = ${JSON.stringify(observations)};
+const hash = value => value === undefined ? null : createHash('sha256').update(value).digest('hex');
+if (process.argv.includes('worker')) {
+  ${missing ? "delete process.env.OPENAI_API_KEY;" : "process.env.OPENAI_API_KEY = 'worker-env-value';"}
+  process.env.GH_TOKEN = process.env.GITHUB_TOKEN = 'worker-gh-value';
+  delete process.env.TAKT_REMOTE_GIT_TOKEN;
+  for (const name of ['REMOTE_PROVIDER_TEST_KEY', 'REMOTE_GIT_TEST_TOKEN', 'REMOTE_GH_TEST_TOKEN']) delete process.env[name];
+  let sequence = 0;
+  const observe = () => {
+    writeFileSync(join(observations, 'worker.json.tmp'), JSON.stringify({ sequence: ++sequence, pid: process.pid,
+      openai: hash(process.env.OPENAI_API_KEY), git: hash(process.env.TAKT_REMOTE_GIT_TOKEN) }));
+    renameSync(join(observations, 'worker.json.tmp'), join(observations, 'worker.json'));
+  };
+  observe(); setInterval(observe, 50).unref();
+}
+MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
+  let denied;
+  try { readFileSync(${JSON.stringify(join(f.project, '.takt/config.yaml'))}); } catch (error) { denied = error.code; }
+  if (denied !== 'EPERM') throw new Error('Daemon state was readable');
+  const api = loadGlobalConfig().openaiApiKey ?? process.env.OPENAI_API_KEY;
+  if (!api) throw new Error('OpenAI authentication failed: API key is missing');
+  const executionId = basename(process.cwd());
+  const originalApi = process.env.OPENAI_API_KEY;
+  const gitEnvironment = await buildSafeGitEnvironment(options.cwd, { allowGitHooks: false, allowGitFilters: false });
+  let credential;
+  if (process.env.TAKT_REMOTE_GIT_TOKEN) {
+    const origin = new URL(process.env.TAKT_REMOTE_GIT_ORIGIN);
+    credential = execFileSync('git', ['credential', 'fill'], { cwd: options.cwd, env: gitEnvironment,
+      input: 'protocol=' + origin.protocol.slice(0, -1) + '\\nhost=' + origin.host + '\\n\\n', encoding: 'utf8' });
+  }
+  const run = join(options.cwd, '.takt/runs', 'remote-' + executionId);
+  mkdirSync(join(run, 'logs'), { recursive: true });
+  const suffix = ${authenticationError} ? '123' : '';
+  const echo = (${authenticationError} ? [api] : [api, process.env.TAKT_REMOTE_GIT_TOKEN, process.env.GH_TOKEN])
+    .filter(Boolean).map(value => value + suffix).join(' ');
+  writeReportFile(join(run, 'reports'), 'auth.md', echo);
+  writeReportFile(join(run, 'reports'), 'auth.md', 'updated ' + echo);
+  const logger = createProviderEventLogger({ logsDir: join(run, 'logs'), sessionId: 'auth', runId: executionId, enabled: true });
+  const midpoint = Math.floor(api.length / 2);
+  const context = { provider: 'mock', providerModel: 'mock', step: 'work' };
+  logger.logEvent(context, { type: 'text', data: { text: 'before ' + api.slice(0, midpoint) } });
+  logger.logEvent(context, { type: 'text', data: { text: api.slice(midpoint) + suffix + ' after ' + echo } });
+  logger.flush();
+  const connectionHash = ${JSON.stringify(createHash('sha256').update(f.registered.token).digest('hex'))};
+  writeFileSync(join(observations, executionId + '.json'), JSON.stringify({ executionId, pid: process.pid, cwd: options.cwd, denied,
+    api: hash(api), envApi: hash(originalApi), gh: hash(process.env.GH_TOKEN), github: hash(process.env.GITHUB_TOKEN),
+    git: hash(process.env.TAKT_REMOTE_GIT_TOKEN), helperPassword: hash(credential?.split('\\n').find(line => line.startsWith('password='))?.slice(9)),
+    tokenPresent: Object.values(process.env).some(value => hash(value) === connectionHash),
+    config: execFileSync('git', ['config', '--local', '--list'], { cwd: options.cwd, encoding: 'utf8' }),
+    origin: execFileSync('git', ['config', '--local', '--get', 'remote.origin.url'], { cwd: options.cwd, encoding: 'utf8' }).trim(), prompt }));
+  while (prompt.includes('hold authentication') && !existsSync(join(observations, 'release'))) await new Promise(resolve => setTimeout(resolve, 20));
+  if (originalApi !== process.env.OPENAI_API_KEY) throw new Error('Concurrent task changed authentication');
+  if (${authenticationError}) throw new Error('OpenAI authentication failed: supplied value ' + api + '123');
+  return { persona: config.name, status: 'done', content: 'echo ' + echo, timestamp: new Date(), sessionId: 'auth-' + executionId };
+} });
+`);
+    return ['--import', JSON.stringify(pathToFileURL(hook).href)].join(' ');
+  } });
+  const calls = () => readdirSync(observations).filter((name) => name !== 'worker.json' && name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(observations, name), 'utf8')) as Record<string, unknown>);
+  return { ...worker, calls, parent: () => JSON.parse(readFileSync(join(observations, 'worker.json'), 'utf8')) as Record<string, unknown>,
+    release() { writeFileSync(join(observations, 'release'), 'release'); } };
+}
+
+isolatedWorkerTest('delivers daemon credentials only to each concurrent task and redacts output before saving and transfer', async () => {
+  vi.stubEnv('REMOTE_PROVIDER_TEST_KEY', 'first-distributed-api-value');
+  vi.stubEnv('REMOTE_GIT_TEST_TOKEN', 'distributed-git-value');
+  vi.stubEnv('REMOTE_GH_TEST_TOKEN', 'distributed-gh-value');
+  const f = await fixture({ origin: 'https://worker-auth.example.test/repo.git', credentials: {
+    git: '${REMOTE_GIT_TEST_TOKEN}', gh: '${REMOTE_GH_TEST_TOKEN}', providers: { openai: '${REMOTE_PROVIDER_TEST_KEY}' } } });
+  try {
+    expect(spawnSync('git', ['-C', f.project, 'config', `url.${f.bareOrigin}.insteadOf`, f.origin]).status).toBe(0);
+    const configPath = join(f.directory, 'config.yaml');
+    writeFileSync(configPath, JSON.stringify({ ...parseYaml(readFileSync(configPath, 'utf8')), logging: { trace: true, provider_events: true } }));
+    f.store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, content: 'hold authentication ${REMOTE_PROVIDER_TEST_KEY}' })) }));
+    const worker = credentialWorker(f);
+    await vi.waitFor(() => expect(worker.calls(), worker.output()).toHaveLength(1), { timeout: 30_000 });
+    const first = worker.calls()[0]!;
+    vi.stubEnv('REMOTE_PROVIDER_TEST_KEY', 'second-distributed-api-value');
+    const goal = await new GoalStore(f.project).get(f.store.read().tasks[0]!.goal_id!);
+    new TaskRunner(f.project).addTask('second authentication task', { goal_id: goal.id, base_branch: goal.branch, worktree: false, workflow: 'remote-fixture' });
+    await vi.waitFor(() => expect(worker.calls(), worker.output()).toHaveLength(2), { timeout: 30_000 });
+    const second = worker.calls().find((call) => call.executionId !== first.executionId)!;
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+    expect(first).toMatchObject({ api: hash('first-distributed-api-value'), envApi: hash('first-distributed-api-value'),
+      git: hash('distributed-git-value'), helperPassword: hash('distributed-git-value'), gh: hash('distributed-gh-value'),
+      github: hash('distributed-gh-value'), denied: 'EPERM', tokenPresent: false });
+    expect(second).toMatchObject({ api: hash('second-distributed-api-value'), envApi: hash('second-distributed-api-value'),
+      git: hash('distributed-git-value'), helperPassword: hash('distributed-git-value'), tokenPresent: false });
+    expect(second.pid).not.toBe(first.pid);
+    expect(worker.parent()).toMatchObject({ openai: hash('worker-env-value'), git: null });
+    const parentSequence = Number(worker.parent().sequence);
+    expect(first.prompt).toContain('$｛REMOTE_PROVIDER_TEST_KEY｝');
+    worker.release();
+    await vi.waitFor(() => expect(f.store.read().tasks.every((task) => task.status === 'completed'), worker.output()
+      + JSON.stringify(f.store.read().tasks.map((task) => task.failure))).toBe(true), { timeout: 30_000 });
+    await vi.waitFor(() => expect(Number(worker.parent().sequence)).toBeGreaterThan(parentSequence));
+    expect(worker.parent()).toMatchObject({ openai: hash('worker-env-value'), git: null });
+    for (const value of ['first-distributed-api-value', 'second-distributed-api-value', 'distributed-git-value', 'distributed-gh-value', f.registered.token]) {
+      expect(filesContaining(worker.config, value)).toEqual([]);
+      expect(filesContaining(f.directory, value)).toEqual([]);
+      for (const call of worker.calls()) expect(filesContaining(call.cwd as string, value)).toEqual([]);
+    }
+    for (const call of worker.calls()) {
+      expect(call.origin).toBe(f.origin);
+      for (const value of ['distributed-git-value', f.registered.token]) {
+        expect(String(call.config).includes(value)).toBe(false);
+        expect(readFileSync(join(call.cwd as string, '.git/config'), 'utf8').includes(value)).toBe(false);
+        expect(String(call.origin).includes(value)).toBe(false);
+      }
+      const events = readFileSync(join(call.cwd as string, '.takt/runs', `remote-${call.executionId}`, 'logs/auth-provider-events.jsonl'), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line) as { event_type: string; data: { text?: string } });
+      expect(events.filter((event) => event.event_type === 'text').map((event) => event.data.text ?? '').join(''))
+        .toBe('before [REDACTED] after [REDACTED] [REDACTED] [REDACTED]');
+    }
+    expect(f.requests.some((request) => request.kind === 'execution' && request.command.kind === 'credentials')).toBe(true);
+    expect(storedText(join(f.directory, 'worker-pull-responses'))).not.toContain('distributed-api-value');
+  } finally { await f.close(); vi.unstubAllEnvs(); }
+});
+
+isolatedWorkerTest.each(['distributed-provider-error-value', 'z', 'xy', 'abc'])(
+  'redacts distributed value %s in provider authentication failures through task, run, transfer and manager', async (secret) => {
+    vi.stubEnv('REMOTE_PROVIDER_TEST_KEY', secret);
+    const f = await fixture({ credentials: { providers: { openai: '${REMOTE_PROVIDER_TEST_KEY}' } } });
+    try {
+      const configPath = join(f.directory, 'config.yaml');
+      writeFileSync(configPath, JSON.stringify({ ...parseYaml(readFileSync(configPath, 'utf8')), logging: { trace: true, provider_events: true } }));
+      const worker = credentialWorker(f, false, true);
+      await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, worker.output()).toBe('failed'), { timeout: 30_000 });
+      const task = f.store.read().tasks[0]!;
+      expect(task.failure?.error).toMatch(/w1.*OpenAI.*authentication/);
+      expect(task.failure?.error).toContain('[REDACTED]123');
+      expect(task.completion?.failureReason).toBe(task.failure?.error);
+      const complete = f.requests.find((request) => request.kind === 'complete');
+      expect(complete).toMatchObject({ kind: 'complete', success: false, reason: expect.stringContaining('[REDACTED]123') });
+      expect(complete !== undefined && JSON.stringify(complete).includes(secret + '123')).toBe(false);
+      expect(worker.calls()).toHaveLength(1);
+      const call = worker.calls()[0]!;
+      const workerRun = join(call.cwd as string, '.takt/runs', task.run_slug!);
+      const daemonRun = join(f.project, '.takt/runs', task.run_slug!);
+      for (const run of [workerRun, daemonRun]) {
+        expect(readFileSync(join(run, 'reports/auth.md'), 'utf8')).toBe('updated [REDACTED]123');
+        const history = join(run, 'reports/.takt-report-internal/history');
+        const historyFiles = readdirSync(history, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
+        expect(historyFiles.length).toBeGreaterThan(0);
+        for (const entry of historyFiles) expect(readFileSync(join(entry.parentPath, entry.name), 'utf8')).toBe('[REDACTED]123');
+        const events = readFileSync(join(run, 'logs/auth-provider-events.jsonl'), 'utf8').trim().split('\n')
+          .map((line) => JSON.parse(line) as { event_type: string; data: { text?: string } });
+        expect(events.filter((event) => event.event_type === 'text').map((event) => event.data.text ?? '').join(''))
+          .toBe('before [REDACTED]123 after [REDACTED]123');
+        const metadata = JSON.parse(readFileSync(join(run, 'meta.json'), 'utf8'));
+        expect(metadata).toMatchObject({ status: 'failed', reason: expect.stringContaining('[REDACTED]123') });
+        expect(storedText(run).includes(secret + '123')).toBe(false);
+      }
+      const records = f.requests.filter((request) => request.kind === 'execution' && request.command.kind === 'record');
+      expect(records.length).toBeGreaterThan(0);
+      for (const request of records) {
+        if (request.kind !== 'execution' || request.command.kind !== 'record') throw new Error('Expected run record');
+        expect(Buffer.from(request.command.record.data, 'base64').toString('utf8').includes(secret + '123')).toBe(false);
+      }
+      await vi.waitFor(async () => {
+        for (const runner of f.turnRunners) for (const turn of runner.calls) {
+          if (!turn.finished && turn.input.event.event.kind !== 'task_failed') await runner.finish(turn);
+        }
+        expect(f.turnRunners.flatMap((runner) => runner.calls.map((turn) => turn.input.event.event)))
+          .toContainEqual(expect.objectContaining({ kind: 'task_failed',
+            result: expect.objectContaining({ success: false, failureReason: task.failure?.error }) }));
+      }, { timeout: 10_000 });
+      expect(JSON.stringify(task.failure).includes(secret + '123')).toBe(false);
+      expect(JSON.stringify(task.completion).includes(secret + '123')).toBe(false);
+      if (secret.length > 3) {
+        expect(filesContaining(worker.config, secret)).toEqual([]);
+        expect(filesContaining(f.directory, secret)).toEqual([]);
+        expect(worker.output().includes(secret)).toBe(false);
+      }
+    } finally { await f.close(); vi.unstubAllEnvs(); }
+  });
+
+isolatedWorkerTest.each([false, true])('uses worker authentication when daemon has no key and reports missing authentication with worker name: %s', async (missing) => {
+  const f = await fixture();
+  try {
+    const worker = credentialWorker(f, missing);
+    await vi.waitFor(() => expect(['completed', 'failed']).toContain(f.store.read().tasks[0]!.status), { timeout: 30_000 });
+    if (missing) {
+      expect(f.store.read().tasks[0]).toMatchObject({ status: 'failed', failure: { error: expect.stringMatching(/w1.*OpenAI.*authentication/) } });
+    } else {
+      expect(f.store.read().tasks[0]!.status, worker.output()).toBe('completed');
+      expect(worker.calls()[0]!.api).toBe(createHash('sha256').update('worker-config-value').digest('hex'));
+    }
+  } finally { await f.close(); }
+});
+
 function controlledRealWorker(f: Awaited<ReturnType<typeof fixture>>, token = f.registered.token,
   protectedProjects: string[] = [f.project]) {
   const taskDir = '.takt/tasks/controlled';
@@ -534,8 +759,8 @@ function controlledRealWorker(f: Awaited<ReturnType<typeof fixture>>, token = f.
     observations = join(home, 'calls'); mkdirSync(observations);
     const hook = join(home, 'controlled-provider.mjs');
     writeFileSync(hook, `
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, basename, dirname } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { MockProvider } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href)};
 const observations = ${JSON.stringify(observations)};
@@ -547,10 +772,10 @@ MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
     try { readFileSync(daemonPath); } catch (error) { denied = error.code; }
     if (denied !== 'EPERM') throw new Error('Worker could read daemon state');
   }
-  const executionId = basename(dirname(options.cwd));
+  const executionId = basename(process.cwd());
   const current = ++number;
   const key = executionId + '-' + current;
-  const slug = readdirSync(join(options.cwd, '.takt/runs'))[0];
+  const slug = 'remote-' + executionId;
   const reportDirectory = join(options.cwd, '.takt/runs', slug, 'reports');
   mkdirSync(reportDirectory, { recursive: true });
   writeFileSync(join(reportDirectory, 'phase-' + current + '.md'), 'remote report ' + current + '\\n');
@@ -558,10 +783,14 @@ MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
   const aborted = () => writeFileSync(join(observations, key + '.aborted'), 'aborted');
   options.abortSignal?.addEventListener('abort', aborted, { once: true });
   if (options.abortSignal?.aborted) aborted();
-  while (!existsSync(join(observations, key + '.release')) && !existsSync(join(observations, 'release-all'))) {
+  while (!existsSync(join(observations, key + '.release')) && !existsSync(join(observations, 'release-all'))
+    && !existsSync(join(observations, 'fail-provider'))) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   options.abortSignal?.removeEventListener('abort', aborted);
+  if (existsSync(join(observations, 'fail-provider'))) {
+    return { persona: config.name, status: 'error', content: '', error: 'Mock provider failed', timestamp: new Date() };
+  }
   writeFileSync(join(options.cwd, 'controlled-result.txt'), 'remote result ' + current + '\\n');
   return { persona: config.name, status: 'done', content: 'remote log ' + current, timestamp: new Date(), sessionId: randomUUID() };
 } });
@@ -578,6 +807,8 @@ MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
       return calls().find((call) => call.number === number && (executionId === undefined || call.executionId === executionId))!;
     },
     release(call: RealCall) { writeFileSync(join(observations, `${call.executionId}-${call.number}.release`), 'release'); },
+    fail() { writeFileSync(join(observations, 'fail-provider'), 'fail'); },
+    recover() { rmSync(join(observations, 'fail-provider'), { force: true }); },
     releaseAll() { writeFileSync(join(observations, 'release-all'), 'release'); },
     aborted(call: RealCall) { return existsSync(join(observations, `${call.executionId}-${call.number}.aborted`)); },
   };
@@ -589,6 +820,202 @@ function runPage(f: Awaited<ReturnType<typeof fixture>>, view: 'summary' | 'log'
   expect(result.isError, firstTextContent(result.content)).not.toBe(true);
   return JSON.parse(firstTextContent(result.content)) as Record<string, unknown>;
 }
+
+async function failDuringVerification(f: Awaited<ReturnType<typeof fixture>>, worker: ReturnType<typeof controlledRealWorker>) {
+  const first = await worker.wait(1);
+  worker.release(first);
+  const verification = await worker.wait(2, first.executionId);
+  worker.fail();
+  await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, worker.output()).toBe('failed'), { timeout: 20_000 });
+  expect(verification.denied).toBe('EPERM');
+  expect(existsSync(verification.cwd)).toBe(true);
+  return { first, verification, assignment: f.store.read().tasks[0]!.remote_assignment! };
+}
+
+isolatedWorkerTest('reserves the failed worker without occupying the project slot for another worker', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  writeFileSync(join(f.project, '.takt/config.yaml'), 'provider: mock\nconcurrency: 1\n');
+  const worker = controlledRealWorker(f);
+  let other: ReturnType<typeof controlledRealWorker> | undefined;
+  try {
+    await failDuringVerification(f, worker);
+    const waiting = new TaskRunner(f.project).addTask('Waiting task', { goal_id: goalRecord().id,
+      base_branch: goalRecord().branch, workflow: 'remote-fixture', worktree: false });
+    const heartbeats = f.responses.filter((response) => response.kind === 'heartbeat').length;
+    await vi.waitFor(() => expect(f.responses.filter((response) => response.kind === 'heartbeat').length)
+      .toBeGreaterThan(heartbeats), { timeout: 15_000 });
+    expect(f.store.read().tasks.find((task) => task.name === waiting.name)!.status).toBe('pending');
+    const listed = JSON.parse(firstTextContent((await listTaktTasks({ cwd: f.project })).content));
+    expect(listed.tasks.find((task: { name: string }) => task.name === f.task.name)).toMatchObject({ workerName: 'w1', retryReservation: { workerName: 'w1' } });
+    expect(f.store.read().tasks[0]!.remote_assignment?.retryReservation).toBe(true);
+    const registered = await f.registry.add('w2', 1);
+    other = controlledRealWorker(f, registered.token);
+    await vi.waitFor(() => expect(other!.calls()).toHaveLength(1), { timeout: 20_000 });
+    expect(other.calls()[0]!.denied).toBe('EPERM');
+    expect(f.store.read().tasks.find((task) => task.name === waiting.name)).toMatchObject({ status: 'running', worker_name: 'w2' });
+  } finally { worker.releaseAll(); other?.releaseAll(); await f.close(); }
+});
+
+isolatedWorkerTest.each(['requeue', 'retry'] as const)('resumes a failed clone on the same worker through %s', async (operation) => {
+  const f = await fixture({ workerConcurrency: 1 });
+  writeFileSync(join(f.project, '.takt/config.yaml'), 'provider: mock\nconcurrency: 1\n');
+  const worker = controlledRealWorker(f);
+  try {
+    const failed = await failDuringVerification(f, worker);
+    writeFileSync(join(failed.verification.cwd, 'preserved-marker'), 'Uncommitted work');
+    const waiting = new TaskRunner(f.project).addTask('Ordinary pending work', { goal_id: goalRecord().id,
+      base_branch: goalRecord().branch, workflow: 'remote-fixture', worktree: false });
+    const parentPid = worker.child.pid;
+    worker.recover();
+    const input = { cwd: f.project, goalId: goalRecord().id, taskName: f.task.name };
+    const result = operation === 'requeue'
+      ? await requeueTaktGoalTask(input, {}, new AbortController().signal)
+      : await retryTaktGoalTask({ ...input, task: 'Corrected remote instructions', startStep: 'verify' }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    await vi.waitFor(() => expect(worker.calls().some((call) => call.pid !== failed.first.pid)).toBe(true), { timeout: 20_000 });
+    const resumed = worker.calls().find((call) => call.pid !== failed.first.pid)!;
+    expect(worker.child.pid).toBe(parentPid);
+    expect(resumed).toMatchObject({ cwd: failed.verification.cwd, denied: 'EPERM' });
+    expect(readFileSync(join(resumed.cwd, 'preserved-marker'), 'utf8')).toBe('Uncommitted work');
+    expect(resumed.prompt).toContain('Verify the result');
+    expect(f.store.read().tasks.find((task) => task.name === waiting.name)!.status).toBe('pending');
+    if (operation === 'retry') {
+      const taskDir = f.store.read().tasks[0]!.task_dir!;
+      expect(readFileSync(join(f.project, taskDir, 'order.md'), 'utf8')).toContain('Corrected remote instructions');
+      expect(resumed.prompt).toContain('Corrected remote instructions');
+    }
+    const current = f.store.read().tasks[0]!.remote_assignment!;
+    expect(current.executionId).not.toBe(failed.assignment.executionId);
+    expect(current.assignmentGeneration).toBe(failed.assignment.assignmentGeneration + 1);
+    worker.releaseAll();
+    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status, worker.output()).toBe('completed'), { timeout: 20_000 });
+  } finally { worker.releaseAll(); await f.close(); }
+});
+
+isolatedWorkerTest('removes the failed workspace before reporting removal and reuses the worker slot', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  const worker = controlledRealWorker(f);
+  try {
+    const failed = await failDuringVerification(f, worker);
+    worker.recover();
+    const result = await removeTaktGoalTask({ cwd: f.project, goalId: goalRecord().id,
+      taskName: f.task.name, reason: 'Discard failed remote work', discardUnmerged: true }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(existsSync(failed.verification.cwd)).toBe(false);
+    expect(f.store.read().tasks.some((task) => task.name === f.task.name)).toBe(false);
+    const waiting = new TaskRunner(f.project).addTask('After removal', { goal_id: goalRecord().id,
+      base_branch: goalRecord().branch, workflow: 'remote-fixture', worktree: false });
+    await vi.waitFor(() => expect(f.store.read().tasks.find((task) => task.name === waiting.name))
+      .toMatchObject({ status: 'running', worker_name: 'w1' }), { timeout: 20_000 });
+    await vi.waitFor(() => expect(worker.calls().some((call) => call.pid !== failed.first.pid && call.denied === 'EPERM'))
+      .toBe(true), { timeout: 10_000 });
+  } finally { worker.releaseAll(); await f.close(); }
+});
+
+isolatedWorkerTest('restarts on another worker from the saved SHA with a new generation after registration removal', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  f.store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, assignment_generation: 6 })) }));
+  const worker = controlledRealWorker(f);
+  let other: ReturnType<typeof controlledRealWorker> | undefined;
+  try {
+    const failed = await failDuringVerification(f, worker);
+    const advanced = spawnSync('git', ['-C', f.project, 'update-ref', `refs/heads/${goalRecord().branch}`, 'HEAD']);
+    expect(advanced.status).toBe(0);
+    await f.registry.remove('w1');
+    const registered = await f.registry.add('w2', 1);
+    other = controlledRealWorker(f, registered.token);
+    const result = await requeueTaktGoalTask({ cwd: f.project, goalId: goalRecord().id,
+      taskName: f.task.name }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    await vi.waitFor(() => expect(other!.calls()).toHaveLength(1), { timeout: 20_000 });
+    const restarted = other.calls()[0]!;
+    const current = f.store.read().tasks[0]!.remote_assignment!;
+    expect(current).toMatchObject({ workerId: 'w2', originalSha: f.originalSha, assignmentGeneration: 8 });
+    expect(current.executionId).not.toBe(failed.assignment.executionId);
+    expect(restarted.prompt).toContain('Controlled remote execution');
+    expect(restarted.prompt).not.toContain('Verify the result');
+    expect(restarted.denied).toBe('EPERM');
+    const head = spawnSync('git', ['-C', restarted.cwd, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+    expect(head.status).toBe(0);
+    expect(head.stdout.trim()).toBe(f.originalSha);
+    const goal = await new GoalStore(f.project).get(goalRecord().id);
+    expect(JSON.stringify(goal.workLog)).toMatch(/w1/);
+    expect(JSON.stringify(goal.workLog)).toMatch(/removed|restart|最初|削除/i);
+  } finally { worker.releaseAll(); other?.releaseAll(); await f.close(); }
+});
+
+isolatedWorkerTest('waits sixty seconds for a disconnected worker before restarting on another worker', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  try {
+    const worker = controlledRealWorker(f);
+    const failed = await failDuringVerification(f, worker);
+    worker.child.kill('SIGTERM'); await worker.closed;
+    const registered = await f.registry.add('w2', 1);
+    const replacement = controlledRealWorker(f, registered.token);
+    const goal = await new GoalStore(f.project).get(f.store.read().tasks[0]!.goal_id!);
+    const result = await requeueTaktGoalTask({ cwd: f.project, goalId: goal.id, taskName: f.task.name }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    await vi.waitFor(() => expect(f.store.read().tasks[0]!.remote_assignment?.retryWaitUntil).toBeTypeOf('number'), { timeout: 10_000 });
+    const deadline = f.store.read().tasks[0]!.remote_assignment!.retryWaitUntil!;
+    expect(deadline - Date.now()).toBeGreaterThan(50_000);
+    expect(f.store.read().tasks[0]!.status).toBe('pending');
+    expect(replacement.calls()).toEqual([]);
+    await vi.waitFor(() => expect(f.store.read().tasks[0]!.worker_name).toBe('w2'), { timeout: 70_000, interval: 500 });
+    expect(Date.now()).toBeGreaterThanOrEqual(deadline);
+    const resumed = await replacement.wait(1);
+    expect(resumed.denied).toBe('EPERM');
+    expect(f.store.read().tasks[0]!.remote_assignment).toMatchObject({ originalSha: failed.assignment.originalSha,
+      assignmentGeneration: failed.assignment.assignmentGeneration + 1, restartReason: expect.stringMatching(/w1.*60 seconds/) });
+    expect(resumed.cwd).not.toBe(failed.verification.cwd);
+    replacement.releaseAll();
+    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status).toBe('completed'), { timeout: 30_000 });
+  } finally { await f.close(); }
+}, 120_000);
+
+isolatedWorkerTest('restarts from the original SHA when the connected worker workspace has disappeared', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  try {
+    const worker = controlledRealWorker(f);
+    const failed = await failDuringVerification(f, worker);
+    rmSync(failed.verification.cwd, { recursive: true, force: true });
+    worker.recover();
+    const goal = await new GoalStore(f.project).get(f.store.read().tasks[0]!.goal_id!);
+    const result = await requeueTaktGoalTask({ cwd: f.project, goalId: goal.id, taskName: f.task.name }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    await vi.waitFor(() => expect(worker.calls().filter((call) => call.executionId !== failed.assignment.executionId)).not.toEqual([]), { timeout: 30_000 });
+    const fresh = worker.calls().find((call) => call.executionId !== failed.assignment.executionId)!;
+    expect(fresh.cwd).not.toBe(failed.verification.cwd);
+    expect(f.store.read().tasks[0]!.remote_assignment).toMatchObject({ originalSha: failed.assignment.originalSha,
+      assignmentGeneration: failed.assignment.assignmentGeneration + 1, restartReason: expect.stringMatching(/workspace was lost/) });
+    expect(f.store.read().tasks[0]!.source_run_slug).toBeUndefined();
+    expect(fresh.denied).toBe('EPERM');
+    worker.releaseAll();
+    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status).toBe('completed'), { timeout: 30_000 });
+  } finally { await f.close(); }
+});
+
+isolatedWorkerTest('releases a failed reservation on goal abort and accepts work from another goal on the same worker', async () => {
+  const f = await fixture({ workerConcurrency: 1 });
+  const worker = controlledRealWorker(f);
+  try {
+    const failed = await failDuringVerification(f, worker);
+    expect(failed.assignment.retryReservation).toBe(true);
+    worker.recover();
+    const result = await abortTaktGoal({ cwd: f.project, goalId: goalRecord().id,
+      reason: 'Stop the failed goal' }, {}, new AbortController().signal);
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(f.store.read().tasks[0]!.remote_assignment?.retryReservation).toBe(false);
+    expect(existsSync(failed.verification.cwd)).toBe(true);
+    const goal = await new GoalStore(f.project).create({ ...goalRecord(), id: randomUUID(), branch: 'takt/after-abort' });
+    expect(spawnSync('git', ['-C', f.project, 'branch', goal.branch, f.originalSha]).status).toBe(0);
+    const waiting = new TaskRunner(f.project).addTask('Other goal work', { goal_id: goal.id,
+      base_branch: goal.branch, workflow: 'remote-fixture', worktree: false });
+    await vi.waitFor(() => expect(f.store.read().tasks.find((task) => task.name === waiting.name))
+      .toMatchObject({ status: 'running', worker_name: 'w1' }), { timeout: 20_000 });
+    await vi.waitFor(() => expect(worker.calls().some((call) => call.pid !== failed.first.pid && call.denied === 'EPERM'))
+      .toBe(true), { timeout: 10_000 });
+  } finally { worker.releaseAll(); await f.close(); }
+});
 
 async function configuredRealWorker(f: Awaited<ReturnType<typeof fixture>>, options: {
   project?: Record<string, unknown>; global?: Record<string, unknown>; workflow?: string;
@@ -702,6 +1129,27 @@ const permissionCases = [
   { name: 'project default', project: { default_permission_mode: 'full' }, global: { default_permission_mode: 'readonly' }, expected: 'full' },
   { name: 'global default', project: undefined, global: { default_permission_mode: 'readonly' }, expected: 'readonly' },
 ].flatMap((entry) => ['readonly', 'full'].map((clonePermission) => ({ ...entry, clonePermission })));
+
+isolatedWorkerTest('preserves an environment reference in task text through input transfer and provider invocation', async () => {
+  vi.stubEnv('REMOTE_TEST_KEY', 'fake-daemon-value');
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  try {
+    f = await fixture();
+    const task = '文字列 ${REMOTE_TEST_KEY} を説明する';
+    f.store.update((current) => ({ tasks: current.tasks.map((record) => ({ ...record, content: task })) }));
+    const workflow = 'name: remote-fixture\nsteps:\n  - name: work\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n';
+    const result = await configuredRealWorker(f, { workflow });
+    expect(result.task.status, result.worker.output()).toBe('completed');
+    const agents = result.observed.filter((value) => value.kind === 'agent');
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.prompt).toContain('$｛REMOTE_TEST_KEY｝');
+    expect(agents[0]!.prompt).not.toContain('fake-daemon-value');
+    const input = JSON.parse(readFileSync(join(f.project, '.takt/remote-executions', result.task.execution_id!, 'input/execution.json'), 'utf8'));
+    expect(input.task).toBe(task);
+    expect(JSON.stringify(input)).not.toContain('fake-daemon-value');
+  } finally { await f?.close(); vi.unstubAllEnvs(); }
+});
+
 isolatedWorkerTest.each(permissionCases)('uses daemon $name permissions despite clone permission=$clonePermission', async (entry) => {
   const f = await fixture();
   try {
@@ -871,15 +1319,6 @@ isolatedWorkerTest('delivers an instruction and a stop to the same real executio
     const receipts = readFileSync(join(f.project, '.takt/runs', runSlug, 'remote-controls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(receipts.map((receipt) => receipt.kind)).toEqual(['tell', 'stop']);
     expect(worker.calls()).toHaveLength(2);
-    const saved = f.store.read();
-    const retryInput = { cwd: f.project, goalId: goalRecord().id, taskName: f.task.name };
-    for (const operation of [() => requeueTaktGoalTask(retryInput, {}, new AbortController().signal),
-      () => retryTaktGoalTask({ ...retryInput, task: 'Corrected instructions' }, {}, new AbortController().signal)]) {
-      const result = await operation();
-      expect(result.isError).toBe(true);
-      expect(firstTextContent(result.content)).toMatch(/remote.*retry.*not supported/i);
-      expect(f.store.read()).toEqual(saved);
-    }
   } finally { worker.releaseAll(); await f.close(); }
 });
 

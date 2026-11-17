@@ -26,6 +26,7 @@ export const TaskRecordSchema = buildTaskSchema(
     name: z.string().min(1),
     status: TaskStatusSchema,
     deletion: z.object({
+      remote_ack: z.boolean().optional(),
       id: z.string().uuid(),
       owner_pid: z.number().int().positive(),
       owner_start_time: z.string().min(1).optional(),

@@ -31,12 +31,14 @@ export const RemoteAssignmentSchema = RemoteExecutionIdentitySchema.extend({
   leaseExpiresAt: z.number().finite(),
   lastAcknowledgedLogSequence: sequence, controlSequence: sequence,
   workLocation: z.string().nullable(), retryReservation: z.boolean(),
+  retryWaitUntil: z.number().finite().optional(), retryReady: z.boolean().optional(), restartReason: z.string().optional(),
 }).strict();
 export type RemoteAssignment = z.infer<typeof RemoteAssignmentSchema>;
 export const RemoteTaskRecordSchema = z.object({
   assignment: RemoteAssignmentSchema,
-  status: z.enum(['running', 'completed', 'failed', 'pr_failed']),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'pr_failed']),
   failureReason: z.string().optional(),
+  cleanupId: z.string().optional(), cleanupAcknowledged: z.boolean().optional(),
 }).strict();
 export type RemoteTaskRecord = z.infer<typeof RemoteTaskRecordSchema>;
 
@@ -49,6 +51,8 @@ export const WorkerRequestSchema = z.discriminatedUnion('kind', [
   z.object({ ...envelope, kind: z.literal('heartbeat'), active: z.array(RemoteExecutionIdentitySchema) }).strict(),
   z.object({ ...envelope, kind: z.literal('execution'), assignment: RemoteExecutionIdentitySchema,
     command: RemoteExecutionCommandSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal('workspace'), assignment: RemoteExecutionIdentitySchema,
+    operation: z.enum(['inspect', 'remove']), cleanupId: z.string().optional(), exists: z.boolean(), error: z.string().optional() }).strict(),
   z.object({ ...envelope, kind: z.literal('complete'), assignment: RemoteExecutionIdentitySchema,
     ...RemoteExecutionResultFields,
     success: z.boolean(), reason: z.string().max(8192).optional(), artifacts: RemoteArtifactsSchema.optional() }).strict()
@@ -62,6 +66,8 @@ export const WorkerResponseSchema = z.discriminatedUnion('kind', [
   z.object({ ...envelope, kind: z.literal('assignment'), assignment: RemoteAssignmentSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal('heartbeat'), stop: z.array(RemoteExecutionIdentitySchema) }).strict(),
   z.object({ ...envelope, kind: z.literal('execution'), response: RemoteExecutionResponseSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal('workspace'), assignment: RemoteAssignmentSchema,
+    operation: z.enum(['inspect', 'remove']), cleanupId: z.string().optional() }).strict(),
   z.object({ ...envelope, kind: z.literal('completed'), accepted: z.boolean() }).strict(),
   z.object({ ...envelope, kind: z.literal('stop'), assignment: RemoteExecutionIdentitySchema, reason: z.string() }).strict(),
   z.object({ kind: z.literal('rejected'), reason: z.string() }).strict(),
@@ -87,6 +93,9 @@ export const RemoteProjectRequestSchema = z.discriminatedUnion('kind', [
     ...RemoteExecutionResultFields,
     now: z.number().finite(), success: z.boolean(), reason: z.string().optional(), artifacts: RemoteArtifactsSchema.optional() }).strict(),
   z.object({ kind: z.literal('fail'), assignment: RemoteExecutionIdentitySchema, reason: z.string() }).strict(),
+  z.object({ kind: z.literal('retry-state'), assignment: RemoteExecutionIdentitySchema,
+    ready: z.boolean().optional(), waitUntil: z.number().optional(), restartReason: z.string().optional() }).strict(),
+  z.object({ kind: z.literal('cleanup'), assignment: RemoteExecutionIdentitySchema, cleanupId: z.string() }).strict(),
 ]);
 export type RemoteProjectRequest = z.infer<typeof RemoteProjectRequestSchema>;
 export const RemoteProjectReplySchema = z.discriminatedUnion('kind', [

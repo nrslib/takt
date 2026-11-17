@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { devNull } from 'node:os';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { remoteGitCredentialHelper } from './git-credential-helper.js';
 
 interface SafeGitEnvironmentOptions {
   readonly allowGitHooks?: boolean;
@@ -25,6 +26,10 @@ export async function buildSafeGitEnvironment(
   delete environment.GIT_COMMON_DIR;
   delete environment.GIT_INDEX_FILE;
   const configEntries: Array<readonly [string, string]> = [];
+  if (environment.TAKT_REMOTE_GIT_TOKEN !== undefined && environment.TAKT_REMOTE_GIT_ORIGIN !== undefined) {
+    configEntries.push(['credential.helper', ''], ['credential.helper', remoteGitCredentialHelper()]);
+    environment.GIT_TERMINAL_PROMPT = '0';
+  }
 
   if (!options.allowGitHooks) {
     configEntries.push(['core.hooksPath', devNull]);

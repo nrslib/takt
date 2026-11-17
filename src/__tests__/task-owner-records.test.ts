@@ -48,17 +48,21 @@ describe('persisted ordinary task owner metadata', () => {
     expect(TaskRecordSchema.parse(retried)).toMatchObject({ owner_pid: null, owner_start_time: null });
   });
 
-  it('clears the old remote assignment on retry while keeping its monotonically increasing generation', () => {
+  it('retains the remote reservation on retry while keeping its generation and clearing attempt readiness', () => {
     const assignment = RemoteAssignmentSchema.parse({ projectId: '/project', taskName: 'owner-test', workerId: 'w1', workerName: 'w1',
       registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 3, requestId: 'r1',
       originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
-      lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: null, retryReservation: false });
-    const retried = buildRetryTaskRecord({ ...running(), owner_pid: null, owner_start_time: null,
+      lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: randomUUID(), retryReservation: true,
+      retryReady: true, retryWaitUntil: 60_000 });
+    const retried = buildRetryTaskRecord({ ...running(), status: 'failed', completed_at: '2026-10-05T01:00:00.000Z',
+      failure: { error: 'remote failure' }, owner_pid: null, owner_start_time: null,
       remote_assignment: assignment, assignment_generation: 3, worker_name: 'w1' }, 'pending', {});
     const saved = TaskRecordSchema.parse(serializeTaskRecord(retried));
-    expect(saved.remote_assignment).toBeUndefined();
-    expect(saved.worker_name).toBeUndefined();
+    expect(saved.remote_assignment).toEqual({ ...assignment, retryReady: false, retryWaitUntil: undefined });
+    expect(saved.worker_name).toBe('w1');
     expect(saved.assignment_generation).toBe(3);
+    expect(saved.owner_pid).toBeNull();
+    expect(saved.owner_start_time).toBeNull();
   });
 
   it('clears the identity when a task becomes failed', () => {

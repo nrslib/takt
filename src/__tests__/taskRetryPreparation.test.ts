@@ -310,7 +310,7 @@ describe('prepareFailedTaskRetry', () => {
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, '/worker-only/clone'])('rejects remote retry before resolving local resources with worktree=%s', (worktreePath) => {
+  it.each([undefined, '/worker-only/clone'])('prepares remote retry from the aggregated run without inspecting worker paths: %s', (worktreePath) => {
     const assignment = RemoteAssignmentSchema.parse({
       projectId: '/project', taskName: failedTask.name, workerId: 'w1', workerName: 'w1',
       registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1,
@@ -325,11 +325,14 @@ describe('prepareFailedTaskRetry', () => {
     }));
     const before = structuredClone(task);
 
-    expect(() => prepareFailedTaskRetry(task, '/project')).toThrow(/remote/i);
+    const preparation = prepareFailedTaskRetry(task, '/project');
+
+    expect(preparation).toMatchObject({ runsBaseDir: '/project', previousOrderContent: 'Canonical order',
+      previousWorkflow: 'default', failure: failedTask.failure });
 
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
-    expect(mockResolveTaskOrderContent).not.toHaveBeenCalled();
-    expect(mockResolveRunSelection).not.toHaveBeenCalled();
+    expect(mockResolveTaskOrderContent).toHaveBeenCalled();
+    expect(mockResolveRunSelection).toHaveBeenCalledWith(task, '/project');
     expect(task).toEqual(before);
   });
 

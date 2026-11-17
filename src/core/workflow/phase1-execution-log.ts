@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { normalizeProviderEventData } from '../logging/providerEvent.js';
+import { getExecutionSecrets } from '../../shared/utils/execution-secrets.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import { collectEmbeddedSensitiveValues, REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -29,6 +31,7 @@ function maskTextFragments(chunks: readonly string[]): string[] {
   const fullText = chunks.join('');
   const sensitiveValues = new Set<string>();
   collectEmbeddedSensitiveValues(fullText, sensitiveValues);
+  const executionSecrets = new Set(getExecutionSecrets());
   if (sensitiveValues.size === 0) return [...chunks];
   const nodes: SensitiveMatchNode[] = [{ next: new Map(), failure: 0, longest: 0, shortLengths: 0 }];
   for (const value of sensitiveValues) {
@@ -43,7 +46,7 @@ function maskTextFragments(chunks: readonly string[]): string[] {
       }
       state = next;
     }
-    if (value.length >= 4) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
+    if (value.length >= 4 || executionSecrets.has(value)) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
     else nodes[state]!.shortLengths |= 1 << value.length;
   }
   const queue = [...nodes[0]!.next.values()];
@@ -260,7 +263,9 @@ export class Phase1ExecutionLog {
     return serializePhase1ExecutionLog(this.entries.flatMap((entry, index) => {
       if (omitted.has(index) || (entry.kind === 'instruction' && !entry.dispatched)) return [];
       const retained = replacements.get(index) ?? entry;
-      return [retained.kind === 'provider_event' ? this.sanitize(retained) : retained];
+      return [retained.kind === 'provider_event'
+        ? { ...retained, event: { ...retained.event, data: normalizeProviderEventData(retained.event) } }
+        : retained];
     }));
   }
 

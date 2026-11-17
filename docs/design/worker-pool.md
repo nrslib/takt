@@ -2,7 +2,7 @@
 
 ## 範囲
 
-daemon が自動実行する manager のゴールタスクと PR マージ用タスクを一つの dispatcher に通す。組み込み worker に加え、リモート worker の登録、認証済み接続、割り当ての保存、入力転送、clone・workflow 実行、成果取得、run 記録の集約、操作配送と lease による復旧を扱う。認証情報の配布、失敗予約とリモート再試行は後続タスクで実装する。
+daemon が自動実行する manager のゴールタスクと PR マージ用タスクを一つの dispatcher に通す。組み込み worker に加え、リモート worker の登録、認証済み接続、割り当ての保存、入力転送、clone・workflow 実行、成果取得、run 記録の集約、操作配送と lease による復旧を扱う。タスク用の認証情報は daemon の配布設定に従い、保存入力とは別にメモリ上で配送する。
 
 手動の `takt run`、`takt watch`、対話モードは移行しない。`--resident` とバージョン差による daemon の扱いは別タスク `add-resident-daemon-option` が担当する。
 
@@ -101,7 +101,7 @@ daemon:
 
 ネットワークでは `POST /worker` の継続 HTTP 接続で NDJSON を交換する。認証、再接続、pull、heartbeat、完了通知と応答だけを扱い、会話 IPC は公開しない。登録は設定ディレクトリの private file `workers.json` に保存する。確定した pull 応答は登録世代を含む要求識別子のハッシュを使い、`worker-pull-responses/<登録世代>/` の private file へ一件ずつ保存する。再送時はその要求のファイルだけを読み、起動時に応答履歴全体をメモリへ読み込まない。登録 CLI と daemon の認証・送信は同じファイル排他を通り、登録削除後に古い認証結果から新規割り当てを送らない。登録削除では再認証できなくなった世代の応答履歴も削除し、他の有効な世代の履歴は保持する。
 
-worker 起動は共通のプロジェクト初期化を通らず、worker マシンの設定ファイルを必要としない。公開 CLI は `RemoteTaskExecutor` を設定し、空きがあれば pull する。タスクごとに子プロセスを作り、daemon が確定した workflow bundle・設定と origin の固定 SHA で実行する。通信トークンをタスク子プロセスの引数や環境へ渡さない。Git と provider の認証には worker の既存設定を使う。成功だけの完了通知は受理せず、保存済みの最終記録と取得・照合した成果を持つタスクだけを取り込み可能にする。
+worker 起動は共通のプロジェクト初期化を通らず、worker マシンの設定ファイルを必要としない。公開 CLI は `RemoteTaskExecutor` を設定し、空きがあれば pull する。タスクごとに子プロセスを作り、daemon が確定した workflow bundle・設定と origin の固定 SHA で実行する。通信トークンをタスク子プロセスの引数や環境へ渡さない。Git、gh、provider の認証は daemon が配布した値を優先し、該当する配布値がなければ worker の既存認証を使う。worker の TAKT 設定で配布値を上書きしない。成功だけの完了通知は受理せず、保存済みの最終記録と取得・照合した成果を持つタスクだけを取り込み可能にする。
 
 worker の管理は daemon マシン上の `takt worker add/list/remove` だけが行う。登録は worker 名、登録世代、concurrency、トークンの検証用ハッシュを保存する。暗号学的乱数のトークン平文は登録時の端末に一度だけ出力し、設定、ログ、run 記録へ保存しない。list は名前と concurrency を表示し、トークンは表示しない。
 
@@ -137,7 +137,7 @@ worker は URL とトークンだけを持ち、外向きに接続する。接�
 
 転送する相対パスは4096文字までとし、絶対パス、親への参照、空の要素とバックスラッシュを拒否する。入れ子の workflow のレポート版管理先も同じ run の記録として転送する。
 
-プロジェクト子プロセスが既存の workflow bundle を準備し、入力を `.takt/remote-executions/<execution ID>/input/` に確定する。版付きの manifest は各ファイルの相対パス、長さ、SHA-256 と空ディレクトリを含むディレクトリ一覧を持つ。同じ認証済み接続の `execution` 要求で manifest と最大64 KiBのチャンクを取得する。入力全体は64 MiB、manifest は192 KiB、ファイルとディレクトリはそれぞれ256件までとし、通信の256 KiBのフレーム上限を保つ。worker は全ファイルを照合した後、既存 bundle loader で参照を検証する。通常設定は設定 snapshot、runtime 設定は実行専用の固定値を使う。今回の入力に daemon の API key・トークンは含めない。認証情報の配送は後続の範囲である。
+プロジェクト子プロセスが既存の workflow bundle を準備し、入力を `.takt/remote-executions/<execution ID>/input/` に確定する。版付きの manifest は各ファイルの相対パス、長さ、SHA-256 と空ディレクトリを含むディレクトリ一覧を持つ。同じ認証済み接続の `execution` 要求で manifest と最大64 KiBのチャンクを取得する。入力全体は64 MiB、manifest は192 KiB、ファイルとディレクトリはそれぞれ256件までとし、通信の256 KiBのフレーム上限を保つ。worker は全ファイルを照合した後、既存 bundle loader で参照を検証する。通常設定は設定 snapshot、runtime 設定は実行専用の固定値を使う。保存入力に daemon の API key・トークンは含めない。認証情報は同じ認証済み接続の別の execution 要求で有効な割り当てを確認してから配送し、pull 応答履歴へ保存しない。
 
 設定 snapshot は実行制御用ディレクトリと clone の両方に適用し、権限設定の優先順位と step の権限下限、言語、`ignore_exceed` を通常の実行と同じ規則で解決する。worker の6系統の CLI パス環境変数による上書きは実行子プロセスへ渡さず、daemon の CLI 設定を使う。worker の HOME・PATH と Git・provider・MCP の認証環境は保持する。
 
@@ -177,7 +177,7 @@ heartbeat 間隔は5秒、再接続の猶予と lease は最後の正常確認�
 
 daemon の再起動では永続化した割り当て、lease、記録の ACK、制御の ACK を復元する。停止時間を含む元の期限まで再接続を待ち、期限内なら running のまま続ける。期限を延ばし直さない。期限を超えた割り当ては切断失敗とし、途中まで受け取った run 記録は残す。
 
-## リモートの失敗予約と再試行（後続実装）
+## リモートの失敗予約と再試行
 
 失敗したタスクは元 worker の空きを一つ予約する。予約は worker の使用数だけに加え、プロジェクトの使用数には加えない。pending の別タスクはその空きを使えず、一覧に予約しているタスクと worker を表示する。今回の組み込み置換では従来の失敗後の空き解放を保持する。
 
@@ -185,13 +185,34 @@ requeue/retry は保存済み worker と作業場所を参照する。元 worker
 
 元 worker の登録が削除済みなら待たず、切断中なら上記60秒の猶予まで待つ。戻らない場合は予約を解放し、別 worker の空きを使って記録済みの元 SHA から最初から実行する。新しい execution ID と世代を発行し、元 worker が使えない理由と最初からやり直したことを manager が読める記録へ残す。途中の作業場所や再開 checkpoint を別 worker へ移さない。元 worker 上の作業場所が失われた場合も途中からの再開は成立しないため同じく最初から実行し、作業場所がない理由を記録する。
 
-## リモートの認証情報（後続実装）
+## リモートの認証情報
 
 worker の接続用トークンとタスク用の認証情報を分離する。接続用トークンは worker の通信処理だけが持ち、タスクのプロセスへ渡さない。daemon が配布対象として明示した Git、gh、provider の認証情報を、タスクごとの子プロセス環境へ重ねる。daemon に該当する認証情報があれば優先し、なければ worker マシンの既存認証を使う。worker 自身や同時実行中の別タスクの環境変数を変更しない。
 
 Git トークンを clone URL や保存 Git config に埋め込まない。認証 helper は専用プロセスの環境から読み、`GIT_CONFIG_COUNT` と `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` によるプロセス限りの指定を使う。gh は該当ホスト用の `GH_TOKEN` / `GITHUB_TOKEN`、provider は各 provider が認識する環境へ渡す。設定ファイルへ認証を生成・保存する provider については書き込まない方式を確認してから対応する。
 
 現行の `src/infra/task/git-environment.ts:10` は危険な Git 設定を除去し、コマンドの環境で hooks / filters を制限する。`src/shared/utils/child-process-env.ts:24` は子プロセスへ渡す環境のコピーを作る。この安全処理を失わず、daemon の認証を最終的な優先値として渡す。認証内容を含む入力をディスク、ログ、run 記録へ保存しない。エラーや出力は配布した秘密値も含めて除去してから記録・転送する。認証不足の失敗には provider と worker 名を含めるが秘密値を含めない。配布済み Git トークンそのものの失効は範囲外である。
+
+配布設定は daemon のグローバル設定 `~/.takt/config.yaml` の `daemon.remote_worker.credentials` に置く。値には環境変数参照だけを指定し、daemon が実行時に解決する。参照先の環境変数がない場合は認証配送を失敗させる。
+
+```yaml
+daemon:
+  remote_worker:
+    host: 127.0.0.1
+    port: 54322
+    credentials:
+      git: ${WORKER_GIT_TOKEN}
+      gh: ${WORKER_GH_TOKEN}
+      providers:
+        openai: ${WORKER_OPENAI_KEY}
+        anthropic: ${WORKER_ANTHROPIC_KEY}
+```
+
+`providers` は `anthropic`、`openai`、`gemini`、`google`、`groq`、`openrouter`、`copilot`、`kiro`、`opencode`、`cursor` を受け付ける。各値は対応する provider の環境変数と TAKT の認証設定へ適用する。未指定の provider は worker の既存認証を使う。Git helper は割当てに記録した origin の protocol と host に一致する要求だけへ応答する。
+
+認証値は認証済み接続の execution 要求で取得し、入力 manifest や pull 応答履歴には含めない。子プロセス内で配布値を除去対象へ登録し、full trace 設定でも保存前に伏せる。worker の標準エラーと provider の text・thinking・tool_output は分割された値も伏せる。provider の記録は結果イベントと workflow 終了時に残りの内容を書き出し、秘密値以外の本文を保持する。
+
+失敗予約を requeue/retry した後の最初の切断観測時に60秒の期限を保存する。再ポーリングや daemon の再起動では延長しない。同じ worker での再開も新しい execution ID、世代、成果ブランチを使い、作業場所と run の継承元は保持する。
 
 ## 要求シナリオとの対応
 
@@ -232,7 +253,7 @@ Git トークンを clone URL や保存 Git config に埋め込まない。認�
 | 失敗したタスクを片付けると空きを手放し、作業場所を消す | リモートの失敗予約と再試行 | 後続 |
 | ゴールを中止すると取っておいた空きを手放す | リモートの失敗予約と再試行 | 後続 |
 | 元の worker がいなければ別の worker で最初からやり直す（削除済み / 切断） | リモートの失敗予約と再試行 | 後続 |
-| daemon に集めた認証情報はタスクのプロセスにだけ渡り、TAKT はディスクに書かない | リモートの認証情報 | 後続 |
-| daemon が持っていない認証情報は worker のマシンのものを使う | リモートの認証情報 | 後続 |
-| 両方にあるときは daemon から渡した認証情報を使う | リモートの認証情報 | 後続 |
-| 認証情報が足りない worker での失敗は理由と worker が分かる | リモートの認証情報 | 後続 |
+| daemon に集めた認証情報はタスクのプロセスにだけ渡り、TAKT はディスクに書かない | リモートの認証情報 | タスク子環境への配送と保存前の除去は今回 |
+| daemon が持っていない認証情報は worker のマシンのものを使う | リモートの認証情報 | 未配布時の既存認証の利用は今回 |
+| 両方にあるときは daemon から渡した認証情報を使う | リモートの認証情報 | daemon 配布値の優先は今回 |
+| 認証情報が足りない worker での失敗は理由と worker が分かる | リモートの認証情報 | 秘密値を除いた provider の理由と worker 名の記録は今回 |

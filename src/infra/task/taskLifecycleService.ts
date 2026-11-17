@@ -314,7 +314,7 @@ export class TaskLifecycleService {
       const goalStore = new GoalStore(this.projectDir);
       const blockedByGoal = new Map<string, boolean>();
       const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined && task.remote_assignment === undefined
           && (selection === undefined || selection.taskName === task.name)
           && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
           if (task.goal_id !== undefined) {
@@ -362,6 +362,12 @@ export class TaskLifecycleService {
   invalidatePendingGoalTasks(goalId: string): void {
     withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
       tasks: current.tasks.map((task) => {
+        if (task.goal_id === goalId && task.status !== 'running' && task.remote_assignment !== undefined) {
+          const released = { ...task, remote_assignment: { ...task.remote_assignment, retryReservation: false } };
+          return task.status !== 'pending' ? released : buildTerminalTaskRecord(released, {
+            status: 'failed', owner_pid: null, failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+        }
         if (task.status !== 'pending' || task.goal_id !== goalId) return task;
         return buildTerminalTaskRecord(task, {
           status: 'failed', owner_pid: null,

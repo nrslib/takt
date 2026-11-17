@@ -1,7 +1,8 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { deferred } from './helpers/controlledDaemon.js';
 import { RemoteWorkerRuntime } from '../features/workerPool/remoteWorkerRuntime.js';
+import type { RemoteCredentialsConfig } from '../core/models/daemon-config-schema.js';
 import { RemoteAssignmentSchema, WorkerRejectedError, executionIdentity, sameExecution, type RemoteTaskRecord, type WorkerRegistration,
   type RemoteProjectRequest, type RemoteProjectReply, type WorkerRequest, type WorkerResponse } from '../core/worker-pool/remoteProtocol.js';
 
@@ -35,6 +36,7 @@ beforeEach(() => {
   doubles.workers.clear(); doubles.events.length = 0; doubles.files.clear();
   doubles.write.mockReset(); doubles.authorize.mockReset(); doubles.list.mockReset();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 function fixture() {
   let now = 1000;
@@ -59,7 +61,7 @@ function fixture() {
       return { kind: 'claim', assignment: structuredClone(assignment) };
     }
     const record = records.find((record) => record.status === 'running' && sameExecution(record.assignment, request.assignment));
-    if (record === undefined || request.kind !== 'fail' && record.assignment.leaseExpiresAt <= request.now) {
+    if (record === undefined || 'now' in request && record.assignment.leaseExpiresAt <= request.now) {
       return { kind: 'updated', record: null };
     }
     if (request.kind === 'renew') record.assignment.leaseExpiresAt = request.leaseExpiresAt;
@@ -78,7 +80,7 @@ function fixture() {
     decline: vi.fn(), release: vi.fn(), close: async () => {},
     get activeTaskCount() { return records.filter((record) => record.status === 'running').length; },
   };
-  const makeRuntime = () => new RemoteWorkerRuntime({ directory: '/config', dispatcher: pool, version: '1.0', now: () => now });
+  const makeRuntime = (credentials?: RemoteCredentialsConfig) => new RemoteWorkerRuntime({ directory: '/config', dispatcher: pool, version: '1.0', now: () => now, credentials });
   const worker = (name: string) => {
     const token = `test-${name}`;
     const registration = { name, registrationGeneration: randomUUID(), concurrency: 2, tokenHash: 'a'.repeat(64) };
@@ -109,6 +111,55 @@ function fixture() {
 
 const receiveCases = ['connect', 'heartbeat', 'complete', 'pull', 'check'] as const;
 
+it.each([
+  'valid', 'before-expiry', 'worker', 'connection-generation', 'assignment-worker', 'assignment-generation',
+  'projectId', 'taskName', 'executionId', 'assignmentGeneration', 'missing-record',
+  'pending', 'failed', 'completed', 'at-expiry', 'after-expiry', 'replaced-connection',
+] as const)('delivers credentials only for a current valid assignment: %s', async (condition) => {
+  vi.stubEnv('FIXTURE_REMOTE_API_KEY', 'fake-runtime-distributed-key');
+  const f = fixture();
+  const runtime = f.makeRuntime({ providers: { openai: '${FIXTURE_REMOTE_API_KEY}' } });
+  try {
+    await runtime.restore(); await f.connect(runtime);
+    await f.send(runtime, f.message({ kind: 'pull' as const }));
+    const record = f.records[0]!;
+    const request = f.message({ kind: 'execution' as const, assignment: executionIdentity(record.assignment),
+      command: { kind: 'credentials' as const } });
+    switch (condition) {
+      case 'worker': request.workerId = 'w2'; break;
+      case 'connection-generation': request.registrationGeneration = randomUUID(); break;
+      case 'assignment-worker': request.assignment.workerId = 'w2'; break;
+      case 'assignment-generation': request.assignment.registrationGeneration = randomUUID(); break;
+      case 'projectId': request.assignment.projectId = '/other-project'; break;
+      case 'taskName': request.assignment.taskName = 'other-task'; break;
+      case 'executionId': request.assignment.executionId = randomUUID(); break;
+      case 'assignmentGeneration': request.assignment.assignmentGeneration += 1; break;
+      case 'missing-record': f.records.splice(0); break;
+      case 'pending': case 'failed': case 'completed': record.status = condition; break;
+      case 'before-expiry': f.advance(record.assignment.leaseExpiresAt - 1000 - 1); break;
+      case 'at-expiry': f.advance(record.assignment.leaseExpiresAt - 1000); break;
+      case 'after-expiry': f.advance(record.assignment.leaseExpiresAt - 1000 + 1); break;
+      case 'replaced-connection': {
+        const replacement = { ...f.sink, send: vi.fn(), close: vi.fn(), fail: vi.fn() };
+        await runtime.receive('test-w1', f.message({ kind: 'connect', version: '1.0', canExecute: true, active: [] }), replacement);
+        break;
+      }
+      case 'valid': break;
+    }
+    f.messages.length = 0;
+    if (condition === 'valid' || condition === 'before-expiry') {
+      await f.send(runtime, request);
+      expect(f.messages).toContainEqual(expect.objectContaining({ kind: 'execution', requestId: request.requestId,
+        response: { kind: 'credentials', environment: { OPENAI_API_KEY: 'fake-runtime-distributed-key',
+          TAKT_OPENAI_API_KEY: 'fake-runtime-distributed-key' } } }));
+    } else {
+      await expect(f.send(runtime, request)).rejects.toBeInstanceOf(WorkerRejectedError);
+      expect(f.messages.filter((message) => message.kind === 'execution')).toEqual([]);
+      expect(JSON.stringify(f.messages).includes('fake-runtime-distributed-key')).toBe(false);
+    }
+  } finally { await runtime.close(); }
+});
+
 it('uses the same execution capability for connection, refresh and replacement while retaining heartbeats', async () => {
   const f = fixture(); const runtime = f.makeRuntime();
   try {
@@ -119,9 +170,11 @@ it('uses the same execution capability for connection, refresh and replacement w
     await f.send(runtime, f.message({ kind: 'heartbeat' as const, active: [] }));
     expect(f.messages.at(-1)).toMatchObject({ kind: 'heartbeat', stop: [] });
     await f.connect(runtime, true);
-    expect(f.pool.setRemoteWorkers).toHaveBeenLastCalledWith([{ name: 'w1', kind: 'remote', concurrency: 2 }]);
+    expect(f.pool.setRemoteWorkers).toHaveBeenLastCalledWith([{ name: 'w1', kind: 'remote', concurrency: 2,
+      registrationGeneration: f.message({ kind: 'pull' }).registrationGeneration }]);
     await runtime.check();
-    expect(f.pool.setRemoteWorkers).toHaveBeenLastCalledWith([{ name: 'w1', kind: 'remote', concurrency: 2 }]);
+    expect(f.pool.setRemoteWorkers).toHaveBeenLastCalledWith([{ name: 'w1', kind: 'remote', concurrency: 2,
+      registrationGeneration: f.message({ kind: 'pull' }).registrationGeneration }]);
     await f.connect(runtime, false); await runtime.check();
     expect(f.pool.setRemoteWorkers).toHaveBeenLastCalledWith([]);
   } finally { await runtime.close(); }

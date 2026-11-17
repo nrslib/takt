@@ -8,6 +8,7 @@ import { reportInputEntries } from '../../models/workflow-report-input.js';
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
+import { redactExecutionSecrets } from '../../../shared/utils/execution-secrets.js';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { renderPhaseContext, stripPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
@@ -1063,7 +1064,7 @@ export class StepExecutor {
   ): string {
     const absPath = join(resolveReportDirectory(this.deps.getCwd(), directory), filename);
     transaction?.recordSnapshotWrite(absPath);
-    writeFileSync(absPath, content, 'utf-8');
+    writeFileSync(absPath, redactExecutionSecrets(content), 'utf-8');
     return join(directory, filename);
   }
 

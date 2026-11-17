@@ -22,7 +22,8 @@ export const ProjectReplySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('remote'), id: z.string(), result: RemoteProjectReplySchema }).strict(),
   z.object({ kind: z.literal('snapshot'), id: z.string(), work: z.object({
     concurrency: z.number().int().positive(), available: z.boolean(),
-    tasks: z.array(z.object({ taskName: z.string(), mergeTask: z.boolean(), origin: z.string().min(1).optional() }).strict()),
+    tasks: z.array(z.object({ taskName: z.string(), mergeTask: z.boolean(), origin: z.string().min(1).optional(),
+      retryWorker: z.string().optional(), retryReady: z.boolean().optional(), remoteOnly: z.boolean().optional() }).strict()),
     remoteRecords: z.array(RemoteTaskRecordSchema).optional(),
   }).strict() }).strict(),
   z.object({ kind: z.literal('started'), id: z.string(), result: StartResultSchema }).strict(),

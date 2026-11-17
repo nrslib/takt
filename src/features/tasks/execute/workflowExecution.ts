@@ -692,6 +692,7 @@ async function executeWorkflowInternal(
       }
     }
   } finally {
+    captureError(terminalizationErrors, () => bootstrap.providerEventLogger.flush());
     let committedPublication: WorkflowTerminalPublicationPayload | undefined;
     if (runExecution !== undefined || primaryError !== undefined) {
       if (liveIntervention !== undefined && !liveInterventionTerminalizationOwned) {

@@ -89,6 +89,29 @@ it('rereads the pending queue after cancellation before a released slot is reuse
   } finally { await f.pool.close(); }
 });
 
+it('counts a failed reservation only against its worker and releases it on the same dispatcher', async () => {
+  const f = fixture(0);
+  const assignment = RemoteAssignmentSchema.parse({ projectId: 'R1', taskName: 'failed-task', workerId: 'w1', workerName: 'w1',
+    registrationGeneration: randomUUID(), executionId: randomUUID(), assignmentGeneration: 1, requestId: 'r1',
+    originalSha: 'a'.repeat(40), origin: 'https://example.test/repo.git', branch: 'result', leaseExpiresAt: 60_000,
+    lastAcknowledgedLogSequence: 0, controlSequence: 0, workLocation: '/worker/clone', retryReservation: true });
+  const snapshot = f.snapshots.get('R1')!;
+  snapshot.concurrency = 1;
+  snapshot.tasks = [{ taskName: 'a', mergeTask: false, origin: assignment.origin }];
+  snapshot.remoteRecords = [{ status: 'failed', assignment, failureReason: 'Provider failed' }];
+  f.pool.setRemoteWorkers([{ name: 'w1', kind: 'remote', concurrency: 1 }, { name: 'w2', kind: 'remote', concurrency: 1 }]);
+  try {
+    await f.pool.restore();
+    expect(f.pool.pull('w1')).toBeUndefined();
+    const other = f.pool.pull('w2');
+    expect(other).toEqual({ projectId: 'R1', taskName: 'a', workerName: 'w2' });
+    f.pool.release(other!);
+    snapshot.remoteRecords = [{ status: 'failed', assignment: { ...assignment, retryReservation: false } }];
+    await f.pool.restore();
+    expect(f.pool.pull('w1')).toEqual({ projectId: 'R1', taskName: 'a', workerName: 'w1' });
+  } finally { await f.pool.close(); }
+});
+
 it('does not claim zero-capacity work and supplies a waiting reason to the project', async () => {
   const f = fixture(0);
   try {

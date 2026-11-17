@@ -48,6 +48,7 @@ export const RemoteInterventionDeliverySchema = z.object({ instructionIds: z.arr
     processedBatchCount: sequence.optional(), runningBatchIndexes: z.array(sequence).optional(), appliesToBatchIndexes: z.array(sequence).optional() }).strict(),
 }).strict();
 export const RemoteExecutionCommandSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('credentials') }).strict(),
   z.object({ kind: z.literal('input-manifest') }).strict(),
   z.object({ kind: z.literal('input-chunk'), path: RemotePathSchema, offset: sequence }).strict(),
   z.object({ kind: z.literal('record'), record: RemoteRecordSchema }).strict(),
@@ -57,6 +58,7 @@ export const RemoteExecutionCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type RemoteExecutionCommand = z.infer<typeof RemoteExecutionCommandSchema>;
 export const RemoteExecutionResponseSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('credentials'), environment: z.record(z.string(), z.string().max(8192)), error: z.string().optional() }).strict(),
   z.object({ kind: z.literal('input-manifest'), manifest: RemoteInputManifestSchema }).strict(),
   z.object({ kind: z.literal('input-chunk'), data: bytes }).strict(),
   z.object({ kind: z.literal('record'), acknowledgedSequence: sequence }).strict(),

@@ -104,7 +104,6 @@ async function retryGoalTask(
       const runner = new TaskRunner(input.cwd);
       const target = runner.listTaskStateItems().find((task) => task.name === input.taskName);
       if (target === undefined || target.goalId !== goal.id) throw new Error('Task does not belong to this goal');
-      if (target.remoteAssignment !== undefined) throw new Error('Remote task retry and requeue are not supported');
       const result = { taskName: input.taskName, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), status: target.status };
       if (target.status === 'pending' || target.status === 'running' || target.status === 'completed') return result;
       if (goal.status !== 'created' && !(target.mergeTask === true && goal.status === 'awaiting_merge')) throw new Error('Goal cannot accept work');

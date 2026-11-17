@@ -2,6 +2,7 @@ export interface PoolWorker {
   name: string;
   kind: 'builtin' | 'remote';
   concurrency: number | undefined;
+  registrationGeneration?: string;
 }
 
 export interface PoolProject {
@@ -14,18 +15,23 @@ export interface PoolTask {
   taskName: string;
   mergeTask: boolean;
   origin?: string;
+  retryWorker?: string;
+  retryReady?: boolean;
+  remoteOnly?: boolean;
 }
 
 export interface PoolAssignment {
   projectId: string;
   taskName: string;
   workerName: string;
+  retryReservation?: boolean;
+  registrationGeneration?: string;
 }
 
 export interface ProjectWork {
   concurrency: number;
   available: boolean;
-  tasks: { taskName: string; mergeTask: boolean; origin?: string }[];
+  tasks: Omit<PoolTask, 'projectId'>[];
   remoteRecords?: import('./remoteProtocol.js').RemoteTaskRecord[];
 }
 
