@@ -25,8 +25,15 @@ const GITLAB_ENV_TOKEN_KEYS = ['GITLAB_TOKEN', 'GITLAB_ACCESS_TOKEN', 'OAUTH_TOK
 // glab reads its default host from these variables, first one set wins.
 const GITLAB_ENV_HOST_KEYS = ['GITLAB_HOST', 'GITLAB_URI', 'GL_HOST'] as const;
 
+function getEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  if (process.platform !== 'win32') return env[key];
+  const normalizedKey = key.toUpperCase();
+  const actualKey = Object.keys(env).find((envKey) => envKey.toUpperCase() === normalizedKey);
+  return actualKey === undefined ? undefined : env[actualKey];
+}
+
 function isSet(env: NodeJS.ProcessEnv, key: string): boolean {
-  const value = env[key];
+  const value = getEnvValue(env, key);
   return value !== undefined && value !== '';
 }
 
@@ -69,7 +76,7 @@ function buildGitHubEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   // in the environment, name an Enterprise Server host only if the caller's own GH_HOST already points at
   // it, so we never aim that token at a host the caller did not configure for it.
   if (GITHUB_ENTERPRISE_TOKEN_KEYS.some((key) => isSet(ambientEnv, key)) && isGitHubEnterpriseServer(remote.hostname)) {
-    const configuredHost = ambientEnv.GH_HOST;
+    const configuredHost = getEnvValue(ambientEnv, 'GH_HOST');
     if (!isSet(ambientEnv, 'GH_HOST') || configuredHost === undefined
       || !sameEndpoint(configuredHost, remote.webHost)) return {};
   }
@@ -88,7 +95,7 @@ function buildGitLabEnv(remote: RemoteRepository, ambientEnv: NodeJS.ProcessEnv)
   // this cannot see that.
   if (GITLAB_ENV_TOKEN_KEYS.some((key) => isSet(ambientEnv, key))) {
     const hostKey = GITLAB_ENV_HOST_KEYS.find((key) => isSet(ambientEnv, key));
-    const configuredHost = hostKey === undefined ? undefined : ambientEnv[hostKey];
+    const configuredHost = hostKey === undefined ? undefined : getEnvValue(ambientEnv, hostKey);
     if (configuredHost === undefined || !sameEndpoint(configuredHost, webEndpoint(remote))) return {};
   }
   // The URL form keeps the host and nested groups unambiguous: glab treats a
@@ -137,7 +144,7 @@ export function resolveRepositoryIdentityEnv(
 function presetRepositoryIdentityEnv(ambientEnv: NodeJS.ProcessEnv): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of REPOSITORY_IDENTITY_ENV_KEYS) {
-    const value = ambientEnv[key];
+    const value = getEnvValue(ambientEnv, key);
     if (value !== undefined && value !== '') env[key] = value;
   }
   return env;

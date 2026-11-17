@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { createGitEnvironment } from '../infra/task/git-environment-settings.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 
@@ -1282,8 +1283,9 @@ describe('executeWorkflow session loading', () => {
 
     function gitRepoWithOrigin(prefix: string): string {
       const dir = createTempDir(prefix);
-      execFileSync('git', ['init', '-q', '-b', 'main', dir]);
-      execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/owner/repo.git']);
+      const env = createGitEnvironment(false);
+      execFileSync('git', ['init', '-q', '-b', 'main', dir], { env });
+      execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/owner/repo.git'], { env });
       return dir;
     }
 

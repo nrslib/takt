@@ -78,6 +78,13 @@ describe('buildRepositoryIdentityEnv', () => {
   describe('with a GitHub Enterprise token in the environment', () => {
     const server = parseRemoteRepositoryUrl('https://ghe.example.com/owner/repo.git')!;
 
+    it.skipIf(process.platform !== 'win32')('reads copied environment keys without case sensitivity on Windows', () => {
+      expect(buildRepositoryIdentityEnv(server, 'github', {
+        Gh_Enterprise_Token: 'x',
+        Gh_Host: 'ghe.example.com',
+      })).toEqual({ GH_REPO: 'ghe.example.com/owner/repo' });
+    });
+
     it.each(['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])('skips an Enterprise Server host when %s is set without GH_HOST', (key) => {
       expect(buildRepositoryIdentityEnv(server, 'github', { [key]: 'x' })).toEqual({});
     });
