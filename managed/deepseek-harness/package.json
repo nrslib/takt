@@ -38,7 +38,7 @@
     "@deepseek-ai/libreoffice-kit": "0.1.5"
   },
   "overrides": {
-    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.2",
     "@deepseek-ai/dsh-http-proxy": {
       "undici": "8.12.3"
     },
