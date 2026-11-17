@@ -198,7 +198,7 @@ assistant:
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
 | `notification_sound` | boolean | `true` | 启用通知音 |
 | `notification_sound_events` | object | - | 各事件通知音开关 |
-| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` 并行任务数 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` 并行任务数；也是 daemon 目标任务的项目级上限 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新任务轮询间隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | 交互模式中的 step 预览数 |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`，comments `true` | 添加 Alloy/Quint 指导，要求同时用两种记法表达。object 格式可独立设置 `mode`、`comments` 和 `model_check_timeout_seconds`；`comments: false` 仅移除自然语言含义注释指令，不减少形式规格数量、需求覆盖、语法或正确性指令。`model_check_timeout_seconds` 是 `/verify` 中 `quint verify` 与 Alloy Analyzer 的上限秒数（1～86,400 的整数，默认 900），`parse`/`typecheck`/`run` 的 60 秒不变。project 和 global 的 object 字段独立解析，project 优先。`true` 和 `false` 不提问；TTY 下 `"Y/n"`、`"y/N"` 每个会话提问一次并分别以 Yes、No 为默认值；非 TTY 不读取标准输入，直接采用默认答案。Gherkin 指导仅适用于开发和实现任务。 manager 也使用此设置且不会询问：`true`/`"Y/n"` 包含两种记法，`false`/`"y/N"` 则不包含。TUI 和 Slack 的 manager 对话也支持 `/verify`。 |
@@ -257,6 +257,54 @@ assistant:
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
 Codex、Claude SDK、claude-headless 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。Codex、Claude SDK、claude-headless、Copilot 和 OpenCode 在观察到工具执行事件后收到 429 时不会自动重试，以免重复执行工作区操作。OpenCode 与其他临时错误共享尝试预算，最多重试 2 次（共尝试 3 次），等待时间为 250ms 和 500ms。重试成功则正常完成。明确匹配已知额度耗尽信号的通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。Copilot 的 `session.error` 表示月度配额耗尽（`statusCode` 402、`errorType: quota` 或 `errorCode: quota_exceeded` 之一）时同样视为额度耗尽，不重试，立即进入 `rate_limit_fallback.switch_chain`。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
+
+## daemon worker pool
+
+`daemon` 仅用于全局 `~/.takt/config.yaml`。指定 `TAKT_CONFIG_DIR` 时，使用该目录中的 `config.yaml`，不要放入项目配置。部署步骤见 [worker pool 指南](./worker-pool.zh-CN.md)。
+
+```yaml
+daemon:
+  builtin_worker:
+    concurrency: 1
+  remote_worker:
+    host: 127.0.0.1
+    port: 54322
+    credentials:
+      git: ${WORKER_GIT_TOKEN}
+      gh: ${WORKER_GH_TOKEN}
+      providers:
+        openai: ${WORKER_OPENAI_KEY}
+```
+
+| 字段 | 值与行为 |
+|------|----------|
+| `daemon.builtin_worker.concurrency` | 非负安全整数。所有项目共享的内置 worker 上限。省略时不设置共享上限，使用各项目的 `concurrency`。0表示不执行内置任务 |
+| `daemon.remote_worker.host` | 监听地址；配置 `remote_worker` 时必填 |
+| `daemon.remote_worker.port` | 必填的0至65535整数。0让操作系统选择空闲端口；固定的前置服务通常使用固定端口 |
+| `daemon.remote_worker.credentials.git` | Git 令牌的环境变量引用，供任务子进程的 Git credential helper 使用 |
+| `daemon.remote_worker.credentials.gh` | gh 令牌的环境变量引用，作为任务子进程的 `GH_TOKEN` 和 `GITHUB_TOKEN` 传入 |
+| `daemon.remote_worker.credentials.providers` | 下表中 provider 认证的环境变量引用 |
+
+省略 `remote_worker` 时不启动网络监听。即使明确指定内置上限，也不会超过项目的 `concurrency`。PR 合并任务和没有 origin 的任务仅由内置 worker 执行；内置上限为0时无法推进。在 daemon 机器上用 `takt worker list` 查看注册名称和上限，通过 [worker CLI](./cli-reference.zh-CN.md#worker) 管理注册。没有直接在 YAML 中编辑注册列表的设置。
+
+认证值仅接受 `${ENV_NAME}` 引用，不接受明文秘密值。引用在 daemon 环境中解析，变量为空、未设置或超过8192字节时，分发失败。不会自动分发未配置的环境变量。
+
+| `providers` 键 | 任务子进程变量 |
+|----------------|----------------|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` |
+| `google` | `GOOGLE_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `kiro` | `KIRO_API_KEY` |
+| `opencode` | `OPENCODE_API_KEY` |
+| `cursor` | `CURSOR_API_KEY` |
+
+分发值覆盖每个任务子进程的环境，并应用于对应的 TAKT provider 认证配置。明确分发的值优先于 worker 的既有认证，未分发的项目使用 worker 的既有认证。不修改 worker 本身或其他并发任务的环境。连接令牌与任务认证分离，不会传给任务子进程。Git 令牌不会嵌入 origin URL 或保存的 Git 配置；helper 仅用于与分配的 origin 的 protocol 和 host 匹配的请求。
+
+daemon 配置在启动时读取。修改后通过 `takt daemon stop` 停止，再重新启动。修改引用的环境变量时，也要更新服务环境并重启。删除注册不会撤销已分发的 Git 令牌；必要时还需在 GitHub 上撤销。
 
 ## Caccia Review Loop
 
@@ -419,7 +467,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
 | `caccia` | object | disabled | CodeRabbit 审查循环设置（见上文） |
 | `draft_pr` | boolean | `false`（来自全局） | 将自动创建的 PR 设为 draft |
-| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` / `takt watch` 并行任务数 |
+| `concurrency` | number (1-10) | `1`（来自全局） | `takt run` / `takt watch` 并行任务数；也是 daemon 目标任务在本项目的上限 |
 | `auto_requeue_max_attempts` | 非负整数 | `0` | 失败 workflow task 的自动 requeue 上限 (`takt run` / `takt watch`) |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` 的迭代限制绕过 |
 | `base_branch` | string | - | 创建 clone 的基分支 |
@@ -623,6 +671,7 @@ Slack 接收正在运行时，或使用 `takt daemon --resident` 启动时，dae
 普通启动且 Slack 接收未运行时，只有以下项目全部消失后 daemon 才会自动退出。
 
 - TUI 连接和正在初始化的会话连接
+- 远程 worker 连接和 worker pool 中正在执行的任务
 - 待处理或执行中的事件、未完成的等待请求及其结果投递
 - 受监测项目中未完成的目标，即 `status` 不是 `completed` 且 `executionStatus` 不是 `aborted` 的目标
 - inbox 中的 JSON 事件、`pending` 或 `running` 的任务、尚未投递的询问回答

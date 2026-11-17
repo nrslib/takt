@@ -205,7 +205,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
 | `notification_sound` | boolean | `true` | 通知音の有効化 |
 | `notification_sound_events` | object | - | イベントごとの通知音切り替え |
-| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` の並列タスク数 |
+| `concurrency` | number (1-10) | `1` | `takt run` / `takt watch` の並列タスク数。daemon のゴールタスクではプロジェクトごとの上限 |
 | `task_poll_interval_ms` | number (100-5000) | `500` | 新規タスクのポーリング間隔 (`takt run` / `takt watch`) |
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true` | Alloy／Quint のガイダンスを追加し、要件を両方の記法でも表現します。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定できます。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`model_check_timeout_seconds` は `/verify` の `quint verify` と Alloy Analyzer に適用する上限秒数（1〜86,400 の整数、デフォルト 900）で、`parse`／`typecheck`／`run` の 60 秒は変わりません。project と global の object はフィールド単位で解決され、project が優先されます。`true` と `false` は質問せず使用します。TTY では `"Y/n"` と `"y/N"` を Yes／No の既定回答として会話セッションごとに1回質問し、非 TTY では標準入力を消費せず既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。 manager もこの設定を使い、質問せず `true`／`"Y/n"` では両記法を含め、`false`／`"y/N"` では含めません。TUI・Slack の manager の会話でも `/verify` を使えます。 |
@@ -264,6 +264,54 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
 Codex、Claude SDK、claude-headless、Copilotの一時的なHTTP 429は同じproviderで最大8回再試行します。待機時間は1、2、4、8、16、30、30、30秒です。Codex、Claude SDK、claude-headless、Copilot、OpenCodeでツール実行イベントを観測した試行では429を受けても操作の重複を防ぐため自動再試行しません。OpenCodeは通常の一時障害と試行予算を共有し、250ms・500ms待機して最大2回再試行します（合計3試行）。再試行で成功すれば通常完了します。使用枠・クレジット・spend capの使い切り通知は再試行せず、直ちに`rate_limit_fallback.switch_chain`へ進みます。ツールイベントを観測せずに429が続く場合は再試行予算を消費してから同じ切り替え処理へ進みます。使い切りと429の両方を含む失敗は使い切りとして扱います。Copilotの`session.error`が月間クォータ切れ（`statusCode` 402、`errorType: quota`、`errorCode: quota_exceeded`のいずれか）を示す場合も使い切りとして扱い、再試行せず直ちに`rate_limit_fallback.switch_chain`へ進みます。切り替え先がなければ従来どおり停止します。再試行の設定項目はありません。429以外の既存の再試行条件は維持します。
+
+## daemon worker pool
+
+`daemon` はグローバルの `~/.takt/config.yaml` 専用です。`TAKT_CONFIG_DIR` を指定した場合は、そのディレクトリの `config.yaml` を使います。プロジェクト設定には置きません。導入手順は [worker pool ガイド](./worker-pool.ja.md)を参照してください。
+
+```yaml
+daemon:
+  builtin_worker:
+    concurrency: 1
+  remote_worker:
+    host: 127.0.0.1
+    port: 54322
+    credentials:
+      git: ${WORKER_GIT_TOKEN}
+      gh: ${WORKER_GH_TOKEN}
+      providers:
+        openai: ${WORKER_OPENAI_KEY}
+```
+
+| フィールド | 値と動作 |
+|------------|----------|
+| `daemon.builtin_worker.concurrency` | 0以上の安全な整数。全プロジェクトで共有する組み込み worker の上限。未指定なら共有上限を設けず、各プロジェクトの `concurrency` を使う。0なら組み込みでは実行しない |
+| `daemon.remote_worker.host` | 待受アドレス。`remote_worker` を設定する場合は必須 |
+| `daemon.remote_worker.port` | 必須の0〜65535の整数。0はOSが空きポートを選ぶため、固定の前段には通常固定ポートを使う |
+| `daemon.remote_worker.credentials.git` | Git トークンの環境変数参照。タスク子環境の Git credential helper で使う |
+| `daemon.remote_worker.credentials.gh` | gh トークンの環境変数参照。タスク子環境の `GH_TOKEN` と `GITHUB_TOKEN` に渡す |
+| `daemon.remote_worker.credentials.providers` | 下表の provider 認証情報の環境変数参照 |
+
+`remote_worker` を省略するとネットワーク待受は開始しません。組み込み上限を明示しても、プロジェクト側の `concurrency` を超えて実行しません。PRマージ用タスクと origin のないタスクは組み込み限定で、組み込み上限が0だと進みません。登録済み worker の名前と上限は daemon 側の `takt worker list` で確認し、登録・削除は [worker CLI](./cli-reference.ja.md#worker)で行います。登録一覧を YAML に直接書く設定はありません。
+
+認証設定の値は `${ENV_NAME}` 形式の参照だけを受け付け、平文の秘密値は受け付けません。参照先は daemon の環境で解決されます。空・未設定、または8192バイトを超える値では認証配送が失敗します。設定していない環境変数を自動で全配送することはありません。
+
+| `providers` のキー | タスク子環境の変数 |
+|--------------------|--------------------|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` |
+| `google` | `GOOGLE_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `kiro` | `KIRO_API_KEY` |
+| `opencode` | `OPENCODE_API_KEY` |
+| `cursor` | `CURSOR_API_KEY` |
+
+配布値はタスクごとの子プロセス環境へ重ね、provider の対応する TAKT 認証設定にも適用します。明示した配布値を worker の既存認証より優先し、配布しない項目は worker の既存認証を使います。worker 自体や同時実行中の別タスクの環境は変更しません。接続トークンはタスク用認証と別で、子プロセスへ渡しません。Git トークンは origin URL や保存 Git config に埋め込まず、割り当ての origin と protocol・host が一致する要求に使います。
+
+daemon 設定は起動時に読むため、変更後は `takt daemon stop` で停止してから起動し直します。配布元の環境変数を変更した場合も、起動サービスへ反映して再起動してください。登録削除では配布済み Git トークンは失効せず、必要な失効は GitHub 側で行います。
 
 ## Caccia レビューループ
 
@@ -411,7 +459,7 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
 | `caccia` | object | 無効 | CodeRabbit レビューループ設定（上記参照） |
 | `draft_pr` | boolean | `false`（global 設定由来） | 自動作成する PR を draft として作成 |
-| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` / `takt watch` の並列タスク数 |
+| `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` / `takt watch` の並列タスク数。daemon のゴールタスクではこのプロジェクトの上限 |
 | `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` / `takt watch` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
@@ -633,6 +681,7 @@ Slack の受信が動いている間と `takt daemon --resident` で起動した
 通常起動では Slack の受信が動いておらず、次のものがすべてなくなると自動終了します。
 
 - TUI の接続と会話接続の初期化処理
+- リモート worker の接続と worker pool で実行中のタスク
 - 処理待ち・実行中のイベント、未完了の待機要求とその結果の配送
 - 対象プロジェクトの未完了のゴール（`status` が `completed` ではなく、`executionStatus` が `aborted` でもないもの）
 - inbox の JSON イベント、`pending`・`running` のタスク、未配送の問い合わせ回答

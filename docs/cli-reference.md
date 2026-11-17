@@ -98,6 +98,7 @@ If a daemon is already running, this command keeps the existing daemon running, 
 This command stays in the foreground. Stop it with `takt daemon stop` from another terminal, or send a signal such as SIGTERM. Plain `takt daemon` and daemons automatically started by manager retain their existing behavior. Without active Slack reception, they exit automatically once all of the following are absent:
 
 - TUI connections and conversation connections being initialized
+- Remote worker connections and tasks running in the worker pool
 - Pending or running events, unfinished wait requests, and delivery of their results
 - Unfinished goals in the monitored projects: goals whose `status` is not `completed` and whose `executionStatus` is not `aborted`
 - Inbox JSON events, `pending` or `running` tasks, and undelivered inquiry answers
@@ -107,6 +108,23 @@ The daemon waits for project inspection to finish and checks the conditions agai
 If `takt manager` has a different version or CLI path from a resident daemon, it leaves the daemon running, displays the mismatch and update instructions, and exits. To update, run `takt daemon stop`, restart with `takt daemon --resident` from the new version you intend to use, then open manager. A manager with the same version and CLI path reuses the running daemon.
 
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
+
+## worker
+
+`takt worker` executes daemon goal tasks on another machine. See the [worker pool deployment guide](./worker-pool.md) for the architecture and cloud setup.
+
+| Command | Behavior |
+|---------|----------|
+| `takt worker --url <url> --token <token>` | Connects to the daemon and keeps executing assigned tasks; both options are required |
+| `takt worker add <name> --concurrency <number>` | Registers a worker and prints its connection token to standard output once |
+| `takt worker list` | Prints registered names and concurrency separated by a tab |
+| `takt worker remove <name>` | Removes a registration and disconnects it |
+
+Run add/list/remove as the daemon user with the same global configuration directory, optionally selected through `TAKT_CONFIG_DIR`. `add` requires `--concurrency`, a nonnegative safe integer. A value of 0 prevents assignment to that worker. `builtin` is reserved. The list shows neither tokens nor connection status. To change concurrency, remove and register the worker again, then supply the new token to the worker.
+
+The startup URL must use HTTPS outside localhost and cannot contain credentials, a query, or a fragment. Use the same TAKT version on the worker and daemon. The registration supplies the worker name and limit; there are no startup `--name` or `--concurrency` options. Stop the worker with SIGINT or SIGTERM.
+
+Removing a registration invalidates its connection token but does not revoke a Git token already distributed. Revoke it on GitHub as well when necessary. See [daemon configuration](./configuration.md#daemon-worker-pool) for builtin capacity and distributed credentials.
 
 ## Director (experimental)
 
