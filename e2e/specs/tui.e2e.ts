@@ -1344,8 +1344,9 @@ steps:
 
     // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
-    const screen = (await tui.visibleScreen()).join('\n');
-    expect(screen).toContain('╰');
+    // The notice reaches the output before the prompt is mounted again, so the
+    // returned prompt is asked of the screen.
+    await waitForPromptReady(tui);
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
     expect((transcript.match(/create noop\.txt/g) ?? []).length).toBe(1);
