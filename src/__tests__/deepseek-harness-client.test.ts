@@ -2870,6 +2870,36 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await closeDeepSeekHarnessProcesses();
   }, 90_000);
 
+  it.skipIf(!SUPPORTED_RUNTIME)('refuses continuing a session after its repository identity changes', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'repository-identity-workspace');
+    await mkdir(workspace, { recursive: true });
+
+    for (const [key, firstValue, secondValue] of [
+      ['GH_REPO', 'github.com/owner/first', 'github.com/owner/second'],
+      ['GITLAB_REPO', 'https://gitlab.example.com/group/first', 'https://gitlab.example.com/group/second'],
+    ] as const) {
+      const call = (sessionId: string | undefined, value: string) => callDeepSeekHarness(
+        'worker',
+        'continue with the same repository identity',
+        {
+          cwd: workspace,
+          sessionId,
+          providerOptions: { baseUrl: api.endpoint, reasoningEffort: 'low' },
+          childProcessEnv: { [key]: value },
+        },
+      );
+      const initial = await call(undefined, firstValue);
+      expect(initial).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+
+      const changed = await call(initial.sessionId, secondValue);
+      expect(changed).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    }
+
+    expect(api.requests).toHaveLength(2);
+    await closeDeepSeekHarnessProcesses();
+  }, 90_000);
+
   it.skipIf(!SUPPORTED_RUNTIME)('refuses a previously used session ID after the parent process restarts', async () => {
     if (offlineManagedNpmCache !== undefined) {
       process.env.NPM_CONFIG_CACHE = offlineManagedNpmCache;
