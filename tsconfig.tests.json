@@ -121,6 +121,7 @@
     "src/__tests__/commands-run.test.ts",
     "src/__tests__/commands-watch.test.ts",
     "src/__tests__/commands-workflow.test.ts",
+    "src/__tests__/compaction-recovery-progress.test.ts",
     "src/__tests__/companion-fix-policy.test.ts",
     "src/__tests__/companion-instruction-mode.test.ts",
     "src/__tests__/companion-runtime-lifecycle.integration.test.ts",

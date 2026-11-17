@@ -1725,7 +1725,7 @@ runtime profile または capability preset で設定できます。legacy モ�
 
 #### Codex の context compaction からの復帰
 
-Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行し、provider call ごとに3回までです。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行します。上限は compaction の総回数ではなく、進捗のない復帰が連続した回数に対して適用されます。復帰 turn の中でファイル読み込み・コマンド実行・編集などのツール呼び出しが1回でもあれば進捗ありとして連続回数をリセットし、ツールを呼び出さないまま再び compaction した復帰が3回続くと provider call を終了します。progress notes の有無や保存の成否、ツール呼び出し前に応答文を書いたかどうかは、この判定に影響しません。最終回答、result の文章、ツール呼び出しを伴わない応答文は進捗に数えません。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。この進捗判定は復帰の繰り返しを止めるための実用的な目安であり、作業が実際に前進していることを証明するものではありません。収束しないままツール呼び出しを繰り返す agent はこの上限では止まりません。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
 
 #### Codex の fast mode (`fast_mode`)
 
