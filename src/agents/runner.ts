@@ -259,16 +259,23 @@ export class AgentRunner {
       return response;
     }
 
-    const maxCompactionRecoveries = 3;
-    let recoveryCount = 0;
+    // Only recoveries that compact again without calling any tool count toward the limit, so a long
+    // review that keeps calling tools is not cut off at a total number of compactions.
+    const maxRecoveriesWithoutProgress = 3;
+    let recovering = false;
+    let recoveriesWithoutProgress = 0;
     let currentOptions = options;
     while (true) {
       let compactionDetected = false;
       let compactionSessionId: string | undefined;
+      let calledTool = false;
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
           recorder.observe(event);
+          if (event.type === 'tool_use') {
+            calledTool = true;
+          }
           // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
           if (event.type === 'context_compacted') {
             compactionDetected = true;
@@ -285,9 +292,9 @@ export class AgentRunner {
           currentOptions.onStream?.(event);
         },
       };
-      const response = recoveryCount === 0
-        ? await agent.call(task, callOptions)
-        : await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions);
+      const response = recovering
+        ? await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions)
+        : await agent.call(task, callOptions);
       recorder.finish(response);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
@@ -300,7 +307,10 @@ export class AgentRunner {
         ...currentOptions,
         sessionId: responseSessionId,
       };
-      if (recoveryCount === maxCompactionRecoveries) {
+      if (recovering) {
+        recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
+      }
+      if (recoveriesWithoutProgress === maxRecoveriesWithoutProgress) {
         const error = 'Provider compaction recovery limit reached';
         currentOptions.onStream?.({
           type: 'result',
@@ -313,7 +323,7 @@ export class AgentRunner {
         });
         return { ...response, status: 'error', error };
       }
-      recoveryCount += 1;
+      recovering = true;
     }
   }
 
