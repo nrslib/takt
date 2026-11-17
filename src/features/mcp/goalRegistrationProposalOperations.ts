@@ -7,7 +7,7 @@ import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirect
 import { resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
 import { ConversationIpcClient } from '../manager/conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from '../manager/conversationPort.js';
-import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
+import { assertCwdAllowedByMcpRoot, errorResult, isPathAllowedByMcpRoot, jsonResult, type McpOperationDependencies } from './operations.js';
 import type {
   ApproveGoalRegistrationInput,
   ListGoalRegistrationProposalsInput,
@@ -37,10 +37,19 @@ export async function listTaktGoalRegistrationProposals(
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const owner = await resolveRegistrationOwner(input.cwd);
-    const store = new ConversationStateStore(await resolveDaemonConfigDirectory(getGlobalConfigDir()));
-    const pending = (await store.read(owner.conversationId))?.record.pending ?? null;
+    const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
     return jsonResult({ proposals: pending === null ? [] : [{ ...pending, conversationId: owner.conversationId }] });
   } catch (error) { return errorResult('Goal registration proposal list failed', error); }
+}
+
+// ワークスペースの会話は許可ルート外のリポジトリを含みうるため、cwd とは別に登録先を検証する。
+async function readAllowedPendingProposal(owner: RegistrationOwner, allowedProjectRoot: string | undefined) {
+  const store = new ConversationStateStore(await resolveDaemonConfigDirectory(getGlobalConfigDir()));
+  const pending = (await store.read(owner.conversationId))?.record.pending ?? null;
+  if (pending !== null && !isPathAllowedByMcpRoot(pending.repositoryDirectory, allowedProjectRoot)) {
+    throw new Error(`The pending registration proposal targets a repository outside the allowed project root: ${pending.repositoryDirectory}`);
+  }
+  return pending;
 }
 
 async function submitRegistrationCommand(
@@ -89,6 +98,7 @@ async function submitOwnedRegistrationCommand(
   if (owner.conversationId !== input.conversationId) {
     throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
   }
+  if (deps.allowedProjectRoot !== undefined) await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
   return submitRegistrationCommand(buildCommand(owner), owner.identity, signal);
 }
 

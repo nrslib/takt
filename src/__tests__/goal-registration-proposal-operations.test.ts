@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   approveTaktGoalRegistration,
   listTaktGoalRegistrationProposals,
@@ -11,13 +11,14 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
 const doubles = vi.hoisted(() => ({
-  allowed: vi.fn(), configDir: vi.fn(), daemonDir: vi.fn(), assignment: vi.fn(),
+  allowed: vi.fn(), withinRoot: vi.fn(), configDir: vi.fn(), daemonDir: vi.fn(), assignment: vi.fn(),
   constructStore: vi.fn(), read: vi.fn(),
   constructClient: vi.fn(), connect: vi.fn(), submit: vi.fn(), output: vi.fn(), close: vi.fn(),
   repositoryDirectory: vi.fn(),
 }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
+  isPathAllowedByMcpRoot: doubles.withinRoot,
 }));
 vi.mock('../infra/config/paths.js', async (original) => ({
   ...await original<typeof import('../infra/config/paths.js')>(), getGlobalConfigDir: doubles.configDir,
@@ -73,6 +74,7 @@ let emit: ((output: PortOutput) => void) | undefined;
 beforeEach(() => {
   vi.resetAllMocks();
   emit = undefined;
+  doubles.withinRoot.mockReturnValue(true);
   doubles.configDir.mockReturnValue('/global-config');
   doubles.daemonDir.mockResolvedValue('/daemon-config');
   doubles.repositoryDirectory.mockImplementation(async (directory: string) => directory);
@@ -300,3 +302,75 @@ it.each(['approve', 'reject'] as const)(
     expect(doubles.submit).not.toHaveBeenCalled();
   },
 );
+
+describe('when the MCP server is limited to a project root', () => {
+  const root = '/allowed';
+  const outside = '/elsewhere/repository';
+  const workspaceAssignment = { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440002' };
+  const workspaceConversationId = conversationId(workspaceAssignment);
+  const workspaceInput = { cwd, revision, conversationId: workspaceConversationId };
+
+  beforeEach(() => {
+    doubles.assignment.mockResolvedValue({ ...workspaceAssignment, name: 'Workspace', repositoryDirectories: [cwd, outside] });
+  });
+  function pendingIn(repositoryDirectory: string | null): void {
+    doubles.read.mockResolvedValue({ record: recordFixture(workspaceAssignment,
+      repositoryDirectory === null ? null : { revision, repositoryDirectory, summary }) });
+  }
+  function outsideRoot(): void {
+    doubles.withinRoot.mockImplementation((target: string) => target !== outside);
+  }
+
+  it('fails the list without exposing a workspace proposal whose repository is outside the root', async () => {
+    pendingIn(outside);
+    outsideRoot();
+
+    const result = await listTaktGoalRegistrationProposals({ cwd }, { allowedProjectRoot: root });
+
+    expect(result.isError).toBe(true);
+    expect(doubles.withinRoot).toHaveBeenCalledWith(outside, root);
+    expect(firstTextContent(result.content)).toContain('outside the allowed project root');
+    expect(firstTextContent(result.content)).not.toContain(summary.objective);
+  });
+
+  it.each(['approve', 'reject'] as const)('does not submit a %s of a proposal whose repository is outside the root', async (operation) => {
+    pendingIn(outside);
+    outsideRoot();
+
+    const result = operation === 'approve'
+      ? await approveTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal)
+      : await rejectTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal);
+
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain('outside the allowed project root');
+    expect(doubles.read).toHaveBeenCalledWith(workspaceConversationId);
+    expect(doubles.withinRoot).toHaveBeenCalledWith(outside, root);
+    expect(doubles.constructClient).not.toHaveBeenCalled();
+    expect(doubles.submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['approve', 'inside'], ['reject', 'inside'], ['approve', 'no longer pending'], ['reject', 'no longer pending'],
+  ] as const)('leaves a %s of a proposal %s the root to the daemon', async (operation, location) => {
+    pendingIn(location === 'inside' ? `${root}/repository` : null);
+    outsideRoot();
+    doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
+
+    const result = operation === 'approve'
+      ? await approveTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal)
+      : await rejectTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal);
+
+    expect(doubles.submit).toHaveBeenCalledOnce();
+    expect(firstTextContent(result.content)).toMatch(/stale_summary/u);
+  });
+
+  it.each(['approve', 'reject'] as const)('does not read the proposal before a %s when no root is configured', async (operation) => {
+    doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
+
+    if (operation === 'approve') await approveTaktGoalRegistration(workspaceInput, {}, signal);
+    else await rejectTaktGoalRegistration(workspaceInput, {}, signal);
+
+    expect(doubles.read).not.toHaveBeenCalled();
+    expect(doubles.submit).toHaveBeenCalledOnce();
+  });
+});
