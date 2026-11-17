@@ -1059,6 +1059,17 @@ steps:
 Presets resolve exactly like `provider_options.extends` (project → global → builtins, with repertoire package scoping). The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). An unresolved name fails fast. `system` and `workflow_call` steps reject `capabilities`.
 
 
+### `repository_identity`
+
+`repository_identity: true` names the project's repository for `gh` and `glab` in a task that runs in a clone (`worktree: true`), which has no `origin` remote for them to read. TAKT passes `GH_REPO` or `GITLAB_REPO` to this workflow's agent steps, command quality gates, and system `command` inputs; no remote and no credential is added.
+
+```yaml
+repository_identity: true
+```
+
+It is off by default, so a workflow that does not operate on the repository gets nothing. Each workflow decides for itself: a called workflow neither inherits the caller's declaration nor loses its own. Nothing is named for a task that runs in the project root, and a variable you set yourself is never overridden. The variables, the host rules, and the GitHub / GitLab detection are in [Repository identity in clones](configuration.md#repository-identity-in-clones).
+
+
 ### `workflow_config.runtime`
 
 Runtime prepare scripts that run before workflow execution. Builtin presets `node` / `gradle` are always allowed. Custom script paths require `workflow_runtime_prepare.custom_scripts: true` in config.

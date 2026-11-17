@@ -21,7 +21,7 @@ import {
 import {
   buildRepositoryIdentityEnv,
   resolveRepositoryIdentityEnv,
-  withRepositoryIdentityEnv,
+  resolveTaskRepositoryIdentityEnv,
 } from '../infra/git/repository-env.js';
 
 beforeEach(() => {
@@ -332,13 +332,13 @@ describe('resolveRepositoryIdentityEnv', () => {
   });
 });
 
-describe('withRepositoryIdentityEnv', () => {
+describe('resolveTaskRepositoryIdentityEnv', () => {
   const origin = () => mockExecFileSync.mockReturnValue('git@github.com:owner/repo.git\n');
 
-  it('adds the repository identity to a task that runs in a clone', () => {
+  it('resolves the repository identity for a task that runs in a clone', () => {
     origin();
 
-    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toEqual({
+    expect(resolveTaskRepositoryIdentityEnv('/clones/task', '/project', {})).toEqual({
       GH_REPO: 'github.com/owner/repo',
     });
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -346,59 +346,44 @@ describe('withRepositoryIdentityEnv', () => {
     );
   });
 
-  it('leaves the environment untouched for a task in the project root', () => {
+  it('resolves nothing for a task in the project root, without reading the origin', () => {
     origin();
-    const env = { TAKT_OBSERVABILITY: '{}' };
 
-    expect(withRepositoryIdentityEnv(env, '/project', '/project', {})).toBe(env);
+    expect(resolveTaskRepositoryIdentityEnv('/project', '/project', {})).toEqual({});
     expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
-  it('merges with the observability variables and keeps them', () => {
-    origin();
-
-    expect(withRepositoryIdentityEnv({ TAKT_OBSERVABILITY: '{}' }, '/clones/task', '/project', {})).toEqual({
-      TAKT_OBSERVABILITY: '{}',
-      GH_REPO: 'github.com/owner/repo',
-    });
-  });
-
-  it('returns the original environment when there is nothing to add', () => {
+  it('resolves nothing when the origin yields nothing', () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error('no origin');
     });
-    const env = { TAKT_OBSERVABILITY: '{}' };
 
-    expect(withRepositoryIdentityEnv(env, '/clones/task', '/project', {})).toBe(env);
-    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', {})).toBeUndefined();
+    expect(resolveTaskRepositoryIdentityEnv('/clones/task', '/project', {})).toEqual({});
   });
 
   it('keeps a repository variable the caller already set, and it wins over the derived one', () => {
     origin();
 
-    expect(withRepositoryIdentityEnv(undefined, '/clones/task', '/project', { GH_REPO: 'other/repo' })).toEqual({
+    expect(resolveTaskRepositoryIdentityEnv('/clones/task', '/project', { GH_REPO: 'other/repo' })).toEqual({
       GH_REPO: 'other/repo',
     });
   });
 
-  it('keeps the caller\'s repository variables even when the origin yields nothing', () => {
+  it("keeps the caller's repository variables even when the origin yields nothing", () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error('no origin');
     });
 
-    expect(withRepositoryIdentityEnv({ TAKT_OBSERVABILITY: '{}' }, '/clones/task', '/project', {
+    expect(resolveTaskRepositoryIdentityEnv('/clones/task', '/project', {
       GITLAB_REPO: 'https://gitlab.example.com/group/project',
       GITLAB_TOKEN: 'secret',
       HOME: '/home/user',
     })).toEqual({
-      TAKT_OBSERVABILITY: '{}',
       GITLAB_REPO: 'https://gitlab.example.com/group/project',
     });
   });
 
   it('does not carry a caller-set repository variable into the project root', () => {
-    const env = { TAKT_OBSERVABILITY: '{}' };
-
-    expect(withRepositoryIdentityEnv(env, '/project', '/project', { GH_REPO: 'other/repo' })).toBe(env);
+    expect(resolveTaskRepositoryIdentityEnv('/project', '/project', { GH_REPO: 'other/repo' })).toEqual({});
   });
 });

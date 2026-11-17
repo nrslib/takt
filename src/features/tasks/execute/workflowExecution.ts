@@ -8,7 +8,7 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
-import { withRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
+import { resolveTaskRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -442,12 +442,9 @@ async function executeWorkflowInternal(
         getEngine: () => engine,
       });
       const ambientEnv = buildChildProcessEnv();
-      const childProcessEnv = withRepositoryIdentityEnv(
-        resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv),
-        cwd,
-        options.projectCwd,
-        ambientEnv,
-      );
+      const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv);
+      // Resolved for the run; each workflow's `repository_identity` decides whether it is passed on.
+      const repositoryIdentityEnv = resolveTaskRepositoryIdentityEnv(cwd, options.projectCwd, ambientEnv);
       const gitSafety = prExecution.prExecutionContext
         ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
         : {};
@@ -486,6 +483,7 @@ async function executeWorkflowInternal(
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
         childProcessEnv,
+        repositoryIdentityEnv,
         language: options.language,
         provider: bootstrap.currentProvider,
         providerSource: bootstrap.currentProviderSource,

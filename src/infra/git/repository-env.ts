@@ -143,25 +143,24 @@ function presetRepositoryIdentityEnv(ambientEnv: NodeJS.ProcessEnv): Record<stri
 }
 
 /**
+ * Repository identity for one task, or `{}` when nothing should be named.
+ *
  * A task in a clone has no `origin`, so `gh` / `glab` cannot find the
  * repository there. Name it from the project root's origin. A task in the
  * project root keeps its remotes and the CLIs' own choice (for example
- * `gh repo set-default`), so nothing is added there.
+ * `gh repo set-default`), so nothing is named there.
+ *
+ * The values are resolved for the whole run; whether they reach a child
+ * process is decided per workflow by `repository_identity`.
  */
-export function withRepositoryIdentityEnv(
-  childProcessEnv: Readonly<Record<string, string>> | undefined,
+export function resolveTaskRepositoryIdentityEnv(
   cwd: string,
   projectCwd: string,
   ambientEnv: NodeJS.ProcessEnv,
-): Readonly<Record<string, string>> | undefined {
+): Record<string, string> {
   if (cwd === projectCwd) {
-    return childProcessEnv;
+    return {};
   }
-  // Command gates and system `command` inputs get only what is in this snapshot, so a repository
-  // variable the caller set is carried over as is, and wins over a derived one.
-  const identityEnv = { ...resolveRepositoryIdentityEnv(projectCwd, ambientEnv), ...presetRepositoryIdentityEnv(ambientEnv) };
-  if (Object.keys(identityEnv).length === 0) {
-    return childProcessEnv;
-  }
-  return { ...childProcessEnv, ...identityEnv };
+  // A repository variable the caller set is carried over as is, and wins over a derived one.
+  return { ...resolveRepositoryIdentityEnv(projectCwd, ambientEnv), ...presetRepositoryIdentityEnv(ambientEnv) };
 }
