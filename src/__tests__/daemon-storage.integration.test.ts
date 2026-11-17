@@ -71,9 +71,9 @@ const roots: string[] = [];
 const signal = (): AbortSignal => new AbortController().signal;
 const io = (): IoOptions => ({ signal: signal(), timeoutMs: 5000 });
 async function root(): Promise<string> { const path = await mkdtemp(join(tmpdir(), 'takt-daemon-storage-')); roots.push(path); return path; }
-function event(id: string, sequence: number): AcceptedEvent {
+function event(id: string, sequence: number, text = id): AcceptedEvent {
   return { eventId: id, requestId: id, conversationId: 'conversation', source: 'tui', occurredAt: '2026-11-03T00:00:00Z',
-    event: { kind: 'human_command', command: { kind: 'message', text: id }, speaker: { namespace: 'test', id: 'human' }, agentOverrides: { provider: 'codex', model: 'test' } },
+    event: { kind: 'human_command', command: { kind: 'message', text }, speaker: { namespace: 'test', id: 'human' }, agentOverrides: { provider: 'codex', model: 'test' } },
     operationId: `operation-${id}`, acceptedSequence: sequence, lane: 'human' };
 }
 function result(input: AcceptedEvent): TurnResult {
@@ -743,50 +743,90 @@ describe('real asynchronous command process boundary', () => {
   });
 });
 
-it('restores each settled turn result after its message and tools from a restarted daemon, and reads turns without a settled result', async () => {
+async function savedTurns() {
   const directory = await root();
   const f = toolOwner(directory);
   const events = new FileEventStore(directory);
   await f.store.create(record());
   const state = { version: 0, assignment, session: { provider: 'codex', model: null, sessionId: null }, revision: 0, pending: null, approval: null };
-  const begin = async (name: string, sequence: number) => {
-    const accepted = { ...event(name, sequence), conversationId: id };
-    const identity = { conversationId: id, operationId: accepted.operationId, generation: 1 };
-    await events.accept(accepted); await events.markStarted(accepted.eventId, identity);
-    await f.owner.started({ turn: identity, event: accepted, state });
-    return { accepted, identity };
-  };
-  const settle = async (accepted: AcceptedEvent, identity: TurnIdentity, outcome: TurnResult['outcome']) => {
-    const finished = { ...identity, event: accepted, outcome };
-    await events.saveResult(accepted.eventId, finished); await f.owner.apply(finished); await events.markSettled(accepted.eventId, finished);
-  };
-  const replied = await begin('with tools', 1);
-  await f.owner.progress(replied.identity, toolEvent(replied.identity, 'use', { type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } }), signal());
-  await f.owner.progress(replied.identity, toolEvent(replied.identity, 'result', { type: 'tool_result', data: { id: 'tool', content: 'read-result', isError: false } }), signal());
-  await settle(replied.accepted, replied.identity, { kind: 'completed', result: { kind: 'reply', message: 'Saved reply' } });
-  const interrupted = await begin('interrupted', 2);
-  await settle(interrupted.accepted, interrupted.identity, { kind: 'interrupted' });
-  const settling = await begin('settling', 3);
-  await events.saveResult(settling.accepted.eventId, { ...settling.identity, event: settling.accepted, outcome: { kind: 'completed', result: { kind: 'reply', message: 'Not yet applied' } } });
-  await begin('running', 4);
-  await f.owner.close();
-
   const errors: unknown[] = [];
-  const restarted = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory), new DaemonNotifications(directory),
-    async () => {}, (error) => { errors.push(error); }, new FileEventStore(directory));
-  const snapshot = await restarted.snapshot(id, { toolHistory: true });
-  const items = [];
-  for await (const item of snapshot.items) items.push(item);
-  snapshot.complete();
-  const displayed = orderSnapshotItems(new Map(items.flatMap((item) => item.kind === 'state' || item.kind === 'remove' ? [] : [[snapshotItemKey(item), item] as const])));
-  expect(displayed.flatMap((item) => item.kind === 'user_message' ? [`message:${item.message}`]
-    : item.kind === 'tool_history' ? [`tool:${item.history.history.entries.map((entry) => entry.result).join()}`]
-      : item.kind === 'turn_result' ? [`result:${item.result.kind}:${'message' in item.result ? item.result.message : ''}`] : [])).toEqual([
+  return { f, events, errors,
+    async begin(name: string, sequence: number, text = name) {
+      const accepted = { ...event(name, sequence, text), conversationId: id };
+      const identity = { conversationId: id, operationId: accepted.operationId, generation: 1 };
+      await events.accept(accepted); await events.markStarted(accepted.eventId, identity);
+      await f.owner.started({ turn: identity, event: accepted, state });
+      return { accepted, identity };
+    },
+    async settle(accepted: AcceptedEvent, identity: TurnIdentity, outcome: TurnResult['outcome']) {
+      const finished = { ...identity, event: accepted, outcome };
+      await events.saveResult(accepted.eventId, finished); await f.owner.apply(finished); await events.markSettled(accepted.eventId, finished);
+    },
+    async useTool(identity: TurnIdentity, result: string) {
+      await f.owner.progress(identity, toolEvent(identity, `use-${result}`, { type: 'tool_use', data: { id: result, tool: 'Read', input: { file_path: 'a.ts' } } }), signal());
+      await f.owner.progress(identity, toolEvent(identity, `result-${result}`, { type: 'tool_result', data: { id: result, content: result, isError: false } }), signal());
+    },
+    async restoredLog() {
+      await f.owner.close();
+      const restarted = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory), new DaemonNotifications(directory),
+        async () => {}, (error) => { errors.push(error); }, new FileEventStore(directory));
+      const snapshot = await restarted.snapshot(id, { toolHistory: true });
+      const items = [];
+      for await (const item of snapshot.items) items.push(item);
+      snapshot.complete();
+      const displayed = orderSnapshotItems(new Map(items.flatMap((item) => item.kind === 'state' || item.kind === 'remove' ? [] : [[snapshotItemKey(item), item] as const])));
+      return displayed.flatMap((item) => item.kind === 'user_message' ? [`message:${item.message}`]
+        : item.kind === 'tool_history' ? [`tool:${item.history.history.entries.map((entry) => entry.result).join()}`]
+          : item.kind === 'turn_result' ? [`result:${item.result.kind}:${'message' in item.result ? item.result.message : ''}`] : []);
+    },
+  };
+}
+
+it('restores each settled turn result after its message and tools from a restarted daemon, and reads turns without a settled result', async () => {
+  const saved = await savedTurns();
+  const replied = await saved.begin('with tools', 1);
+  await saved.useTool(replied.identity, 'read-result');
+  await saved.settle(replied.accepted, replied.identity, { kind: 'completed', result: { kind: 'reply', message: 'Saved reply' } });
+  const interrupted = await saved.begin('interrupted', 2);
+  await saved.settle(interrupted.accepted, interrupted.identity, { kind: 'interrupted' });
+  const settling = await saved.begin('settling', 3);
+  await saved.events.saveResult(settling.accepted.eventId, { ...settling.identity, event: settling.accepted, outcome: { kind: 'completed', result: { kind: 'reply', message: 'Not yet applied' } } });
+  await saved.begin('running', 4);
+
+  expect(await saved.restoredLog()).toEqual([
     'message:with tools', 'tool:read-result', 'result:reply:Saved reply',
     'message:interrupted', 'result:error:Turn interrupted',
     'message:settling', 'message:running',
   ]);
-  expect([...f.errors, ...errors]).toEqual([]);
+  expect([...saved.f.errors, ...saved.errors]).toEqual([]);
+});
+
+it('restores only the turns from the last completed /clear onward, keeping the turns of a rejected /clear', async () => {
+  const saved = await savedTurns();
+  const cleared = { kind: 'completed', result: { kind: 'notice', message: 'Conversation cleared.' } } as const;
+  const before = await saved.begin('before clear', 1);
+  await saved.useTool(before.identity, 'before-tool');
+  await saved.settle(before.accepted, before.identity, { kind: 'completed', result: { kind: 'reply', message: 'before reply' } });
+  const firstClear = await saved.begin('/clear', 2);
+  await saved.settle(firstClear.accepted, firstClear.identity, cleared);
+  const middle = await saved.begin('between clears', 3);
+  await saved.useTool(middle.identity, 'middle-tool');
+  await saved.settle(middle.accepted, middle.identity, { kind: 'completed', result: { kind: 'reply', message: 'middle reply' } });
+  const secondClear = await saved.begin(' /clear ', 4);
+  await saved.settle(secondClear.accepted, secondClear.identity, cleared);
+  const after = await saved.begin('after clear', 5);
+  await saved.useTool(after.identity, 'after-tool');
+  await saved.settle(after.accepted, after.identity, { kind: 'completed', result: { kind: 'reply', message: 'after reply' } });
+  const rejectedClear = await saved.begin('rejected clear', 6, '/clear');
+  await saved.settle(rejectedClear.accepted, rejectedClear.identity, { kind: 'completed',
+    result: { kind: 'error', code: 'registration_recovery', message: 'Recovery required' } });
+
+  expect(await saved.restoredLog()).toEqual([
+    'message: /clear ', 'result:notice:Conversation cleared.',
+    'message:after clear', 'tool:after-tool', 'result:reply:after reply',
+    'message:/clear', 'result:error:Recovery required',
+  ]);
+  expect([...saved.f.errors, ...saved.errors]).toEqual([]);
 });
 
 type ToolEventBody = Omit<ConversationToolEvent['event'], 'toolActivity'>;

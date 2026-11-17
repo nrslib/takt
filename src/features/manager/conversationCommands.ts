@@ -2,6 +2,8 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
 
+export const CLEAR_COMMAND = '/clear';
+
 const id = z.uuid();
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const ConversationCommandSchema = z.discriminatedUnion('kind', [

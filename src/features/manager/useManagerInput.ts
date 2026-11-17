@@ -7,6 +7,7 @@ import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManag
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelection } from './useManagerSelection.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 
 export const MAKE_GOAL_COMMAND = '/make-goal';
 
@@ -49,7 +50,7 @@ export function useManagerInput({
     if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
       && next.text !== editorRef.current.text
-      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify'].some((command) => command.startsWith(next.text.trim())))) {
+      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify', CLEAR_COMMAND].some((command) => command.startsWith(next.text.trim())))) {
       summaryApproval.dismiss(pending);
     }
     edit(next);

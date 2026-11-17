@@ -19,6 +19,7 @@ import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
@@ -43,8 +44,10 @@ import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
 import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
-  { command: '/verify', labelKey: 'interactive.commands.verify' }];
+  { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
+/** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
+const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -62,6 +65,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
+  const [transcriptGeneration, setTranscriptGeneration] = useState(0);
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
@@ -70,6 +74,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
+  const clearOperation = useRef<string | null>(null);
   const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
@@ -87,7 +92,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
   const savingAnswer = useRef<{ operationId: string | null } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
-  const { stdout } = useStdout();
+  const { stdout, write } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
   const [rows, setRows] = useState(() => stdout.rows);
   const toolColumns = useRef(columns);
@@ -230,6 +235,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
+    // 保存済みの結果がライブより先に届いても消すように、表示の入口で判定する。
+    if (clearOperation.current === operationId && result.kind === 'notice' && mounted.current) {
+      // Static は書き出した行を端末に残し、何件目まで書いたかも覚えている。配列を空にするだけでは
+      // 前の会話が画面に残り、続く通知も書かれないため、端末を消してから Static を作り直す。
+      // 消去は新しい Static が書き出す前に済ませる必要があるので、描画後の Effect ではなくここで行う。
+      if (stdout.isTTY) write(CLEAR_TERMINAL);
+      setEntries([]);
+      setTranscriptGeneration((generation) => generation + 1);
+    }
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
@@ -336,6 +350,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
       })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
@@ -522,7 +537,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const statusLabel = elapsed === undefined ? displayedActivity
     : displayedActivity === '' ? elapsed : `${displayedActivity} ${elapsed}`;
   return <Box flexDirection="column">
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+    <TranscriptView key={transcriptGeneration} entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
     {epicsOpen ? epicNoticeLines.length > 0 && <Text wrap="truncate-end">{epicNoticeLines.join('\n')}</Text>
       : noticeMessages.map((text) => <Text key={text}>{text}</Text>)}

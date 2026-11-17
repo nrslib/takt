@@ -14,6 +14,7 @@ import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { ConversationState, OperationResult, OutputVersion, PortOutput, SnapshotItem } from '../manager/conversationPort.js';
 import { conversationProjection } from './conversationProjection.js';
+import { CLEAR_COMMAND } from '../manager/conversationCommands.js';
 import { DaemonRouting } from './routing.js';
 import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
 import { ToolTurn } from './toolTurn.js';
@@ -252,7 +253,7 @@ export class DaemonConversations implements ConversationOwner {
     const running = turn === undefined ? null : { ...turn.state };
     const state: ConversationState = { conversationId: id, assignment: current.state.assignment, revision: current.state.revision,
       pending: current.state.pending, approval: current.state.approval, running, interrupted: this.interrupted.has(id) };
-    const items: Array<SnapshotItem & { recordedAt?: string }> = [{ kind: 'state', state }];
+    let items: Array<SnapshotItem & { recordedAt?: string }> = [{ kind: 'state', state }];
     if (withTools) {
       const histories = await this.store.readToolHistories(id).catch((error: unknown) => {
         this.onError(error);
@@ -288,14 +289,22 @@ export class DaemonConversations implements ConversationOwner {
       }
     }
     if (withTools) {
-      for (const { outcome, ...saved } of await this.turns.readTurns(id)) {
+      const turns = await this.turns.readTurns(id);
+      const cleared = turns.filter(({ message, outcome }) => message?.trim() === CLEAR_COMMAND
+        && outcome?.kind === 'completed' && outcome.result.kind === 'notice').at(-1);
+      for (const { outcome, ...saved } of turns) {
         for (const item of items) {
           if (item.kind === 'tool_history' && item.history.operationId === saved.operationId) item.acceptedSequence = saved.acceptedSequence;
         }
+        if (cleared !== undefined && saved.acceptedSequence < cleared.acceptedSequence) continue;
         if (saved.message !== undefined) items.push({ kind: 'user_message', ...saved, message: saved.message });
         if (outcome !== undefined && outcome.kind !== 'deferred') {
           items.push({ kind: 'turn_result', operationId: saved.operationId, acceptedSequence: saved.acceptedSequence, result: operationResultOf(outcome) });
         }
+      }
+      if (cleared !== undefined) {
+        items = items.filter((item) => item.kind !== 'tool_history' || item.acceptedSequence === undefined
+          || item.acceptedSequence >= cleared.acceptedSequence);
       }
     }
     const frozen = structuredClone(items);

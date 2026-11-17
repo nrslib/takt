@@ -806,6 +806,31 @@ it('does not repeat a reply shown live when a later snapshot contains its saved 
   await waitFor(() => expect(logLines()).toEqual(['user:live question', 'assistant:live reply', 'user:next question', 'assistant:next reply']));
 });
 
+it.each(['live', 'snapshot'] as const)('clears the earlier log when the /clear notice arrives from the %s result and keeps later messages', async (source) => {
+  const context = mount('en');
+  const { app, client } = context;
+  const earlier = randomUUID();
+  client.output({ kind: 'user_message', operationId: earlier, message: 'earlier question' });
+  client.output({ kind: 'result', operationId: earlier, result: { kind: 'reply', message: 'earlier reply' } });
+  await waitFor(() => expect(logLines()).toEqual(['user:earlier question', 'assistant:earlier reply']));
+  await typeAndSubmit(context, '/clear');
+  await waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: '/clear' }]));
+  const operationId = await client.operation();
+  await waitFor(() => expect(logLines()).toContain('user:/clear'));
+  const notice = getLabel('manager.conversation.cleared', 'en');
+  const result = { kind: 'notice', message: notice } as const;
+  if (source === 'live') client.output({ kind: 'result', operationId, result });
+  else client.change({ items: [...client.getSnapshot().items, savedResult(operationId, 2, result)] });
+  await waitFor(() => expect(logLines()).toEqual([`system:${notice}`]));
+  // テスト用の出力は Static がそれまでに書き出した全行を毎回含むので、書き出した結果そのものを確かめられる。
+  await waitFor(() => expect(app.lastFrame()).toContain(notice));
+  expect(app.lastFrame()).not.toContain('earlier');
+  client.output({ kind: 'user_message', operationId: randomUUID(), message: 'later question' });
+  await waitFor(() => expect(logLines()).toEqual([`system:${notice}`, 'user:later question']));
+  await waitFor(() => expect(app.lastFrame()).toContain('later question'));
+  expect(app.lastFrame()).not.toContain('earlier');
+});
+
 it('ends the goal proposal request when its live result arrives after the snapshot showed the saved result', async () => {
   const context = mount('en');
   const { app, client } = context;
