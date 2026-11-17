@@ -158,6 +158,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42
@@ -197,6 +198,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: ping のログに requestIdを追加する
@@ -220,6 +222,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42
@@ -246,6 +249,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 68
@@ -285,6 +289,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 利用者 API にカーソルによるページングを追加する
@@ -308,6 +313,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 68
@@ -622,6 +628,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 26
@@ -661,6 +668,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Add requestId to ping logs
@@ -684,6 +692,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 26
@@ -710,6 +719,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 34
@@ -749,6 +759,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Add cursor pagination to users API
@@ -772,6 +783,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 34

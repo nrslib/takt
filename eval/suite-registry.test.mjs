@@ -285,14 +285,14 @@ test('manager work split is active, explicit, costly and has no prepare targets'
       reasoning_effort: undefined,
     },
   });
-  assert.equal(config.tests.length, 172);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 86);
+  assert.equal(config.tests.length, 174);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 87);
   const executionTests = config.tests.filter(({ providers }) => providers.includes('claude-sdk-opus-5'));
   assert.equal(executionTests.length, 8);
   assert.equal(new Set(executionTests.map(({ vars }) => vars.case)).size, 4);
   const replayTests = config.tests.filter(({ providers }) => !providers.includes('claude-sdk-opus-5'));
-  assert.equal(replayTests.length, 164);
-  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 82);
+  assert.equal(replayTests.length, 166);
+  assert.equal(new Set(replayTests.map(({ vars }) => vars.case)).size, 83);
   for (const caseId of [
     'paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued',
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
@@ -311,6 +311,7 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'migration-method-event', 'migration-method-conversation', 'settled-operation-merge',
     'csv-export-scope-conversation', 'search-index-scope-conversation',
     'single-operation-request', 'migration-no-downtime', 'unidentified-goal', 'external-contract-limit',
+    'running-subworkflow-progress',
   ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
     if (['paused-requeue', 'paused-requeue-before-start', 'task-stopped-not-resumed', 'resumed-already-requeued'].includes(caseId)) {
