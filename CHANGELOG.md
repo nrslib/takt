@@ -8,9 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-11-17
+
+### Added
+
+- Manager can bundle existing goals in several repositories of the same workspace into an Epic with an overall objective, acceptance criteria, and a combined verification procedure (#2040). Manager records verification evidence against the fixed SHAs that each completed goal integrated, and an Epic is completed only explicitly after every member is completed and current evidence matches. Press `Ctrl+T` in the manager TUI to browse Epics and their details.
+- `takt manager`, the interactive TUI, and pipeline/CI runs show each tool call as it starts and completes, with its success or failure and duration (#2041, #2048). The conversation log is ordered as it happened, with Thinking (◇) and tools (◆) shown dimmed before the reply (●), and messages waiting to be processed are shown between the log and the input box. Reopening manager now shows previous messages, completed tool history, and replies again.
+- Send `/clear` in manager to start the conversation over (#2064). Manager's AI begins a new session and earlier messages are no longer shown, while saved records, goals, and proposals stay as they are.
+- The standalone `takt-mcp` server adds `takt_create_goal` to register a new goal (#2055) and `takt_answer_goal_question` to answer a goal question (#2057).
+- Added the `merge-review-ci` builtin workflow, which reviews only PRs whose CI has already succeeded and hands them to `merge-review` (#2038). PRs with pending, failed, or absent checks end without review or comments.
+- `merge.prepare_workflow` selects the workflow manager uses when it prepares a goal PR without merging (#2036). The default remains `merge-prepare`.
+- `manager.preserve_goal_worktree: true` keeps a goal task's worktree and run reports after manager integrates its result (#2039).
+- `provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`, and `import_user_read_deny: true` also imports the `Read(` rules from `~/.claude/settings.json` (#1961).
+- Agents now leave short progress notes as they work, and TAKT saves them in the run, so a step resumed after context compaction, an interrupted attempt, or a new session continues from the recorded progress instead of starting over (#2056).
+
+### Changed
+
+- Manager creates a goal proposal only when `/make-goal` is run explicitly, in both the TUI and Slack (#2051). Once agreement is reached, manager suggests `/make-goal` instead of generating a proposal on its own.
+- `merge-review-fix`, `merge-review-fix-simple`, and `merge-prepare` skip the full review when synchronizing with the base branch needs no conflict resolution, and proceed to push, Caccia, and CI (#2050). Every AI conflict resolution is still reviewed and fixed before push.
+- Builtin fix plans and review decisions state which repair approach was chosen and why (#2049).
+- Updated the Pi SDK to 1.5.2 (#2027).
+
 ### Fixed
 
-- Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone. Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.
+- Read-only steps such as review and final checks can run shell commands again with Claude and Pi (#2052). Claude previously lost `Bash` in `edit: false` steps, and Pi had no shell in read-only mode, so commands like `gh` could not run. Report output (Phase 2) and strict read-only steps still get no shell.
+- When Codex compacts its context during Phase 1, TAKT resumes the same thread and sends the step instruction again, up to three times, instead of accepting the cut-off turn as the step result (#2042).
+- Manager turns no longer fail because tool output, conversation files, or daemon messages exceed a size limit (#2048).
+- Manager shows the reason when a conversation turn fails, in the TUI, Slack, and webhook notifications (#2035).
+- An answer to a goal question is no longer lost when notifying manager fails; the daemon delivers it again (#2062).
+- Approving a goal proposal with a start or integration branch that does not exist locally, such as `origin/main`, is rejected with a reason before anything is reserved, instead of leaving a reservation that blocked every later operation (#2037).
+- Deleting a task no longer force-deletes its recorded branch when the task uses `worktree: false`, or when a worktree task failed before its clone was created (#1999).
+- OpenCode steps running in a clone, such as in `takt merge`, can read the run context stored outside the clone, so final checks no longer stop as BLOCKED (#1988). Editing that context is still denied on OpenCode v2.
+- Pasting multi-line text into the TUI editor keeps the line breaks for LF, CRLF, and CR newlines, including CR text pasted from WSL2 (#2033).
+- `takt_list_tasks` no longer sets up the Git environment again for every task (#2061).
+- Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone (#2028). Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.
+
+### Internal
+
+- The release workflow reads the PR title and release tag from environment variables instead of expanding them into scripts, closing a shell injection path (#2059).
+- Refreshed dependencies in the lockfile.
 
 ## [0.75.0] - 2026-11-08
 
