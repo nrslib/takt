@@ -73,6 +73,7 @@ describe('MCP task goal integration', () => {
     vi.spyOn(goalGit, 'resolveGoalBranchSha').mockResolvedValue(goalSha);
     vi.spyOn(goalGit, 'isGoalCommitIncluded').mockResolvedValue(true);
     vi.spyOn(goalGit, 'runGoalGit').mockResolvedValue({ output: Buffer.alloc(0), code: 0, truncated: false });
+    vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
@@ -82,9 +83,49 @@ describe('MCP task goal integration', () => {
     expect(output.tasks[0]).toMatchObject({ status: 'completed', goalIntegration: 'integrated' });
     expect(output.tasks[0]).not.toHaveProperty('goalIntegrationReason');
     expect(goalDoubles.get).toHaveBeenCalledWith(goalId);
-    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, undefined);
-    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, undefined, {});
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined, {});
     expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('builds the Git environment once for completed tasks across multiple goals', async () => {
+    const otherGoalId = '650e8400-e29b-41d4-a716-446655440001';
+    const environment = { GIT_LITERAL_PATHSPECS: '1' };
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue(environment);
+    goalDoubles.get.mockImplementation(async (id: string) => ({ ...goalRecord(), id, branch: `branch-${id}` }));
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([
+      task({ name: 'task-1' }),
+      task({ name: 'task-2' }),
+      task({ name: 'task-3', goalId: otherGoalId }),
+    ]);
+    const output = await list();
+    expect(output.tasks.map((entry) => entry.goalIntegration)).toEqual(['integrated', 'integrated', 'integrated']);
+    expect(buildEnvironment).toHaveBeenCalledTimes(1);
+    expect(buildEnvironment).toHaveBeenCalledWith(cwd, undefined);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, `branch-${goalId}`, undefined, environment);
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined, environment);
+  });
+
+  it('builds the Git environment again on the next list call', async () => {
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
+    await list();
+    await list();
+    expect(buildEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not build the Git environment when no task needs a Git check', async () => {
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ goalId: undefined })]);
+    const output = await list();
+    expect(output.tasks[0]).not.toHaveProperty('goalIntegration');
+    expect(buildEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('reports unknown when Git environment preparation fails', async () => {
+    vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockRejectedValue(new Error('filter config unavailable'));
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown' });
+    expect(output.tasks[0]!.goalIntegrationReason).toContain('filter config unavailable');
   });
 
   it('returns not_integrated for an existing completion commit outside the goal history', async () => {
@@ -107,10 +148,10 @@ describe('MCP task goal integration', () => {
 
     const result = await listTaktTasks({ cwd }, {}, controller.signal);
 
-    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, controller.signal);
-    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, controller.signal);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, controller.signal, {});
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, controller.signal, {});
     expect(goalGit.runGoalGit).toHaveBeenCalledWith(
-      cwd, ['cat-file', '-e', '--', `${completionSha}^{commit}`], 0, controller.signal, [0, 1, 128],
+      cwd, ['cat-file', '-e', '--', `${completionSha}^{commit}`], 0, controller.signal, [0, 1, 128], {},
     );
     expect(result.isError).toBe(true);
     expect(firstTextContent(result.content)).toContain(abortReason.message);

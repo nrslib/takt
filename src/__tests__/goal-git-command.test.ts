@@ -146,6 +146,30 @@ it('terminates a process when capture streams are unavailable', async () => {
   expect(terminate).toHaveBeenCalledOnce();
 });
 
+it('uses a supplied environment without rebuilding it', async () => {
+  processOutput([Buffer.from('ok')]);
+  const environment = { CUSTOM_ENVIRONMENT: '1' };
+  expect(await runGoalGit('/project', ['diff'], 100, undefined, [0], environment)).toMatchObject({ code: 0 });
+  expect(doubles.environment).not.toHaveBeenCalled();
+  expect(doubles.spawn.mock.calls[0]![2]).toMatchObject({ env: environment });
+});
+
+it('forwards a supplied environment through the ancestry check', async () => {
+  processOutput([], 0);
+  const environment = { CUSTOM_ENVIRONMENT: '1' };
+  expect(await isGoalCommitIncluded('/project', sourceSha, targetSha, undefined, environment)).toBe(true);
+  expect(doubles.environment).not.toHaveBeenCalled();
+  expect(doubles.spawn.mock.calls[0]![2]).toMatchObject({ env: environment });
+});
+
+it('forwards a supplied environment through branch resolution', async () => {
+  processOutput([Buffer.from(`${targetSha}\n`)]);
+  const environment = { CUSTOM_ENVIRONMENT: '1' };
+  expect(await resolveGoalBranchSha('/project', 'main', undefined, environment)).toBe(targetSha);
+  expect(doubles.environment).not.toHaveBeenCalled();
+  expect(doubles.spawn.mock.calls[0]![2]).toMatchObject({ env: environment });
+});
+
 it('completes an ancestor without requesting content comparison', async () => {
   processOutput([Buffer.from(`${targetSha}\n`)]);
   processOutput([], 0);
