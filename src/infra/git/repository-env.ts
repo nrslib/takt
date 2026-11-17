@@ -10,12 +10,12 @@
 import { resolveConfigValue } from '../config/resolveConfigValue.js';
 import { REPOSITORY_IDENTITY_ENV_KEYS } from '../../shared/utils/repository-identity-env.js';
 import {
-  detectVcsProviderFromHostname,
+  detectVcsProvider,
   getOriginRemoteUrl,
   parseRemoteRepositoryUrl,
   type RemoteRepository,
+  type VcsProviderType,
 } from './detect.js';
-import type { VcsProviderType } from './detect.js';
 
 const GITHUB_DEFAULT_HOST = 'github.com';
 // gh sends these to a GitHub Enterprise Server host (`gh help environment`).
@@ -59,6 +59,7 @@ function webEndpoint(remote: RemoteRepository): string {
 }
 
 function isGitHubEnterpriseServer(hostname: string): boolean {
+  // A `*.ghe.com` tenant takes GH_TOKEN in gh, not GH_ENTERPRISE_TOKEN (`gh help environment`).
   return hostname !== GITHUB_DEFAULT_HOST && !hostname.endsWith('.ghe.com');
 }
 
@@ -120,7 +121,7 @@ export function buildRepositoryIdentityEnv(
  * Resolve repository identity variables from the project root's `origin`.
  *
  * The provider is `vcs_provider` from config (project, then global) when set,
- * otherwise detected from the origin hostname.
+ * otherwise `detectVcsProvider`, the same detection as the rest of takt.
  */
 export function resolveRepositoryIdentityEnv(
   projectCwd: string,
@@ -129,7 +130,7 @@ export function resolveRepositoryIdentityEnv(
   const url = getOriginRemoteUrl(projectCwd);
   const remote = url === undefined ? undefined : parseRemoteRepositoryUrl(url);
   if (remote === undefined) return {};
-  const provider = resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProviderFromHostname(remote.hostname);
+  const provider = resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd);
   return buildRepositoryIdentityEnv(remote, provider, ambientEnv);
 }
 

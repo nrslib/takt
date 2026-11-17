@@ -411,19 +411,18 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(2);
-    expect(stateRecord.systemContexts).toBeInstanceOf(Map);
-    expect(stateRecord.structuredOutputs).toBeInstanceOf(Map);
-    expect((stateRecord.systemContexts as Map<string, unknown>).get('route_context')).toEqual({
+    expect(state.systemContexts).toBeInstanceOf(Map);
+    expect(state.structuredOutputs).toBeInstanceOf(Map);
+    expect(state.systemContexts.get('route_context')).toEqual({
       task: {
         exists: true,
         body: 'Current task body',
       },
     });
-    expect((stateRecord.structuredOutputs as Map<string, unknown>).get('plan_followup')).toEqual({
+    expect(state.structuredOutputs.get('plan_followup')).toEqual({
       action: 'noop',
     });
   });
@@ -483,10 +482,9 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
-    expect((stateRecord.structuredOutputs as Map<string, unknown>).get('plan_followup')).toEqual({
+    expect(state.structuredOutputs.get('plan_followup')).toEqual({
       action: 'noop',
     });
   });
@@ -540,10 +538,9 @@ describe('system workflow execution integration', () => {
     });
 
     const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
 
     expect(state.status).toBe('completed');
-    expect((stateRecord.systemContexts as Map<string, unknown>).get('wait_before_next_scan')).toEqual({
+    expect(state.systemContexts.get('wait_before_next_scan')).toEqual({
       queue: {
         exists: false,
         total_count: 0,

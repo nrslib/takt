@@ -250,7 +250,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `auto_fetch` | boolean | `false` | クローン作成前にリモートを fetch してクローンを最新に保つ |
 | `base_branch` | string | - | クローン作成のベースブランチ（デフォルトはリモートのデフォルトブランチ） |
 | `workflow_categories_file` | string | - | カテゴリファイルのパス（[Workflow カテゴリ](#workflow-カテゴリ) 参照。デフォルトのユーザー上書きは `workflow-categories.yaml`） |
-| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー。`origin` のホスト名から自動検出します（[clone でのリポジトリの指定](#clone-でのリポジトリの指定)）。それ以外のホストでは設定してください |
+| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー。自動検出するのは `github.com` と `gitlab.com` のリモートだけです。`*.ghe.com` やセルフホストを含むそれ以外のホストでは設定してください（[clone でのリポジトリの指定](#clone-でのリポジトリの指定)） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。`assistant` は assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）をルーティングし、OpenCode の report retry 失敗後の Report phase fallback provider としても使われます。project の `takt_providers.assistant` は global の `takt_providers.assistant` を上書きします。どちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `telemetry` | object | `{ routing_decisions: false }` | local-only の routing decision 記録。デフォルト無効（opt-in）です。`takt telemetry enable` または `routing_decisions: true` で有効化すると、auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。 |
 | `analytics` | object | 無効 | local-only の analytics 収集。`enabled` で有効化し、`events_path` でイベントディレクトリを変更（デフォルト `~/.takt/analytics/events`）、`retention_days` で `takt purge` が適用する保持期間を設定します（デフォルト: 30日）。TAKT は analytics イベントをアップロードしません。 |
@@ -492,13 +492,13 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 
 `worktree: true` のタスクは `origin` リモートのない clone で動くため、そこでは `gh` や `glab` が git リモートからリポジトリを特定できません。[`repository_identity: true`](workflows.ja.md#repository_identity) を宣言した workflow では、TAKT がプロジェクトルートの `origin` を読み、その workflow のエージェントのステップ、コマンドの品質ゲート、system の `command` 入力にリポジトリを渡します。宣言がなければ何も渡さないので、リポジトリを操作しない workflow はそのままです。
 
-- GitHub: `GH_REPO=HOST/OWNER/REPO`。gh の既定のホストが `github.com` とは限らないため、`github.com` でもホストを必ず付けます。ssh 専用のホスト `ssh.github.com` と `altssh.gitlab.com` は、それぞれ `github.com` と `gitlab.com` として扱います。`GH_ENTERPRISE_TOKEN` または `GITHUB_ENTERPRISE_TOKEN` が設定されているときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを付けます。呼び出し側がそのトークンのために設定していないホストへ、トークンを向けないためです。
+- GitHub: `GH_REPO=HOST/OWNER/REPO`。gh の既定のホストが `github.com` とは限らないため、`github.com` でもホストを必ず付けます。`GH_ENTERPRISE_TOKEN` または `GITHUB_ENTERPRISE_TOKEN` が設定されているときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを付けます。呼び出し側がそのトークンのために設定していないホストへ、トークンを向けないためです。
 - GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`。スキームは origin のものです（`http` は `http` のまま、ssh の origin は `https`）。`GITLAB_TOKEN`、`GITLAB_ACCESS_TOKEN`、`OAUTH_TOKEN` のいずれかが設定されているときは、`GITLAB_HOST`（または `GITLAB_URI` / `GL_HOST`）が同じスキーム、ホスト、実効ポート（`http` は 80、`https` は 443。スキームのない値は `https` とみなします）を指す場合に限って付けます。トークンを設定したホストとは別のホストを TAKT が指定しないようにするためです。比較するのは環境変数だけで、glab はプロトコルと API のホストを、これらの変数のスキームではなく自身の設定（`api_protocol`、`api_host`）から決めます。TAKT はその設定を見られません。
 - リポジトリは常にプロジェクトルートの `origin` で、ホストは通常の DNS 名（または角括弧付きの IPv6 アドレス）でなければなりません。それ以外は無視します。`origin` が fork で、`gh repo set-default` で upstream を選んでいる場合、TAKT はその選択（`remote.<name>.gh-resolved`）を読まず、fork を指定してしまいます。その場合は `GH_REPO` を自分で設定してください。設定した値はそのまま渡されます。
 
 利用者がすでに設定している変数は上書きしません。リモートや認証情報は追加せず、URL に含まれるユーザー名やトークンも使いません。`repository_identity` のない workflow、プロジェクトルートで動くタスク、`origin` がないか URL として認識できない場合、プロバイダーが分からない場合は何も追加しません。system の `command` 入力は `HOME` なしで動くため、そこでの `gh` / `glab` には別途認証が必要です。
 
-プロバイダーは `vcs_provider` が設定されていればそれ（プロジェクトがグローバルを上書き）を使い、なければ `origin` のホスト名から検出します。`github.com` と `gitlab.com`、`ghe.com` のサブドメイン（GitHub）、次に `.` で区切ったラベルのうち `github` か `gitlab` のどちらか一方にちょうど一致するものがあるホスト名（`github.example.com`、`gitlab.example.com` など）です。両方を含むホスト名やどちらも含まないホスト名（`ghe.corp.example` など）、`github.com-work` のような ssh の別名は検出しないので、`vcs_provider` を設定してください。TAKT が GitHub と GitLab を選ぶほかの箇所も同じ検出を使います。
+プロバイダーは `vcs_provider` が設定されていればそれ（プロジェクトがグローバルを上書き）を使い、なければ `origin` のホスト名から検出します。`github.com` は GitHub、`gitlab.com` は GitLab です。`*.ghe.com` の GitHub Enterprise Cloud、GitHub Enterprise Server、セルフホストの GitLab など、それ以外のホストは検出しないので、`vcs_provider` を設定してください。`origin` のホストが ssh 専用のホスト（`ssh.github.com`、`altssh.gitlab.com` など）や `~/.ssh/config` の別名（`github.com-work` など）で、Web や API を提供していない場合は、`vcs_provider` を設定しても正しい値になりません。`GH_REPO` / `GITLAB_REPO` を自分で設定してください。設定した値はそのまま渡されます（上記のとおり）。
 
 ## 環境変数上書き
 

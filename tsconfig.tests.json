@@ -442,6 +442,7 @@
     "src/__tests__/it-system-pr-sync-effects.test.ts",
     "src/__tests__/it-system-step-wait.test.ts",
     "src/__tests__/it-system-structured-output.test.ts",
+    "src/__tests__/it-system-workflow-execution.test.ts",
     "src/__tests__/it-task-list-terminal-output.test.ts",
     "src/__tests__/it-task-owner-identity.test.ts",
     "src/__tests__/it-task-restart-point.test.ts",

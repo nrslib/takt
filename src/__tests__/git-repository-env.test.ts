@@ -15,7 +15,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 }));
 
 import {
-  detectVcsProviderFromHostname,
+  detectVcsProvider,
   parseRemoteRepositoryUrl,
 } from '../infra/git/detect.js';
 import {
@@ -40,12 +40,6 @@ describe('parseRemoteRepositoryUrl', () => {
     ['https://user:secret-token@GitLab.Example.com/group/project.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com', webScheme: 'https', path: 'group/project' }],
     ['https://oauth2@gitlab.example.com:8443/a/b/c/d.git', { hostname: 'gitlab.example.com', webHost: 'gitlab.example.com:8443', webScheme: 'https', path: 'a/b/c/d' }],
     ['  https://github.com/owner/repo.git\n', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
-    // ssh-only hosts are read as the host that serves the web and the API
-    ['ssh://git@ssh.github.com:443/owner/repo.git', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
-    ['git@ssh.github.com:owner/repo.git', { hostname: 'github.com', webHost: 'github.com', webScheme: 'https', path: 'owner/repo' }],
-    ['ssh://git@altssh.gitlab.com:443/group/project.git', { hostname: 'gitlab.com', webHost: 'gitlab.com', webScheme: 'https', path: 'group/project' }],
-    // but only for ssh remotes: an https URL names the host it says
-    ['https://ssh.github.com/owner/repo.git', { hostname: 'ssh.github.com', webHost: 'ssh.github.com', webScheme: 'https', path: 'owner/repo' }],
   ])('parses %s', (url, expected) => {
     expect(parseRemoteRepositoryUrl(url)).toEqual(expected);
   });
@@ -72,32 +66,6 @@ describe('parseRemoteRepositoryUrl', () => {
   });
 });
 
-describe('detectVcsProviderFromHostname', () => {
-  it.each([
-    ['github.com', 'github'],
-    ['gitlab.com', 'gitlab'],
-    ['github.example.com', 'github'],
-    ['gitlab.example.com', 'gitlab'],
-    ['git.gitlab.example.org', 'gitlab'],
-    ['GitHub.Example.COM', 'github'],
-    ['GITLAB.COM', 'gitlab'],
-    ['octocorp.ghe.com', 'github'],
-    ['ghe.corp.example', undefined],
-    ['github.gitlab.example.com', undefined],
-    ['mygithub.example.com', undefined],
-    ['github', undefined],
-    ['github.com-work', undefined],
-    ['gitlab.internal-2', undefined],
-    ['bitbucket.org', undefined],
-    ['gist.github.com', 'github'],
-    ['user.github.io', undefined],
-    ['192.168.1.github', undefined],
-    ['github.co.uk', 'github'],
-  ])('%s -> %s', (hostname, expected) => {
-    expect(detectVcsProviderFromHostname(hostname)).toBe(expected);
-  });
-});
-
 describe('buildRepositoryIdentityEnv', () => {
   const github = { hostname: 'github.com', webHost: 'github.com', webScheme: 'https' as const, path: 'owner/repo' };
   const ghe = { hostname: 'github.example.com', webHost: 'github.example.com', webScheme: 'https' as const, path: 'owner/repo' };
@@ -105,12 +73,6 @@ describe('buildRepositoryIdentityEnv', () => {
 
   it('names the host in GH_REPO even for github.com, since gh may default to another host', () => {
     expect(buildRepositoryIdentityEnv(github, 'github', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
-  });
-
-  it('names github.com for the official ssh-over-443 remote', () => {
-    const remote = parseRemoteRepositoryUrl('ssh://git@ssh.github.com:443/owner/repo.git')!;
-
-    expect(buildRepositoryIdentityEnv(remote, 'github', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
   });
 
   describe('with a GitHub Enterprise token in the environment', () => {
@@ -246,13 +208,15 @@ describe('hostnames that collide with Object.prototype properties', () => {
     const remote = parseRemoteRepositoryUrl(`git@${name}:owner/repo.git`)!;
 
     expect(remote).toEqual({ hostname: name.toLowerCase(), webHost: name.toLowerCase(), webScheme: 'https', path: 'owner/repo' });
-    expect(detectVcsProviderFromHostname(name)).toBeUndefined();
+    mockExecFileSync.mockReturnValue(`git@${name}:owner/repo.git\n`);
+    expect(detectVcsProvider('/project')).toBeUndefined();
     expect(typeof remote.hostname).toBe('string');
   });
 
   it('does not look up __proto__ either, whatever the table', () => {
     expect(parseRemoteRepositoryUrl('git@__proto__:owner/repo.git')).toBeUndefined();
-    expect(detectVcsProviderFromHostname('__proto__')).toBeUndefined();
+    mockExecFileSync.mockReturnValue('git@__proto__:owner/repo.git\n');
+    expect(detectVcsProvider('/project')).toBeUndefined();
   });
 
   it('builds GH_REPO from such a host when the provider is forced, even with an Enterprise token', () => {
@@ -293,9 +257,9 @@ describe('buildRepositoryIdentityEnv GH_REPO host', () => {
 
 describe('resolveRepositoryIdentityEnv', () => {
   it('reads origin of the project root', () => {
-    mockExecFileSync.mockReturnValue('git@github.example.com:owner/repo.git\n');
+    mockExecFileSync.mockReturnValue('git@github.com:owner/repo.git\n');
 
-    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({ GH_REPO: 'github.example.com/owner/repo' });
+    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['remote', 'get-url', 'origin'],
@@ -303,7 +267,27 @@ describe('resolveRepositoryIdentityEnv', () => {
     );
   });
 
-  it('lets vcs_provider override the hostname rule', () => {
+  it.each([
+    'git@github.example.com:owner/repo.git',
+    'https://gitlab.example.com/group/project.git',
+    'https://acme.ghe.com/owner/repo.git',
+  ])('returns nothing for the self-hosted origin %s without vcs_provider', (url) => {
+    mockExecFileSync.mockReturnValue(`${url}\n`);
+
+    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({});
+  });
+
+  it.each([
+    ['git@github.example.com:owner/repo.git', { GH_REPO: 'github.example.com/owner/repo' }],
+    ['https://acme.ghe.com/owner/repo.git', { GH_REPO: 'acme.ghe.com/owner/repo' }],
+  ])('names the self-hosted GitHub origin %s when vcs_provider is github', (url, expected) => {
+    mockExecFileSync.mockReturnValue(`${url}\n`);
+    mockResolveConfigValue.mockReturnValue('github');
+
+    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual(expected);
+  });
+
+  it('names a self-hosted GitLab origin with nested groups when vcs_provider is gitlab', () => {
     mockExecFileSync.mockReturnValue('https://code.example.com/group/sub/project.git\n');
     mockResolveConfigValue.mockReturnValue('gitlab');
 
@@ -313,20 +297,14 @@ describe('resolveRepositoryIdentityEnv', () => {
   });
 
   it('lets vcs_provider override a detected provider', () => {
-    mockExecFileSync.mockReturnValue('https://gitlab.example.com/owner/repo.git\n');
+    mockExecFileSync.mockReturnValue('https://gitlab.com/owner/repo.git\n');
     mockResolveConfigValue.mockReturnValue('github');
 
-    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({ GH_REPO: 'gitlab.example.com/owner/repo' });
+    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({ GH_REPO: 'gitlab.com/owner/repo' });
   });
 
   it('returns nothing when origin is absent', () => {
     mockExecFileSync.mockImplementation(() => { throw new Error('No such remote'); });
-
-    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({});
-  });
-
-  it('returns nothing for an undetected host without config', () => {
-    mockExecFileSync.mockReturnValue('git@ghe.corp.example:owner/repo.git\n');
 
     expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({});
   });
