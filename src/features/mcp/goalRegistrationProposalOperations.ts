@@ -155,7 +155,11 @@ async function submitOwnedRegistrationCommand(
   buildCommand: (owner: RegistrationOwner) => Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
 ): Promise<OperationResult> {
   const owner = await resolveOwnedRegistration(input, deps);
-  if (deps.allowedProjectRoot !== undefined) await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
+  if (deps.allowedProjectRoot !== undefined) {
+    // revision ごとに保留中の案は一つなので、検査した案と daemon が扱う案を revision で結び付ける。
+    const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
+    if (pending?.revision !== input.revision) return { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' };
+  }
   return submitRegistrationCommand(buildCommand(owner), owner.identity, signal);
 }
 

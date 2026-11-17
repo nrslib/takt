@@ -460,19 +460,40 @@ describe('when the MCP server is limited to a project root', () => {
     expect(doubles.submit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['approve', 'inside'], ['reject', 'inside'], ['approve', 'no longer pending'], ['reject', 'no longer pending'],
-  ] as const)('leaves a %s of a proposal %s the root to the daemon', async (operation, location) => {
-    pendingIn(location === 'inside' ? `${root}/repository` : null);
+  it.each(['approve', 'reject'] as const)('submits a %s of the inspected revision whose repository is inside the root', async (operation) => {
+    pendingIn(`${root}/repository`);
     outsideRoot();
-    doubles.submit.mockResolvedValue({ kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' });
+    acceptSubmission();
+
+    const pending = operation === 'approve'
+      ? approveTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal)
+      : rejectTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal);
+    await vi.waitFor(() => expect(emit).toBeDefined());
+    emit!({ kind: 'result', operationId, result: operation === 'approve'
+      ? { kind: 'goal_registered', goal: goalRecord() } : { kind: 'notice', message: '登録案を取り下げました' } });
+    const result = await pending;
+
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(doubles.submit).toHaveBeenCalledOnce();
+    expect(doubles.submit.mock.calls[0]![0]).toMatchObject({ revision, conversationId: workspaceConversationId });
+  });
+
+  it.each([
+    ['approve', 'no proposal is pending'], ['reject', 'no proposal is pending'],
+    ['approve', 'the request names an older revision'], ['reject', 'the request names an older revision'],
+  ] as const)('refuses a %s as stale without submitting when %s', async (operation, condition) => {
+    pendingIn(condition === 'no proposal is pending' ? null : `${root}/repository`);
+    outsideRoot();
+    const input = { ...workspaceInput, revision: condition === 'no proposal is pending' ? revision : revision - 1 };
 
     const result = operation === 'approve'
-      ? await approveTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal)
-      : await rejectTaktGoalRegistration(workspaceInput, { allowedProjectRoot: root }, signal);
+      ? await approveTaktGoalRegistration(input, { allowedProjectRoot: root }, signal)
+      : await rejectTaktGoalRegistration(input, { allowedProjectRoot: root }, signal);
 
-    expect(doubles.submit).toHaveBeenCalledOnce();
-    expect(firstTextContent(result.content)).toMatch(/stale_summary/u);
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain('stale_summary: The displayed proposal has changed');
+    expect(doubles.constructClient).not.toHaveBeenCalled();
+    expect(doubles.submit).not.toHaveBeenCalled();
   });
 
   it.each(['approve', 'reject'] as const)('does not read the proposal before a %s when no root is configured', async (operation) => {
