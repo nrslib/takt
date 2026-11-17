@@ -4,6 +4,7 @@ import {
   getWorkflowInputSchema, askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
   listGoalRegistrationProposalsInputSchema, approveGoalRegistrationInputSchema, rejectGoalRegistrationInputSchema,
+  getGoalRegistrationProposalInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -222,6 +223,17 @@ describe('MCP goal registration proposal inputs', () => {
     expect(listGoalRegistrationProposalsInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
     expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: '/repo', revision }).success).toBe(false);
     expect(listGoalRegistrationProposalsInputSchema.safeParse({ cwd: 'repo' }).success).toBe(false);
+  });
+
+  it('reads a registration proposal by owner conversation and an optional proposal field path', () => {
+    expect(getGoalRegistrationProposalInputSchema.parse({ cwd: '/repo', conversationId })).toEqual({ cwd: '/repo', conversationId });
+    for (const path of ['summary.objective', 'summary.acceptanceCriteria.0', 'summary.specifications.gherkin', 'summary.startBranch']) {
+      expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path, textOffset: 4096, maxBytes: 4096 }).success, path).toBe(true);
+    }
+    for (const path of ['repositoryDirectory', 'summary', 'summary.objective.0', 'summary.unknown']) {
+      expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo', conversationId, path }).success, path).toBe(false);
+    }
+    expect(getGoalRegistrationProposalInputSchema.safeParse({ cwd: '/repo' }).success).toBe(false);
   });
 
   it('approves and rejects a registration proposal by project path, revision and owner conversation', () => {

@@ -4,12 +4,17 @@ import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js'
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
+import type { PendingSummary } from '../../infra/conversations/schema.js';
+import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
 import { ConversationIpcClient } from '../manager/conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from '../manager/conversationPort.js';
 import { assertCwdAllowedByMcpRoot, errorResult, isPathAllowedByMcpRoot, jsonResult, type McpOperationDependencies } from './operations.js';
+import { goalValuePage, selectGoalValue } from './goalResponse.js';
+import { pagedResult } from './response.js';
 import type {
   ApproveGoalRegistrationInput,
+  GetGoalRegistrationProposalInput,
   ListGoalRegistrationProposalsInput,
   RejectGoalRegistrationInput,
 } from './schemas.js';
@@ -38,8 +43,53 @@ export async function listTaktGoalRegistrationProposals(
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const owner = await resolveRegistrationOwner(input.cwd);
     const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
-    return jsonResult({ proposals: pending === null ? [] : [{ ...pending, conversationId: owner.conversationId }] });
+    return jsonResult({
+      proposals: pending === null ? [] : [{ ...proposalIdentity(owner, pending), fields: proposalFields(pending.summary) }],
+      retrieval: 'Read proposal text with takt_get_goal_registration_proposal, conversationId and a fields path, using textOffset/maxBytes for strings and offset/limit for lists.',
+    });
   } catch (error) { return errorResult('Goal registration proposal list failed', error); }
+}
+
+export async function getTaktGoalRegistrationProposal(
+  input: GetGoalRegistrationProposalInput, deps: McpOperationDependencies,
+): Promise<CallToolResult> {
+  try {
+    const owner = await resolveOwnedRegistration(input, deps);
+    const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
+    if (pending === null) throw new Error(`No goal registration proposal is pending for ${input.cwd}`);
+    const identity = proposalIdentity(owner, pending);
+    if (input.path === undefined) return jsonResult({ proposal: { ...identity, summary: pending.summary } });
+    const value = selectGoalValue(pending, input.path);
+    if (Array.isArray(value)) {
+      const offset = input.offset ?? 0;
+      return pagedResult('items', value.slice(offset, offset + (input.limit ?? 50)), value.length, offset, undefined, { ...identity, path: input.path });
+    }
+    return jsonResult({ ...identity, path: input.path, ...goalValuePage(value, input) });
+  } catch (error) { return errorResult('Goal registration proposal read failed', error); }
+}
+
+function proposalIdentity(owner: RegistrationOwner, pending: PendingSummary) {
+  return { revision: pending.revision, conversationId: owner.conversationId, repositoryDirectory: pending.repositoryDirectory };
+}
+
+function proposalFields(summary: ManagerGoalSummary) {
+  const text = (path: string, value: string) => ({ path, totalBytes: Buffer.byteLength(value) });
+  const list = (path: string, values: readonly string[]) => ({
+    path, totalCount: values.length, totalBytes: values.reduce((total, value) => total + Buffer.byteLength(value), 0),
+  });
+  const optional = (path: string, value: string | undefined) => (value === undefined ? [] : [text(path, value)]);
+  const specifications = summary.specifications ?? {};
+  return [
+    text('summary.objective', summary.objective),
+    list('summary.outOfScope', summary.outOfScope),
+    list('summary.acceptanceCriteria', summary.acceptanceCriteria),
+    list('summary.constraints', summary.constraints),
+    ...optional('summary.specifications.gherkin', specifications.gherkin),
+    ...optional('summary.specifications.quint', specifications.quint),
+    ...optional('summary.specifications.alloy', specifications.alloy),
+    ...optional('summary.startBranch', summary.startBranch),
+    ...optional('summary.integrationBranch', summary.integrationBranch),
+  ];
 }
 
 // ワークスペースの会話は許可ルート外のリポジトリを含みうるため、cwd とは別に登録先を検証する。
@@ -50,6 +100,17 @@ async function readAllowedPendingProposal(owner: RegistrationOwner, allowedProje
     throw new Error(`The pending registration proposal targets a repository outside the allowed project root: ${pending.repositoryDirectory}`);
   }
   return pending;
+}
+
+async function resolveOwnedRegistration(
+  input: { cwd: string; conversationId: string }, deps: McpOperationDependencies,
+): Promise<RegistrationOwner> {
+  assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+  const owner = await resolveRegistrationOwner(input.cwd);
+  if (owner.conversationId !== input.conversationId) {
+    throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
+  }
+  return owner;
 }
 
 async function submitRegistrationCommand(
@@ -93,11 +154,7 @@ async function submitOwnedRegistrationCommand(
   signal: AbortSignal,
   buildCommand: (owner: RegistrationOwner) => Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
 ): Promise<OperationResult> {
-  assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-  const owner = await resolveRegistrationOwner(input.cwd);
-  if (owner.conversationId !== input.conversationId) {
-    throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
-  }
+  const owner = await resolveOwnedRegistration(input, deps);
   if (deps.allowedProjectRoot !== undefined) await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
   return submitRegistrationCommand(buildCommand(owner), owner.identity, signal);
 }

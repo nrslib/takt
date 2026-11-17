@@ -31,6 +31,7 @@ import {
   listGoalQuestionsInputSchema,
   answerGoalQuestionInputSchema,
   listGoalRegistrationProposalsInputSchema,
+  getGoalRegistrationProposalInputSchema,
   approveGoalRegistrationInputSchema,
   rejectGoalRegistrationInputSchema,
   listStandaloneInquiriesInputSchema,
@@ -65,7 +66,7 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
-import { approveTaktGoalRegistration, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
+import { approveTaktGoalRegistration, getTaktGoalRegistrationProposal, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -99,6 +100,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_list_goals',
   'takt_get_goal',
   'takt_list_goal_registration_proposals',
+  'takt_get_goal_registration_proposal',
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
@@ -425,7 +427,7 @@ export function createTaktMcpServer(
       'takt_approve_goal_registration',
       {
         title: 'Approve a goal registration',
-        description: 'Approve the pending goal registration proposal selected by revision and conversationId, with the same handling as choosing to register in the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Registers the goal and returns it. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals.',
+        description: 'Approve the pending goal registration proposal selected by revision and conversationId, with the same handling as choosing to register in the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Registers the goal and returns it. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals and their text with takt_get_goal_registration_proposal.',
         inputSchema: approveGoalRegistrationInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal registration approval failed', (deps) => approveTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
@@ -434,7 +436,7 @@ export function createTaktMcpServer(
       'takt_reject_goal_registration',
       {
         title: 'Reject a goal registration',
-        description: 'Dismiss the pending goal registration proposal selected by revision and conversationId without registering the goal, with the same handling as dismissing the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Returns the dismissed revision. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals.',
+        description: 'Dismiss the pending goal registration proposal selected by revision and conversationId without registering the goal, with the same handling as dismissing the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Returns the dismissed revision. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals and their text with takt_get_goal_registration_proposal.',
         inputSchema: rejectGoalRegistrationInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
@@ -490,10 +492,20 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[4],
     {
       title: 'List goal registration proposals',
-      description: 'Read the goal registration proposal currently pending registration approval in the manager conversation of this project, the same state as the TUI registration dialog. Returns at most one proposal with its revision, repositoryDirectory and summary, or an empty list when nothing is pending. Responses fit 64 KiB.',
+      description: 'List the goal registration proposal currently pending registration approval in the manager conversation of this project, the same state as the TUI registration dialog. Returns at most one proposal summary with its revision, conversationId, repositoryDirectory and fields (path, totalBytes and, for lists, totalCount), or an empty list when nothing is pending. Proposal text is not included; read it with takt_get_goal_registration_proposal before approving. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: listGoalRegistrationProposalsInputSchema,
     },
     (input) => operation(input.cwd, 'Goal registration proposal list failed', (deps) => listTaktGoalRegistrationProposals(projectInput(input, deps), deps), false),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[5],
+    {
+      title: 'Get a goal registration proposal',
+      description: 'Read the pending goal registration proposal owned by conversationId, as returned by takt_list_goal_registration_proposals. Select path from its fields list, for example summary.objective or summary.acceptanceCriteria.0, and use textOffset/maxBytes for forward UTF-8 text or offset/limit (1-50) for lists. Follow nextOffset for continuation. Without path, returns the whole proposal. Every response includes revision; approve with the revision you read. A conversationId that does not own the proposal returns an error. Responses fit 64 KiB, with explicit truncation.',
+      inputSchema: getGoalRegistrationProposalInputSchema,
+    },
+    (input) => operation(input.cwd, 'Goal registration proposal read failed', (deps) => getTaktGoalRegistrationProposal(projectInput(input, deps), deps), false),
   );
 
   if (options.toolSet === undefined || options.toolSet === 'all') {

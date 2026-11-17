@@ -980,6 +980,7 @@ describe('manager questions, answers and notifications through production bounda
       await reader.connect(a);
       expect((await reader.listTools()).tools.map(({ name }) => name).sort()).toEqual([
         'takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal', 'takt_list_goal_registration_proposals',
+        'takt_get_goal_registration_proposal',
       ].sort());
     } finally { try { await reader.close(); } finally { await server.close(); } }
   });

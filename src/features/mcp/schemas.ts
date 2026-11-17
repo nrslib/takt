@@ -146,8 +146,14 @@ export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposal
 const goalRegistrationRevisionSchema = z.number().int().safe().positive()
   .describe('Revision of the pending goal registration proposal returned by takt_list_goal_registration_proposals.');
 const goalRegistrationOwnerSchema = {
-  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_registration_proposals. The approval or rejection is refused unless it identifies the conversation that owns the pending proposal.'),
+  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_registration_proposals. The request is refused unless it identifies the conversation that owns the pending proposal.'),
 };
+export const getGoalRegistrationProposalInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  ...goalRegistrationOwnerSchema,
+  path: z.string().max(128).regex(/^summary\.(objective|startBranch|integrationBranch|(outOfScope|acceptanceCriteria|constraints)(\.\d+)?|specifications\.(gherkin|quint|alloy))$/).optional()
+    .describe('Proposal field path from the fields list of takt_list_goal_registration_proposals, for example summary.objective or summary.acceptanceCriteria.0. Array indices refer to saved order.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
+});
 export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
   revision: goalRegistrationRevisionSchema,
   ...goalRegistrationOwnerSchema,
@@ -157,6 +163,7 @@ export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentit
   ...goalRegistrationOwnerSchema,
 });
 export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
+export type GetGoalRegistrationProposalInput = z.infer<typeof getGoalRegistrationProposalInputSchema>;
 export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
 export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
