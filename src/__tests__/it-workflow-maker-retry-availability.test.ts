@@ -243,9 +243,9 @@ describe('Workflow Maker assistant retry command availability integration', () =
             const response = step.response;
             if (response !== undefined) {
               await vi.waitFor(() => {
-                expect(providerState.providerCall).toHaveBeenCalledTimes(response);
+                expect(providerState.providerCall, app.lastFrame()).toHaveBeenCalledTimes(response);
                 expect(app.lastFrame() ?? '').toContain(`Provider response ${response}`);
-              });
+              }, { timeout: 5_000 });
             }
           }
           return await settled;

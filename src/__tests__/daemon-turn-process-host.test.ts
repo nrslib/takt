@@ -137,6 +137,70 @@ it('forwards bounded state requests independently of turn completion and cancels
   child.exit.resolve({ code: 1, signal: null }); await f.host.close();
   expect(child.messages.some((message) => message.kind === 'daemon_reply')).toBe(false);
 });
+it('writes the next message to the child only after the previous send has completed', async () => {
+  const child = childFixture(); const f = fixture(); const input = turnStart();
+  const completions: Array<(error: Error | null) => void> = [];
+  child.child.send = vi.fn((message: unknown, callback: unknown) => {
+    child.messages.push(message as DaemonProcessMessage);
+    completions.push(callback as (error: Error | null) => void);
+    return true;
+  }) as typeof child.child.send;
+  f.host.start(input, new AbortController().signal);
+  child.receive({ kind: 'ready' });
+  f.host.interrupt(input.turn);
+  expect(child.messages.map((message) => message.kind)).toEqual(['initialize']);
+  completions[0]!(null);
+  expect(child.messages.map((message) => message.kind)).toEqual(['initialize', 'start_turn']);
+  completions[1]!(null);
+  expect(child.messages.map((message) => message.kind)).toEqual(['initialize', 'start_turn', 'interrupt']);
+  completions[2]!(null);
+  child.child.emit('message', { ...child.envelope(), kind: 'turn_finished', turn: input.turn, outcome: { kind: 'interrupted' } });
+  await f.posted.promise;
+  expect(f.post).toHaveBeenCalledExactlyOnceWith({ kind: 'turn_finished', turn: input.turn, outcome: { kind: 'interrupted' } });
+  child.exit.resolve({ code: 0, signal: null }); await f.host.close();
+});
+it('releases a daemon_reply waiting for its send callback when the child disconnects and terminates the child', async () => {
+  const child = childFixture(); const f = fixture(); const input = turnStart();
+  child.child.send = vi.fn((message: unknown, callback: unknown) => {
+    child.messages.push(message as DaemonProcessMessage);
+    child.child.emit('sent', message);
+    if ((message as DaemonProcessMessage).kind !== 'daemon_reply') (callback as (error: Error | null) => void)(null);
+    return true;
+  }) as typeof child.child.send;
+  f.request.mockResolvedValue({ kind: 'state_saved', version: 1, duplicate: false });
+  const written = deferred<void>();
+  child.child.on('sent', (message: DaemonProcessMessage) => { if (message.kind === 'daemon_reply') written.resolve(); });
+  f.host.start(input, new AbortController().signal); child.receive({ kind: 'ready' });
+  child.child.emit('message', { ...child.envelope(), kind: 'daemon_request', turn: input.turn, requestId: 'request',
+    request: { kind: 'save_conversation', change: { operationId: 'save', expectedVersion: 0, session: input.state.session } } });
+  await written.promise;
+  expect(f.onError).not.toHaveBeenCalled();
+
+  child.child.emit('disconnect');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Turn process IPC is disconnected' }));
+  if (process.platform !== 'win32') expect(child.child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  await vi.advanceTimersByTimeAsync(5_000); await child.terminated.promise;
+  child.exit.resolve({ code: 1, signal: null }); await f.posted.promise;
+  expect(f.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ turn: input.turn, outcome: expect.objectContaining({ kind: 'failed' }) }));
+  await f.host.close();
+});
+it('forwards and answers a state request larger than 1 MiB', async () => {
+  const child = childFixture(); const f = fixture(); const input = turnStart();
+  f.request.mockResolvedValue({ kind: 'state_saved', version: 1, duplicate: false });
+  const replied = deferred<void>();
+  child.child.on('sent', (message: DaemonProcessMessage) => { if (message.kind === 'daemon_reply') replied.resolve(); });
+  f.host.start(input, new AbortController().signal); child.receive({ kind: 'ready' });
+  const interruptedMessage = 'i'.repeat(2 * 1024 * 1024);
+  child.child.emit('message', { ...child.envelope(), kind: 'daemon_request', turn: input.turn, requestId: 'large',
+    request: { kind: 'save_conversation', change: { operationId: 'large', expectedVersion: 0, interruptedMessage } } });
+  await replied.promise;
+  expect(f.request.mock.calls[0]![1]).toMatchObject({ kind: 'save_conversation', change: { interruptedMessage } });
+  expect(child.messages.at(-1)).toMatchObject({ kind: 'daemon_reply', requestId: 'large', reply: { kind: 'state_saved', version: 1 } });
+  expect(child.terminate).not.toHaveBeenCalled();
+  child.child.emit('message', { ...child.envelope(), kind: 'turn_finished', turn: input.turn, outcome: { kind: 'completed', result: { kind: 'reply', message: 'done' } } });
+  child.exit.resolve({ code: 0, signal: null }); await f.host.close();
+});
 it('holds close until terminal notifications have reached the bus', async () => {
   const child = childFixture(); const f = fixture(); const input = turnStart();
   const notification = deferred<void>(); f.post.mockReturnValue(notification.promise);

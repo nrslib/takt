@@ -90,7 +90,7 @@ function buildManagerConversationPlan(
     const selection = resolve(repositoryDirectory) === resolve(cwd) ? workflowSelection
       : withRepositoryConfig(repositoryDirectory, () => resolveManagerWorkflowSelection(repositoryDirectory, resolveManagerConfig(repositoryDirectory), lang));
     for (const name of selection.missingWorkflows) {
-      warn(`Manager workflow not found: ${name}; ignored in ${repositoryDirectory}. Check manager.workflows / manager.default_workflow in config.yaml.`);
+      warn(`Manager workflow not found: ${name}; ignored in ${repositoryDirectory}. Check manager.workflows in config.yaml.`);
     }
   }
   const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
@@ -108,7 +108,7 @@ function buildManagerConversationPlan(
       systemPrompt: buildManagerSystemPrompt({
         lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
         formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(lang), repository: cwd,
-        defaultWorkflow: workflowSelection.defaultWorkflow ?? null, mainMerge: managerConfig.mainMerge,
+        mainMerge: managerConfig.mainMerge,
         concurrency: resolveConfigValue(cwd, 'concurrency'),
       }),
     },

@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import type { ReadableStream, WritableStream } from 'node:stream/web';
-import { client, methods, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
+import { client, methods, ndJsonStream, PROTOCOL_VERSION, type NewSessionResponse } from '@agentclientprotocol/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ExecuteTaskOptions } from '../features/tasks/execute/types.js';
 import { createTaktAcpAgentApp } from '../app/acp/index.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
@@ -132,24 +133,16 @@ describe('ACP package entrypoint', () => {
     }));
   });
 
-  it('should depend on the official ACP TypeScript SDK', () => {
-    const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
-      dependencies?: Record<string, string>;
-    };
-
-    expect(packageJson.dependencies).toEqual(expect.objectContaining({
-      '@agentclientprotocol/sdk': expect.any(String),
-    }));
-  });
-
   it('should force kill the source stdio child when graceful termination hangs', async () => {
     vi.useFakeTimers();
     const child = new EventEmitter() as ChildProcessWithoutNullStreams;
-    child.exitCode = null;
-    child.signalCode = null;
+    Object.defineProperties(child, {
+      exitCode: { value: null, writable: true },
+      signalCode: { value: null, writable: true },
+    });
     child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
       if (signal === 'SIGKILL') {
-        child.signalCode = 'SIGKILL';
+        Object.defineProperty(child, 'signalCode', { value: 'SIGKILL' });
         child.emit('exit', null, 'SIGKILL');
       }
       return true;
@@ -178,9 +171,7 @@ describe('ACP package entrypoint', () => {
     const debugLogPath = join(debugLogDir, 'debug.log');
     initDebugLogger({ enabled: true, logFile: debugLogPath }, '/repo');
     const updates: string[] = [];
-    const runWorkflowExecution = vi.fn(async (request: {
-      eventSink?: (event: unknown) => void | Promise<void>;
-    }) => {
+    const runWorkflowExecution = vi.fn(async (request: ExecuteTaskOptions) => {
       await request.eventSink?.({
         type: 'run_started',
         runDirectory: '/repo/.takt/runs/run-1',
@@ -204,6 +195,7 @@ describe('ACP package entrypoint', () => {
     });
     const app = createTaktAcpAgentApp({
       createConversationSession: vi.fn(() => ({
+        createTaskInstruction: vi.fn(),
         handleUserMessage: vi.fn().mockResolvedValue({
           kind: 'workflow_execution_requested',
           task: 'Implement ACP support',
@@ -235,7 +227,7 @@ describe('ACP package entrypoint', () => {
         const sessionResponse = await agent.request(methods.agent.session.new, {
           cwd: '/repo',
           mcpServers: [],
-        });
+        }) as NewSessionResponse;
         const promptResponse = await agent.request(methods.agent.session.prompt, {
           sessionId: sessionResponse.sessionId,
           prompt: [{ type: 'text', text: 'Implement ACP support' }],
@@ -268,6 +260,7 @@ describe('ACP package entrypoint', () => {
     const clientToAgent = new TransformStream<Uint8Array>();
     const agentToClient = new TransformStream<Uint8Array>();
     const createConversationSession = vi.fn(() => ({
+      createTaskInstruction: vi.fn(),
       handleUserMessage: vi.fn(),
     }));
     const app = createTaktAcpAgentApp({
@@ -284,7 +277,7 @@ describe('ACP package entrypoint', () => {
         return agent.request(methods.agent.session.new, {
           cwd: '/repo',
         });
-      });
+      }) as NewSessionResponse;
 
     expect(sessionResponse.sessionId).toEqual(expect.any(String));
     expect(createConversationSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -298,6 +291,7 @@ describe('ACP package entrypoint', () => {
     const agentToClient = new TransformStream<Uint8Array>();
     const app = createTaktAcpAgentApp({
       createConversationSession: vi.fn(() => ({
+        createTaskInstruction: vi.fn(),
         handleUserMessage: vi.fn(),
       })),
     });
@@ -369,7 +363,7 @@ describe('ACP package entrypoint', () => {
           defaultAction: 'enqueue',
           mcpServers: [],
         };
-        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest);
+        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest) as NewSessionResponse;
         return agent.request(methods.agent.session.prompt, {
           sessionId: sessionResponse.sessionId,
           prompt: [{ type: 'text', text: '/go include progress updates' }],
@@ -396,9 +390,7 @@ describe('ACP package entrypoint', () => {
     const clientToAgent = new TransformStream<Uint8Array>();
     const agentToClient = new TransformStream<Uint8Array>();
     const updates: string[] = [];
-    const runWorkflowExecution = vi.fn(async (request: {
-      eventSink?: (event: unknown) => void | Promise<void>;
-    }) => {
+    const runWorkflowExecution = vi.fn(async (request: ExecuteTaskOptions) => {
       await request.eventSink?.({
         type: 'progress',
         message: 'workflow running from root direct defaultAction',
@@ -448,7 +440,7 @@ describe('ACP package entrypoint', () => {
           cwd: '/repo',
           defaultAction: 'direct',
           mcpServers: [],
-        });
+        }) as NewSessionResponse;
         return agent.request(methods.agent.session.prompt, {
           sessionId: sessionResponse.sessionId,
           prompt: [{ type: 'text', text: '/go include progress updates' }],
@@ -516,7 +508,7 @@ describe('ACP package entrypoint', () => {
             prNumber: 789,
           },
         };
-        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest);
+        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest) as NewSessionResponse;
         return agent.request(methods.agent.session.prompt, {
           sessionId: sessionResponse.sessionId,
           prompt: [{ type: 'text', text: 'pending task にして' }],
@@ -741,6 +733,7 @@ steps:
       const updates: string[] = [];
       const app = createTaktAcpAgentApp({
         createConversationSession: vi.fn(() => ({
+          createTaskInstruction: vi.fn(),
           handleUserMessage: vi.fn().mockResolvedValue({
             kind: 'workflow_execution_requested',
             task: 'Run ACP smoke',
@@ -767,7 +760,7 @@ steps:
           const sessionResponse = await agent.request(methods.agent.session.new, {
             cwd: projectDir,
             mcpServers: [],
-          });
+          }) as NewSessionResponse;
           return agent.request(methods.agent.session.prompt, {
             sessionId: sessionResponse.sessionId,
             prompt: [{ type: 'text', text: 'Run ACP smoke' }],
@@ -811,7 +804,7 @@ steps:
             const sessionResponse = await agent.request(methods.agent.session.new, {
               cwd: projectDir,
               mcpServers: [],
-            });
+            }) as NewSessionResponse;
             const promptResponse = await agent.request(methods.agent.session.prompt, {
               sessionId: sessionResponse.sessionId,
               prompt: [{ type: 'text', text: 'Run ACP stdio smoke' }],

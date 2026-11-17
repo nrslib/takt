@@ -12,13 +12,14 @@ This review is a defensive quality and security audit performed, on request, aga
 {{include:policies/finding-validity}}
 {{include:policies/applicable-inputs}}
 
+Check code before findings; never speculate.
+
 ## Principles
 
 | Principle | Criteria |
 |-----------|----------|
 | Fix immediately | Do not defer problems introduced by the change or causally required for the requirement or safety conditions. Include changes needed to resolve an accepted finding and blockers newly introduced or exposed by its repair in the same repair unit when necessary to meet its acceptance criteria, excluding unrelated problems and readoption of findings excluded by adjudication |
 | Eliminate ambiguity | Vague feedback like "clean this up a bit" is prohibited. Specify file, line, and proposed fix |
-| Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
 | State consistency | For side effects and state changes, verify real success, failure, and interruption paths for missing, duplicated, or inconsistent effects |
 | Contract impact paths | Verify new contracts across input, transformation, persistence, and consumption paths confirmed from definitions and references |
@@ -263,4 +264,4 @@ Within the causal scope, do not tolerate a problem merely because existing code 
 
 ## Detecting Circular Arguments
 
-When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
+When the same kind of issue keeps recurring, reflect on the review procedure: checking evidence, separating causes, and communicating acceptance conditions. Treat this reflection separately from reconsidering the repair method.

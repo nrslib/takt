@@ -15,6 +15,8 @@ Use this plan and the current decision to determine current repair targets. Read
 - If the plan conflicts under the same requirements and design assumptions, do not edit; provide evidence and report "Fix plan requires revision"
 - If task-level requirements or design must change, do not edit; provide evidence and report "Task-level replanning required"
 
+Check the plan’s method comparison and selection reasons. Record the method actually applied, treatment of the shared cause, and current evidence in the repair report. Relate verification approaches from the old plan superseded by the latest instructions to the acceptance criteria retained.
+
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/repair-path-check}}
 

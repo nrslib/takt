@@ -8,6 +8,7 @@ import { filterSlashCommands } from '../features/interactive/slashCommandRegistr
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
@@ -55,7 +56,7 @@ describe('TUI confirmation to conversation routes through the real runner', () =
       void run.catch(() => undefined);
       await terminal.waitForPrompt(getLabel('interactive.modeSelection.prompt', 'en'), 0);
       await terminal.send('\x1B[B\x1B[B\r');
-      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
       const first = inkFrames.frames[0]!;
       expect(terminal.output()).not.toContain(getLabel('interactive.formalSpecPrompt', 'en'));
       await terminal.send('before command\r');
@@ -89,12 +90,12 @@ describe('TUI confirmation to conversation routes through the real runner', () =
         expect(capture.systemPrompts.at(-1)).toBe(capture.systemPrompts[0]);
         expect(capture.allowedTools.at(-1)).toEqual(['Read']);
       } else {
-        expect(capture.systemPrompts.at(-1)).toBe(buildInteractiveSystemPrompt('en', {
+        expect(capture.systemPrompts.at(-1)).toBe(withProgressNotesGuidance(buildInteractiveSystemPrompt('en', {
           grillMe: mode === 'grill-me', formalSpec,
           workflowContext: {
             name: 'menu-workflow', description: 'Menu workflow', workflowStructure: 'implement', stepPreviews: [], taskHistory: [],
           },
-        }));
+        }), 'en'));
       }
       expect(filterSlashCommands('/verify', continued.props.conversation.commandAvailability).length > 0).toBe(formalSpec);
       await terminal.send('/cancel\r');
@@ -135,7 +136,7 @@ describe('TUI confirmation to conversation routes through the real runner', () =
         await terminal.waitForPrompt(getLabel('interactive.formalSpecPrompt', 'en'), mark);
         await terminal.send('y\r');
       }
-      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+      await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
       const first = inkFrames.frames[0]!;
       await terminal.send('before command\r');
       await vi.waitFor(() => expect(first.submissions).toHaveLength(1));
@@ -220,7 +221,7 @@ describe('TUI /go action menu through the real selector', () => {
     void run.catch(() => undefined);
     await terminal.waitForPrompt(getLabel('interactive.modeSelection.prompt', 'en'), 0);
     await terminal.send('\r');
-    await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1));
+    await vi.waitFor(() => expect(inkFrames.frames).toHaveLength(1), { timeout: 10_000 });
     const first = inkFrames.frames[0]!;
     const instruction = await first.props.conversation.submit({
       text: '/go build the task', abortSignal: new AbortController().signal, onAssistantChunk: () => undefined,

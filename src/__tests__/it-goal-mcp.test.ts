@@ -1,6 +1,14 @@
 import * as goalPr from '../infra/goals/pull-request.js';
-import { saveManagerEvent } from '../infra/goals/events.js';
-vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: vi.fn() }));
+import * as autoRun from '../features/manager/autoRun.js';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+const actualManagerEvents = vi.hoisted(() => ({
+  saveManagerEvent: undefined as undefined | typeof import('../infra/goals/events.js')['saveManagerEvent'],
+}));
+vi.mock('../infra/goals/events.js', async (original) => {
+  const actual = await original<typeof import('../infra/goals/events.js')>();
+  actualManagerEvents.saveManagerEvent = actual.saveManagerEvent;
+  return { ...actual, saveManagerEvent: vi.fn() };
+});
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { execFileSync } from 'node:child_process';
@@ -39,6 +47,16 @@ import type { CreatePrOptions } from '../infra/git/types.js';
 import * as processRunner from '../shared/utils/spawn.js';
 import * as goalNotifications from '../features/manager/notifications.js';
 import { saveProjectConfig, loadProjectConfig } from '../infra/config/project/projectConfig.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import * as turnFailureNotification from '../features/manager/turnFailureNotification.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { createConversationRuntime } from '../features/manager/conversationRuntime.js';
+import { receiveInboxChange } from '../features/daemon/inbox.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { deferred } from './helpers/controlledDaemon.js';
+import type { TurnEvent } from '../core/daemon/events.js';
 
 const prStatus = vi.hoisted(() => ({ command: vi.fn() }));
 const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goal branch tip/i;
@@ -119,19 +137,17 @@ describe('manager goal task enqueue', () => {
     });
   }
 
-  it('lists only configured manager workflows with usage descriptions and the additional default', async () => {
+  it('lists only configured manager workflows with usage descriptions', async () => {
     saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: {
-      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'], defaultWorkflow: 'simple',
+      autoRun: false, workflows: [{ safe: 'Use for input validation' }, 'missing-manager-workflow'],
     } });
     await withEnqueue(async (client) => {
       const result = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content)).workflows).toEqual([
         { name: 'safe', description: 'fixture safe', usageDescription: 'Use for input validation' },
-        expect.objectContaining({ name: 'simple' }),
       ]);
       expect((await enqueue(client)).isError).toBeUndefined();
-      expect((await enqueue(client, { workflow: 'simple', workKey: 'default-work' })).isError).toBeUndefined();
     });
   });
 
@@ -767,10 +783,11 @@ describe('local goal integration and inspection through manager MCP', () => {
     expect(responses[0]).toEqual(responses[1]);
   });
 
-  function configure(mode: 'auto' | 'approve' | undefined, target?: string) {
+  function configure(mode: 'auto' | 'approve' | undefined, target?: string, preserveGoalWorktree = false) {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),
-      'manager:', '  workflows: all', '  auto_run: false', ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
+      'manager:', '  workflows: all', '  auto_run: false', `  preserve_goal_worktree: ${preserveGoalWorktree}`,
+      ...(mode === undefined ? [] : [`  main_merge: ${mode}`]),
     ].join('\n'));
   }
 
@@ -847,8 +864,39 @@ describe('local goal integration and inspection through manager MCP', () => {
       expectIncluded(task.sha, branch);
       expect(existsSync(clone.path)).toBe(false);
       expect(existsSync(clone.metadataPath)).toBe(false);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: task.taskName, status: 'completed' }),
+      ]));
       const saved = await new GoalStore(cwd).get(goalId);
       expect(saved.workLog).toHaveLength(previous.workLog.length + (included ? 0 : 1));
+    });
+  });
+
+  it.each([false, true])('[SCN-TL-CLEAN-P3] preserves the integrated worktree, run artifacts, metadata, and completed task with already included=%s', async (included) => {
+    const task = await saveResult({ 'result.txt': 'integrated work\n' });
+    const clone = saveTaskClone(task);
+    const runDir = join(clone.path, '.takt', 'runs', `run-${task.sha}`);
+    mkdirSync(join(runDir, 'reports'), { recursive: true });
+    mkdirSync(join(runDir, 'logs'), { recursive: true });
+    writeFileSync(join(runDir, 'reports', 'result.md'), 'preserved report\n');
+    writeFileSync(join(runDir, 'logs', 'execution.jsonl'), '{"event":"completed"}\n');
+    const before = cloneSnapshot(clone);
+    configure('approve', undefined, true);
+    if (included) git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged' });
+      expect(JSON.parse(firstTextContent(result.content))).not.toHaveProperty('cleanupWarning');
+      expectIncluded(task.sha, branch);
+      expect(cloneSnapshot(clone)).toEqual(before);
+      expect(readFileSync(join(runDir, 'reports', 'result.md'), 'utf8')).toBe('preserved report\n');
+      expect(readFileSync(join(runDir, 'logs', 'execution.jsonl'), 'utf8')).toBe('{"event":"completed"}\n');
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: task.taskName, status: 'completed' }),
+      ]));
     });
   });
 
@@ -2607,6 +2655,256 @@ describe('task integration status through MCP with real Git', () => {
 });
 
 
+describe('goal creation through the standalone MCP', () => {
+  let cwd: string;
+  const createGoalTool = 'takt_create_goal';
+  const createdId = '750e8400-e29b-41d4-a716-446655440000';
+  const objective = 'MCP から登録したゴールを扱えるようにする';
+  const purpose = '入力検証を追加する';
+
+  beforeEach(async () => {
+    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-create-')));
+    initializeRepository(cwd);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'provider: mock', 'branch_name_strategy: romaji', 'base_branch: release',
+      'manager:', '  workflows: all', '  auto_run: false',
+    ].join('\n'));
+    writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+      'name: safe', 'description: fixture safe', 'max_steps: 4', 'initial_step: work',
+      'steps:', '  - name: work', '    persona: coder', '    instruction: Implement input validation',
+      '    rules:', '      - condition: when(true)', '        next: COMPLETE', '',
+    ].join('\n'));
+    // registered イベントの配信を検証するため、この describe では実際の保存処理に戻す。
+    vi.mocked(saveManagerEvent).mockImplementation(actualManagerEvents.saveManagerEvent!);
+  }, 120_000);
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.mocked(saveManagerEvent).mockReset();
+    rmSync(cwd, { recursive: true, force: true });
+    await setImmediate();
+  });
+
+  function goalBranches(): string[] {
+    return git(cwd, ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${createdId.slice(0, 8)}`])
+      .split('\n').filter((ref) => ref.length > 0);
+  }
+
+  function createArguments(): Record<string, unknown> {
+    return {
+      cwd, id: createdId, objective, outOfScope: ['GitHub連携'],
+      acceptanceCriteria: ['登録したゴールが一覧に現れる'], constraints: ['TypeScript を使う'],
+    };
+  }
+
+  function createGoalThroughMcp(client: Client) {
+    return client.callTool({ name: createGoalTool, arguments: createArguments() });
+  }
+
+  it('registers the goal through the existing creation flow for MCP and manager readers', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      const result = await createGoalThroughMcp(client);
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content)).goal).toMatchObject({
+        id: createdId, status: 'created', executionStatus: 'active',
+        branch: expect.stringContaining(`goal-${createdId.slice(0, 8)}`), integrationBranch: 'release',
+      });
+
+      const goalJson = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8'));
+      expect(goalJson).toMatchObject({
+        id: createdId, objective, mode: 'local', status: 'created', executionStatus: 'active', integrationBranch: 'release',
+      });
+      expect(goalBranches()).toHaveLength(1);
+      expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([
+        { kind: 'registered', goalId: createdId, createdAt: expect.any(String) },
+      ]);
+
+      const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
+      expect(listed.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(listed.content)).goals.map((goal: { id: string }) => goal.id)).toContain(createdId);
+    });
+    await expect(new GoalStore(cwd).get(createdId)).resolves.toMatchObject({ id: createdId, status: 'created' });
+  });
+
+  it.each([undefined, 'all'] as const)('rejects a subdirectory without creating a goal with tool set %s', async (toolSet) => {
+    const subdirectory = join(cwd, 'sub');
+    mkdirSync(subdirectory);
+
+    await withServer(cwd, toolSet, async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: {
+        ...createArguments(), cwd: subdirectory,
+      } });
+
+      expect(result.isError).toBe(true);
+      expect(existsSync(join(cwd, '.takt', 'goals'))).toBe(false);
+      expect(existsSync(join(subdirectory, '.takt', 'goals'))).toBe(false);
+      expect(goalBranches()).toEqual([]);
+      expect(readManagerEvents(cwd)).toEqual([]);
+    });
+  });
+
+  it('rejects a duplicate id with the existing creation error and keeps the saved goal', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
+      const savedGoal = readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8');
+
+      const duplicate = await createGoalThroughMcp(client);
+
+      expect(duplicate.isError).toBe(true);
+      const reason = firstTextContent(duplicate.content);
+      expect(reason).toContain('Goal creation failed');
+      expect(reason).toContain(`Goal already exists: ${createdId}`);
+      expect(readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8')).toBe(savedGoal);
+      expect(goalBranches()).toHaveLength(1);
+      expect(readManagerEvents(cwd)).toHaveLength(1);
+    });
+  });
+
+  it('rejects schema-invalid input at the tool boundary without creating anything', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: {
+        cwd, id: 'not-a-uuid', objective: '不正な入力', outOfScope: [], acceptanceCriteria: [], constraints: [],
+      } });
+      expect(result.isError).toBe(true);
+      expect(firstTextContent(result.content)).toContain('Input validation error');
+      expect(existsSync(join(cwd, '.takt', 'goals'))).toBe(false);
+      expect(goalBranches()).toEqual([]);
+      expect(readManagerEvents(cwd)).toEqual([]);
+    });
+  });
+
+  it.each([undefined, 'all', 'manager', 'read-only'] as const)('exposes takt_create_goal only on the standalone tool set %s', async (toolSet) => {
+    await withServer(cwd, toolSet, async (client) => {
+      const tools = (await client.listTools()).tools;
+      const tool = tools.find(({ name }) => name === createGoalTool);
+      if (toolSet === undefined || toolSet === 'all') {
+        expect(tool).toBeDefined();
+        expect(tool!.description).toContain('64 KiB');
+        expect(tool!.description).toContain('truncation');
+      } else {
+        expect(tool).toBeUndefined();
+      }
+    });
+  });
+
+  it.each([undefined, 'all', 'manager', 'read-only'] as const)('exposes takt_answer_goal_question only on the standalone tool set %s', async (toolSet) => {
+    await withServer(cwd, toolSet, async (client) => {
+      const tools = (await client.listTools()).tools;
+      const tool = tools.find(({ name }) => name === 'takt_answer_goal_question');
+      if (toolSet === undefined || toolSet === 'all') {
+        expect(tool).toBeDefined();
+        expect(tool!.description).toContain('64 KiB');
+        expect(tool!.description).toContain('truncation');
+      } else {
+        expect(tool).toBeUndefined();
+      }
+    });
+  });
+
+  it('answers a pending question through the standalone MCP and records the answer and the manager event', async () => {
+    const questionId = '650e8400-e29b-41d4-a716-446655440001';
+    await withServer(cwd, 'all', async (client) => {
+      expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
+      await new GoalStore(cwd).update(createdId, (goal) => ({ ...goal, questions: [{
+        id: questionId, kind: 'question', recipient: 'human',
+        body: '出力形式はどれですか', status: 'pending', createdAt: '2026-11-01T00:00:00.000Z',
+      }] }));
+
+      const runSpy = vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+      let result;
+      try {
+        result = await client.callTool({ name: 'takt_answer_goal_question', arguments: {
+          cwd, goalId: createdId, questionId, answer: { text: 'CSV' },
+        } });
+        expect(runSpy).toHaveBeenCalledExactlyOnceWith(cwd);
+      } finally {
+        runSpy.mockRestore();
+      }
+
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+        questionId, answer: { text: 'CSV', source: 'mcp' },
+      });
+
+      const saved = JSON.parse(readFileSync(join(cwd, '.takt', 'goals', createdId, 'goal.json'), 'utf8'));
+      expect(saved.questions).toMatchObject([{
+        id: questionId, status: 'answered', answer: { text: 'CSV', source: 'mcp' },
+      }]);
+      const events = readManagerEvents(cwd).map(({ event }) => event);
+      expect(events).toHaveLength(2);
+      expect(events[1]).toMatchObject({
+        kind: 'answer', goalId: createdId, questionId, answer: { text: 'CSV', source: 'mcp' },
+      });
+    });
+  });
+
+  it('accepts a goal task enqueue against the created goal', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
+    });
+    await withServer(cwd, 'manager', async (client) => {
+      const enqueued = await client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
+        cwd, goalId: createdId, purpose, task: 'input-validation', workflow: 'safe',
+      } });
+      expect(enqueued.isError).toBeUndefined();
+      const saved = JSON.parse(firstTextContent(enqueued.content));
+      expect(saved.workflow).toBe('safe');
+      const pending = new TaskRunner(cwd).listPendingTaskItems();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({ goalId: createdId, name: saved.taskName });
+      expect(await new GoalStore(cwd).get(createdId)).toMatchObject({
+        workLog: [expect.objectContaining({ summary: `Submitted ${saved.taskName}: ${purpose}` })],
+      });
+    });
+  });
+
+  it('delivers the registered event to the manager conversation as a known goal', async () => {
+    await withServer(cwd, 'all', async (client) => {
+      expect((await createGoalThroughMcp(client)).isError).toBeUndefined();
+    });
+    const saved = readManagerEvents(cwd);
+    expect(saved).toHaveLength(1);
+    const processed: TurnEvent[] = [];
+    const failures = vi.spyOn(turnFailureNotification, 'notifyManagerTurnFailure');
+    vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'run-fixture', version: '1' }), servers: {}, dispose: async () => {} });
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+      return { call: async (prompt, options) => {
+        if (config.name !== 'manager') throw new Error(`Unexpected persona: ${config.name}`);
+        expect(options.cwd).toBe(cwd);
+        const payload = prompt.split('\n').map((line) => line.trim()).find((line) => line.startsWith('{"event":'));
+        if (payload === undefined) throw new Error('Manager event payload was not sent');
+        processed.push((JSON.parse(payload) as { event: TurnEvent }).event);
+        return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'Goal registration received', summary: null }, sessionId: 'run-manager' };
+      } };
+    });
+    const directory = getGlobalConfigDir();
+    const daemon = await conversationDaemon(directory, createConversationRuntime(directory));
+    const files = new DaemonPersistedFiles(directory);
+    const done = deferred<void>();
+    let applied = 0;
+    const outcomes: unknown[] = [];
+    const apply = daemon.conversations.apply.bind(daemon.conversations);
+    vi.spyOn(daemon.conversations, 'apply').mockImplementation(async (result) => {
+      outcomes.push(result.outcome);
+      await apply(result); if (++applied === saved.length) done.resolve();
+    });
+    try {
+      const inbox = await files.inboxDirectory(cwd);
+      for (const record of readManagerEvents(cwd)) await receiveInboxChange({ target: { targetId: cwd, generation: 'inbox',
+        conversationId: conversationId({ kind: 'repository', repositoryDirectory: cwd }), kind: 'inbox', directory: inbox },
+        path: record.filePath, generation: record.event.createdAt, value: record.event, removed: false }, files, daemon.conversations, daemon.dispatcher);
+      await done.promise; await daemon.dispatcher.drain();
+    } finally { await daemon.close(); }
+    expect(failures).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([expect.objectContaining({ kind: 'completed', result: { kind: 'reply', message: 'Goal registration received' } })]);
+    expect(processed).toEqual([expect.objectContaining({ kind: 'goal_registered', repositoryDirectory: cwd, goalId: createdId })]);
+    expect(readManagerEvents(cwd)).toEqual([]);
+    await expect(new GoalStore(cwd).get(createdId)).resolves.toMatchObject({ id: createdId });
+  });
+});
+
+
 async function withServer<T>(
   cwd: string,
   toolSet: TaktMcpToolSet | undefined,
@@ -2622,7 +2920,8 @@ async function withServer<T>(
     const names = (await client.listTools()).tools.map(({ name }) => name);
     expect(names).toContain('takt_list_goals');
     expect(names).toContain('takt_get_goal');
-    expect(names).not.toContain('takt_create_goal');
+    if (toolSet === undefined || toolSet === 'all') expect(names).toContain('takt_create_goal');
+    else expect(names).not.toContain('takt_create_goal');
     return await action(client);
   } finally {
     await client.close();

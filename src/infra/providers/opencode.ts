@@ -10,6 +10,7 @@ import {
   type OpenCodeCompactSessionOptions,
 } from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit, toOpenCodeMcpToolName } from '../opencode/allowedTools.js';
+import { resumeCompactedSession } from './compaction-recovery.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from '../opencode/runtime.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
@@ -84,6 +85,9 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 
   return {
     cwd: options.cwd,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
     callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
@@ -122,6 +126,9 @@ function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions)
   return {
     cwd: options.cwd,
     sessionId: options.sessionId,
+    ...(options.openCodeExternalDirectories === undefined
+      ? {}
+      : { externalDirectoryAllowlist: options.openCodeExternalDirectories }),
     ...(model === undefined ? {} : { model }),
     ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
     abortSignal: options.abortSignal,
@@ -206,19 +213,10 @@ export class OpenCodeProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    if (systemPrompt) {
-      return {
-        call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-          return callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options));
-        },
-      };
-    }
-
-    return {
-      call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callOpenCode(name, prompt, toOpenCodeOptions(options));
-      },
-    };
+    const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => systemPrompt
+      ? callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options))
+      : callOpenCode(name, prompt, toOpenCodeOptions(options));
+    return { call, recoverFromCompaction: resumeCompactedSession(name, call) };
   }
 
   setupIsolatedStructured(config: AgentSetup): ProviderAgent {

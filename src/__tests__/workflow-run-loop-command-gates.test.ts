@@ -1,4 +1,4 @@
-import type { PreparedInstruction } from '../core/workflow/instruction/prepared-instruction.js';
+import type { PreparedStepInstruction } from '../core/workflow/instruction/prepared-instruction.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -118,7 +118,7 @@ function makeDeps(
     runQualityGates,
     prepareInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => {
       const previous = state.lastOutput?.content;
-      return { text: previous ? `instruction ${stepIteration}\n${previous}` : `instruction ${stepIteration}`, injectedReports: [] };
+      return { text: previous ? `instruction ${stepIteration}\n${previous}` : `instruction ${stepIteration}`, injectedReports: [], reviewScope: { kind: 'not_a_git_repository' as const } };
     }),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
@@ -162,7 +162,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'review', content: 'approved' });
     const commitTransition = vi.fn(() => events.push('commit'));
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response,
       instruction,
       commitTransition,
@@ -519,7 +519,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'review', content: 'needs_fix' });
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response,
       instruction,
       commitTransition,
@@ -560,7 +560,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'review', content: 'selected' });
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response,
       instruction,
       commitTransition,
@@ -607,7 +607,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'review', content: 'needs_details' });
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response,
       instruction,
       commitTransition,
@@ -654,7 +654,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const response = makeResponse({ persona: 'review', content: 'needs_details' });
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response,
       instruction,
       commitTransition,
@@ -690,7 +690,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
       const response = makeResponse({ persona: 'review', status, content: status });
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({ response, instruction }));
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({ response, instruction }));
       const runQualityGates = vi.fn(async () => ({ ok: true as const }));
       const deps = makeDeps(state, step, runStep, runQualityGates);
 
@@ -715,7 +715,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
       const response = makeResponse({ persona: 'review', status, content: status });
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({ response, instruction }));
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({ response, instruction }));
       const runQualityGates = vi.fn(async () => ({ ok: true as const }));
       const deps = makeDeps(state, step, runStep, runQualityGates);
 
@@ -764,13 +764,13 @@ describe('WorkflowRunLoop command quality gates', () => {
       const commitTransition = vi.fn();
       const runStep = vi
         .fn()
-        .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+        .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
           instructions.push(instruction);
           state.stepOutputs.set(step.name, firstResponse);
           state.lastOutput = firstResponse;
           return { response: firstResponse, instruction, commitTransition };
         })
-        .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+        .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
           instructions.push(instruction);
           state.stepOutputs.set(step.name, secondResponse);
           state.lastOutput = secondResponse;
@@ -833,12 +833,12 @@ describe('WorkflowRunLoop command quality gates', () => {
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
     const runStep = vi
       .fn()
-      .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, firstResponse);
         state.lastOutput = firstResponse;
         return { response: firstResponse, instruction };
       })
-      .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      .mockImplementationOnce(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, secondResponse);
         state.lastOutput = secondResponse;
         return { response: secondResponse, instruction };
@@ -888,7 +888,7 @@ describe('WorkflowRunLoop command quality gates', () => {
         observabilityEnabled: false,
       });
       expect(failureResult.ok).toBe(false);
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         return { response, instruction };
@@ -933,7 +933,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -955,7 +955,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -984,7 +984,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -1017,7 +1017,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -1059,7 +1059,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
       const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         return { response, instruction };
@@ -1103,7 +1103,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
       const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         return { response, instruction };
@@ -1147,7 +1147,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       });
       const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
       const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+      const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         return { response, instruction };
@@ -1182,7 +1182,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -1223,7 +1223,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'implement', content: 'implementation done' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -1281,7 +1281,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction, commitTransition };
@@ -1326,7 +1326,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     });
     const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
     const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction };
@@ -1362,7 +1362,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
     const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
     const commitTransition = vi.fn();
-    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
+    const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => {
       state.stepOutputs.set(step.name, response);
       state.lastOutput = response;
       return { response, instruction, commitTransition };
@@ -1408,9 +1408,9 @@ function makeDeadlineCoordinator(
     () => '/worktree/.takt/runs/test/reports',
     () => undefined,
     () => 'workflow-step-deadline-test',
-    undefined,
+    () => undefined,
     () => 'deadline test task',
-    undefined,
+    () => ({ kind: 'not_a_git_repository' as const }),
     () => '/worktree/.takt/runs/test/failures',
     context.getAbortSignal,
     context.recordActivity,
@@ -1450,7 +1450,7 @@ function makeDeadlineDeps(
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
     resolveDoneTransition: vi.fn<LoopDeps['resolveDoneTransition']>(() => ({ nextStep: 'COMPLETE', commandGates: 'required' })),
     runLoopMonitorJudge: vi.fn(),
-    prepareInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => ({ text: `instruction ${stepIteration}`, injectedReports: [] })),
+    prepareInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => ({ text: `instruction ${stepIteration}`, injectedReports: [], reviewScope: { kind: 'not_a_git_repository' as const } })),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
     resolveStepProviderModel: vi.fn((_step: WorkflowStep, runtime?: import('../core/workflow/types.js').RuntimeStepResolution) => ({
@@ -1459,7 +1459,7 @@ function makeDeadlineDeps(
     })),
     resolveStepProviderModelBeforeAutoRouting: vi.fn<LoopDeps['resolveStepProviderModelBeforeAutoRouting']>(() => ({ provider: 'claude', model: 'test-model' })),
     resolveRuntimeForStep: vi.fn(),
-    runStep: vi.fn<LoopDeps['runStep']>(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
+    runStep: vi.fn<LoopDeps['runStep']>(async (_step: WorkflowStep, { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } }) => ({
       response: makeResponse(),
       instruction,
     })),
@@ -1547,7 +1547,7 @@ describe('WorkflowRunLoop step deadline', () => {
     let attempt = 0;
     deps.runStep = vi.fn<LoopDeps['runStep']>(async (
       currentStep: WorkflowStep,
-      { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] },
+      { text: instruction }: PreparedStepInstruction = { text: '', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' } },
       runtime?: Parameters<OptionsBuilder['buildAgentOptions']>[1],
     ) => {
       const signal = context.getAbortSignal();

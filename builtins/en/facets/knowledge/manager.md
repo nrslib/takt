@@ -14,7 +14,7 @@ Pausing holds execution and subsequent events; aborting is terminal. Resuming al
 
 Task termination, human answers, and saved PR merges, closures, or conflicts with the integration target arrive as events. Periodic patrols inspect eligible active goals together, including awaiting_merge goals with a linked merge task that is pending or running. Goals only waiting for a human merge are excluded from patrols and handled by the PR watcher.
 
-The standard PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, conflict resolution, review, CodeRabbit feedback, and waiting for CI. Review and CI waiting in a custom merge.workflow follow its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
+The default PR finishing workflows (merge-prepare / merge-review-fix-simple) handle integration of the target branch, CodeRabbit feedback, and waiting for CI. A clean sync skips the full review; after AI conflict resolution, both initial synchronization and resynchronization go through review and fixes before push. In a custom merge.prepare_workflow or merge.workflow, processing including review and CI waiting follows its defined steps. Tasks can be submitted while CI is running. Their results distinguish prepared, merged, and unresolved and include the PR state.
 
 manager.main_merge is resolved from project configuration. Both approve and auto create PRs. approve finishes preparation with until: prepare and waits for a person to merge. auto treats the person's setting as a continuing instruction to integrate and uses until: merge to finish preparation and merge.
 
@@ -47,7 +47,7 @@ Choose how to correct or check a saved completion record according to the approv
 - If the approved SHA is already included in the target and is still the current goal branch tip, correct the evidence with takt_complete_goal using the same expectedSha and corrected summary. Do not use takt_reopen_goal for an included SHA.
 - If the approved SHA is already included in the target and no evidence correction is needed, use takt_check_goal_completion.
 
-takt_merge_goal_pr accepts cwd, goalId, prNumber matching the saved PR, and until. It queues a merge task as pending and returns its name. until: prepare uses merge-prepare; until: merge uses merge.workflow (default: merge-review-fix-simple). It checks the saved PR, awaiting_merge, and pause/abort state.
+takt_merge_goal_pr accepts cwd, goalId, prNumber matching the saved PR, and until. It queues a merge task as pending and returns its name. until: prepare uses merge.prepare_workflow (default: merge-prepare); until: merge uses merge.workflow (default: merge-review-fix-simple). It checks the saved PR, awaiting_merge, and pause/abort state.
 
 Merge tasks push directly to the PR branch. The local goal branch is fast-forwarded when it is an ancestor; diverged branches and checked-out working copies retain their contents, and this is recorded in the result. When a workflow ends with COMPLETE and the PR is still at the preparation stage, the result arrives as successful with prepared.
 
@@ -61,7 +61,7 @@ Saved information includes objective, outOfScope, acceptanceCriteria, constraint
 
 People answer through Ctrl+R in the TUI or the inquiry thread in Slack, and the answer's source and type are saved. Historical approval records are available for reference and withdrawal. Completion and abortion close inquiries; pausing retains them.
 
-The TUI handles consultation, proposal approval, answers, state operations, and display. Proposals are navigated with the arrow keys and Enter; returning to the conversation or entering revisions withdraws the proposal. Ctrl+R opens inquiries and Ctrl+G opens active goals. Both remain available during processing. Tab confirms / completions. /make-goal and /verify are conversation commands; other / input is treated as a message. Responses containing summary display a registration proposal.
+The TUI handles consultation, proposal approval, answers, state operations, and display. Proposals are navigated with the arrow keys and Enter; returning to the conversation or entering revisions withdraws the proposal. Ctrl+R opens inquiries and Ctrl+G opens active goals. Both remain available during processing. Tab confirms / completions. /make-goal and /verify are conversation commands; other / input is treated as a message. Ordinary consultation does not automatically generate proposals; once agreement is reached, manager suggests /make-goal. Only the summary returned for an explicit /make-goal execution becomes a proposal awaiting approval.
 
 manager.notifications toggles question / awaiting_merge / completed / progress / blocked / custom by kind. Answer screens are available from saved questions. The normal screen shows the beginning of notifications received since startup; full text and past notifications are available from goal records. Notification delivery results are saved in logs.
 

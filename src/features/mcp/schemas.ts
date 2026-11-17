@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
@@ -93,6 +93,7 @@ export const getWorkflowInputSchema = goalIdentityInputSchema.extend({
 });
 export type GetWorkflowInput = z.infer<typeof getWorkflowInputSchema>;
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
+export const createGoalInputSchema = GoalCreateInputSchema;
 export const abortGoalInputSchema = goalWriteInputSchema.extend({
   reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. This tool does not save the reason; use takt_record_goal_work_log to record it.'),
 });
@@ -133,6 +134,10 @@ export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit:
 export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
+export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
+});
+export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();
@@ -147,7 +152,7 @@ export const withdrawStandaloneInquiryInputSchema = standaloneInquiryIdentityInp
 export type ListStandaloneInquiriesInput = z.infer<typeof listStandaloneInquiriesInputSchema>;
 export type WithdrawStandaloneInquiryInput = z.infer<typeof withdrawStandaloneInquiryInputSchema>;
 export const notifyGoalInputSchema = goalWriteInputSchema.extend({
-  ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
+  ...GoalNotificationInputSchema.omit({ source: true }).shape, kind: z.enum(['blocked', 'custom']),
 });
 export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
 export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;

@@ -456,6 +456,11 @@ function extractCopilotEventData(root: Record<string, unknown>): Record<string, 
   return toRecord(root.data) ?? root;
 }
 
+/** Text before a tool call is working text (progress notes, commentary); the answer follows the last call. */
+function startsToolCall(type: unknown): boolean {
+  return type === 'tool.execution_start' || type === 'tool.user_requested';
+}
+
 function isToolExecutionEvent(value: unknown): boolean {
   const type = toRecord(value)?.type;
   return type === 'tool.execution_start' || type === 'tool.execution_complete';
@@ -475,7 +480,9 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
   }
 
   const parsed = collectCopilotOutput(lines);
-  if (parsed.content.length === 0) {
+  // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+  // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+  if (parsed.content.length === 0 && parsed.events.length === 0) {
     return {
       error: `Failed to extract assistant content from copilot JSONL output: ${trimDetail(trimmed, '<empty>')}`,
     };
@@ -485,7 +492,8 @@ function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: stri
 
 function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
   const events: StreamEvent[] = [];
-  let content: string | undefined;
+  let terminalResult: string | undefined;
+  let sawAssistantText = false;
   let assistantMessageContent: string | undefined;
   let assistantDeltaContent = '';
   let sessionId: string | undefined;
@@ -503,7 +511,9 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     ]) ?? sessionId;
     const type = typeof root.type === 'string' ? root.type : undefined;
 
-    if (type === 'tool.execution_start' || type === 'tool.user_requested') {
+    if (startsToolCall(type)) {
+      assistantMessageContent = undefined;
+      assistantDeltaContent = '';
       const id = firstNonEmptyString([data.toolCallId, data.tool_call_id, data.id]);
       const tool = firstNonEmptyString([data.mcpToolName, data.toolName, data.tool_name]);
       if (id !== undefined && tool !== undefined) {
@@ -542,6 +552,7 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'assistant.message') {
       const message = extractStructuredText(data.content ?? data.deltaContent);
       if (message !== undefined && message.length > 0) {
+        sawAssistantText = true;
         assistantMessageContent = message;
       }
       continue;
@@ -550,6 +561,7 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'assistant.message_delta') {
       const message = extractStructuredText(data.content ?? data.deltaContent);
       if (message !== undefined && message.length > 0) {
+        sawAssistantText = true;
         assistantDeltaContent += message;
       }
       continue;
@@ -558,12 +570,17 @@ function collectCopilotOutput(lines: unknown[]): CopilotParsedOutput {
     if (type === 'result' || type === 'session.result') {
       const result = extractStructuredText(data.result ?? data.content ?? root.result);
       if (result !== undefined) {
-        content = result;
+        terminalResult = result;
       }
     }
   }
 
-  return { content: content ?? assistantMessageContent ?? assistantDeltaContent, sessionId, events };
+  // The terminal result is not known to leave out the working text before tool calls, so it is the
+  // answer only when the output carries no assistant text; otherwise the text after the last tool call is.
+  const content = sawAssistantText
+    ? assistantMessageContent ?? assistantDeltaContent
+    : terminalResult ?? '';
+  return { content, sessionId, events };
 }
 
 interface CopilotCallOutcome {
@@ -617,6 +634,8 @@ async function executeCopilotCall(
       const parsed = collectCopilotOutput([value]);
       emitStructuredEvents(options.onStream, parsed.events);
       const root = toRecord(value);
+      // Matches the final content, which starts over at each tool call, so it is not emitted twice.
+      if (startsToolCall(root?.type)) streamedContent = '';
       if (root?.type === 'assistant.message_delta') {
         emitText(streamedContent + parsed.content);
       } else if (root?.type === 'assistant.message') {

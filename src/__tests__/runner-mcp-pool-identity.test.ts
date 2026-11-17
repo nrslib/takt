@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ResolvedMcpServers, ProviderMcpAdapter, PreparedProviderMcp } from '../infra/providers/mcp/index.js';
 import type { AgentResponse } from '../core/models/index.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 
 /**
  * Contracts covered (see fix-plan.md U1):
@@ -123,6 +124,39 @@ const mcpServers = {
 };
 
 describe('Runner MCP pool identity propagation (MCP-POOL-IDENTITY-MISSING)', () => {
+  it('should scope reused tool IDs to each normal and custom provider call without changing event data', async () => {
+    const { runAgent, AgentRunner } = await import('../agents/runner.js');
+    const { callOpenCodeCustom } = await import('../infra/opencode/client.js');
+    const received: StreamEvent[] = [];
+    const start: StreamEvent = { type: 'tool_use', data: { id: 'item_0', tool: 'Read', input: { file_path: 'file.txt' } } };
+    const finish: StreamEvent = { type: 'tool_result', data: { id: 'item_0', content: 'done', isError: false } };
+    const emit = (onStream: ((event: StreamEvent) => void) | undefined) => {
+      onStream?.(start);
+      onStream?.(finish);
+      return Promise.resolve(fakeAgentResponse);
+    };
+    vi.mocked(callOpenCodeCustom)
+      .mockImplementationOnce((_name, _prompt, _system, options) => emit(options.onStream))
+      .mockImplementationOnce((_name, _prompt, _system, options) => emit(options.onStream));
+    const options = {
+      cwd: '/tmp',
+      resolvedExecution: { provider: 'opencode' as const, model: 'sonnet', providerOptions: {}, permissionMode: 'readonly' as const },
+      onStream: (event: StreamEvent) => received.push(event),
+    };
+    await runAgent(undefined, 'task', options);
+    await new AgentRunner().runCustom({ name: 'custom', prompt: 'system' }, 'task', options);
+    expect(received).toHaveLength(4);
+    for (const index of [0, 2]) {
+      expect(received[index]!.toolActivity?.callId).toEqual(expect.any(String));
+      expect(received[index]!.toolActivity?.callId).toBe(received[index + 1]!.toolActivity?.callId);
+      expect(received[index]!.data).toEqual(start.data);
+      expect(received[index + 1]!.data).toEqual(finish.data);
+    }
+    expect(received[0]!.toolActivity?.callId).not.toBe(received[2]!.toolActivity?.callId);
+    expect(start).not.toHaveProperty('toolActivity');
+    expect(finish).not.toHaveProperty('toolActivity');
+  });
+
   it('Given RunAgentOptions.mcpServerIdentity, When runAgent executes opencode, Then ResolvedMcpServers.identity equals the provided identity', async () => {
     const { runAgent } = await import('../agents/runner.js');
     await runAgent(undefined, 'task', {

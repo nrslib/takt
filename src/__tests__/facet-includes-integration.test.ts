@@ -10,6 +10,12 @@
  * - project partial overrides builtin partial
  */
 
+import assert from 'node:assert/strict';
+import type { ResolvedFacetContent, WorkflowConfig } from '../core/models/types.js';
+import { isNormalOrTeamLeaderWorkflowStep } from '../core/models/workflow-types.js';
+import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../infra/config/loaders/workflowLoader.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { makeInstructionContext, makeStep } from './test-helpers.js';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdirSync,
@@ -70,6 +76,179 @@ describe('facet include expansion', () => {
       expect(assistant).not.toContain(partial);
     }
     expect(grill).not.toContain('{{include:');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: review resolves its shared review procedure partial once', (lang) => {
+    const reviewCommon = resolveRefToContent(
+      fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/policies/review-common.md`, import.meta.url)),
+      undefined, tempDir, 'policies', { projectDir: tempDir, lang });
+    expect(reviewCommon).toBeDefined();
+    const review = resolveRefToContent('review', undefined, tempDir, 'policies', { projectDir: tempDir, lang });
+    expect(review).toBeDefined();
+    expect(review?.split(reviewCommon!.trim())).toHaveLength(2);
+    expect(review).not.toContain('{{include:');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: keeps included policies in the full snapshot and matches direct array injection', (lang) => {
+    const policiesDir = join(tempDir, '.takt', 'facets', 'policies');
+    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'policies');
+    mkdirSync(policiesDir, { recursive: true });
+    mkdirSync(partialsDir, { recursive: true });
+    writeFileSync(join(partialsDir, 'shared.md'), 'SHARED-RULE');
+    writeFileSync(join(policiesDir, 'first.md'), 'FIRST-RULE\n{{include:policies/shared}}\n{{include:policies/shared}}\n' + 'a'.repeat(2_100));
+    writeFileSync(join(policiesDir, 'last.md'), 'LAST-RULE');
+    const policyContents = ['first', 'last'].map(name => ({
+      content: resolveRefToContent(name, undefined, tempDir, 'policies', { projectDir: tempDir, lang })!,
+    }));
+    const combined = policyContents.map(entry => entry.content).join('\n\n---\n\n');
+    const policyPath = join(tempDir, 'policies.md');
+    writeFileSync(policyPath, combined);
+    const step = makeStep({ policyContents });
+    const instructionContext = makeInstructionContext({ language: lang, policySourcePath: policyPath });
+    const direct = new InstructionBuilder(step, instructionContext).build();
+    const runtime = new InstructionBuilder(step, {
+      ...instructionContext,
+      policyContents: [{ content: readFileSync(policyPath, 'utf8'), sourcePath: policyPath }],
+    }).build();
+
+    expect(runtime).toBe(direct);
+    expect(runtime).toContain(policyPath);
+    expect(readFileSync(policyPath, 'utf8')).toBe(combined);
+    expect(combined).not.toContain('{{include:');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: real repair workflows link resolved policy snapshots and the final-gate output contract', (lang) => {
+    mkdirSync(join(tempDir, '.takt'), { recursive: true });
+    writeFileSync(join(tempDir, '.takt/config.yaml'), `language: ${lang}\n`);
+    const loadBuiltin = (name: string) => {
+      const workflow = loadWorkflowByIdentifier(
+        fileURLToPath(new URL(`../../builtins/${lang}/workflows/${name}.yaml`, import.meta.url)), tempDir);
+      assert.ok(workflow, name);
+      return workflow;
+    };
+    const childOf = (parent: WorkflowConfig, name: string) => {
+      const call = parent.steps.find(step => step.name === name);
+      assert.ok(call?.kind === 'workflow_call', name);
+      const child = resolveWorkflowCallTarget(parent, call, tempDir, tempDir);
+      assert.ok(child, name);
+      return child;
+    };
+    const agentOf = (workflow: WorkflowConfig, name: string) => {
+      const step = workflow.steps.find(step => step.name === name);
+      assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step), name);
+      return step;
+    };
+    const adjudicationFixedPolicies = ['process-deviation', 'review-adjudication', 'repair-strategy', 'architecture', 'takt', 'contract-change'];
+    const adjudicationPolicies = [...adjudicationFixedPolicies, 'review'];
+    const stages: { step: ReturnType<typeof agentOf>; expectedPolicies: string[]; label: string }[] = [];
+    for (const entry of ['peer-review', 'review-fix-simple']) {
+      let peer = loadBuiltin(entry);
+      if (entry === 'review-fix-simple') peer = childOf(peer, 'reviewers');
+      const remediation = childOf(peer, 'remediation');
+      const defaults = loadBuiltin('review-remediation');
+      const planningPolicies = ['process-deviation', 'repair-strategy', 'contract-change', 'coding', 'testing', 'review',
+        ...(entry === 'review-fix-simple' ? ['architecture'] : [])];
+      const fixPolicies = ['repair-strategy', 'contract-change', 'coding', 'testing',
+        ...(entry === 'review-fix-simple' ? ['ai-antipattern'] : [])];
+      const entryStages = [
+        { step: agentOf(peer, 'review-adjudication'), expectedPolicies: adjudicationPolicies },
+        { step: agentOf(peer, 'final-gate'), expectedPolicies: ['process-deviation', 'repair-strategy', 'contract-change', 'coding', 'testing', 'review', 'architecture',
+          ...(entry === 'peer-review' ? ['takt'] : [])] },
+        ...['fix-plan', 'fix-replan', 'verification-replan', 'fix-verifier'].map(name => ({
+          step: agentOf(remediation, name), expectedPolicies: planningPolicies,
+        })),
+        ...['fix', 'fix-retry'].map(name => ({ step: agentOf(remediation, name), expectedPolicies: fixPolicies })),
+        { step: agentOf(defaults, 'review-adjudication'), expectedPolicies: [...adjudicationFixedPolicies, 'coding', 'testing', 'review'] },
+      ];
+      assert.equal(entryStages.length, 9);
+      stages.push(...entryStages.map(stage => ({ ...stage,
+        label: `${lang}/${stage.step === entryStages.at(-1)?.step ? 'review-remediation' : entry}/${stage.step.name}`,
+      })));
+    }
+    // These parents call review-remediation; the peer-review paths above call development-remediation variants without adjudication.
+    for (const { entry, planPolicies } of [
+      { entry: 'simple', planPolicies: ['review', 'coding', 'testing', 'ai-antipattern'] },
+      { entry: 'simple-core', planPolicies: ['review', 'coding', 'testing'] },
+      { entry: 'simple-mini', planPolicies: ['coding', 'testing', 'review'] },
+      { entry: 'review-fix-backend', planPolicies: ['coding', 'testing', 'review'] },
+      { entry: 'review-fix-backend-cqrs', planPolicies: ['coding', 'testing', 'review', 'cqrs-es'] },
+      { entry: 'review-fix-frontend', planPolicies: ['coding', 'testing', 'design-fidelity', 'review'] },
+      { entry: 'review-fix-dual', planPolicies: ['coding', 'testing', 'design-fidelity', 'screen-api', 'review'] },
+      { entry: 'review-fix-dual-cqrs', planPolicies: ['coding', 'testing', 'design-fidelity', 'screen-api', 'review', 'cqrs-es'] },
+    ]) {
+      const remediation = childOf(loadBuiltin(entry), 'remediation');
+      stages.push({ step: agentOf(remediation, 'review-adjudication'),
+        expectedPolicies: [...adjudicationFixedPolicies, ...planPolicies],
+        label: `${lang}/${entry}/remediation/review-adjudication`,
+      });
+    }
+    assert.equal(stages.length, 26);
+    const repairPolicy = resolveRefToContent('repair-strategy', undefined, tempDir, 'policies', { projectDir: tempDir, lang });
+    const finalGateFormat = resolveRefToContent('supervisor-validation', undefined, tempDir, 'output-contracts', { projectDir: tempDir, lang });
+    assert.ok(repairPolicy);
+    assert.ok(finalGateFormat);
+    const reviewCommon = resolveRefToContent(
+      fileURLToPath(new URL(`../../builtins/${lang}/facets/partials/policies/review-common.md`, import.meta.url)),
+      undefined, tempDir, 'policies', { projectDir: tempDir, lang });
+    assert.ok(reviewCommon);
+    for (const { step, expectedPolicies, label } of stages) {
+      const expectedSources = expectedPolicies.map(name => ({
+        name, sourcePath: fileURLToPath(new URL(`../../builtins/${lang}/facets/policies/${name}.md`, import.meta.url)),
+      }));
+      const expectedSourcePaths = expectedSources.map(policy => policy.sourcePath).sort();
+      const assertExactPolicies = (policies: readonly ResolvedFacetContent[] | undefined): readonly ResolvedFacetContent[] => {
+        assert.ok(policies, `${label}: policyContents must exist`);
+        assert.deepEqual(policies.map(policy => policy.sourcePath).sort(), expectedSourcePaths,
+          `${label}: policy source paths must match exactly, including multiplicity`);
+        return policies;
+      };
+      const policyContents = assertExactPolicies(step.policyContents);
+      assertExactPolicies([...policyContents].reverse());
+      assert.throws(() => assertExactPolicies(undefined), { code: 'ERR_ASSERTION', message: `${label}: policyContents must exist` });
+      const extraPolicy = { content: repairPolicy, sourcePath: join(tempDir, 'policies', 'unexpected.md') };
+      for (const extras of [[extraPolicy], [extraPolicy, extraPolicy]]) {
+        assert.throws(() => assertExactPolicies([...policyContents, ...extras]), { code: 'ERR_ASSERTION' },
+          `${label}: unexpected policies must be rejected`);
+      }
+      for (const { name, sourcePath } of expectedSources) {
+        const missing = policyContents.filter(policy => policy.sourcePath !== sourcePath);
+        assert.throws(() => assertExactPolicies(missing), { code: 'ERR_ASSERTION' }, `${label}: missing ${name}`);
+        const duplicate = policyContents.find(policy => policy.sourcePath === sourcePath);
+        assert.ok(duplicate);
+        assert.throws(() => assertExactPolicies([...policyContents, duplicate]), { code: 'ERR_ASSERTION' },
+          `${label}: duplicate ${name}`);
+        const wrongSource = policyContents.map(policy => policy.sourcePath === sourcePath
+          ? { ...policy, sourcePath: join(tempDir, 'policies', `${name}.md`) } : policy);
+        assert.throws(() => assertExactPolicies(wrongSource), { code: 'ERR_ASSERTION' }, `${label}: wrong source for ${name}`);
+      }
+      expect(policyContents.filter(({ content }) => content === repairPolicy)).toHaveLength(1);
+      const combined = policyContents.map(({ content }) => content).join('\n\n---\n\n');
+      expect(combined).not.toContain('{{include:');
+      expect(step.instruction).not.toContain('{{include:');
+      if (expectedPolicies.includes('review')) {
+        expect(combined.split(reviewCommon.trim()), `${label}: review-common must appear once`).toHaveLength(2);
+      }
+      const policyPath = join(tempDir, 'policies.md');
+      writeFileSync(policyPath, combined);
+      const snapshot = readFileSync(policyPath, 'utf8');
+      expect(snapshot).toBe(combined);
+      expect(snapshot).toContain(repairPolicy);
+      const instructionContext = makeInstructionContext({
+        cwd: tempDir, projectCwd: tempDir, language: lang, policySourcePath: policyPath,
+      });
+      const direct = new InstructionBuilder(step, instructionContext).build();
+      const runtime = new InstructionBuilder(step, { ...instructionContext,
+        policyContents: [{ content: snapshot, sourcePath: policyPath }],
+      }).build();
+      expect(runtime).toBe(direct);
+      expect(runtime).toContain(policyPath);
+      if (step.name === 'final-gate') {
+        const report = step.outputContracts?.find(contract => 'name' in contract && contract.name === 'review-resolution.md');
+        assert.ok(report && 'format' in report);
+        expect(report.format).toBe(finalGateFormat);
+        expect(runtime).toContain(finalGateFormat);
+      }
+    }
   });
 
   it.each(['ja', 'en'] as const)('%s: manager excludes shared interview partials and ignores their project overrides', (lang) => {

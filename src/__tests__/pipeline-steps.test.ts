@@ -123,6 +123,24 @@ describe('runWorkflow', () => {
     }
   });
 
+  it('does not start a terminal spinner for a pipeline running on a TTY', async () => {
+    const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    try {
+      const result = await runWorkflow('/project', 'default', 'Pipeline task', '/clone', {}, {
+        execCwd: '/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
+      });
+
+      expect(result).toMatchObject({ success: true });
+      expect(mockExecuteTaskWithResult).toHaveBeenCalledOnce();
+      expect(mockStatusStart).not.toHaveBeenCalled();
+      expect(mockStatusStop).not.toHaveBeenCalled();
+    } finally {
+      if (ttyDescriptor) Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
   it.each([false, true])('retains the executed workflow Caccia decision in its result (%s)', async (workflowHasCaccia) => {
     mockExecuteTaskWithResult.mockResolvedValue({ success: true, workflowHasCaccia });
     const result = await runWorkflow('/project', 'default', 'Pipeline task', '/clone', {}, {

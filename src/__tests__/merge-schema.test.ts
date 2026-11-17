@@ -11,25 +11,29 @@ describe('Merge configuration schema', () => {
     expect(denormalizeMergeConfig(undefined)).toBeUndefined();
     expect(denormalizeMergeConfig({ method: 'squash', concurrency: 2, autoStart: false, includeDraft: true,
       includeForks: false, threatCheckMaxDiffBytes: 100,
-      workflow: 'merge-review', where: { author: 'alice' } })).toEqual({
+      workflow: 'merge-review', prepareWorkflow: 'custom-prepare', where: { author: 'alice' } })).toEqual({
       method: 'squash', concurrency: 2, auto_start: false, include_draft: true,
       include_forks: false, threat_check_max_diff_bytes: 100,
-      workflow: 'merge-review', where: { author: 'alice' },
+      workflow: 'merge-review', prepare_workflow: 'custom-prepare', where: { author: 'alice' },
     });
     expect(denormalizeMergeConfig({})).toEqual({});
   });
   it.each([['project', ProjectConfigSchema], ['global', GlobalConfigSchema]] as const)(
     '%s設定でmergeの選定条件・workflow・方式・独立した自動起動を受理する', (_scope, schema) => {
       const merge = {
-        workflow: 'merge-review', method: 'rebase', concurrency: 3, auto_start: true, include_draft: true,
+        workflow: 'merge-review', prepare_workflow: 'custom-prepare', method: 'rebase', concurrency: 3, auto_start: true, include_draft: true,
         where: { author: 'author', labels: ['ready', 'automation'], base_branch: 'main',
           head_branch: 'takt/*', managed_by_takt: true, same_repository: true },
       };
       expect(schema.parse({ merge, caccia: { enabled: false } })).toMatchObject({ merge: {
-        workflow: merge.workflow, method: merge.method, concurrency: 3, autoStart: true, includeDraft: true, where: merge.where,
+        workflow: merge.workflow, prepareWorkflow: merge.prepare_workflow, method: merge.method, concurrency: 3, autoStart: true, includeDraft: true, where: merge.where,
       } });
     },
   );
+
+  it.each([ProjectConfigSchema, GlobalConfigSchema])('prepare_workflowの空文字を拒否する', (schema) => {
+    expect(schema.safeParse({ merge: { prepare_workflow: '' } }).success).toBe(false);
+  });
 
   it.each(['squash', 'merge', 'rebase'])('マージ方式%sを受理する', (method) => {
     expect(ProjectConfigSchema.parse({ merge: { method } })).toMatchObject({ merge: { method } });

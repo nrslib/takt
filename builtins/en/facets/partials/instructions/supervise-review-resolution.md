@@ -28,3 +28,5 @@ Do not request or inspect machine-gate execution status, results, or logs, inclu
 {{include:instructions/supervise-external-confirmation}}
 
 Record the decision, evidence, and any required repair targets completely.
+
+Retain the repair history and fixed-version references recorded in review-resolution.md, and record how the actual method matches the latest requirements and decision. Reconcile changed verification approaches with the original acceptance criteria.

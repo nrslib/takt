@@ -125,6 +125,7 @@ import { getProjectConfigDir } from '../infra/config/paths.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { runConversationLoop } from '../features/interactive/conversationLoop.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { runDirectInstructMode } from '../features/tasks/resume/directInstructMode.js';
 import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
@@ -210,9 +211,9 @@ describe('interactiveMode', () => {
 
     expect(capture.callCount).toBe(1);
     expect(capture.prompts[0]).toContain('continue discussing the task');
-    expect(capture.systemPrompts[0]).toBe(buildInteractiveSystemPrompt('en', {
+    expect(capture.systemPrompts[0]).toBe(withProgressNotesGuidance(buildInteractiveSystemPrompt('en', {
       grillMe: false, formalSpec: mode, formalSpecComments: true,
-    }));
+    }), 'en'));
     expect(result.action).toBe('cancel');
   });
 

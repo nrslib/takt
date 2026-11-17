@@ -144,6 +144,8 @@ export interface ClaudeCallOptions {
   outputSchema?: Record<string, unknown>;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude as flag settings */
+  denyRules?: string[];
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];
@@ -200,6 +202,8 @@ export interface ClaudeSpawnOptions {
   onStderr?: (data: string) => void;
   /** Sandbox settings for Claude SDK */
   sandbox?: SandboxSettings;
+  /** Resolved permissions.deny rules passed to Claude as flag settings */
+  denyRules?: string[];
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];

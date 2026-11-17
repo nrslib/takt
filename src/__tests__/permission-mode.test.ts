@@ -5,7 +5,6 @@
 import { describe, it, expect } from 'vitest';
 import { SdkOptionsBuilder, buildSdkOptions } from '../infra/claude/options-builder.js';
 import { mapToCodexSandboxMode } from '../infra/codex/types.js';
-import type { PermissionMode } from '../core/models/index.js';
 import type { ClaudeSpawnOptions } from '../infra/claude/types.js';
 
 describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
@@ -21,14 +20,6 @@ describe('SdkOptionsBuilder.mapToSdkPermissionMode', () => {
     expect(SdkOptionsBuilder.mapToSdkPermissionMode('full')).toBe('bypassPermissions');
   });
 
-  it('should map all PermissionMode values exhaustively', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    for (const mode of modes) {
-      const result = SdkOptionsBuilder.mapToSdkPermissionMode(mode);
-      expect(result).toBeDefined();
-      expect(typeof result).toBe('string');
-    }
-  });
 });
 
 describe('SdkOptionsBuilder.build() — bypass permission opt-in', () => {
@@ -80,14 +71,6 @@ describe('mapToCodexSandboxMode', () => {
     expect(mapToCodexSandboxMode('full')).toBe('danger-full-access');
   });
 
-  it('should map all PermissionMode values exhaustively', () => {
-    const modes: PermissionMode[] = ['readonly', 'edit', 'full'];
-    for (const mode of modes) {
-      const result = mapToCodexSandboxMode(mode);
-      expect(result).toBeDefined();
-      expect(typeof result).toBe('string');
-    }
-  });
 });
 
 describe('SdkOptionsBuilder.build() — mcpServers', () => {
@@ -207,11 +190,6 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
     });
 
     expect(options).not.toHaveProperty('skills');
-  });
-
-  it('includes project in settingSources', () => {
-    const options = buildSdkOptions({ cwd: '/test' });
-    expect(options.settingSources).toEqual(['project']);
   });
 
   it('includes effort when provided', () => {

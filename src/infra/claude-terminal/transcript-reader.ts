@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { AskUserQuestionInput } from '../../core/workflow/types.js';
 import { createPartTimeoutReason } from '../../shared/types/agent-failure.js';
 import { getClaudeProjectSessionsDir } from '../config/project/sessionStore.js';
+import { nextAssistantAnswerText } from '../claude/answer-text.js';
 import type {
   ClaudeSessionRef,
   ClaudeTranscriptBaseline,
@@ -167,7 +168,7 @@ function appendTranscriptEntry(
     const message = toRecord(entry.message);
     const text = extractTextContent(message?.content);
     const events = extractToolUseEvents(message?.content);
-    const lastAssistantText = text.length > 0 ? text.join('\n') : parsed.lastAssistantText;
+    const lastAssistantText = nextAssistantAnswerText(parsed.lastAssistantText, message?.content, '\n');
     return {
       sessionId,
       assistantText: [...(parsed.assistantText ? [parsed.assistantText] : []), ...text].join('\n'),

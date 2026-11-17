@@ -100,10 +100,18 @@ steps:
   - name: review-adjudication
     uses: peer-review-adjudication
     with:
-      review_policy_additions:
-        $param: plan_policy
+      review_policy_additions: []
       review_knowledge_additions:
         $param: fix_knowledge
+    # review は plan_policy に含まれるため、固定分との重複を避ける。
+    policy:
+      - process-deviation
+      - review-adjudication
+      - repair-strategy
+      - architecture
+      - takt
+      - contract-change
+      - $param: plan_policy
     rules:
       - condition: 修正対象あり
         next: fix-plan

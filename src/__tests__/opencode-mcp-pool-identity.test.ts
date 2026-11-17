@@ -1,10 +1,15 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
 import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { createOpenCodeMcpAdapter } from '../infra/providers/mcp/opencode.js';
 import { acquireOpenCodeClient, resetSharedServerPool } from '../infra/opencode/server-pool.js';
 import { startOpenCodeServer } from '../infra/opencode/server-process.js';
 import type { ManagedOpenCodeTransport } from '../infra/opencode/transport.js';
+
+const temporaryDirectories: string[] = [];
 
 vi.mock('../infra/opencode/runtime.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/opencode/runtime.js')>();
@@ -62,6 +67,10 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
 
   afterEach(() => {
     resetSharedServerPool();
+    for (const directory of temporaryDirectories) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    temporaryDirectories.length = 0;
     vi.resetAllMocks();
     vi.unstubAllEnvs();
   });
@@ -116,5 +125,47 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
         expect(preparedB.identity).not.toContain('synthetic-project-a');
       } finally { b.release(); }
     } finally { await preparedA.dispose(); await preparedB.dispose(); }
+  });
+
+  it('uses a separate shared server for each external context allowlist', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-opencode-pool-identity-'));
+    temporaryDirectories.push(root);
+    const contextA = join(root, 'context-a');
+    const contextB = join(root, 'context-b');
+    mkdirSync(contextA);
+    mkdirSync(contextB);
+    const canonicalContextA = realpathSync(contextA);
+    const canonicalContextB = realpathSync(contextB);
+    const a = await acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextA],
+    );
+    a.release();
+    const b = await acquireOpenCodeClient(
+      'opencode/model', undefined, undefined, undefined, undefined, undefined, false, undefined, [contextB],
+    );
+
+    try {
+      expect(b.client).not.toBe(a.client);
+      expect(startOpenCodeServer).toHaveBeenCalledTimes(2);
+      const firstConfig = vi.mocked(startOpenCodeServer).mock.calls[0]![0].config;
+      const secondConfig = vi.mocked(startOpenCodeServer).mock.calls[1]![0].config;
+      if (generation === 'v1') {
+        expect(firstConfig.permission).toMatchObject({
+          external_directory: { '*': 'deny', [join(canonicalContextA, '*')]: 'allow' },
+        });
+        expect(secondConfig.permission).toMatchObject({
+          external_directory: { '*': 'deny', [join(canonicalContextB, '*')]: 'allow' },
+        });
+      } else {
+        expect(firstConfig.permissions).toContainEqual({
+          action: 'external_directory', resource: join(canonicalContextA, '*'), effect: 'allow',
+        });
+        expect(secondConfig.permissions).toContainEqual({
+          action: 'external_directory', resource: join(canonicalContextB, '*'), effect: 'allow',
+        });
+      }
+    } finally {
+      b.release();
+    }
   });
 });

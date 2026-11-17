@@ -17,7 +17,7 @@ export function buildManagerSystemPrompt(input) {
     mkdirSync(join(directory, '.takt'));
     writeFileSync(join(directory, '.takt/config.yaml'), stringify({
       provider: 'mock', language: input.lang, concurrency: input.concurrency,
-      manager: { default_workflow: input.defaultWorkflow ?? undefined, main_merge: input.mainMerge },
+      manager: { main_merge: input.mainMerge },
       assistant: { formal_spec: { mode: input.specificationConfiguration.mode, comments: input.specificationConfiguration.comments,
         model_check_timeout_seconds: input.specificationConfiguration.modelCheckTimeoutSeconds } },
     }));

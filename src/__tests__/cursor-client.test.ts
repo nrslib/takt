@@ -15,6 +15,7 @@ vi.mock('node:child_process', () => ({
 
 import { callCursor, callCursorCustom } from '../infra/cursor/client.js';
 import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
+import { runPhase1WithEmptyRecovery } from '../core/workflow/engine/phase1-empty-recovery.js';
 
 type SpawnScenario = {
   stdout?: string | readonly Buffer[];
@@ -548,6 +549,90 @@ describe('callCursor', () => {
     expect(onStream).toHaveBeenCalledWith({ type: 'tool_use', data: {
       id: 'tool-1', tool: 'takt_get_run', input: { runSlug: 'selected-run' },
     } });
+  });
+
+  // cursor-agent's stream-json `result` is the concatenation of every text delta of the turn.
+  it.each([
+    { label: 'the concatenated result event', result: 'Progress note: checked input.ts.Final answer' },
+    { label: 'no result event', result: undefined },
+  ])('returns only the text after the last tool call as content and streams the earlier text with $label', async ({ result: terminal }) => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: checked input.ts.' }] } }),
+        JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'read_file', args: { path: 'retry.ts' } } } } }),
+        JSON.stringify({ type: 'tool_call', subtype: 'completed', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'read_file' }, result: { success: { content: 'retry source' } } } } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Final answer' }] } }),
+        ...(terminal === undefined ? [] : [JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: terminal })]),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'inspect task', { cwd: '/repo', onStream });
+
+    expect(result).toMatchObject({ status: 'done', content: 'Final answer' });
+    const streamed = onStream.mock.calls.map(([event]) => event as { type: string; data: Record<string, unknown> });
+    expect(streamed.map((event) => event.type)).toEqual(['text', 'tool_use', 'tool_result', 'text', 'result']);
+    expect(streamed.filter((event) => event.type === 'text').map((event) => event.data.text))
+      .toEqual(['Progress note: checked input.ts.', 'Final answer']);
+    expect(streamed.at(-1)?.data).toMatchObject({ result: 'Final answer', success: true });
+  });
+
+  it.each([
+    { label: 'the concatenated result event', result: 'Progress note: editing retry.ts.' },
+    { label: 'no result event', result: undefined },
+  ])('returns an empty successful answer with the new session ID when the turn ends with a tool call and $label', async ({ result: terminal }) => {
+    const onStream = vi.fn();
+    mockSpawnWithScenario({
+      stdout: [
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-new' }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] } }),
+        JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'write_file', args: { path: 'retry.ts' } } } } }),
+        JSON.stringify({ type: 'tool_call', subtype: 'completed', call_id: 'tool-1',
+          tool_call: { mcpToolCall: { args: { name: 'write_file' }, result: { success: { content: 'written' } } } } }),
+        ...(terminal === undefined ? [] : [JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: terminal })]),
+      ].join('\n'),
+    });
+
+    const result = await callCursor('coder', 'edit retry.ts', { cwd: '/repo', onStream });
+
+    // An empty answer continues the same session; a provider error would repeat the edit in a fresh session.
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId: 'sess-new' });
+    expect(result.error).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Progress note: editing retry.ts.' } });
+    expect(onStream).toHaveBeenLastCalledWith({ type: 'result', data: { result: '', success: true, sessionId: 'sess-new' } });
+  });
+
+  it('continues the same session instead of a fresh retry when Phase 1 ends with a tool call', async () => {
+    mockSpawnWithScenarios([
+      {
+        stdout: [
+          JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-new' }),
+          JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] } }),
+          JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'tool-1',
+            tool_call: { mcpToolCall: { args: { name: 'write_file', args: { path: 'retry.ts' } } } } }),
+        ].join('\n'),
+        code: 0,
+      },
+      {
+        stdout: JSON.stringify({ type: 'assistant', session_id: 'sess-new', message: { content: [{ type: 'text', text: 'Edit complete.' }] } }),
+        code: 0,
+      },
+    ]);
+
+    const recovered = await runPhase1WithEmptyRecovery({
+      instruction: 'edit retry.ts',
+      initialSessionId: undefined,
+      execute: (attempt) => callCursor('coder', attempt.instruction, { cwd: '/repo', sessionId: attempt.sessionId }),
+      discardSession: vi.fn(),
+    });
+
+    expect(recovered.response).toMatchObject({ status: 'done', content: 'Edit complete.' });
+    expect(recovered.finalAttempt).toMatchObject({ reason: 'empty_continuation', sessionId: 'sess-new' });
+    const [, continuationArgs] = mockSpawn.mock.calls[1] as [string, string[]];
+    expect(continuationArgs).toEqual(expect.arrayContaining(['--resume', 'sess-new']));
   });
 
   it('preserves the error text of failed Cursor tool results', async () => {

@@ -40,6 +40,7 @@ import {
 import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import { buildClaudePromptInput } from './image-input.js';
 import { extractClaudeProviderUsage } from './usage.js';
+import { nextAssistantAnswerText } from './answer-text.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { isClaudeSessionMissing } from './session-resume.js';
 import { withDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
@@ -265,9 +266,7 @@ export class QueryExecutor {
         }
       }
       accumulatedAssistantText += messageText;
-      if (messageText.trim().length > 0) {
-        lastAssistantMessageText = messageText;
-      }
+      lastAssistantMessageText = nextAssistantAnswerText(lastAssistantMessageText, assistantMsg.message.content, '');
       return messageText;
     };
     const applyResultMessage = (resultMsg: SDKResultMessage): void => {
@@ -453,7 +452,10 @@ export class QueryExecutor {
         }
       }
 
-      const finalContent = resultContent || accumulatedAssistantText;
+      // A result without text (for example a structured-output turn) falls back to the answer text of
+      // the last assistant messages only: earlier text and text before a tool call are working text such
+      // as progress notes. A turn that ends with a tool call therefore has an empty answer.
+      const finalContent = resultContent || lastAssistantMessageText;
       if (rateLimitClass !== 'NotRateLimit') {
         return {
           success: false,

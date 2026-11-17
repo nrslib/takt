@@ -23,14 +23,18 @@ jobs:
 
       - name: Extract version from PR title
         id: version
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          VERSION=$(echo "${{ github.event.pull_request.title }}" | sed 's/^Release //')
+          VERSION=$(printf '%s\n' "$PR_TITLE" | sed 's/^Release //')
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag on PR head commit
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          git tag "${{ steps.version.outputs.tag }}" "${{ github.event.pull_request.head.sha }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          git tag "$TAG" "${{ github.event.pull_request.head.sha }}"
+          git push origin "$TAG"
 
   publish:
     needs: tag
@@ -51,8 +55,10 @@ jobs:
 
       - name: Determine npm tag
         id: npm-tag
+        env:
+          RELEASE_TAG: ${{ needs.tag.outputs.tag }}
         run: |
-          VERSION="${{ needs.tag.outputs.tag }}"
+          VERSION="$RELEASE_TAG"
           VERSION="${VERSION#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if echo "$VERSION" | grep -qE '(alpha|beta|rc|next)'; then
@@ -70,7 +76,7 @@ jobs:
         if: steps.npm-tag.outputs.tag == 'latest'
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
-          VERSION="${{ steps.npm-tag.outputs.version }}"
+          VERSION="$RELEASE_VERSION"
 
           for attempt in 1 2 3; do
             if npm dist-tag add "${PACKAGE_NAME}@${VERSION}" next; then
@@ -84,6 +90,7 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.npm-tag.outputs.version }}
 
       - name: Verify dist-tags
         run: |

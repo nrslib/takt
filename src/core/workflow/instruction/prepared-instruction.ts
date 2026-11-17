@@ -1,6 +1,7 @@
 import type { ResolvedReportReferenceScope } from './report-reference.js';
 import type { WorkflowStep } from '../../models/types.js';
 import type { ReportExecutionMetadata } from '../report-execution-store.js';
+import type { TaskReviewScope } from '../review-scope.js';
 
 export interface ReportReferenceConsumer {
   readonly workflowRef: string;
@@ -52,6 +53,11 @@ export interface PreparedInstruction {
   readonly text: string;
   readonly injectedReports: readonly InjectedReport[];
   readonly reportInputs?: Phase1ReportInputs;
+}
+
+/** A step's instruction with the review scope it was built from, so later identity uses that same scope. */
+export interface PreparedStepInstruction extends PreparedInstruction {
+  readonly reviewScope: TaskReviewScope;
 }
 
 /** Inputs actually supplied to Phase 1, independent of provider session history. */

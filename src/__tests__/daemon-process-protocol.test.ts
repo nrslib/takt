@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  TURN_PROTOCOL_VERSION, MAX_PROCESS_MESSAGE_BYTES, MAX_PROCESS_PENDING_REQUESTS,
-  MAX_PROCESS_PENDING_BYTES, MAX_PROCESS_PROGRESS_BYTES, MAX_PROCESS_DELIVERY_PORTS,
-  parseDaemonProcessMessage, parseTurnProcessMessage, processRequestBytes,
+  TURN_PROTOCOL_VERSION, MAX_PROCESS_PROGRESS_BYTES,
+  parseDaemonProcessMessage, parseTurnProcessMessage,
   type DaemonProcessMessage, type TurnProcessMessage,
 } from '../core/daemon/processProtocol.js';
 import { input, turnState } from './helpers/controlledDaemon.js';
@@ -18,6 +17,18 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('roundtrips tool identities, batched completions and results larger than the intermediate text limit', () => {
+    const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
+    const toolId = 'provider-tool-'.repeat(30);
+    for (const event of [
+      { type: 'tool_use', data: { id: toolId, tool: 'Read', input: { file_path: 'a.ts' } }, toolActivity },
+      { type: 'tool_output', data: { id: toolId, tool: 'Read', output: 'stream' }, toolActivity },
+      { type: 'tool_result', data: { id: toolId, completedToolIds: [toolId, 'second'], content: '日'.repeat(MAX_PROCESS_PROGRESS_BYTES), isError: true }, toolActivity },
+    ]) {
+      const message = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool_event', eventId: 'event', event } };
+      expect(parseTurnProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+    }
+  });
   it.each(['human', 'manager', undefined] as const)('preserves resumed origin %s through inbox, storage and IPC', (origin) => {
     const saved = ManagerEventSchema.parse({ kind: 'resumed', goalId: '650e8400-e29b-41d4-a716-446655440000',
       createdAt: '2026-11-10T00:00:00Z', ...(origin === undefined ? {} : { origin }) });
@@ -73,14 +84,13 @@ describe('daemon turn process protocol', () => {
     }
   });
 
-  it('accepts bounded intermediate text and rejects extra fields and UTF-8 overflow', () => {
+  it('accepts intermediate text over the display limit as received and rejects extra fields', () => {
     const value = { ...common, kind: 'turn_progress', turn,
       message: { kind: 'turn_text', message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) } };
     expect(parseTurnProcessMessage(value, common.launchId)).toEqual(value);
-    for (const message of [
-      { kind: 'turn_text', message: 'あ'.repeat(Math.ceil(MAX_PROCESS_PROGRESS_BYTES / 3)) },
-      { kind: 'turn_text', message: 'safe', input: { command: 'private' } },
-    ]) expect(() => parseTurnProcessMessage({ ...value, message }, common.launchId)).toThrow();
+    const over = { ...value, message: { kind: 'turn_text', message: 'あ'.repeat(Math.ceil(MAX_PROCESS_PROGRESS_BYTES / 3)) } };
+    expect(parseTurnProcessMessage(over, common.launchId)).toEqual(over);
+    expect(() => parseTurnProcessMessage({ ...value, message: { kind: 'turn_text', message: 'safe', input: { command: 'private' } } }, common.launchId)).toThrow();
   });
 
   it.each(['コードを読む', 'あ'.repeat(256)])('accepts a bounded Bash description: %s', (description) => {
@@ -303,12 +313,15 @@ describe('daemon turn process protocol', () => {
     expect(() => parseDaemonProcessMessage(value, common.launchId)).toThrow();
   });
 
-  it('enforces UTF-8 and serialized byte limits, including JSON escaping', () => {
-    const progress = { ...common, kind: 'turn_progress', turn, message: 'a'.repeat(MAX_PROCESS_PROGRESS_BYTES) };
-    expect(parseTurnProcessMessage(progress, common.launchId)).toEqual(progress);
-    expect(() => parseTurnProcessMessage({ ...progress, message: 'あ'.repeat(MAX_PROCESS_PROGRESS_BYTES) }, common.launchId)).toThrow();
-    expect(() => parseTurnProcessMessage({ ...request, request: { kind: 'notify_director', notificationId: 'n', message: 'a'.repeat(MAX_PROCESS_MESSAGE_BYTES) } }, common.launchId)).toThrow();
-    expect(() => parseTurnProcessMessage({ ...request, request: { kind: 'notify_director', notificationId: 'n', message: '\u0000'.repeat(MAX_PROCESS_MESSAGE_BYTES / 4) } }, common.launchId)).toThrow();
+  it('accepts business messages larger than 12 MiB in both directions, including JSON escaping', () => {
+    const notification = { ...request, request: { kind: 'notify_director', notificationId: 'n', message: 'a'.repeat(13 * 1024 * 1024) } };
+    expect(parseTurnProcessMessage(notification, common.launchId)).toEqual(notification);
+    const escaped = { ...request, request: { kind: 'notify_director', notificationId: 'n', message: '\u0000'.repeat(3 * 1024 * 1024) } };
+    expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(12 * 1024 * 1024);
+    expect(parseTurnProcessMessage(escaped, common.launchId)).toEqual(escaped);
+    const start = { ...common, kind: 'start_turn', input: { event: acceptedEvent, turn,
+      state: { ...turnState(), interruptedMessage: 'i'.repeat(13 * 1024 * 1024) } } };
+    expect(parseDaemonProcessMessage(start, common.launchId)).toEqual(start);
   });
 
   it.each([
@@ -321,26 +334,46 @@ describe('daemon turn process protocol', () => {
     expect(() => parseTurnProcessMessage({ ...common, kind: 'turn_progress', turn, message }, common.launchId)).toThrow();
   });
 
-  it('bounds pending request counts and aggregate bytes before reservation', () => {
-    const size = processRequestBytes(0, 0, request);
-    expect(size).toBe(Buffer.byteLength(JSON.stringify(request)));
-    expect(processRequestBytes(MAX_PROCESS_PENDING_REQUESTS - 1, MAX_PROCESS_PENDING_BYTES - size, request)).toBe(size);
-    expect(() => processRequestBytes(MAX_PROCESS_PENDING_REQUESTS, 0, request)).toThrow();
-    expect(() => processRequestBytes(0, MAX_PROCESS_PENDING_BYTES - size + 1, request)).toThrow();
-    expect(() => processRequestBytes(-1, 0, request)).toThrow();
-    expect(() => processRequestBytes(0, 0, { ...common, kind: 'ready' })).toThrow();
+  it('accepts delivery information for more than 32 ports', () => {
+    const delivery = { ...common, kind: 'daemon_reply', turn, requestId: 'rpc', reply: {
+      kind: 'delivery', conversationId: 'target', assignment: turnState().assignment,
+      connectedPorts: Array.from({ length: 33 }, (_, index) => `port-${index}`),
+    } };
+    expect(parseDaemonProcessMessage(delivery, common.launchId)).toEqual(delivery);
   });
 
-  it('bounds delivery information and rejects non-JSON values', () => {
-    expect(() => parseDaemonProcessMessage({ ...common, kind: 'daemon_reply', turn, requestId: 'rpc', reply: {
-      kind: 'delivery', conversationId: 'target', assignment: turnState().assignment,
-      connectedPorts: Array.from({ length: MAX_PROCESS_DELIVERY_PORTS + 1 }, () => 'tui'),
-    } }, common.launchId)).toThrow();
+  it('validates deeply nested tool input without recursion and still distinguishes a cycle', () => {
+    const root: Record<string, unknown> = {};
+    let leaf = root;
+    for (let depth = 0; depth < 20_000; depth++) {
+      const next: Record<string, unknown> = {}; leaf.next = next; leaf = next;
+    }
+    const message = { ...common, kind: 'turn_progress', turn, message: { kind: 'tool_event', eventId: 'deep',
+      event: { type: 'tool_use', toolActivity: { callId: 'call', operationId: turn.operationId, generation: turn.generation }, data: { id: 'tool', tool: 'Read', input: root } } } };
+    expect(() => parseTurnProcessMessage(message, common.launchId)).not.toThrow();
+    leaf.next = root;
+    let failure: unknown;
+    try { parseTurnProcessMessage(message, common.launchId); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(RangeError);
+  });
+
+  it('accepts deep and wide JSON data and shared references but rejects non-JSON values and cycles', () => {
+    const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
+    const toolUse = (input: Record<string, unknown>) => ({ ...common, kind: 'turn_progress', turn,
+      message: { kind: 'tool_event', eventId: 'event', event: { type: 'tool_use', data: { id: 'tool', tool: 'Read', input }, toolActivity } } });
+    let nested: Record<string, unknown> = { leaf: true };
+    for (let depth = 0; depth < 64; depth++) nested = { nested };
+    const shared = { value: 'shared' };
+    const json = toolUse({ nested, wide: Array.from({ length: 70_000 }, (_, index) => index), first: shared, second: shared });
+    expect(parseTurnProcessMessage(json, common.launchId)).toEqual(json);
     for (const extra of [new AbortController().signal, () => {}, (async function* () {})(), { complete() {} }]) {
       expect(() => parseTurnProcessMessage({ ...request, extra }, common.launchId)).toThrow();
+      expect(() => parseTurnProcessMessage(toolUse({ extra }), common.launchId)).toThrow();
     }
     const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
+    cyclic.self = { child: cyclic };
     expect(() => parseTurnProcessMessage(cyclic, common.launchId)).toThrow();
+    expect(() => parseTurnProcessMessage(toolUse({ cyclic }), common.launchId)).toThrow();
   });
 });

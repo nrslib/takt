@@ -5,9 +5,12 @@ import type { UserMessageColors } from './terminalColors.js';
 
 export const USER_MARKER = '❯ ';
 export const ASSISTANT_MARKER = '● ';
+export const THINKING_MARKER = '◇ ';
+export const TOOL_MARKER = '◆ ';
 export const MARKER_WIDTH = 2;
+export const MARKER_INDENT = ' '.repeat(MARKER_WIDTH);
 
-const INDENT = ' '.repeat(MARKER_WIDTH);
+const INDENT = MARKER_INDENT;
 const CLEAR_TO_LINE_END = '\x1b[K';
 
 /**
@@ -24,6 +27,11 @@ export function formatTranscriptEntryOutput(entry: TranscriptEntry, colors: User
   if (entry.role === 'assistant') {
     const first = `${chalk.white(ASSISTANT_MARKER)}${lines[0] ?? ''}`;
     return `${[first, ...lines.slice(1).map((line) => `${INDENT}${line}`)].join('\n')}\n\n`;
+  }
+  if (entry.role === 'thinking' || entry.role === 'tool') {
+    // Marker included: the reply is what should draw the eye, not the work behind it.
+    const marker = entry.role === 'thinking' ? THINKING_MARKER : TOOL_MARKER;
+    return `${chalk.dim([`${marker}${lines[0] ?? ''}`, ...lines.slice(1).map((line) => `${INDENT}${line}`)].join('\n'))}\n\n`;
   }
 
   const text = [`${USER_MARKER}${lines[0] ?? ''}`, ...lines.slice(1).map((line) => `${INDENT}${line}`)]

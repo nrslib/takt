@@ -151,6 +151,7 @@ function emitResult(
   error: string | undefined,
   sessionId: string | undefined,
   failureCategory?: AgentFailureCategory,
+  partialOutput?: string,
 ): void {
   options.onStream?.({
     type: 'result',
@@ -160,6 +161,7 @@ function emitResult(
       error,
       sessionId: sessionId ?? '',
       failureCategory,
+      ...(partialOutput === undefined ? {} : { partialOutput }),
     },
   });
 }
@@ -185,13 +187,19 @@ export class DevinClient {
       const proc = spawnDevinAcp(args, options);
       const outcome = await runDevinAcpPrompt(proc, buildPrompt(prompt, options.systemPrompt), options);
       const { sessionId, providerUsage } = outcome;
+      const content = outcome.content.trim();
 
       if (outcome.stopReason === 'cancelled' || options.abortSignal?.aborted) {
-        throw createExecError(DEVIN_ABORTED_MESSAGE, { name: 'AbortError', sessionId });
+        throw createExecError(DEVIN_ABORTED_MESSAGE, {
+          name: 'AbortError',
+          sessionId,
+          ...(content.length === 0 ? {} : { partialOutput: content }),
+        });
       }
-
-      const content = outcome.content.trim();
-      if (content.length === 0) {
+      // A turn that ends with a tool call has an empty answer, not an unreadable output: the session
+      // continues (empty continuation) instead of a fresh session repeating the tools' side effects.
+      const endedAfterToolCall = outcome.calledTool && outcome.stopReason === 'end_turn';
+      if (content.length === 0 && !endedAfterToolCall) {
         const emptyError = outcome.stopReason === 'end_turn'
           ? 'devin returned empty output'
           : `devin returned empty output (stop reason: ${outcome.stopReason})`;
@@ -213,11 +221,12 @@ export class DevinClient {
       // completed step. `cancelled` is handled above.
       if (outcome.stopReason !== 'end_turn') {
         const stopError = `devin returned incomplete output (stop reason: ${outcome.stopReason})`;
-        emitResult(options, content, false, stopError, sessionId, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+        emitResult(options, content, false, stopError, sessionId, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, content);
         return {
           persona: agentType,
           status: 'error',
           content,
+          partialOutput: content,
           error: stopError,
           failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
           timestamp: new Date(),
@@ -256,7 +265,8 @@ export class DevinClient {
         };
       }
       const message = classifyExecutionError(error, options);
-      emitResult(options, '', false, message, sessionId);
+      const { partialOutput } = error;
+      emitResult(options, partialOutput ?? '', false, message, sessionId, undefined, partialOutput);
       return {
         persona: agentType,
         status: 'error',
@@ -265,6 +275,7 @@ export class DevinClient {
         timestamp: new Date(),
         sessionId,
         providerUsage: usageMissingSnapshot(),
+        ...(partialOutput === undefined ? {} : { partialOutput }),
       };
     } finally {
       try {

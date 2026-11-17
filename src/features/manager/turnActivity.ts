@@ -1,5 +1,7 @@
 import { ConversationActivitySchema, MAX_CONVERSATION_TEXT_BYTES, MAX_TOOL_DESCRIPTION_LENGTH, type ConversationActivity } from '../../shared/types/conversation-activity.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
+import type { ManagerTurnInput } from './turnExecutor.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { toSingleLineText } from '../tui/displayText.js';
@@ -65,4 +67,16 @@ export function createTurnActivityReporter(report: (activity: ConversationActivi
     report(next);
   };
   return { onStream, flush, discard };
+}
+
+/** ツールの開始より前の本文、ツールのイベント、activity の順に知らせる。daemon がその activity を、同じツールの入力の値で伏せられるようにする。 */
+export function reportManagerStream(raw: StreamEvent, identify: (event: ToolActivityEvent) => ToolActivityEvent,
+  reporter: ReturnType<typeof createTurnActivityReporter>, input: Pick<ManagerTurnInput, 'abortSignal' | 'onProviderOutput' | 'onToolEvent'>): StreamEvent {
+  const event = raw.type === 'tool_use' || raw.type === 'tool_result' || raw.type === 'tool_output' ? identify(raw) : raw;
+  input.onProviderOutput?.();
+  if (input.abortSignal.aborted) return event;
+  if (event.type === 'tool_use') reporter.flush();
+  if (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output') input.onToolEvent?.(event);
+  reporter.onStream(event);
+  return event;
 }

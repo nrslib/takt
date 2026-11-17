@@ -87,6 +87,9 @@ function createBuilder(cwd: string, step: WorkflowStep): OptionsBuilder {
     () => REPORT_DIR_REL,
     () => 'en',
     () => 'structured-report-repro',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 

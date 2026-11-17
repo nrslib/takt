@@ -17,6 +17,7 @@ import type { InteractiveModeResult } from '../features/interactive/interactive.
 import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import type { EditorDraft } from '../features/tui/editorState.js';
 import type { StreamCallback, StreamEvent } from '../shared/types/provider.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
 import {
   TranscriptEntryView,
   TranscriptView,
@@ -25,6 +26,8 @@ import {
 import { runTuiConversation } from '../features/tui/conversationRunner.js';
 import { formatTranscriptEntryOutput } from '../features/tui/transcriptOutput.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
+import { ToolActivityView } from '../features/tui/ToolActivityView.js';
+import { createToolActivityViewState, toggleToolActivityView } from '../features/tui/toolActivityViewState.js';
 import { layoutPromptRows, resolvePromptContentWidth } from '../features/tui/promptLayout.js';
 import {
   createTuiConversation,
@@ -248,6 +251,7 @@ function createScriptedConversation(
 }
 
 interface RenderOverrides {
+  readonly lang?: 'ja' | 'en';
   readonly autoSubmit?: boolean;
   readonly initialHistory?: readonly string[];
   readonly initialDraft?: EditorDraft;
@@ -268,7 +272,7 @@ function renderConversation(
   return render(
     <ConversationView
       ui={UI}
-      lang="en"
+      lang={overrides.lang ?? 'en'}
       conversation={conversation}
       initialEntries={INITIAL_ENTRIES}
       userMessageColors={overrides.userMessageColors ?? {
@@ -1402,7 +1406,10 @@ describe('TranscriptEntryView', () => {
       const beforeCaret = Array.from({ length: buffer.baseY + buffer.cursorY }, (_, index) => (
         buffer.getLine(index)?.translateToString(true) ?? ''
       )).join('\n');
-      expect(beforeCaret).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+      // The queue sits right above the input, so a height reduction may push its
+      // rows into scrollback like any transcript row; the prompt and status row,
+      // which stay below the caret, must not leave residue.
+      expect(beforeCaret).not.toMatch(/│ ❯|╰|Thinking|↑ \d/);
       expect(beforeCaret).toContain('SHELL_MARKER');
       expect(countOccurrences(getTerminalText(terminal).replace(/\s/g, ''), 'committedhistorymarker')).toBe(1);
     };
@@ -1451,7 +1458,7 @@ describe('TranscriptEntryView', () => {
       app.unmount();
       await app.waitUntilExit();
       await updateTerminal();
-      expect(getTerminalText(terminal)).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+      expect(getTerminalText(terminal)).not.toMatch(/│ ❯|╰|Thinking|↑ \d/);
     } finally {
       app?.unmount();
       await app?.waitUntilExit();
@@ -1804,7 +1811,7 @@ describe('ConversationView activity status', () => {
     });
   });
 
-  it('should complete only the displayed tool when a result has no id', async () => {
+  it('should keep both tools running when an idless result is ambiguous', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
     try {
@@ -1816,17 +1823,18 @@ describe('ConversationView activity status', () => {
       expect(status(app)).toContain('b.ts');
       emit(input, { type: 'tool_result', data: { content: 'done', isError: false } });
       await flushFrames();
-      expect(status(app)).toContain('Read');
-      expect(status(app)).toContain('a.ts');
+      expect(status(app)).toContain('Edit');
+      expect(status(app)).toContain('b.ts');
       emit(input, { type: 'tool_result', data: { id: 'A', content: 'done', isError: false } });
       await flushFrames();
-      expect(status(app)).toContain(UI.thinking);
+      expect(status(app)).toContain('Edit');
+      expect(status(app)).toContain('b.ts');
     } finally {
       app.unmount();
     }
   });
 
-  it.each(['thinking', 'responding'] as const)('should remove the latest tool after an idless result while %s', async (kind) => {
+  it.each(['thinking', 'responding'] as const)('should retain an ambiguous tool after an idless result while %s', async (kind) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
     try {
@@ -1846,10 +1854,8 @@ describe('ConversationView activity status', () => {
       emit(input, { type: 'tool_result', data: { id: 'C', content: 'done', isError: false } });
       await flushFrames();
 
-      expect(status(app)).toContain('Read');
-      expect(status(app)).toContain('a.ts');
-      expect(status(app)).not.toContain('Edit');
-      expect(status(app)).not.toContain('b.ts');
+      expect(status(app)).toContain('Edit');
+      expect(status(app)).toContain('b.ts');
       expect(status(app)).not.toContain('Write');
       expect(status(app)).not.toContain('c.ts');
     } finally {
@@ -2054,6 +2060,34 @@ describe('ConversationView activity status', () => {
     } finally {
       app.unmount();
       vi.useRealTimers();
+    }
+  });
+
+  it('hides only unfinished tool entries after interrupting a submission', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'finished', tool: 'Read', input: { file_path: 'finished.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'finished', content: 'kept-result', isError: false } });
+      emit(input, { type: 'tool_use', data: { id: 'unfinished', tool: 'Read', input: { file_path: 'unfinished.ts' } } });
+      await flushFrames();
+      app.stdin.write('\x0f');
+      await flushFrames();
+      expect(app.lastFrame()).toContain('finished.ts');
+      expect(app.lastFrame()).toContain('unfinished.ts');
+
+      app.stdin.write(ESC);
+      await flushFrames();
+
+      expect(app.lastFrame()).toContain('finished.ts');
+      expect(app.lastFrame()).not.toContain('unfinished.ts');
+      expect(app.lastFrame()).toContain('kept-result');
+      conversation.resolveWith({ kind: 'assistant_response', content: 'late response' });
+      await flushFrames();
+    } finally {
+      app.unmount();
     }
   });
 
@@ -2335,7 +2369,7 @@ describe('ConversationView activity status', () => {
         expect(countOccurrences(buffer, '│ ❯')).toBe(1);
         expect(statusRows(buffer)[0]).toContain(UI.interruptHint);
         if (event.type === 'tool_use') {
-          expect(statusRows(buffer)[0]).toMatch(/^\S Read \d+s /u);
+          expect(statusRows(buffer)[0]).toMatch(/^\S Read\S* \d+s /u);
           const row = statusRows(buffer)[0]!;
           expect(row.indexOf(UI.interruptHint)).toBeLessThan(row.indexOf(event.data.id === 'short-read' ? 'a.ts' : '日本語'));
           expect(row).toContain(event.data.id === 'short-read' ? 'a.ts' : '日本語');
@@ -2344,11 +2378,13 @@ describe('ConversationView activity status', () => {
         if (event.type === 'tool_result') {
           expect(statusRows(buffer)[0]).toContain(`Read 3s ${UI.interruptHint} a.ts`);
           expect(statusRows(buffer)[0]).not.toContain('日本語');
+          expect(buffer).toContain('PRIVATE_RESULT');
         }
         expect(stringWidth(statusRows(buffer)[0]!)).toBeLessThanOrEqual(48);
-        for (const forbidden of ['END_OF_PATH', 'PRIVATE_RESULT', 'PRIVATE_THOUGHT']) {
-          expect(buffer).not.toContain(forbidden);
-        }
+        expect(statusRows(buffer)[0]).not.toContain('PRIVATE_RESULT');
+        expect(statusRows(buffer)[0]).not.toContain('PRIVATE_THOUGHT');
+        expect(buffer).not.toContain('END_OF_PATH');
+        expect(countOccurrences(buffer, 'PRIVATE_THOUGHT')).toBe(event.type === 'thinking' ? 1 : 0);
       }
       submission!.onAssistantChunk('earlier line\nCURRENT_TAIL');
       await flushFrames();
@@ -2360,6 +2396,8 @@ describe('ConversationView activity status', () => {
       buffer = await updateTerminal();
       expect(buffer).toContain('confirmed reply');
       expect(buffer).toContain('older shell history');
+      expect(countOccurrences(buffer, '◇ PRIVATE_THOUGHT')).toBe(1);
+      expect(buffer.indexOf('◇ PRIVATE_THOUGHT')).toBeLessThan(buffer.indexOf('confirmed reply'));
       expect(statusRows(buffer)).toEqual([]);
       for (const forbidden of [UI.interruptHint, UI.extendedThinking, 'CURRENT_TAIL', 'very-long-path/']) {
         expect(buffer).not.toContain(forbidden);
@@ -2508,6 +2546,7 @@ describe('ConversationView activity status', () => {
       await flushFrames();
       expect(stripAnsi(terminal.stdout.frames.slice(offset).join(''))).toContain(getLabel('tui.ui.extendedThinking', lang));
       expect(await currentStatus()).toContain(`${getLabel('tui.ui.extendedThinking', lang)} 1m02s ${hint}`);
+      expect(await currentStatus()).not.toContain('PRIVATE_THOUGHT');
       await resize(14);
       await expectNarrowActivity(getLabel('tui.ui.extendedThinking', lang), '1m02s');
       await resize(60);
@@ -2550,7 +2589,8 @@ describe('ConversationView activity status', () => {
       await resize(60);
       expect(await currentStatus()).toContain(`${getLabel('tui.ui.responding', lang)} 1m02s ${hint}`);
       expect(await currentStatus()).toContain('visible response');
-      expect(terminal.stdout.frames.join('')).not.toContain('PRIVATE_THOUGHT');
+      expect(await currentStatus()).not.toContain('PRIVATE_THOUGHT');
+      expect(countOccurrences(getTerminalText(screen).replace(/\s/gu, ''), '◇PRIVATE_THOUGHT')).toBe(1);
       conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed' });
       await flushFrames();
       terminal.stdin.write('next');
@@ -2579,6 +2619,616 @@ describe('ConversationView activity status', () => {
       screen.dispose();
       vi.useRealTimers();
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ConversationView tool history', () => {
+  const CTRL_O = '\x0f';
+  const PAGE_UP = '\x1b[5~';
+  const PAGE_DOWN = '\x1b[6~';
+
+  it.each(['ja', 'en'] as const)('should show Ctrl+O guidance and toggle history with that key in %s', async (lang) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn(), { lang });
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'guidance', tool: 'Bash', input: { command: 'printf ready' } } });
+      emit(input, { type: 'tool_result', data: { id: 'guidance', content: 'ready', isError: false } });
+      await flushFrames();
+      const hint = () => stripAnsi(app.lastFrame() ?? '').split('\n').find((row) => /Tools:|ツール履歴:/u.test(row));
+      expect(hint()).toContain('Ctrl+O');
+      expect(hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+      await press(app, CTRL_O);
+      expect(hint()).toContain('Ctrl+O');
+      expect(hint()).toContain(lang === 'ja' ? '折りたたみ' : 'collapse');
+      await press(app, CTRL_O);
+      expect(hint()).toContain(lang === 'ja' ? '展開' : 'expand');
+    } finally { app.unmount(); }
+  });
+
+  it.each(['ja', 'en'] as const)('should retain continuation and end states in one row at 32 columns with real %s labels', (lang) => {
+    const labels = {
+      compact: getLabel('tui.ui.toolHistoryCompact', lang),
+      expanded: getLabel('tui.ui.toolHistoryExpanded', lang),
+      more: getLabel('tui.ui.toolHistoryMore', lang),
+      end: getLabel('tui.ui.toolHistoryEnd', lang),
+      completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+      running: getLabel('tui.ui.toolHistoryRunning', lang),
+    };
+    const compact = createToolActivityViewState();
+    for (const state of [compact, toggleToolActivityView(compact)]) {
+      const frames = [true, false].map((hasMore) => {
+        const page = { rows: ['safe result'], heads: [], next: state.position, hasMore };
+        const frame = stripAnsi(renderToString(<ToolActivityView page={page} state={state} labels={labels} height={2} />, { columns: 32 }));
+        const rows = frame.split('\n');
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toBe('  safe result');
+        expect(rows[1]).toContain(hasMore ? labels.more : labels.end);
+        expect(stringWidth(rows[1]!)).toBeLessThanOrEqual(32);
+        return frame;
+      });
+      expect(frames[0]).not.toBe(frames[1]);
+    }
+  });
+
+  it('should reflow live compact output at 64, 32 and 64 columns while retaining the Japanese draft cursor', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(64, 36);
+    const stdin = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 64, rows: 36, convertEol: true });
+    const draft = '日本語下書き';
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processed = 0;
+    try {
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={INITIAL_ENTRIES} submitMode="chat" autoSubmit={false} initialHistory={[]}
+        initialDraft={undefined} initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, { stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin, exitOnCtrlC: false, interactive: true, patchConsole: false });
+      await waitForOutput(stdout, (value) => value.includes('seeded task'), 'initial transcript');
+      stdin.write('inspect tools');
+      await flushFrames();
+      stdin.write(ENTER);
+      await vi.waitFor(() => expect(conversation.submitCalls).toHaveLength(1));
+      const input = conversation.submitCalls[0]!;
+      emit(input, { type: 'tool_use', data: { id: 'wrapped', tool: 'Bash', input: { command: 'printf ready' } } });
+      emit(input, { type: 'tool_output', data: { id: 'wrapped', tool: 'Bash', output: 'x'.repeat(97) + '\n' } });
+      stdin.write(`\x1b[200~${draft}\x1b[201~`);
+      await flushFrames();
+      stdin.write(ARROW_LEFT);
+      await flushFrames();
+      for (const columns of [64, 32, 64]) {
+        terminal.resize(columns, 36);
+        const start = stdout.frames.length;
+        stdout.resize(columns, 36);
+        await waitForOutput(stdout, () => stdout.frames.length > start, 'resized compact history frame');
+        await app.waitUntilRenderFlush();
+        await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+        processed = stdout.frames.length;
+        const screen = getVisibleTerminalText(terminal, 36);
+        // Output rows are indented under the tool marker, so each holds two columns fewer.
+        const results = screen.split('\n').filter((row) => /^ {2}x+$/u.test(row.trimEnd())).map((row) => row.trim());
+        expect(results, screen).toHaveLength(columns === 32 ? 3 : 2);
+        expect(results.join('')).toHaveLength(columns === 32 ? 90 : 97);
+        for (const row of results) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
+        expect(screen.includes(getLabel('tui.ui.toolHistoryMore', 'en'))).toBe(columns === 32);
+        const active = terminal.buffer.active;
+        const line = active.getLine(active.baseY + active.cursorY)?.translateToString(true) ?? '';
+        const layout = layoutPromptRows(draft, draft.length - 1, resolvePromptContentWidth(columns, 1));
+        expect(line).toContain(`❯ ${layout.rows[layout.cursorRow] ?? ''}`);
+        expect(active.cursorX).toBe(line.indexOf('❯ ') + 2 + stringWidth((layout.rows[layout.cursorRow] ?? '').slice(0, layout.cursorColumn)));
+        expect(input.abortSignal?.aborted).toBe(false);
+      }
+      expect(conversation.submitCalls).toHaveLength(1);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  async function begin(app: ReturnType<typeof render>, conversation: ScriptedConversation): Promise<TuiSubmitInput> {
+    await flushFrames();
+    app.stdin.write('inspect tools');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    const input = conversation.submitCalls[0];
+    if (input === undefined) throw new Error('The view did not start a submission.');
+    return input;
+  }
+
+  function emit(input: TuiSubmitInput, event: StreamEvent): void {
+    if (input.onStreamEvent === undefined) throw new Error('The submission has no stream sink.');
+    input.onStreamEvent(event);
+  }
+
+  async function press(app: ReturnType<typeof render>, key: string): Promise<string> {
+    app.stdin.write(key);
+    await flushFrames();
+    return stripAnsi(app.lastFrame() ?? '');
+  }
+
+  function assertSafeFrames(frames: readonly string[], forbidden: readonly string[]): void {
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) {
+      for (const line of stripAnsi(frame).split('\n')) {
+        for (const value of forbidden) expect(line).not.toContain(value);
+      }
+      for (const sequence of ['\x1b[2J', '\x1b]52;', '\x07']) expect(frame).not.toContain(sequence);
+    }
+  }
+
+  it.each(['chat', 'summarize'] as const)('should display provider tool completion through the real %s conversation', async (submitMode) => {
+    let stream: StreamCallback | undefined;
+    let finish: (() => void) | undefined;
+    const completion = new Promise<void>((resolve) => { finish = resolve; });
+    const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (_prompt, options) => {
+      stream = options.onStream;
+      await completion;
+      return { persona: 'interactive', status: 'done', content: 'final provider answer', timestamp: new Date() };
+    });
+    const store = createSessionImageAttachmentStore('/repo');
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ctx: {
+          provider: makeProvider({ setup: () => ({ call }) }),
+          providerType: 'mock', model: 'mock-model', lang: 'en', personaName: 'interactive', sessionId: undefined,
+        },
+        strategy: {
+          systemPrompt: 'system', formalSpec: false, modelCheckTimeoutSeconds: 300,
+          allowedTools: [], transformPrompt: (message: string) => message, introMessage: 'Interactive mode',
+        },
+      },
+      attachmentStore: store,
+      persistSession: false,
+    });
+    const app = renderConversation(conversation, submitMode, vi.fn());
+    let now = 1000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await flushFrames();
+      await press(app, 'inspect provider');
+      await press(app, ENTER);
+      await vi.waitFor(() => expect(stream).toBeTypeOf('function'));
+      stream!({ type: 'tool_use', data: { id: 'provider-tool', tool: 'Bash', input: { command: 'printf ready' } } });
+      await flushFrames();
+      expect(app.lastFrame()).toContain(`◆ Bash Ran printf ready … ${getLabel('tui.ui.toolHistoryRunning', 'en')}`);
+      expect(app.lastFrame()).not.toContain('@1000');
+      now = 1250;
+      stream!({ type: 'tool_result', data: { id: 'provider-tool', content: 'provider-result-ready', isError: false } });
+      await flushFrames();
+      const frame = stripAnsi(app.lastFrame() ?? '');
+      expect(frame).toContain('◆ Bash Ran printf ready ✓ 250 ms');
+      expect(frame).toContain('provider-result-ready');
+      expect(frame).not.toContain('@1000');
+      expect(frame).not.toContain('@1250');
+      const expanded = await press(app, CTRL_O);
+      expect(expanded.split('\n').map((row) => row.trim())).toContain('◆ ✓ Bash Ran');
+      expect(expanded).toContain('printf ready');
+      expect(expanded).toContain('provider-result-ready');
+      expect(expanded).toContain('@1000');
+      expect(expanded).toContain('@1250');
+    } finally {
+      clock.mockRestore();
+      app.unmount();
+      finish!();
+      await flushFrames();
+      cleanupImageAttachmentStore(store);
+    }
+  });
+
+  it('should expand five grouped reads into their individual targets and results', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      const start = app.frames.length;
+      for (let index = 0; index < 5; index += 1) {
+        emit(input, { type: 'tool_use', data: { id: `read-${index}`, tool: 'Read', input: { file_path: `source-${index}.ts secret123\x1b[2J`, api_key: 'secret123' } } });
+        emit(input, { type: 'tool_result', data: { id: `read-${index}`, content: `read-result-${index} secret123`, isError: false } });
+      }
+      emit(input, { type: 'tool_use', data: { id: 'search', tool: 'Grep', input: { pattern: 'needle.*' } } });
+      await flushFrames();
+      for (let index = 0; index < 5; index += 1) {
+        expect(countOccurrences(app.lastFrame() ?? '', `source-${index}.ts`)).toBe(1);
+        expect(countOccurrences(app.lastFrame() ?? '', `read-result-${index}`)).toBe(1);
+      }
+      expect(app.lastFrame()).toContain('needle.*');
+      const expanded = [await press(app, CTRL_O)];
+      for (let page = 0; page < 12; page += 1) expanded.push(await press(app, PAGE_DOWN));
+      for (let index = 0; index < 5; index += 1) {
+        expect(expanded.join('\n')).toContain(`source-${index}.ts`);
+        expect(expanded.join('\n')).toContain(`read-result-${index}`);
+      }
+      const compact = await press(app, CTRL_O);
+      for (let index = 0; index < 5; index += 1) expect(countOccurrences(compact, `read-result-${index}`)).toBe(1);
+      assertSafeFrames(app.frames.slice(start), ['secret123']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should read bounded result pages forward and backward without printing the whole result', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    const lines = Array.from({ length: 65 }, (_, index) => `result-row-${String(index).padStart(3, '0')}`);
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'long command' } } });
+      emit(input, { type: 'tool_result', data: { id: 'long', content: lines.join('\n'), isError: false } });
+      await flushFrames();
+      const compact = stripAnsi(app.lastFrame() ?? '');
+      const compactRows = compact.match(/result-row-\d{3}/gu) ?? [];
+      expect(compactRows.length).toBeGreaterThanOrEqual(1);
+      expect(compactRows.length).toBeLessThanOrEqual(3);
+      expect(compact).toMatch(/more|omitt|truncat|…/iu);
+      const pages = [await press(app, CTRL_O)];
+      expect(pages[0]).toContain(lines[0]);
+      for (let page = 0; page < 80 && !pages.at(-1)!.includes(lines.at(-1)!); page += 1) {
+        pages.push(await press(app, PAGE_DOWN));
+      }
+      for (const line of lines) expect(pages.join('\n')).toContain(line);
+      for (const frame of pages) expect(frame.match(/result-row-\d{3}/gu)?.length ?? 0).toBeLessThan(lines.length);
+      for (let page = 1; page < pages.length; page += 1) await press(app, PAGE_UP);
+      expect(app.lastFrame()).toContain(lines[0]);
+      expect(conversation.submitCalls).toHaveLength(1);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should preserve a Japanese draft insertion point and interrupt a running tool after browsing history', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn(), { initialHistory: ['previous question'] });
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'done', tool: 'Bash', input: { command: 'read log' } } });
+      emit(input, { type: 'tool_result', data: { id: 'done', content: Array<string>(45).fill('log result').join('\n'), isError: false } });
+      emit(input, { type: 'tool_use', data: { id: 'running', tool: 'Grep', input: { pattern: 'still-running' } } });
+      await press(app, '\x1b[200~日本語下書き\x1b[201~');
+      await press(app, ARROW_LEFT);
+      await press(app, ARROW_LEFT);
+      for (const key of [CTRL_O, PAGE_DOWN, PAGE_UP, CTRL_O]) {
+        const frame = await press(app, key);
+        expect(frame).toContain('日本語下書き');
+        expect(statusRows(frame).join('\n')).toContain('still-running');
+        expect(input.abortSignal?.aborted).toBe(false);
+      }
+      expect(await press(app, '確定')).toContain('日本語下確定書き');
+      await press(app, ESC);
+      expect(input.abortSignal?.aborted).toBe(true);
+      await press(app, ENTER);
+      expect(conversation.submitCalls[1]?.text).toBe('日本語下確定書き');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep slash completion selection while toggling and paging tool history', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'completion.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'tool', content: 'completion-result', isError: false } });
+      await press(app, '/');
+      await press(app, ARROW_DOWN);
+      const before = stripAnsi(app.lastFrame() ?? '');
+      const selected = before.split('\n').find((line) => /^\s*❯ \/\S+/u.test(line));
+      expect(selected).toBeDefined();
+      for (const key of [CTRL_O, PAGE_DOWN, PAGE_UP, CTRL_O]) await press(app, key);
+      expect(stripAnsi(app.lastFrame() ?? '').split('\n')).toContain(selected);
+      const command = selected!.trim().split(/\s+/u)[1]!;
+      expect(await press(app, TAB)).toContain(`❯ ${command}`);
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(input.abortSignal?.aborted).toBe(false);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep response text separate from tool results and keep the reasoning out of the status row', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'answer.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'read', content: 'separate-tool-result', isError: false } });
+      emit(input, { type: 'thinking', data: { thinking: 'REASONING_BODY' } });
+      await flushFrames();
+      expect(statusRows(app.lastFrame() ?? '').join('\n')).toContain(UI.extendedThinking);
+      expect(statusRows(app.lastFrame() ?? '').join('\n')).not.toContain('REASONING_BODY');
+      input.onAssistantChunk('Read imaginary.ts is response prose');
+      await flushFrames();
+      expect(app.lastFrame()).toContain('separate-tool-result');
+      await press(app, CTRL_O);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'Read imaginary.ts is response prose' });
+      await flushFrames();
+      const frame = stripAnsi(app.lastFrame() ?? '');
+      expect(frame).toContain('separate-tool-result');
+      expect(frame).toContain('Read imaginary.ts is response prose');
+      expect(countOccurrences(frame, 'imaginary.ts')).toBe(1);
+      expect(countOccurrences(frame, '◇ REASONING_BODY')).toBe(1);
+      expect(frame.indexOf('separate-tool-result')).toBeLessThan(frame.indexOf('◇ REASONING_BODY'));
+      expect(frame.indexOf('◇ REASONING_BODY')).toBeLessThan(frame.indexOf('Read imaginary.ts is response prose'));
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should redact selected structured results in compact and expanded history', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      const start = app.frames.length;
+      emit(input, { type: 'tool_use', data: { id: 'safe', tool: 'Bash', input: { command: 'printf ready secret123\x1b[2J', api_key: 'secret123' } } });
+      emit(input, { type: 'tool_result', data: { id: 'safe', content: '{"stdout":"ready secret123","token":"secret123"}', isError: false } });
+      await flushFrames();
+      for (const frame of [stripAnsi(app.lastFrame() ?? ''), await press(app, CTRL_O)]) {
+        expect(frame).toContain('ready');
+        expect(frame).toContain('[REDACTED]');
+      }
+      assertSafeFrames(app.frames.slice(start), ['secret123', '{"stdout"', '"token"']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each([
+    '{"private_blob":{"text":"do-not-display"}}',
+    '[{"text":"do-not-display"}]',
+    '{"stdout":"do-not-display',
+  ])('should omit unselected structured results in compact and expanded history: %s', async (content) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      const start = app.frames.length;
+      emit(input, { type: 'tool_use', data: { id: 'unknown', tool: 'Read', input: { file_path: 'safe.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'unknown', content, isError: false } });
+      await flushFrames();
+      for (const frame of [stripAnsi(app.lastFrame() ?? ''), await press(app, CTRL_O)]) {
+        expect(frame).toContain('safe.ts');
+        expect(frame).toContain('structured output omitted');
+      }
+      assertSafeFrames(app.frames.slice(start), ['do-not-display', 'private_blob', '{"stdout"', '[{"text"']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should sanitize split streaming output during repeated expansion without completing the tool', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      const start = app.frames.length;
+      emit(input, { type: 'tool_use', data: { id: 'stream', tool: 'Bash', input: { command: 'printf progress', api_key: 'secret123' } } });
+      for (const output of ['progress-ready\napi_key=sec', 'ret123\n', '\x1b]', '52;c;PRIVATE_CLIPBOARD\x07', 'stream-tail\n']) {
+        emit(input, { type: 'tool_output', data: { id: 'stream', tool: 'Bash', output } });
+        for (const key of [CTRL_O, PAGE_DOWN, PAGE_UP, CTRL_O]) await press(app, key);
+        assertSafeFrames(app.frames.slice(start), ['secret123', 'api_key=sec', 'ret123', 'PRIVATE_CLIPBOARD']);
+        expect(statusRows(app.lastFrame() ?? '').join('\n')).toContain('printf progress');
+        expect(input.abortSignal?.aborted).toBe(false);
+      }
+      emit(input, { type: 'tool_result', data: { id: 'stream', content: 'progress-ready\napi_key=secret123\nstream-tail', isError: false } });
+      await flushFrames();
+      expect(app.lastFrame()).toContain('progress-ready');
+      expect(app.lastFrame()).toContain('[REDACTED]');
+      assertSafeFrames(app.frames.slice(start), ['secret123', 'api_key=sec', 'ret123', 'PRIVATE_CLIPBOARD']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should commit completed tool entries once in arrival order before the reply and next submission', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const first = await begin(app, conversation);
+      for (const id of ['first', 'second']) {
+        emit(first, { type: 'tool_use', data: { id, tool: 'Read', input: { file_path: `${id}.ts` } } });
+        emit(first, { type: 'tool_result', data: { id, content: `${id}-result`, isError: false } });
+      }
+      await flushFrames();
+      expect(countOccurrences(app.lastFrame() ?? '', 'first-result')).toBe(1);
+      expect(countOccurrences(app.lastFrame() ?? '', 'second-result')).toBe(1);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'read complete' });
+      await flushFrames();
+      const completed = app.lastFrame() ?? '';
+      expect(countOccurrences(completed, 'first-result')).toBe(1);
+      expect(countOccurrences(completed, 'second-result')).toBe(1);
+      expect(completed.indexOf('first-result')).toBeLessThan(completed.indexOf('second-result'));
+      expect(completed.indexOf('second-result')).toBeLessThan(completed.indexOf('read complete'));
+
+      await press(app, 'next question');
+      const frame = await press(app, ENTER);
+      expect(countOccurrences(frame, 'first-result')).toBe(1);
+      expect(countOccurrences(frame, 'second-result')).toBe(1);
+      expect(frame.indexOf('second-result')).toBeLessThan(frame.indexOf('next question'));
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the previous turn tool history in the transcript and ignore the old stream sink on the next submission', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const first = await begin(app, conversation);
+      emit(first, { type: 'tool_use', data: { id: 'old', tool: 'Read', input: { file_path: 'old-turn.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'old', content: 'old-turn-result', isError: false } });
+      conversation.resolveWith({ kind: 'assistant_response', content: 'committed first answer' });
+      await flushFrames();
+      expect(app.lastFrame()).toContain('old-turn-result');
+      await press(app, 'next question');
+      await press(app, ENTER);
+      const second = conversation.submitCalls[1]!;
+      emit(second, { type: 'tool_use', data: { id: 'new', tool: 'Edit', input: { file_path: 'new-turn.ts' } } });
+      emit(second, { type: 'tool_result', data: { id: 'new', content: 'new-turn-result', isError: false } });
+      emit(first, { type: 'tool_use', data: { id: 'late', tool: 'Read', input: { file_path: 'late-old-turn.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'old', content: 'late-old-result', isError: true } });
+      await flushFrames();
+      const frame = await press(app, CTRL_O);
+      expect(frame).toContain('new-turn-result');
+      expect(frame).toContain('committed first answer');
+      expect(countOccurrences(frame, 'old-turn.ts')).toBe(1);
+      expect(countOccurrences(frame, 'old-turn-result')).toBe(1);
+      expect(frame.indexOf('old-turn-result')).toBeLessThan(frame.indexOf('next question'));
+      assertSafeFrames([frame], ['late-old-turn.ts', 'late-old-result']);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the previous turn tool history before a local command line in the transcript', async () => {
+    const conversation = createScriptedConversation(
+      new Map<string, TuiLocalCommand>([['/accept', { kind: 'notice', message: 'No assistant response found.' }]]),
+      NO_ORDER_COMMANDS,
+    );
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const first = await begin(app, conversation);
+      emit(first, { type: 'tool_use', data: { id: 'old', tool: 'Read', input: { file_path: 'old-turn.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'old', content: 'old-turn-result', isError: false } });
+      conversation.resolveWith({ kind: 'assistant_response', content: 'committed first answer' });
+      await flushFrames();
+      await press(app, '/accept');
+      await press(app, ENTER);
+      await press(app, 'next question');
+      const frame = await press(app, ENTER);
+      expect(countOccurrences(frame, 'old-turn-result')).toBe(1);
+      expect(frame.indexOf('old-turn-result')).toBeLessThan(frame.indexOf('/accept'));
+      expect(frame.indexOf('/accept')).toBeLessThan(frame.indexOf('next question'));
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should associate reverse completions by call context and keep a failure after a duplicate success', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', toolActivity: { callId: 'attempt-a' }, data: { id: 'same-id', tool: 'Read', input: { file_path: 'slow-a.ts' } } });
+      emit(input, { type: 'tool_use', toolActivity: { callId: 'attempt-b' }, data: { id: 'same-id', tool: 'Edit', input: { file_path: 'fast-b.ts' } } });
+      emit(input, { type: 'tool_result', toolActivity: { callId: 'attempt-b' }, data: { id: 'same-id', content: 'fast-b-success', isError: false } });
+      await flushFrames();
+      expect(statusRows(app.lastFrame() ?? '').join('\n')).toContain('slow-a.ts');
+      expect(app.lastFrame()).toContain('fast-b-success');
+      emit(input, { type: 'tool_result', toolActivity: { callId: 'attempt-a' }, data: { id: 'same-id', content: 'slow-a-failure', isError: true } });
+      await flushFrames();
+      const committed = app.lastFrame() ?? '';
+      expect(countOccurrences(committed, 'slow-a-failure')).toBe(1);
+      expect(countOccurrences(committed, 'fast-b-success')).toBe(1);
+      expect(committed.indexOf('fast-b-success')).toBeLessThan(committed.indexOf('slow-a-failure'));
+      emit(input, { type: 'tool_result', toolActivity: { callId: 'attempt-a' }, data: { id: 'same-id', content: 'incorrect-success-replacement', isError: false } });
+      const frame = await press(app, CTRL_O);
+      expect(frame).toContain('slow-a.ts');
+      expect(frame).toContain('slow-a-failure');
+      expect(frame).toContain('fast-b.ts');
+      expect(frame).toContain('fast-b-success');
+      expect(frame).toMatch(/✗|failure/u);
+      expect(frame).toMatch(/✓|success/u);
+      expect(frame).toContain('completion #3');
+      expect(frame).toContain('completion #4');
+      expect(statusRows(frame).join('\n')).toContain(UI.thinking);
+      expect(frame).not.toContain('incorrect-success-replacement');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should reflow existing history and preserve the Japanese hardware cursor on the same terminal across resizes', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 36);
+    const stdin = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 80, rows: 36, convertEol: true });
+    const draft = '日本語下書き';
+    const result = `HISTORY_BEFORE_RESIZE\n${'日本語の長い結果 '.repeat(100)}WRAPPED_RESULT_END`;
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processed = 0;
+    const refresh = async (): Promise<string> => {
+      await app!.waitUntilRenderFlush();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+      processed = stdout.frames.length;
+      return getVisibleTerminalText(terminal, stdout.rows);
+    };
+    const assertCursor = (): void => {
+      const active = terminal.buffer.active;
+      const line = active.getLine(active.baseY + active.cursorY)?.translateToString(true) ?? '';
+      const layout = layoutPromptRows(draft, 4, resolvePromptContentWidth(stdout.columns, 1));
+      expect(line).toContain(`❯ ${layout.rows[layout.cursorRow] ?? ''}`);
+      expect(active.cursorX).toBe(line.indexOf('❯ ') + 2 + stringWidth((layout.rows[layout.cursorRow] ?? '').slice(0, layout.cursorColumn)));
+      expect(active.cursorY).toBeLessThan(stdout.rows);
+    };
+    try {
+      await writeTerminalFrames(terminal, ['SHELL_SCROLLBACK_MARKER\r\n']);
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[{ role: 'assistant', content: 'COMMITTED_RESPONSE_MARKER' }]}
+        submitMode="chat" autoSubmit={false} initialHistory={[]} initialDraft={undefined}
+        initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin, exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      await waitForOutput(stdout, (value) => value.includes('COMMITTED_RESPONSE_MARKER'), 'committed response');
+      stdin.write('inspect tools');
+      await flushFrames();
+      stdin.write(ENTER);
+      await vi.waitFor(() => expect(conversation.submitCalls).toHaveLength(1));
+      const input = conversation.submitCalls[0]!;
+      emit(input, { type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: `printf ${'長いコマンド'.repeat(100)}` } } });
+      emit(input, { type: 'tool_result', data: { id: 'long', content: result, isError: false } });
+      emit(input, { type: 'tool_use', data: { id: 'running', tool: 'Read', input: { file_path: 'running.ts' } } });
+      stdin.write(`\x1b[200~${draft}\x1b[201~`);
+      await flushFrames();
+      stdin.write(ARROW_LEFT);
+      await flushFrames();
+      stdin.write(ARROW_LEFT);
+      await flushFrames();
+      expect(await refresh()).toContain('HISTORY_BEFORE_RESIZE');
+      assertCursor();
+      for (const [columns, rows] of [[32, 36], [80, 36], [40, 12], [80, 36]] as const) {
+        terminal.resize(columns, rows);
+        const start = stdout.frames.length;
+        stdout.resize(columns, rows);
+        await waitForOutput(stdout, () => stdout.frames.length > start, 'resized history frame');
+        const screen = await refresh();
+        // Completed tools now belong to native scrollback, not the live pane.
+        expect(getTerminalText(terminal).replace(/\s/gu, '')).toContain('HISTORY_BEFORE_RESIZE');
+        expect(screen).toContain('running.ts');
+        assertCursor();
+        expect(input.abortSignal?.aborted).toBe(false);
+        expect(countOccurrences(getTerminalText(terminal), 'COMMITTED_RESPONSE_MARKER')).toBe(1);
+        expect(countOccurrences(getTerminalText(terminal), 'SHELL_SCROLLBACK_MARKER')).toBe(1);
+      }
+      stdin.write(CTRL_O);
+      await flushFrames();
+      let screen = await refresh();
+      for (let page = 0; page < 80 && !screen.replace(/\s/gu, '').includes('WRAPPED_RESULT_END'); page += 1) {
+        assertCursor();
+        stdin.write(PAGE_DOWN);
+        await flushFrames();
+        screen = await refresh();
+      }
+      expect(screen.replace(/\s/gu, '')).toContain('WRAPPED_RESULT_END');
+      assertCursor();
+      expect(getTerminalText(terminal)).not.toContain('�');
+      expect(countOccurrences(getTerminalText(terminal), 'COMMITTED_RESPONSE_MARKER')).toBe(1);
+      expect(conversation.submitCalls).toHaveLength(1);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
     }
   });
 });
@@ -2625,6 +3275,58 @@ describe('ConversationView', () => {
       const calls = submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls;
       expect(calls).toHaveLength(1);
       expect(calls[0]?.text).toBe('やあ、てすと');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('should normalize CR line breaks from a bracketed paste without submitting it', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write('\x1b[200~first\rsecond\x1b[201~');
+      await flushFrames();
+      expect(view.lastFrame()).toContain('second');
+      expect(conversation.submitCalls).toHaveLength(0);
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe('first\nsecond');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('should preserve embedded CR line breaks from an unbracketed input chunk', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write('first\rsecond');
+      await flushFrames();
+      expect(view.lastFrame()).toContain('second');
+      expect(conversation.submitCalls).toHaveLength(0);
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe('first\nsecond');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('should insert a pending image prefix before text from a bracketed paste', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await flushFrames();
+      view.stdin.write(']');
+      await flushFrames();
+      view.stdin.write('\x1b[200~abc\x1b[201~');
+      await flushFrames();
+      expect(view.lastFrame()).toContain(visiblePromptLine(']abc'));
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe(']abc');
     } finally {
       view.unmount();
     }
@@ -6045,6 +6747,212 @@ describe('TUI scrollback output', () => {
       }
       terminal.restore();
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ConversationView conversation log order', () => {
+  const CTRL_O = '\x0f';
+
+  async function begin(app: ReturnType<typeof render>, conversation: ScriptedConversation, text = 'inspect the code'): Promise<TuiSubmitInput> {
+    await flushFrames();
+    app.stdin.write(text);
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+    const input = conversation.submitCalls.at(-1);
+    if (input === undefined) throw new Error('The view did not start a submission.');
+    return input;
+  }
+
+  function emit(input: TuiSubmitInput, event: StreamEvent): void {
+    if (input.onStreamEvent === undefined) throw new Error('The submission has no stream sink.');
+    input.onStreamEvent(event);
+  }
+
+  function frameOf(app: ReturnType<typeof render>): string {
+    return stripAnsi(app.lastFrame() ?? '');
+  }
+
+  /** Rows above the prompt box: the transcript and the running area. */
+  function rowsAbovePrompt(frame: string): string[] {
+    const rows = frame.split('\n');
+    return rows.slice(0, rows.findIndex((row) => row.startsWith('╭')));
+  }
+
+  function expectInOrder(frame: string, parts: readonly string[]): void {
+    let from = 0;
+    for (const part of parts) {
+      const index = frame.indexOf(part, from);
+      expect(index, `${part} after offset ${from}\n${frame}`).toBeGreaterThanOrEqual(from);
+      from = index + part.length;
+    }
+  }
+
+  it('should show the user line, thinking, tools and the reply in the order they happened, each committed once', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'thinking', data: { thinking: 'Plan: read ' } });
+      emit(input, { type: 'thinking', data: { thinking: 'the file' } });
+      await flushFrames();
+      const live = frameOf(app);
+      expect(rowsAbovePrompt(live).at(-1)).toBe('◇ Plan: read the file');
+      expect(countOccurrences(live, 'Plan: read the file')).toBe(1);
+      expect(statusRows(live).join('\n')).toContain(UI.extendedThinking);
+      expect(statusRows(live).join('\n')).not.toContain('Plan: read');
+
+      emit(input, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'a.ts' } } });
+      await flushFrames();
+      const running = frameOf(app);
+      expect(countOccurrences(running, '◇ Plan: read the file')).toBe(1);
+      expect(rowsAbovePrompt(running).some((row) => row.startsWith('◆ Read a.ts …'))).toBe(true);
+
+      emit(input, { type: 'tool_result', data: { id: 'read', content: 'file-body', isError: false } });
+      emit(input, { type: 'thinking', data: { thinking: 'Now answer.' } });
+      await flushFrames();
+      input.onAssistantChunk('streamed ');
+      input.onAssistantChunk('answer');
+      await flushFrames();
+      expect(countOccurrences(frameOf(app), 'streamed answer')).toBe(1);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'final answer' });
+      await flushFrames();
+
+      const done = frameOf(app);
+      expectInOrder(done, ['❯ inspect the code', '◇ Plan: read the file', '◆ Read a.ts ✓', 'file-body', '◇ Now answer.', '● final answer']);
+      for (const once of ['Plan: read the file', 'file-body', 'Now answer.', 'final answer']) {
+        expect(countOccurrences(done, once), once).toBe(1);
+      }
+      expect(done).not.toContain('streamed answer');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the status label and add no thinking entry when the provider sends no thinking text', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'thinking', data: { thinking: '' } });
+      await flushFrames();
+      expect(statusRows(frameOf(app)).join('\n')).toContain(UI.extendedThinking);
+      expect(frameOf(app)).not.toContain('◇');
+      conversation.resolveWith({ kind: 'assistant_response', content: 'plain answer' });
+      await flushFrames();
+      expect(frameOf(app)).toContain('● plain answer');
+      expect(frameOf(app)).not.toContain('◇');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the running tool area between the transcript and the prompt instead of below the status row', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'build', tool: 'Bash', input: { command: 'npm run build' } } });
+      emit(input, { type: 'tool_output', data: { id: 'build', tool: 'Bash', output: '> tsc -p tsconfig.json\n' } });
+      await flushFrames();
+      const rows = frameOf(app).split('\n');
+      const prompt = rows.findIndex((row) => row.startsWith('╭'));
+      const tool = rows.findIndex((row) => row.startsWith('◆ Bash Ran npm run build … running'));
+      expect(tool).toBeGreaterThan(-1);
+      expect(tool).toBeLessThan(prompt);
+      expect(rows[tool + 1]).toBe('  > tsc -p tsconfig.json');
+      expect(rows.findIndex((row) => /Tools:/u.test(row))).toBeLessThan(prompt);
+      expect(rows.findIndex((row) => statusRows(row).length > 0)).toBeGreaterThan(prompt);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should hold a queued line above the prompt and move it into the transcript once when its turn starts', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    const heading = getLabel('tui.ui.queuedCount', 'en', { count: '1' });
+    try {
+      const first = await begin(app, conversation);
+      emit(first, { type: 'tool_use', data: { id: 'before', tool: 'Read', input: { file_path: 'before.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'before', content: 'before-result', isError: false } });
+      app.stdin.write('next request');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      const queued = frameOf(app).split('\n');
+      const headingRow = queued.findIndex((row) => row.includes(heading));
+      expect(headingRow).toBeGreaterThan(-1);
+      expect(queued[headingRow]).toContain(UI.queuedHint);
+      expect(queued[headingRow + 1]).toBe('❯ next request');
+      expect(queued[headingRow + 2]!.startsWith('╭')).toBe(true);
+      expect(countOccurrences(frameOf(app), 'next request')).toBe(1);
+
+      emit(first, { type: 'tool_use', data: { id: 'after', tool: 'Read', input: { file_path: 'after.ts' } } });
+      emit(first, { type: 'tool_result', data: { id: 'after', content: 'after-result', isError: false } });
+      conversation.resolveWith({ kind: 'assistant_response', content: 'first answer' });
+      await flushFrames();
+      const moved = frameOf(app);
+      expect(conversation.submitCalls.map(({ text }) => text)).toEqual(['inspect the code', 'next request']);
+      expectInOrder(moved, ['❯ inspect the code', 'before-result', 'after-result', '● first answer', '❯ next request']);
+      expect(countOccurrences(moved, 'next request')).toBe(1);
+      expect(moved).not.toContain(heading);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each(['interrupted', 'error'] as const)('should keep the thinking and tools shown so far and record the %s turn after them', async (ending) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'done', tool: 'Bash', input: { command: 'npm test' } } });
+      emit(input, { type: 'tool_result', data: { id: 'done', content: 'kept-result', isError: false } });
+      emit(input, { type: 'thinking', data: { thinking: 'Half-finished thought' } });
+      await flushFrames();
+      if (ending === 'interrupted') app.stdin.write(ESC);
+      else conversation.resolveWith({ kind: 'error', message: 'provider failed' });
+      await flushFrames();
+      const frame = frameOf(app);
+      expectInOrder(frame, ['◆ Bash Ran npm test ✓', 'kept-result', '◇ Half-finished thought',
+        ending === 'interrupted' ? UI.responseInterrupted : 'provider failed']);
+      expect(countOccurrences(frame, 'Half-finished thought')).toBe(1);
+      if (ending === 'interrupted') conversation.resolveWith({ kind: 'assistant_response', content: 'late' });
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('should mark omitted output with a dim [more] and show the raw times only when expanded in %s', async (lang) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const level = chalk.level;
+    chalk.level = 3;
+    const app = renderConversation(conversation, 'chat', vi.fn(), { lang });
+    let now = 1794811657541;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const input = await begin(app, conversation);
+      emit(input, { type: 'tool_use', data: { id: 'log', tool: 'Bash', input: { command: 'cat log' } } });
+      emit(input, { type: 'tool_use', data: { id: 'running', tool: 'Read', input: { file_path: 'running.ts' } } });
+      now += 74;
+      emit(input, { type: 'tool_result', data: { id: 'log', content: 'one\ntwo\nthree\nfour', isError: false } });
+      await flushFrames();
+      const compact = frameOf(app);
+      expectInOrder(compact, ['◆ Bash Ran cat log ✓ 74 ms', '  one', '  two', '  three', '  [more]']);
+      for (const raw of ['@1794811657541', '#1', getLabel('tui.ui.toolHistoryCompletion', lang), '[出力を省略・続きあり]', '[truncated; more]']) {
+        expect(compact).not.toContain(raw);
+      }
+      const committed = (app.lastFrame() ?? '').split('\n').find((row) => stripAnsi(row) === '  [more]');
+      expect(committed).toContain('\x1b[2m');
+      app.stdin.write(CTRL_O);
+      await flushFrames();
+      expect(frameOf(app)).toContain('@1794811657541');
+    } finally {
+      clock.mockRestore();
+      app.unmount();
+      chalk.level = level;
     }
   });
 });

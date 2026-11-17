@@ -1,5 +1,6 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import {
   getLanguage,
   resolveConfigValues,
@@ -53,7 +54,7 @@ export async function runSyncConflictResolver(
       resolvedProviderModel.provider,
     );
   const provider = getProvider(resolvedProviderModel.provider);
-  const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(systemPrompt, lang, provider.getRuntimeInstructions());
+  const resolvedSystemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(systemPrompt, lang, provider.getRuntimeInstructions()), lang);
   const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
 
   return agent.call(prompt, {

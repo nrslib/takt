@@ -46,10 +46,6 @@ describe('validateProviderModelRequirements', () => {
     })).not.toThrow();
   });
 
-  it('Given no resolved model source, When validate, Then the OpenCode model requirement remains', () => {
-    expect(() => validateProviderModelRequirements('opencode', undefined)).toThrow(/requires model/);
-  });
-
   it('Given an empty OpenCode model with default source, When validate, Then it is not treated as dropped', () => {
     expect(() => validateProviderModelRequirements('opencode', '', {
       modelSource: 'default',

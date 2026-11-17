@@ -21,28 +21,23 @@ it('defaults to default and simple with descriptions in the configured language'
   expect(ja.workflows?.map(({ usageDescription }) => usageDescription)).not.toEqual(en.workflows?.map(({ usageDescription }) => usageDescription));
 });
 
-it('keeps mixed entries and adds the default workflow without replacing usage descriptions', () => {
+it('keeps mixed entries and preserves usage descriptions', () => {
   expect(resolveManagerWorkflowSelection('/repo', {
-    workflows: ['simple', { custom: 'Custom work' }], defaultWorkflow: 'default',
+    workflows: ['simple', { custom: 'Custom work' }],
   }, 'ja')).toEqual({ workflows: [
     { name: 'simple', description: 'Workflow simple' },
     { name: 'custom', description: 'Workflow custom', usageDescription: 'Custom work' },
-    { name: 'default', description: 'Workflow default' },
-  ], defaultWorkflow: 'default', missingWorkflows: [] });
+  ], missingWorkflows: [] });
   expect(resolveManagerWorkflowSelection('/repo', {
-    workflows: [{ default: 'Explicit usage' }], defaultWorkflow: 'default',
+    workflows: [{ default: 'Explicit usage' }],
   }, 'en').workflows).toEqual([{ name: 'default', description: 'Workflow default', usageDescription: 'Explicit usage' }]);
 });
 
 it('ignores missing names and reports them for startup warnings', () => {
-  expect(resolveManagerWorkflowSelection('/repo', { workflows: ['simple', 'missing'], defaultWorkflow: 'missing' }, 'en'))
+  expect(resolveManagerWorkflowSelection('/repo', { workflows: ['simple', 'missing'] }, 'en'))
     .toEqual({ workflows: [{ name: 'simple', description: 'Workflow simple' }], missingWorkflows: ['missing'] });
 });
 
 it('allows every workflow when all is configured', () => {
   expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all' }, 'en')).toEqual({ missingWorkflows: [] });
-  expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all', defaultWorkflow: 'default' }, 'en'))
-    .toEqual({ defaultWorkflow: 'default', missingWorkflows: [] });
-  expect(resolveManagerWorkflowSelection('/repo', { workflows: 'all', defaultWorkflow: 'missing' }, 'en'))
-    .toEqual({ missingWorkflows: ['missing'] });
 });

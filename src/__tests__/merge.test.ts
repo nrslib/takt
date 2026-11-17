@@ -482,7 +482,7 @@ describe('Merge target selection and execution', () => {
   });
 
   it('既定はsimple workflow・squash・自動起動無効・draft除外である', () => {
-    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', method: 'squash', autoStart: false, includeDraft: false,
+    expect(resolveMergeSettings(undefined)).toMatchObject({ workflow: 'merge-review-fix-simple', prepareWorkflow: 'merge-prepare', method: 'squash', autoStart: false, includeDraft: false,
       includeForks: false, threatCheckMaxDiffBytes: 200_000 });
   });
 

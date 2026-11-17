@@ -1,3 +1,5 @@
+Preserve unaffected contracts; migrate current consumers; remove superseded paths unless explicitly retained. Compatibility/legacy/migration/coexistence: explicit targets/scope. Meet acceptance/real safety conditions.
+
 {{include:policies/evidence-based-judgment}}
 
 # Contract Replacement Policy

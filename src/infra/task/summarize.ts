@@ -14,6 +14,7 @@ import { getProvider, type ProviderType } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 import { createLogger, slugify } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { SummarizeOptions } from './types.js';
 import { checkManagedProviders } from '../managed-providers/preflight.js';
@@ -73,11 +74,11 @@ class TaskSummarizer {
     cwd: string,
   ): Promise<string> {
     const provider = getProvider(this.providerType);
-    const systemPrompt = buildProviderRuntimeSystemPrompt(
+    const systemPrompt = withProgressNotesGuidance(buildProviderRuntimeSystemPrompt(
       loadTemplate('score_slug_system_prompt', 'en'),
       'en',
       provider.getRuntimeInstructions(),
-    );
+    ), 'en');
     const agent = provider.setup({
       name: 'summarizer',
       systemPrompt,

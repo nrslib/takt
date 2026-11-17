@@ -6,6 +6,8 @@ import { makeProvider } from './test-helpers.js';
 import { diagnosticLoggingSuppressed, withoutDiagnosticLogging } from '../shared/utils/diagnostic-context.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 import { MAX_PROCESS_PROGRESS_BYTES } from '../core/daemon/processProtocol.js';
+import type { Provider } from '../infra/providers/types.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -20,6 +22,50 @@ function fixture() {
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
+
+it('adds the progress notes guidance without changing the manager prompt that requires goal work-log records', () => {
+  const setup = vi.fn<Provider['setup']>(() => ({ call: vi.fn<ProviderAgent['call']>() }));
+  const managerPrompt = 'Record each operation and its evidence with takt_record_goal_work_log in the same turn.';
+
+  createManagerTurnExecutor('/repository', { ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup }) },
+    strategy: { systemPrompt: managerPrompt } });
+
+  expect(setup).toHaveBeenCalledWith({ name: 'manager', systemPrompt: withProgressNotesGuidance(managerPrompt, 'en') });
+});
+
+it('forwards tool identities and batched results with a separate call identity for each provider call', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'thinking', data: { thinking: 'hidden' } });
+    options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: '日本語.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { completedToolIds: ['reused'], content: 'failed', isError: true } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.map(([event]) => event.type)).toEqual(['tool_use', 'tool_result', 'tool_use', 'tool_result']);
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events[0]).toMatchObject({ data: { id: 'reused', input: { file_path: '日本語.ts' } } });
+  expect(events[1]).toMatchObject({ data: { completedToolIds: ['reused'], isError: true } });
+  expect(events[0].toolActivity.callId).toBe(events[1].toolActivity.callId);
+  expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
+});
+
+it('assigns an unidentified result to the tool started after a batch that completed both its own and listed tools', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'a', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_use', data: { id: 'b', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { id: 'a', completedToolIds: ['b'], content: 'batch', isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'c', tool: 'Read', input: {} } });
+    options.onStream!({ type: 'tool_result', data: { content: 'c result', isError: false } });
+    return success;
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(onToolEvent.mock.calls.at(-1)![0]).toMatchObject({ type: 'tool_result', data: { id: 'c', content: 'c result' } });
+});
 
 it.each([true, false, undefined])('uses fresh business context only for patrols when patrol=%s', async (patrol) => {
   const { call, executor, input, invalidateSession } = fixture();

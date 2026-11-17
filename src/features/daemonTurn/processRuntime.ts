@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
-import { TURN_PROTOCOL_VERSION, MAX_PROCESS_PENDING_REQUESTS, MAX_PROCESS_SEND_BYTES,
-  parseDaemonProcessMessage, parseTurnProcessMessage, processRequestBytes,
+import { TURN_PROTOCOL_VERSION,
+  parseDaemonProcessMessage, parseTurnProcessMessage,
   type DaemonStateRequest, type DaemonStateReply, type TurnProcessMessage } from '../../core/daemon/processProtocol.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { MAX_PROCESS_PROGRESS_BYTES } from '../../core/daemon/processProtocol.js';
-import type { ConversationActivity, ConversationProgress } from '../../shared/types/conversation-activity.js';
+import type { ConversationProgress } from '../../shared/types/conversation-activity.js';
+import { SerialSender } from '../../shared/utils/serialSender.js';
 
 export interface TurnIo {
   signal: AbortSignal;
   request(request: DaemonStateRequest): Promise<DaemonStateReply>;
-  progress(message: ConversationProgress): void;
+  progress(message: ConversationProgress): void | Promise<void>;
 }
 export interface TurnBusiness {
   execute(input: TurnStart, io: TurnIo): Promise<TurnOutcome>;
@@ -33,72 +34,22 @@ export function createTurnProcessRuntime(input: {
   let initialization: Promise<void> | undefined;
   let active: { turn: TurnIdentity; controller: AbortController; completion: Promise<void>; outcome?: TurnOutcome } | undefined;
   let closing: Promise<void> | undefined;
-  const requests = new Map<string, { turn: TurnIdentity; bytes: number; resolve(reply: DaemonStateReply): void; reject(error: unknown): void }>();
-  let requestBytes = 0;
-  let sendCount = 0;
-  let sendBytes = 0;
-  let pendingActivity: { turn: TurnIdentity; activity: ConversationActivity } | undefined;
-  let sendingActivity = false;
-  let activityUnavailable = false;
-  let progressUnavailable = false;
-  const progressQueue: Array<{ turn: TurnIdentity; message: ConversationProgress; signal: AbortSignal }> = [];
-  let flushingProgress = false;
+  const requests = new Map<string, { turn: TurnIdentity; resolve(reply: DaemonStateReply): void; reject(error: unknown): void }>();
   let progressCompletion = Promise.resolve();
+  let progressAvailable = true;
+  const sender = new SerialSender<TurnProcessMessage>((message, done) => {
+    input.transport.send(message).then(() => { done(null); }, done);
+  });
   const envelope = () => {
     if (initialized === undefined) throw new Error('Turn process is not initialized');
     return { protocolVersion: TURN_PROTOCOL_VERSION, launchId: initialized.launchId } as const;
   };
   const send = async (value: unknown): Promise<void> => {
-    const message = parseTurnProcessMessage(value, envelope().launchId);
-    const bytes = Buffer.byteLength(JSON.stringify(message));
-    if (sendCount >= MAX_PROCESS_PENDING_REQUESTS || sendBytes + bytes > MAX_PROCESS_SEND_BYTES) throw new Error('Process send capacity exceeded');
-    sendCount++;
-    sendBytes += bytes;
-    try { await input.transport.send(message); }
-    finally { sendCount--; sendBytes -= bytes; }
-  };
-  const flushActivity = async (): Promise<void> => {
-    sendingActivity = true;
-    try {
-      while (pendingActivity !== undefined) {
-        if (flushingProgress) await progressCompletion;
-        if (pendingActivity === undefined) break;
-        const { turn, activity } = pendingActivity;
-        pendingActivity = undefined;
-        if (active === undefined || !sameTurn(active.turn, turn) || active.controller.signal.aborted || active.outcome !== undefined) continue;
-        // 表示用の送信は常に1件に制限し、業務用の送信枠を消費しない。
-        await input.transport.send(parseTurnProcessMessage({ ...envelope(), kind: 'turn_progress', turn,
-          message: activity }, envelope().launchId));
-      }
-    } catch {
-      // 表示の配送が使えなくても、ターンの結果は通常の経路で確定する。
-      activityUnavailable = true;
-    } finally {
-      pendingActivity = undefined;
-      sendingActivity = false;
-    }
-  };
-  const flushProgress = async (): Promise<void> => {
-    flushingProgress = true;
-    try {
-      while (progressQueue.length > 0) {
-        const pending = progressQueue[0]!;
-        try {
-          if (!pending.signal.aborted) await send({ ...envelope(), kind: 'turn_progress', turn: pending.turn, message: pending.message });
-        } finally {
-          progressQueue.shift();
-        }
-      }
-    } catch {
-      // 途中表示の送信失敗は、実行結果の確定に影響させない。
-      progressUnavailable = true;
-      progressQueue.length = 0;
-    } finally { flushingProgress = false; }
+    await sender.send(parseTurnProcessMessage(value, envelope().launchId));
   };
   const rejectRequests = (error: unknown): void => {
     for (const pending of requests.values()) pending.reject(error);
     requests.clear();
-    requestBytes = 0;
   };
   const request = (turn: TurnIdentity, value: DaemonStateRequest): Promise<DaemonStateReply> => {
     if (active === undefined || !sameTurn(active.turn, turn) || active.outcome !== undefined || closing !== undefined) {
@@ -107,12 +58,10 @@ export function createTurnProcessRuntime(input: {
     active.controller.signal.throwIfAborted();
     const requestId = randomUUID();
     const message: TurnProcessMessage = { ...envelope(), kind: 'daemon_request', turn, requestId, request: value };
-    const bytes = processRequestBytes(requests.size, requestBytes, message);
     return new Promise((resolve, reject) => {
-      requests.set(requestId, { turn, bytes, resolve, reject });
-      requestBytes += bytes;
+      requests.set(requestId, { turn, resolve, reject });
       void send(message).catch((error: unknown) => {
-        if (requests.delete(requestId)) requestBytes -= bytes;
+        requests.delete(requestId);
         reject(error);
         input.onFatal(error);
       });
@@ -152,32 +101,23 @@ export function createTurnProcessRuntime(input: {
           const controller = new AbortController();
           const current = { turn: message.input.turn, controller, completion: Promise.resolve(), outcome: undefined as TurnOutcome | undefined };
           active = current;
-          activityUnavailable = false;
-          progressUnavailable = false;
           progressCompletion = Promise.resolve();
+          progressAvailable = true;
           current.completion = Promise.resolve().then(async () => {
             let outcome: TurnOutcome;
             try {
               outcome = await business!.execute(message.input, { signal: controller.signal,
                 request: (value) => request(current.turn, value),
                 progress: (value) => {
-                  if (controller.signal.aborted || current.outcome !== undefined || progressUnavailable) return;
-                  if (typeof value !== 'string' && value.kind !== 'turn_text') {
-                    if (activityUnavailable) return;
-                    pendingActivity = { turn: current.turn, activity: value };
-                    if (!sendingActivity) void flushActivity();
-                    return;
-                  }
+                  if (controller.signal.aborted || current.outcome !== undefined) return Promise.resolve();
                   const message = typeof value === 'string' ? truncateUtf8(value, MAX_PROCESS_PROGRESS_BYTES).value
-                    : { kind: value.kind, message: truncateUtf8(value.message, MAX_PROCESS_PROGRESS_BYTES).value };
-                  if (progressQueue.length >= MAX_PROCESS_PENDING_REQUESTS) {
-                    progressUnavailable = true;
-                    return;
-                  }
-                  progressQueue.push({ turn: current.turn, message, signal: controller.signal });
-                  if (!flushingProgress) {
-                    progressCompletion = flushProgress();
-                  }
+                    : value.kind === 'turn_text' ? { ...value, message: truncateUtf8(value.message, MAX_PROCESS_PROGRESS_BYTES).value } : value;
+                  const delivery = progressCompletion.then(async () => {
+                    if (!controller.signal.aborted && progressAvailable) await send({ ...envelope(), kind: 'turn_progress', turn: current.turn, message });
+                  });
+                  // void の provider callback が使われても、終了通知は全配信を待つ。
+                  progressCompletion = delivery.catch(() => { progressAvailable = false; });
+                  return progressCompletion;
                 } });
             } catch {
               outcome = controller.signal.aborted ? { kind: 'interrupted' } : { kind: 'failed', message: 'Turn execution failed' };
@@ -185,7 +125,6 @@ export function createTurnProcessRuntime(input: {
             await progressCompletion;
             if (controller.signal.aborted && outcome.kind !== 'interrupted') outcome = { kind: 'interrupted' };
             current.outcome = outcome;
-            pendingActivity = undefined;
             await send({ ...envelope(), kind: 'turn_finished', turn: current.turn, outcome });
           });
           void current.completion.catch(input.onFatal);
@@ -204,12 +143,16 @@ export function createTurnProcessRuntime(input: {
           const pending = requests.get(message.requestId);
           if (pending === undefined || !sameTurn(pending.turn, message.turn)) return;
           requests.delete(message.requestId);
-          requestBytes -= pending.bytes;
           pending.resolve(message.reply);
           break;
         }
       }
     },
     async disconnect(): Promise<void> { await shutdown(); },
+    /** IPC が切れた後は送信の完了通知が来ないので、送信待ちを解放してから終了する。 */
+    async transportClosed(): Promise<void> {
+      sender.close(new Error('Turn transport disconnected'));
+      await shutdown();
+    },
   };
 }

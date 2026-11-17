@@ -44,6 +44,7 @@ import {
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import { renderTraceReportFromRecords } from '../features/tasks/execute/traceReport.js';
 import type { StreamCallback, StreamEvent } from '../shared/types/provider.js';
+import { withProgressNotesGuidance } from '../shared/prompts/progress-notes.js';
 
 const supportedRuntime = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -515,7 +516,8 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(endpoint.requests[5]?.toolNames).toContain('read');
     expect(endpoint.requests.map((request) => request.model)).toEqual(Array(7).fill('deepseek-v4-flash'));
     expect(endpoint.requests.map((request) => request.reasoningEffort)).toEqual(Array(7).fill('low'));
-    expect(endpoint.requests.map((request) => request.system)).toEqual(Array(7).fill(plan.strategy.systemPrompt));
+    expect(endpoint.requests.map((request) => request.system))
+      .toEqual(Array(7).fill(withProgressNotesGuidance(plan.strategy.systemPrompt, 'en')));
     expect(endpoint.requests.every((request) => request.apiKey?.includes(STORE_KEY))).toBe(true);
     expect(endpoint.requests.every((request) => !request.toolResultContainsStoreKey)).toBe(true);
     expect(endpoint.requests.every((request) => !request.hasSessionLog)).toBe(true);
@@ -536,6 +538,9 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       { projectCwd: workspace, provider: 'deepseek-harness', reportFallbackProvider: { provider: 'deepseek-harness', model: 'deepseek-v4-flash' } },
       () => workspace, () => workspace, () => undefined, () => path.join(root, 'reports'),
       () => 'en', () => 'default',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
     const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, {});
     expect(fallback).toBeDefined();

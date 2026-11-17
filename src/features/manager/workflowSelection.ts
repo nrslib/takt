@@ -20,17 +20,14 @@ const defaultWorkflows = {
 
 export function resolveManagerWorkflowSelection(
   cwd: string,
-  config: { workflows?: ManagerWorkflowsConfig; defaultWorkflow?: string },
+  config: { workflows?: ManagerWorkflowsConfig },
   language: 'ja' | 'en',
-): { workflows?: ManagerWorkflow[]; defaultWorkflow?: string; missingWorkflows: string[] } {
+): { workflows?: ManagerWorkflow[]; missingWorkflows: string[] } {
   const configured = config.workflows ?? defaultWorkflows[language];
   const entries = new Map<string, string | undefined>();
   for (const entry of configured === 'all' ? [] : configured) {
     if (typeof entry === 'string') entries.set(entry, undefined);
     else for (const [name, description] of Object.entries(entry)) entries.set(name, description);
-  }
-  if (config.defaultWorkflow !== undefined && !entries.has(config.defaultWorkflow)) {
-    entries.set(config.defaultWorkflow, undefined);
   }
   const workflows: ManagerWorkflow[] = [];
   const missingWorkflows: string[] = [];
@@ -41,7 +38,6 @@ export function resolveManagerWorkflowSelection(
   }
   return {
     ...(configured === 'all' ? {} : { workflows }),
-    ...(workflows.some(({ name }) => name === config.defaultWorkflow) ? { defaultWorkflow: config.defaultWorkflow } : {}),
     missingWorkflows,
   };
 }

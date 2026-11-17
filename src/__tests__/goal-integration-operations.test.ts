@@ -47,7 +47,7 @@ it.each(['ja', 'en'])('passes human verification steps and resolved language %s 
   expect(doubles.complete).toHaveBeenCalledOnce();
   expect(doubles.complete.mock.calls[0]).toEqual(expect.arrayContaining([completion.humanChecks, language]));
 });
-beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
+beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree: false, policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
 it.each(['paused', 'aborted'] as const)('rejects writes against a %s goal before invoking tools', async (executionStatus) => {
   doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus });
   for (const result of [await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal), await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal), await checkTaktGoalCompletion(input, {}, signal), await reopenTaktGoal({ ...input, reason: '追加の修正' }, {}, signal)]) expect(result.isError).toBe(true);
@@ -84,9 +84,10 @@ it('passes the reason and cancellation through integration and notifies using th
     id: saved.id, status: 'created', executionStatus: 'active', branch: saved.branch, integrationBranch: saved.integrationBranch,
   }, workLogEntryId: saved.workLog[0]!.id });
 });
-it('passes reviewed SHA, notification policy and cancellation directly to integration', async () => {
+it.each([false, true])('passes reviewed SHA, notification policy, cancellation, and preserveGoalWorktree=%s directly to integration', async (preserveGoalWorktree) => {
+  doubles.config.mockReturnValue({ mainMerge: 'approve', preserveGoalWorktree, policy });
   await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
-  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja');
+  expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja', preserveGoalWorktree);
 });
 it('returns clone cleanup diagnostics without changing the successful MCP merge response', async () => {
   const sha = 'a'.repeat(40);

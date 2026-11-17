@@ -3,6 +3,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 import { keepsPiToolWithoutEdit, PI_READONLY_TOOLS } from './pi-tool-policy.js';
+import { resumeCompactedSession } from './compaction-recovery.js';
 
 const log = createLogger('pi-provider');
 
@@ -68,10 +69,9 @@ export class PiProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    return {
-      call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
-        callPiLazy(name, prompt, toPiOptions(options, systemPrompt)),
-    };
+    const call = (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> =>
+      callPiLazy(name, prompt, toPiOptions(options, systemPrompt));
+    return { call, recoverFromCompaction: resumeCompactedSession(name, call) };
   }
 
 }

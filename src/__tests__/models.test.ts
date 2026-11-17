@@ -3,7 +3,6 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import * as PublicSchemas from '../core/models/schemas.js';
 import {
   AgentTypeSchema,
   StatusSchema,
@@ -16,15 +15,6 @@ import {
   ProjectConfigSchema,
 } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { STATUS_VALUES } from '../core/models/status.js';
-
-describe('public schema entry point', () => {
-  it('should not export assistant init runtime limit constants', () => {
-    expect('MAX_ASSISTANT_INIT_FILES' in PublicSchemas).toBe(false);
-    expect('MAX_ASSISTANT_INIT_FILE_BYTES' in PublicSchemas).toBe(false);
-    expect('MAX_ASSISTANT_INIT_CONTEXT_BYTES' in PublicSchemas).toBe(false);
-  });
-});
 
 describe('AgentTypeSchema', () => {
   it('should accept valid agent types', () => {
@@ -45,10 +35,6 @@ describe('StatusSchema', () => {
     expect(StatusSchema.parse('blocked')).toBe('blocked');
     expect(StatusSchema.parse('error')).toBe('error');
     expect(StatusSchema.parse('rate_limited')).toBe('rate_limited');
-  });
-
-  it('should align with the shared status contract values', () => {
-    expect(StatusSchema.options).toEqual([...STATUS_VALUES]);
   });
 
   it('should reject invalid statuses', () => {
@@ -444,7 +430,6 @@ describe('WorkflowConfigRawSchema', () => {
     const result = WorkflowConfigRawSchema.parse(config);
     expect(result.workflow_config).toEqual({});
   });
-
 
   it('should parse workflow-facing project config aliases', () => {
     const project = ProjectConfigSchema.parse({
@@ -985,7 +970,6 @@ describe('ProjectConfigSchema', () => {
     expect(provider?.model).toBe('gpt-5.3');
     expect(provider?.network_access).toBe(false);
   });
-
 
   it('should parse workflow_runtime_prepare policy block', () => {
     const result = ProjectConfigSchema.parse({

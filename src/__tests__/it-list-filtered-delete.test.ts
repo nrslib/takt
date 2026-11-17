@@ -220,7 +220,7 @@ describe('non-interactive filtered deletion with real task resources', () => {
       writeFileSync(file, 'keep this artifact');
     }
     saveRecords(project, [record('cleanup', 'completed', {
-      branch: 'feature/cleanup', worktree_path: resources.clone,
+      branch: 'feature/cleanup', worktree: true, worktree_path: resources.clone,
     }), record('other-goal', 'pending', { goal_id: '550e8400-e29b-41d4-a716-446655440001' }),
     record('running', 'running')]);
 
@@ -228,6 +228,7 @@ describe('non-interactive filtered deletion with real task resources', () => {
       branch: 'feature/cleanup', yes: true });
 
     for (const file of Object.values(resources)) expect(existsSync(file)).toBe(false);
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/cleanup'])).toBe('');
     expect(names(project)).toEqual(['other-goal', 'running']);
     for (const file of [taskArtifact, runArtifact]) expect(readFileSync(file, 'utf8')).toBe('keep this artifact');
     expect(process.exit).not.toHaveBeenCalled();
@@ -241,6 +242,120 @@ describe('non-interactive filtered deletion with real task resources', () => {
       branch: 'feature/root-only', yes: true });
 
     expect(git(project, ['branch', '--format=%(refname:short)']).split('\n')).toEqual(['main']);
+    expect(names(project)).toEqual([]);
+  });
+
+  it('preserves a specified unmerged branch when a worktree task fails before clone creation', async () => {
+    git(project, ['switch', '-c', 'feature/pre-clone-failure']);
+    writeFileSync(join(project, 'feature-work.txt'), 'unmerged work\n');
+    git(project, ['add', 'feature-work.txt']);
+    git(project, ['commit', '-m', 'feature work']);
+    git(project, ['switch', 'main']);
+    saveRecords(project, [record('pre-clone-failure', 'failed', {
+      branch: 'feature/pre-clone-failure', worktree: true,
+    })]);
+
+    await listTasksNonInteractive(project, {
+      enabled: true, action: 'delete', status: ['failed'], yes: true,
+    });
+
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/pre-clone-failure']))
+      .toBe('refs/heads/feature/pre-clone-failure');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('preserves an unmerged branch when a custom-path worktree task fails before clone creation', async () => {
+    git(project, ['switch', '-c', 'feature/custom-path-pre-clone-failure']);
+    writeFileSync(join(project, 'custom-path-work.txt'), 'custom path work\n');
+    git(project, ['add', 'custom-path-work.txt']);
+    git(project, ['commit', '-m', 'custom path work']);
+    git(project, ['switch', 'main']);
+    saveRecords(project, [record('custom-path-pre-clone-failure', 'failed', {
+      branch: 'feature/custom-path-pre-clone-failure', worktree: join(root, 'custom-worktree'),
+    })]);
+
+    await listTasksNonInteractive(project, {
+      enabled: true, action: 'delete', status: ['failed'], yes: true,
+    });
+
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/custom-path-pre-clone-failure']))
+      .toBe('refs/heads/feature/custom-path-pre-clone-failure');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('preserves a merged user branch when deleting a pending worktree task without a recorded path', async () => {
+    git(project, ['switch', '-c', 'feature/preexisting-merged']);
+    writeFileSync(join(project, 'merged-work.txt'), 'merged work\n');
+    git(project, ['add', 'merged-work.txt']);
+    git(project, ['commit', '-m', 'merged work']);
+    git(project, ['switch', 'main']);
+    git(project, ['merge', '--ff-only', 'feature/preexisting-merged']);
+    saveRecords(project, [record('preexisting-merged', 'pending', {
+      branch: 'feature/preexisting-merged', worktree: true,
+    })]);
+
+    await listTasksNonInteractive(project, {
+      enabled: true, action: 'delete', status: ['pending'], yes: true,
+    });
+
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/preexisting-merged']))
+      .toBe('refs/heads/feature/preexisting-merged');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('cleans a leftover clone while preserving the branch of a failed task without a recorded worktree', async () => {
+    const resources = cloneResources(project, 'feature/clone-without-worktree');
+    rmSync(resources.session);
+    saveRecords(project, [record('clone-without-worktree', 'failed', {
+      branch: 'feature/clone-without-worktree', worktree: true,
+    })]);
+
+    await listTasksNonInteractive(project, {
+      enabled: true, action: 'delete', status: ['failed'], yes: true,
+    });
+
+    expect(existsSync(resources.clone)).toBe(false);
+    expect(existsSync(resources.meta)).toBe(false);
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/clone-without-worktree']))
+      .toBe('refs/heads/feature/clone-without-worktree');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('deletes a worktree-disabled task while preserving its shared branch and working tree changes', async () => {
+    const trackedFile = join(project, 'tracked.txt');
+    writeFileSync(trackedFile, 'committed content\n');
+    git(project, ['add', 'tracked.txt']);
+    git(project, ['commit', '-m', 'tracked fixture']);
+    git(project, ['switch', '-c', 'develop']);
+    writeFileSync(join(project, 'develop-only.txt'), 'develop work\n');
+    git(project, ['add', 'develop-only.txt']);
+    git(project, ['commit', '-m', 'develop work']);
+    git(project, ['switch', 'main']);
+    const developSha = git(project, ['rev-parse', 'refs/heads/develop']);
+    writeFileSync(trackedFile, 'uncommitted tracked change\n');
+    const untrackedFile = join(project, 'untracked.txt');
+    writeFileSync(untrackedFile, 'untracked content\n');
+    saveRecords(project, [record('shared-branch-task', 'failed', {
+      branch: 'develop', base_branch: 'develop', worktree: false,
+    })]);
+
+    await listTasksNonInteractive(project, { enabled: true, action: 'delete', status: ['failed'], yes: true });
+
+    expect(git(project, ['rev-parse', 'refs/heads/develop'])).toBe(developSha);
+    expect(readFileSync(trackedFile, 'utf8')).toBe('uncommitted tracked change\n');
+    expect(readFileSync(untrackedFile, 'utf8')).toBe('untracked content\n');
+    expect(names(project)).toEqual([]);
+  });
+
+  it('deletes a worktree-disabled task when its recorded branch is checked out', async () => {
+    const mainSha = git(project, ['rev-parse', 'refs/heads/main']);
+    saveRecords(project, [record('current-branch-task', 'failed', {
+      branch: 'main', base_branch: 'main', worktree: false,
+    })]);
+
+    await listTasksNonInteractive(project, { enabled: true, action: 'delete', status: ['failed'], yes: true });
+
+    expect(git(project, ['rev-parse', 'refs/heads/main'])).toBe(mainSha);
     expect(names(project)).toEqual([]);
   });
 

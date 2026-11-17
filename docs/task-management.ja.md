@@ -231,7 +231,7 @@ takt list
 | **Pull from remote** | リモート origin から最新の変更を取り込み（fast-forward のみ） |
 | **Try merge** | スカッシュマージ（コミットせずにステージング、手動レビュー用） |
 | **Merge & cleanup** | スカッシュマージしてブランチを削除 |
-| **Delete** | すべての変更を破棄してブランチを削除 |
+| **Delete** | タスクと worktree を削除してブランチを削除。削除される worktree/clone 内の未コミット変更も失われます（`worktree: false` のタスクと、`worktree` が `true` またはパス文字列で `worktree_path` が未記録のタスクはブランチを保持） |
 
 ### 失敗タスクの操作
 
@@ -351,7 +351,7 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 `--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
 
-削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。clone のタスクでも、後片付けのあとに元のリポジトリの同名ブランチを `git branch -d` で削除します。未取り込みなどで Git が削除を拒否した場合は、ブランチを残して警告し、clone とタスクの記録の削除は成功します。
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。clone のタスクでも、後片付けのあとに元のリポジトリの同名ブランチを `git branch -d` で削除します。`worktree: false` のタスクは記録されたブランチと作業ツリー上の変更を保持します。`worktree` が `true` またはパス文字列で `worktree_path` が未記録のタスクは、状態やブランチのマージ状況にかかわらず記録されたブランチを保持します。そのブランチの clone メタ情報が残っていれば、clone とメタ情報は片付けます。未取り込みなどで Git が削除を拒否した場合は、ブランチを残して警告し、clone とタスクの記録の削除は成功します。
 
 ```bash
 # 対象一覧を確認してから削除します
@@ -364,9 +364,9 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 ## CodeRabbit レビューループ（`caccia`）
 
-マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。worktree タスクの `auto_pr` と Pipeline の `--auto-pr` は `caccia.enabled: true` の場合に PR 作成・更新成功後の Caccia を実行します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow、または `merge.auto_start: true` で選択されたマージ用 workflow に明示の `caccia` system 効果がある場合も後処理を抑止します。呼び出し先の workflow も判定対象です。それ以外は Caccia の完了後にマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。Git の push 自体からは起動せず、`takt merge` は引き続き明示効果で実行します。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `sync → commit_and_push → caccia → wait_ci → merge_pr` の順です。AIで競合を解消した場合は、初回・再同期とも `commit_and_push` の前にレビュー・修正を行います。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。worktree タスクの `auto_pr` と Pipeline の `--auto-pr` は `caccia.enabled: true` の場合に PR 作成・更新成功後の Caccia を実行します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow、または `merge.auto_start: true` で選択されたマージ用 workflow に明示の `caccia` system 効果がある場合も後処理を抑止します。呼び出し先の workflow も判定対象です。それ以外は Caccia の完了後にマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。Git の push 自体からは起動せず、`takt merge` は引き続き明示効果で実行します。
 
-`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。初回成功の扱いは変わらず、CI待機のtimeoutは未解決としてABORTし、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。CIが初回から成功した場合は回復処理を行わず、CI待機のtimeoutは未解決としてABORTし、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
 
 Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 

@@ -14,7 +14,7 @@ function providerPermission(permissions: Record<string, ManagerPermission> | und
 
 export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
   permission: ManagerPermission;
-  autoRun: boolean; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
+  autoRun: boolean; preserveGoalWorktree: boolean; mainMerge: 'auto' | 'approve';
   workflows?: ManagerWorkflowsConfig;
   notifications: Record<ManagerNotificationKind, boolean>;
 } {
@@ -25,7 +25,7 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
       ?? providerPermission(global?.providerPermissions, provider)
       ?? project?.permission ?? global?.permission ?? 'auto',
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
-    defaultWorkflow: project?.defaultWorkflow ?? global?.defaultWorkflow,
+    preserveGoalWorktree: project?.preserveGoalWorktree ?? global?.preserveGoalWorktree ?? false,
     workflows: project?.workflows ?? global?.workflows,
     mainMerge: project?.mainMerge ?? 'approve',
     notifications: {

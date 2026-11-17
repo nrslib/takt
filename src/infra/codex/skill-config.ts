@@ -4,10 +4,10 @@ import {
   statSync,
   type Stats,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { CodexOptions } from '@openai/codex-sdk';
 import { isPathInside, lstatIfExists } from '../../shared/utils/index.js';
+import { resolveCodexHomeDirectory, resolveHomeDirectory } from './home.js';
 
 const SKILL_FILE_NAME = 'SKILL.md';
 // Keep TAKT's snapshot bounded by the same traversal limits as Codex Skill discovery.
@@ -170,19 +170,11 @@ function getRepoSkillRoots(cwd: string): string[] {
   }
 }
 
-function resolveHomeDirectory(env: Readonly<Record<string, string | undefined>>): string {
-  const configuredHome = env.HOME || env.USERPROFILE;
-  if (configuredHome) {
-    return resolve(configuredHome);
-  }
-  return homedir();
-}
-
 function getUserSkillRoots(
   env: Readonly<Record<string, string | undefined>>,
 ): { roots: string[]; excludedRoots: string[] } {
   const home = resolveHomeDirectory(env);
-  const codexHome = resolve(env.CODEX_HOME || join(home, '.codex'));
+  const codexHome = resolveCodexHomeDirectory(env);
   const codexSkillsRoot = join(codexHome, 'skills');
   return {
     roots: [

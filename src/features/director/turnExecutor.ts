@@ -7,9 +7,10 @@ import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/m
 import { createAgentFailureError, isAgentFailureError } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 export function createDirectorTurnExecutor(plan: DirectorConversationPlan, config: McpHttpServerConfig) {
-  const agent = plan.ctx.provider.setup({ name: 'director', systemPrompt: plan.systemPrompt });
+  const agent = plan.ctx.provider.setup({ name: 'director', systemPrompt: withProgressNotesGuidance(plan.systemPrompt, plan.ctx.lang) });
   return { execute: (input: ManagerTurnInput) => withoutDiagnosticLogging(async () => {
     const servers = { [DIRECTOR_MCP_SERVER_NAME]: config };
     const adapter = createMcpAdapter(plan.ctx.providerType);

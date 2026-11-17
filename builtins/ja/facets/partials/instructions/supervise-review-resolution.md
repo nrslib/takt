@@ -28,3 +28,5 @@
 {{include:instructions/supervise-external-confirmation}}
 
 判定結果、根拠、必要な修正対象を漏れなく記録してください。
+
+review-resolution.md に記録された修正の経過と固定版の参照先を引き継ぎ、最新の要求・裁定と実際の方式の対応を記録してください。確認方法が更新された箇所は元の受入条件と照合してください。

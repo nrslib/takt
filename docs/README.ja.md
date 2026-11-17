@@ -86,7 +86,7 @@ takt list
 
 ## CodeRabbit レビューループ
 
-GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit のレビューを待ち、隔離クローンで未解決の bot スレッドに対応し、反復ごとの判断レポートを保存します。マージ用 workflow は明示的な `caccia` 効果で同じループを実行します。`caccia.enabled` は効果が CodeRabbit を待つかを制御し、既定は無効です。push や PR 公開からの暗黙の実行はありません。[CLI リファレンス](./cli-reference.ja.md#takt-caccia)と[設定ガイド](./configuration.ja.md)を参照してください。
+GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit のレビューを待ち、隔離クローンで未解決の bot スレッドに対応し、反復ごとの判断レポートを保存します。マージ用 workflow は明示的な `caccia` 効果で同じループを実行します。`caccia.enabled` は効果が CodeRabbit を待つかを制御し、既定は無効です。Git の push 自体は Caccia を起動しません。有効設定時は worktree タスクの `auto_pr` と Pipeline の `--auto-pr` による PR 公開成功後にも実行し、設定ガイドの除外条件・実行順序に従います。[CLI リファレンス](./cli-reference.ja.md#takt-caccia)と[設定ガイド](./configuration.ja.md)を参照してください。
 
 ### 動画チュートリアル
 
@@ -293,7 +293,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
-| `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が受付・保存・配送・見張りを行い、会話のターンは会話ごとの子プロセスで動かします。`takt daemon stop` で daemon を停止できます |
+| `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/clear` を送ると会話を新しく始めます。manager の AI は新しいセッションで応答し、それより前の会話は表示しませんが、ゴールや登録案はそのまま残ります。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が受付・保存・配送・見張りを行い、会話のターンは会話ごとの子プロセスで動かします。`takt daemon stop` で daemon を停止できます |
 | `takt director` | 全 manager を見渡す実験的な会話 TUI を開きます。[director](#director実験的)を参照してください |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、停止依頼、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
@@ -308,7 +308,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 manager との会話は daemon で実行され、TUI は要求を送り、結果を表示します。受け付けたターンは、TUI を閉じても daemon で処理が続きます。同じリポジトリや workspace を担当先として開き直すと、同じ会話に戻ります。同じ担当先で2つ目の TUI を開いても同じ会話につながり、承認待ちの登録案があれば再表示され、「登録する」を選んで `Enter` を押すと登録できます。
 
-開き直した画面には、前の画面の発言や返事は再表示されません。会話履歴は provider のセッションに任せます。TAKT は発言本文と結果全文を `daemon-events` に保存し、完了後も保持します。自動削除は行いません。承認待ちのゴール要約やゴールの記録は別に保存します。
+開き直した画面には、前の発言、完了したツールの履歴、返事が、ターンごとにこの順で会話ログに再表示されます。Thinking とツールの合間に出た本文は再表示されません。会話履歴は provider のセッションに任せます。TAKT は発言本文と結果全文を `daemon-events` に保存し、完了後も保持します。自動削除は行いません。承認待ちのゴール要約やゴールの記録は別に保存します。
 
 daemon はイベントで動きます。キューは人の入力と、それ以外のイベントの2本です。次のターンでは人の入力を先に処理し、各キューでは受け付けた順を守ります。会話は1本で、イベントで知った内容も次の人との会話に引き継ぎます。処理中でも発言・承認・問い合わせ回答を保存して受け付け、画面の読み出しと現在のターンの中断を行えます。accepted は永続化済みの受付で、処理の完了ではありません。中断しても待機中の入力は消えません。失敗や中断のあとは、manager が現在の状態と副作用を確かめ、再開・修正してのやり直し・新しい作業を判断します。
 
@@ -349,7 +349,7 @@ daemon は各プロジェクトのイベント処理前に、中断タスクを 
 
 ### manager の判断と作業
 
-manager は、担当のゴールを完成まで進める TAKT に詳しいエンジニアとして、自分で調査・実装・確認・Git 操作を行い、必要に応じて委任します。provider の通常の道具と割り当てた MCP を `full` 権限で使い、利用者の provider options は維持します。manager 固有の権限判断役、読取範囲の審査、保存許可による実行制御はありません。
+manager は、担当のゴールを完成まで進める TAKT に詳しいエンジニアとして、自分で調査・実装・確認・Git 操作を行い、必要に応じて委任します。provider の通常の道具と割り当てた MCP を使い、利用者の provider options は維持します。権限は既定で `auto` です。Claude（`claude` / `claude-sdk`）と Codex で制限なく実行するには、`manager.permission` または provider ごとの `manager.provider_permissions` を `full` に設定します。それ以外の provider では `auto` も `full` と同じ動作です。provider ごとの `manager.provider_permissions` は `manager.permission` より優先されるため、provider ごとの設定が `auto` なら `manager.permission: full` を設定しても `auto` が適用されます。別個の manager 固有の権限判断役、読取範囲の審査、保存許可による実行制御はありません。新しい開発タスクに使えるワークフローは `manager.workflows` と `manager.default_workflow` で選べます。詳しくは[設定ガイド](./configuration.ja.md#manager-がタスクに使う-workflow)を参照してください。
 
 取り込み先への反映、force push、リモートブランチや未保存成果の削除、ゴール中止、依頼範囲外の新しい投稿は、対象と作用が分かる人の明示指示に従うファセットの方針です。直接の発言、director の伝言、保存された継続指示を扱い、PR 作成・通常 push・設定済み通知は依頼作業に含めます。PR マージの指示にはそのブランチの削除も含み、指示済みのことを再確認しません。秘密値を読むにはその必要を含む人の指示が必要で、応答・記録・成果物に秘密値を残しません。
 
@@ -411,6 +411,16 @@ export DEEPSEEK_API_KEY=...                 # 公式 DeepSeek Harness SDK
 ```
 
 OpenCode の呼び出しには既定で 60 分の provider イベント無活動上限があります。タイマーは provider イベントごとにリセットされるため、イベントが届き続ける限り呼び出しは 60 分を超えて実行できます。上限は `provider_options.opencode.guards.call_timeout_ms`（最大 86,400,000 ms）で変更できます。guard プロファイルとモデル別上書きは [Configuration Guide](./configuration.ja.md) を参照してください。
+
+`provider_options.claude.permissions.deny` を使うと、Claude Code の `permissions.deny` ルール（例: `Read(./.env)`）を `claude-sdk` と `claude-headless` に渡せます。
+`Read(` ルールが止めるのは、Claude の組み込みのファイルツール（Grep や Glob などには `Read` ルールをベストエフォートで適用します）と、Claude Code が Bash の中で認識するファイル用コマンド（`cat`、`head` など）です。
+ファイル名を書かずにファイルを読むコマンド（`grep -r pattern .` など）や、スクリプトが自分でファイルを開く読み取りは止められません。
+Claude が sandbox 内で実行するシェルのコマンドと、そこから起動したプロセスによるパスへのアクセスを OS のレベルで止めるには、そのパスの `Read(` 拒否ルールを追加し、Claude Code の sandbox をファイルシステム隔離付きで有効にしてください。`sandbox.filesystem.disabled: true` は隔離を無効にし、sandbox 内のコマンドがホスト上のファイルを読めるため設定しないでください。`excludedCommands` に一致するコマンドや `allow_unsandboxed_commands` により sandbox 外で実行されるコマンドは、この遮断の対象外です。
+拒否ルールのないパスは、sandbox の中のプロセスでも読めます。
+hooks や MCP サーバーなど、sandbox の外で動くプロセスは止まりません。
+`provider_options.claude.permissions.import_user_read_deny: true` を指定すると、`~/.claude/settings.json` の `Read(` ルールも取り込みます。
+どちらのキーも既定では未指定で、`claude-terminal` は対象外です。
+詳しくは[Claude Code の Read 拒否ルール](./configuration.ja.md#claude-read-deny-rules)を参照してください。
 
 ### プロバイダー設定専用レイヤー（`runtime.yaml`）
 

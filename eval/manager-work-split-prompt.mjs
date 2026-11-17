@@ -76,7 +76,7 @@ export function buildManagerSystemPrompt(fixture) {
     const system = production.buildManagerSystemPrompt({
       lang: fixture.lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
       formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang), repository: fixture.cwd,
-      defaultWorkflow: fixture.defaultWorkflow, mainMerge: fixture.mainMerge, concurrency: fixture.concurrency,
+      mainMerge: fixture.mainMerge, concurrency: fixture.concurrency,
     });
     // Retain the older concurrency comparison as an eval-only transformation.
     return process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY === '1'

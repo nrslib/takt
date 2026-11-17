@@ -11,7 +11,7 @@ interface NormalizeClaudeTerminalResponseInput {
   agentName: string;
   sessionId: string;
   assistantText: string;
-  /** 最後の assistant エントリの text。省略時は assistantText 全体を通知文と照合する */
+  /** 最後の assistant エントリの text。応答本文と通知文の照合に使い、省略時は assistantText 全体を使う */
   lastAssistantText?: string;
   events?: ClaudeTerminalEvent[];
   outputSchema?: Record<string, unknown>;
@@ -126,17 +126,18 @@ function normalizeStructuredOutput(
 export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalResponseInput): AgentResponse {
   emitToolUseEvents(input.onStream, input.events);
 
-  // 通知文は単独の assistant エントリで届く。assistantText は全エントリを結合した文字列なので、
-  // 通常の応答の後に通知が来たケースを取り逃がさないよう最後のエントリだけを照合する (#1674)。
-  const rateLimitCandidate = input.lastAssistantText ?? input.assistantText;
-  const rateLimitSource = resolveRateLimitTextSource(rateLimitCandidate);
+  // assistantText は全エントリを結合した文字列。それより前のエントリは作業中のテキスト（進捗メモや経過説明）で、
+  // 結果は最後のエントリにある。通知文も単独の assistant エントリで届くため、通常の応答の後に通知が来た
+  // ケースを取り逃がさないよう最後のエントリだけを照合する (#1674)。
+  const finalText = input.lastAssistantText ?? input.assistantText;
+  const rateLimitSource = resolveRateLimitTextSource(finalText);
   if (rateLimitSource) {
-    return createRateLimitedResponse(input, rateLimitSource, rateLimitCandidate.trim());
+    return createRateLimitedResponse(input, rateLimitSource, finalText.trim());
   }
 
   let structuredOutput: Record<string, unknown> | undefined;
   try {
-    structuredOutput = normalizeStructuredOutput(input.assistantText, input.outputSchema);
+    structuredOutput = normalizeStructuredOutput(finalText, input.outputSchema);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return createProviderErrorResponse(input, `Claude terminal structured output validation failed: ${detail}`);
@@ -148,14 +149,14 @@ export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalRe
 
   emitText(input.onStream, input.assistantText);
   emitResult(input.onStream, {
-    result: input.assistantText,
+    result: finalText,
     sessionId: input.sessionId,
     success: true,
   });
   return {
     persona: input.agentName,
     status: 'done',
-    content: input.assistantText,
+    content: finalText,
     timestamp: new Date(),
     sessionId: input.sessionId,
     structuredOutput,

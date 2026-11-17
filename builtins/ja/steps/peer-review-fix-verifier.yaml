@@ -14,6 +14,7 @@ edit: false
 persona: coding-reviewer
 policy:
   - process-deviation
+  - repair-strategy
   - contract-change
   - $param: verification_policy
 knowledge:

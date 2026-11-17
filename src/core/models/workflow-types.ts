@@ -51,6 +51,7 @@ export type {
   CopilotEffort,
   KiroEffort,
   ClaudeSandboxSettings,
+  ClaudePermissionsOptions,
   ProviderGuardOptions,
   CodexProviderOptions,
   CodexPermissionControl,

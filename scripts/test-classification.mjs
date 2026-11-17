@@ -238,10 +238,12 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
   'src/__tests__/claude-mcp-runtime.test.ts',
+  'src/__tests__/claude-read-deny-wiring.test.ts',
   'src/__tests__/cli-update-check.test.ts',
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/clone-metadata-central.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
+  'src/__tests__/codex-compaction.test.ts',
   'src/__tests__/codex-interactive-session-recovery.integration.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/config-path-collision.test.ts',
@@ -297,6 +299,8 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/observability-compose.test.ts',
   'src/__tests__/opencode-coerce-tool-args.test.ts',
   'src/__tests__/opencode-list-tool-shim.test.ts',
+  'src/__tests__/opencode-types.test.ts',
+  'src/__tests__/opencode-v2-transport.test.ts',
   'src/__tests__/orderReader.test.ts',
   'src/__tests__/orderRevision.test.ts',
   'src/__tests__/pathBoundary.test.ts',
@@ -382,6 +386,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/daemon-conversation-delivery.integration.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
@@ -396,8 +401,10 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/daemon-retired-watch-events.integration.test.ts',
+  'src/__tests__/daemon-startup.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/director-foundation.integration.test.ts',
+  'src/__tests__/epic-storage.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/interactive-resume-records.integration.test.ts',
@@ -440,6 +447,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/manager-conversation-client.integration.test.ts',
   'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
   'src/__tests__/manager-conversation-service.integration.test.ts',
+  'src/__tests__/manager-turn-failure-webhook.integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
   'src/__tests__/merge-pagination.integration.test.ts',
   'src/__tests__/merge-settings.integration.test.ts',
@@ -454,6 +462,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
   'src/__tests__/runtime-provider-nonworkflow-seam.integration.test.ts',
   'src/__tests__/taskInstructionActions.test.ts',
+  'src/__tests__/tool-activity-terminal.integration.test.ts',
   'src/__tests__/verify-across-providers.integration.test.ts',
 ]);
 
@@ -465,6 +474,8 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/tool-activity-runner-exit.integration.test.ts',
+  'src/__tests__/tool-activity-workflow.integration.test.ts',
   'src/__tests__/daemon-wait-command.integration.test.ts',
   'src/__tests__/workflow-resume-results.integration.test.ts',
   'src/__tests__/it-cli-react-production.test.ts',

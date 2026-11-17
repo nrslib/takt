@@ -249,8 +249,9 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - E2E用 `config.yaml` に `runtime.prepare: [gradle, node]` を設定する。
     - mock providerの呼び出しログで、`TMPDIR`、`TAKT_RUNTIME_TMP`、`GRADLE_USER_HOME`、`npm_config_cache` がprovider呼び出し前に注入されたことを確認する。未設定時は注入されないことを確認する。
-    - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。
+    - 正例では `takt --task '<./gradlew test && npm test を1回のコマンドとして実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行し、Gradle 成功後に npm が同じ provider 実行環境で続けて起動することを確認する。各コマンドの実行回数と初回の環境変数を記録し、fixture 未変更・1回実行・初回から必要な環境変数があったことを検証する。
     - 正例では、作業リポジトリに `.takt/.runtime/env.sh` と `.takt/.runtime/{cache,config,state,gradle,npm}` が作成されていることを確認する。`TMPDIR` はworktree固有の短い外部パスであり、NodeとGradleに同じ値が伝播することを確認する。
+    - OpenCode では `edit: false` の workflow でも同じ初回環境伝播を検証する。
     - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外し、Gradle の欠落環境変数および npm のruntimeキャッシュ未注入を示す専用証跡ファイルと両コマンドの実行markerを確認する。`.takt/.runtime/env.sh` は生成されないことを確認する。
 - Runtime.yaml provider section（runtime-v1）（`e2e/specs/runtime-provider.e2e.ts`）
   - 目的: 有効な `~/.takt/runtime.yaml` の `provider` セクションから provider/model が解決され（runtime-v1）、`--provider` を渡さずに workflow が完了することをmockで確認する（issue #1136）。
@@ -329,7 +330,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
 - Model override（`e2e/specs/model-override.e2e.ts`）
   - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
 - Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
-  - 目的: 不正引数・存在しない workflow・不正 YAML など代表エラーケースを確認。
+  - 目的: workflow パスの欠落、不正 YAML、`--pipeline` の入力不足を確認。廃止済み `--create-worktree` の拒否は `e2e/specs/worktree.e2e.ts` で確認する。
 - Quiet mode（`e2e/specs/quiet-mode.e2e.ts`）
   - 目的: `--quiet` でAIストリーム出力が抑制されることを確認。
 - Catalog command（`e2e/specs/cli-catalog.e2e.ts`）
@@ -340,8 +341,8 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 削除済みの `takt switch` が unknown command になることを確認。
 - Clear sessions command（`e2e/specs/cli-clear.e2e.ts`）
   - 目的: `takt clear` でセッション情報が削除されることを確認。
-- Help command（`e2e/specs/cli-help.e2e.ts`）
-  - 目的: `takt --help` と `takt run --help` / `takt watch --help` の表示内容に加え、`--ignore-exceed` が `run` と `watch` の両方に表示されることを確認。
+- CLI バージョンと端末要件（`e2e/specs/cli-help.e2e.ts`）
+  - 目的: `--version` がパッケージのバージョンと一致すること、および端末のない `make` が成果物を作成せず拒否されることを確認。
 - Eject builtin workflows（`e2e/specs/eject.e2e.ts`）
   - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別eject、不正なfacet type（prototype由来名・改行/C1制御文字）の安全なstderr出力を確認。
 - Workflow authoring CLI（`e2e/specs/cli-workflow-authoring.e2e.ts`）

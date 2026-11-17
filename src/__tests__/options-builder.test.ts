@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
@@ -7,6 +8,7 @@ import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
+import type { TaskReviewScope } from '../core/workflow/review-scope.js';
 
 function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined
@@ -34,6 +36,8 @@ interface PhaseContextSources {
   readonly projectCwd?: string;
   readonly currentWorkflowStack?: readonly WorkflowResumePointEntry[];
   readonly reportsRootDir?: string;
+  readonly reviewScope?: TaskReviewScope;
+  readonly openCodeExternalDirectories?: readonly string[];
 }
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
@@ -70,19 +74,55 @@ function createBuilder(
     () => '.takt/runs/sample/reports',
     () => 'ja',
     () => engineOverrides.workflowName ?? 'default',
-    currentWorkflowStack === undefined
-      ? undefined
-      : () => [...currentWorkflowStack],
+    () => (currentWorkflowStack === undefined ? undefined : [...currentWorkflowStack]),
     () => 'Original workflow task',
-    undefined,
+    () => phaseContextSources.reviewScope ?? { kind: 'not_a_git_repository' },
     failureDir === undefined ? undefined : () => failureDir,
     () => engineOptions.abortSignal,
     recordActivity,
     reportsRootDir === undefined
       ? undefined
       : () => reportsRootDir,
+    undefined,
+    phaseContextSources.openCodeExternalDirectories,
   );
 }
+
+describe('automatic progress notes requests', () => {
+  const scope: TaskReviewScope = { kind: 'collected', paths: ['src/input.ts'], source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } } };
+
+  it.each([
+    { label: 'non-editing step', step: createStep({ name: 'plan', edit: false }), revisionBound: true },
+    { label: 'editing step', step: createStep({ name: 'implement', edit: true }), revisionBound: false },
+    { label: 'step without an edit setting', step: createStep({ name: 'summarize' }), revisionBound: false },
+  ])('creates a request for a $label in any workflow without changing its permissions', ({ step, revisionBound }) => {
+    const builder = createBuilder(step, { workflowName: 'custom-workflow' });
+    const options = builder.buildAgentOptions(step);
+
+    const request = builder.buildProgressNotesRequest(step, scope);
+
+    const identity = {
+      reportDir: '/project/.takt/runs/sample/reports', task: 'Original workflow task',
+      stepName: step.name, definition: JSON.stringify(step),
+    };
+    expect(request).toEqual(revisionBound
+      ? { ...identity, bindsSourceRevision: true, scope }
+      : { ...identity, bindsSourceRevision: false });
+    expect(options.progressNotes).toBeUndefined();
+    expect(options.edit).toBe(step.edit);
+  });
+
+  it('gives each Team Leader part its own identity', () => {
+    const parent = { name: 'implement', personaDisplayName: 'Coder', instruction: 'implement', edit: true, teamLeader: { maxConcurrency: 2, timeoutMs: 10_000 } };
+    const builder = createBuilder(parent);
+    const parts = ['part-1', 'part-2'].map((id) => createPartStep(parent, { id, title: id, instruction: `Implement ${id}` }));
+
+    const requests = parts.map((part) => builder.buildProgressNotesRequest(part, scope));
+
+    expect(requests.map((request) => request.stepName)).toEqual(parts.map((part) => part.name));
+    expect(new Set(requests.map((request) => request.stepName)).size).toBe(2);
+  });
+});
 
 describe('OptionsBuilder.buildBaseOptions', () => {
   beforeEach(() => {
@@ -103,6 +143,21 @@ describe('OptionsBuilder.buildBaseOptions', () => {
         codex: { defaultPermissionMode: 'full' },
       },
     });
+  });
+
+  it('carries TAKT external context directories into OpenCode workflow options', () => {
+    const contextDirectory = '/state/.takt/runs/run-a/context';
+    const builder = createBuilder(
+      createStep({ provider: 'opencode', model: 'opencode/model' }),
+      { provider: 'opencode', model: 'opencode/model' },
+      undefined,
+      { openCodeExternalDirectories: [contextDirectory] },
+    );
+
+    const step = createStep({ provider: 'opencode', model: 'opencode/model' });
+    expect(builder.buildBaseOptions(step).openCodeExternalDirectories).toEqual([contextDirectory]);
+    expect(builder.buildNewSessionReportOptions(step, { maxTurns: 1 }).openCodeExternalDirectories)
+      .toEqual([contextDirectory]);
   });
 
   it('passes runtime defaults permission mode to the actual provider call', () => {
@@ -958,7 +1013,9 @@ describe('OptionsBuilder.buildResumeOptions', () => {
         expect(options.executionPhase).toBe(2);
         expect(options.outputSchema).toBeUndefined();
       }
-      if (provider === 'pi') expect(phase1.allowedTools).toEqual(expectedTools);
+      if (provider === 'pi') {
+        expect(phase1.allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
+      }
     },
   );
 
@@ -981,15 +1038,15 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     },
   );
 
-  it('allows the actual Pi readonly tool names after workflow aliases are normalized', () => {
+  it('allows Pi inspection tools but not Bash in report phases after workflow aliases are normalized', () => {
     const step = createStep({ provider: 'pi', model: 'test-model' });
     const options = createBuilder(step).buildResumeOptions(step, 'session', { maxTurns: 3 });
     const tools = ['read', 'grep', 'find', 'ls', 'codemode', 'bash', 'write', 'edit']
       .map((name) => ({ name, source: 'builtin' }));
-    const phase1Names = resolvePiActiveTools('readonly', ['Read', 'Grep', 'Glob', 'LS', 'CodeMode'], tools);
+    const inspectionNames = resolvePiActiveTools('readonly', ['Read', 'Grep', 'Glob', 'LS', 'CodeMode'], tools);
 
-    expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names));
-    expect(resolvePiActiveTools(options.permissionMode, options.allowedTools, tools)).toEqual(phase1Names);
+    expect(new Set(options.allowedTools)).toEqual(new Set(inspectionNames));
+    expect(resolvePiActiveTools(options.permissionMode, options.allowedTools, tools)).toEqual(inspectionNames);
   });
 
   it('rejects every DeepSeek report route before SDK startup when tool constraints cannot be enforced', async () => {
@@ -1460,7 +1517,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
-  it('removes write and command tools when output contracts exist and edit is not enabled', () => {
+  it('removes write tools but keeps Bash when output contracts exist and edit is not enabled', () => {
     // Given
     const step = createStep({
       outputContracts: [{ name: 'report.md', format: 'markdown', useJudge: true }],
@@ -1475,10 +1532,10 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     const options = builder.buildAgentOptions(step);
 
     // Then
-    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read', 'Bash']);
   });
 
-  it('removes command tools when edit is false without output contracts', () => {
+  it('keeps command tools when edit is false without output contracts', () => {
     const step = createStep({
       providerOptions: {
         claude: { allowedTools: ['Read', 'bash', ' Bash '] },
@@ -1489,7 +1546,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read', 'bash', 'Bash']);
   });
 
   it('removes OpenCode command tools when edit is false without output contracts', () => {
@@ -1875,5 +1932,41 @@ describe('OptionsBuilder.buildAgentOptions', () => {
       },
     });
     expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+  });
+
+  it('keeps claude permissions for Claude team leader parts when part_allowed_tools is given', () => {
+    const step = createStep({
+      providerOptions: {
+        claude: {
+          allowedTools: ['Read', 'Edit', 'Bash'],
+          permissions: { deny: ['Read(./.env)'] },
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      providerOptions: {
+        claude: {
+          permissions: { importUserReadDeny: false },
+        },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      providerInfo: {
+        provider: 'claude',
+        model: 'sonnet',
+      },
+      teamLeaderPart: {
+        partAllowedTools: ['Read', 'Edit'],
+      },
+    });
+
+    const expectedClaude = {
+      permissions: { deny: ['Read(./.env)'], importUserReadDeny: false },
+    };
+    expect(options.providerOptions).toEqual({ claude: expectedClaude });
+    expect(options.resolvedProviderOptions).toEqual({ claude: expectedClaude });
+    expect(options.allowedTools).toEqual(['Read', 'Edit']);
   });
 });

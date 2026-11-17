@@ -3,9 +3,10 @@ import type { PermissionMode } from '../../core/models/index.js';
 
 export const PI_CODEMODE_TOOL_NAME = 'codemode';
 const PI_CODEMODE_INLINE_PATH = `<inline:${PI_CODEMODE_TOOL_NAME}>`;
-export const PI_READONLY_TOOLS = ['read', 'grep', 'find', 'ls', PI_CODEMODE_TOOL_NAME] as const;
+export const PI_READONLY_TOOLS = ['read', 'grep', 'find', 'ls', 'bash', PI_CODEMODE_TOOL_NAME] as const;
+export const PI_INSPECTION_TOOLS = PI_READONLY_TOOLS.filter((tool) => tool !== 'bash');
 
-const PI_EDIT_TOOLS = [...PI_READONLY_TOOLS, 'edit', 'write', 'bash'];
+const PI_EDIT_TOOLS = [...PI_READONLY_TOOLS, 'edit', 'write'];
 const PI_DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write', PI_CODEMODE_TOOL_NAME];
 const PI_BUILTIN_TOOLS = new Set([
   'read',

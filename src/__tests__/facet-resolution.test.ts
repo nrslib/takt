@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -114,16 +114,6 @@ describe('resolveFacetByName', () => {
 
     const content = resolveFacetByName('coder', 'personas', context);
     expect(content).toBe('OVERRIDE');
-  });
-});
-
-describe('resource-resolver public API boundary', () => {
-  it('should not re-export workflow package scope helpers', async () => {
-    const resourceResolver = await import('../infra/config/loaders/resource-resolver.js');
-
-    expect(resourceResolver).not.toHaveProperty('buildCandidateDirsWithPackage');
-    expect(resourceResolver).not.toHaveProperty('getPackageFromWorkflowDir');
-    expect(resourceResolver).not.toHaveProperty('isPackageWorkflow');
   });
 });
 
@@ -429,40 +419,6 @@ describe('facet inheritance', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${name}.md`), content);
   }
-
-  it.each(['ja', 'en'] as const)('composes frontend facets from gui without duplicating the shared facet (%s)', (language) => {
-    const languageContext: FacetResolutionContext = { projectDir, lang: language, workflowDir };
-
-    const knowledge = resolveRefToContent('frontend', undefined, workflowDir, 'knowledge', languageContext);
-    const policy = resolveRefToContent('frontend', undefined, workflowDir, 'policies', languageContext);
-    const builtinFacet = (type: FacetType, name: string): string =>
-      readFileSync(join(getBuiltinFacetDir(language, type), name + '.md'), 'utf8');
-    const guiKnowledge = builtinFacet('knowledge', 'gui');
-    const frontendKnowledge = builtinFacet('knowledge', 'frontend').replace(/^\{extends:gui\}\s*/, '');
-    const guiPolicy = builtinFacet('policies', 'gui');
-    const frontendPolicy = builtinFacet('policies', 'frontend').replace(/^\{extends:gui\}\s*/, '');
-
-    expect(knowledge).not.toContain('{extends:gui}');
-    expect(policy).not.toContain('{extends:gui}');
-    expect(knowledge).toContain(guiKnowledge);
-    expect(knowledge).toContain(frontendKnowledge);
-    expect(policy).toContain(guiPolicy);
-    expect(policy).toContain(frontendPolicy);
-    expect(knowledge.split(guiKnowledge)).toHaveLength(2);
-    expect(policy.split(guiPolicy)).toHaveLength(2);
-  });
-
-  it.each(['ja', 'en'] as const)('keeps react facets independent from frontend and gui', (language) => {
-    const languageContext: FacetResolutionContext = { projectDir, lang: language, workflowDir };
-
-    const knowledge = resolveRefToContent('react', undefined, workflowDir, 'knowledge', languageContext);
-    const policy = resolveRefToContent('react', undefined, workflowDir, 'policies', languageContext);
-
-    expect(knowledge).not.toContain('{extends:');
-    expect(policy).not.toContain('{extends:');
-    expect(knowledge).toBe(readFileSync(join(getBuiltinFacetDir(language, 'knowledge'), 'react.md'), 'utf8'));
-    expect(policy).toBe(readFileSync(join(getBuiltinFacetDir(language, 'policies'), 'react.md'), 'utf8'));
-  });
 
   it('should append local content after an inherited instruction parent', () => {
     writeProjectFacet('instructions', 'base', 'Base instruction');

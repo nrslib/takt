@@ -47,3 +47,8 @@ workflow_overrides:
         - "Run `npm test` and verify unit tests pass. On failure, quote the failing output in your report and return needs_fix"
         - "Run `npm run test:it` and verify integration tests pass. On failure, quote the failing output in your report and return needs_fix"
         - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass. On failure, quote the failing output in your report and return needs_fix"
+
+manager:
+  workflows:
+    - takt-default: TAKT本体の通常の機能追加や不具合修正。TAKT固有の計画・テスト・レビューを行う
+    - simple: 1〜2ファイルで済む小さな修正。軽い流れで進める

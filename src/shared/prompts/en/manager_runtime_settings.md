@@ -8,10 +8,6 @@ Formal specification configuration: {{specificationConfiguration}}
 
 Formal specification mode determines which specifications to prepare at registration; comments determines how comments are handled within specifications.
 
-Default workflow: {{defaultWorkflow}}
-
-This is the default when choosing a workflow for delegated tasks. null means no default is specified.
-
 Repository manager.main_merge: {{mainMerge}}
 
 This is a saved human standing integration instruction. approve prepares the PR and waits for the person to merge; auto advances through finishing and merging.

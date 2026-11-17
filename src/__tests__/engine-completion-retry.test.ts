@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
@@ -139,6 +139,33 @@ describe('WorkflowEngine completion retry wiring', () => {
     expect(runReportPhase).toHaveBeenCalledOnce();
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session-2');
+  });
+
+  it('passes external run context directories to the Phase 3 completion judge', async () => {
+    const cloneCwd = join(cwd, 'clone');
+    mkdirSync(cloneCwd, { recursive: true });
+    const step = reviewStep('reviewer', { completionRetry: { ...completion, maxRetry: 0 } });
+    engine = new WorkflowEngine(normalConfig(step), cloneCwd, 'task', {
+      projectCwd: cwd,
+      provider: 'opencode',
+      model: 'opencode/probe',
+      runPathsDirectory: join(cwd, '.takt', 'runs'),
+      reportDirName: 'external-run-context',
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      if (options.internalAgentName === COMPLETION_RETRY_JUDGE_NAME) return judgeResponse(true);
+      options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      return reviewerResponse(String(persona), 'review', 'review-session');
+    });
+
+    await expect(engine.run()).resolves.toMatchObject({ status: 'completed' });
+
+    const judgeCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => (
+      options.internalAgentName === COMPLETION_RETRY_JUDGE_NAME
+    ));
+    expect(judgeCall?.[2].openCodeExternalDirectories).toEqual([
+      realpathSync(join(cwd, '.takt', 'runs', 'external-run-context', 'context')),
+    ]);
   });
 
   it('loads the review-completion judge runtime seat through to the common transport', async () => {
@@ -281,7 +308,7 @@ describe('WorkflowEngine completion retry wiring', () => {
     },
   );
 
-  it('clears the normal reviewer session after double-empty recovery succeeds fresh without one', async () => {
+  it('keeps the normal reviewer session when repeated same-session recovery succeeds', async () => {
     const step = reviewStep('reviewer');
     const delegatedUsage = vi.fn();
     engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
@@ -302,7 +329,7 @@ describe('WorkflowEngine completion retry wiring', () => {
         undefined,
         'review-session',
         'review-session',
-        undefined,
+        'review-session',
       ][reviewerCalls - 1]);
       if (reviewerCalls === 1) {
         return reviewerResponse(String(persona), 'initial review', 'review-session');
@@ -321,9 +348,9 @@ describe('WorkflowEngine completion retry wiring', () => {
       .filter(([context]) => context.step === step.name)
       .map(([, result]) => result.success);
     expect(reviewerUsage.length).toBeGreaterThan(0);
-    expect(reviewerUsage).not.toContain(false);
+    expect(reviewerUsage).toEqual([true, true, true]);
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
-    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBeUndefined();
+    expect(phase2.getSessionId(phase2.resolveSessionKey(step))).toBe('review-session');
   });
 
   it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
@@ -520,19 +547,18 @@ describe('WorkflowEngine completion retry wiring', () => {
       undefined,
       'reviewer-b-session-1',
       'reviewer-b-session-1',
-      undefined,
+      'reviewer-b-session-1',
     ]);
     const reviewerBUsage = delegatedUsage.mock.calls
       .filter(([context]) => context.step === 'reviewer-b')
       .map(([, result]) => result.success);
-    expect(reviewerBUsage.length).toBeGreaterThan(0);
-    expect(reviewerBUsage).not.toContain(false);
+    expect(reviewerBUsage).toEqual([true, true, true, true]);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(vi.mocked(runReportPhase).mock.calls.map(([reportedStep]) => reportedStep.name).sort())
       .toEqual(['reviewer-a', 'reviewer-b']);
     const reviewerBPhase2 = vi.mocked(runReportPhase).mock.calls
       .find(([reportedStep]) => reportedStep.name === 'reviewer-b')![2] as ReportPhaseRunnerContext;
-    expect(reviewerBPhase2.getSessionId(reviewerBPhase2.resolveSessionKey(reviewerB))).toBeUndefined();
+    expect(reviewerBPhase2.getSessionId(reviewerBPhase2.resolveSessionKey(reviewerB))).toBe('reviewer-b-session-1');
   });
 
   it('keeps a judge failure in Phase 2 without leaking it to response, state, or Phase 3', async () => {

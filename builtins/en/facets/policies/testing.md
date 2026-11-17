@@ -1,6 +1,6 @@
 # Testing Policy
 
-Subject to the five-part evidence gate below, an observable behavior change requires the minimum test needed to prevent regressions that existing tests cannot detect, and a bug fix requires an existing or new regression test that would detect the pre-fix failure.
+With all five evidence conditions: changed observable behavior needs minimal tests for regressions existing tests miss; fixes need tests detecting pre-fix failure.
 
 ## Principles
 

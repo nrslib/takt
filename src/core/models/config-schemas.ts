@@ -78,6 +78,7 @@ export const CacciaConfigSchema = z.object({
 
 export const MergeConfigSchema = z.object({
   workflow: z.string().min(1).optional(),
+  prepare_workflow: z.string().min(1).optional(),
   method: z.enum(['squash', 'merge', 'rebase']).optional(),
   concurrency: z.number().int().positive().safe().optional(),
   auto_start: z.boolean().optional(),
@@ -87,6 +88,7 @@ export const MergeConfigSchema = z.object({
   where: PrListWhereRawSchema.optional(),
 }).strict().transform((config): MergeConfig => ({
   ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
+  ...(config.prepare_workflow === undefined ? {} : { prepareWorkflow: config.prepare_workflow }),
   ...(config.method === undefined ? {} : { method: config.method }),
   ...(config.concurrency === undefined ? {} : { concurrency: config.concurrency }),
   ...(config.auto_start === undefined ? {} : { autoStart: config.auto_start }),
@@ -166,7 +168,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     permission: ManagerPermissionSchema.optional(),
     provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
-    default_workflow: z.string().trim().min(1).optional(),
+    preserve_goal_worktree: z.boolean().optional(),
     workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
     // Deprecated: accepted for existing configuration files and ignored.
     sensitive_paths: z.unknown().optional(),

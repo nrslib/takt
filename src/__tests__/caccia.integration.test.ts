@@ -445,7 +445,7 @@ describe('Caccia report lifecycle', () => {
     ];
     const decisions = [{ thread_id: 'display-thread', valid: false, reason: 'Intentional behavior.' }];
     let calls = 0;
-    mockRunAgent.mockImplementation(async (persona, instruction, options) => {
+    mockRunAgent.mockImplementation(async (persona, instruction, options: Parameters<typeof runAgent>[2]) => {
       calls += 1;
       options?.onPromptResolved?.({
         systemPrompt: typeof persona === 'string' ? persona : '',
@@ -453,9 +453,9 @@ describe('Caccia report lifecycle', () => {
       });
       options?.onStream?.({ type: 'text', data: { text: 'display-stream-marker\n' } });
       if (calls === 1) {
-        options?.onStream?.({ type: 'tool_output', data: { output: 'safe \x1b]52;c;' } });
-        options?.onStream?.({ type: 'tool_output', data: { output: 'c2FmZQ==\x07\nnext\n' } });
-        options?.onStream?.({ type: 'tool_output', data: { output: 'safe 52;c;c2FmZQ==\n' } });
+        options?.onStream?.({ type: 'tool_output', data: { tool: 'Bash', output: 'safe \x1b]52;c;' } });
+        options?.onStream?.({ type: 'tool_output', data: { tool: 'Bash', output: 'c2FmZQ==\x07\nnext\n' } });
+        options?.onStream?.({ type: 'tool_output', data: { tool: 'Bash', output: 'safe 52;c;c2FmZQ==\n' } });
         options?.onStream?.({ type: 'tool_result', data: { content: '', isError: false } });
       }
       return {

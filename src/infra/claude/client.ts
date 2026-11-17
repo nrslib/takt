@@ -66,6 +66,7 @@ export class ClaudeClient {
       baseUrl: options.baseUrl,
       outputSchema: options.outputSchema,
       sandbox: options.sandbox,
+      denyRules: options.denyRules,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
       imageAttachments: options.imageAttachments,
       childProcessEnv: options.childProcessEnv,

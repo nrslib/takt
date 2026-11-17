@@ -8,6 +8,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone. Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.
+
+## [0.75.0] - 2026-11-08
+
+### Added
+
+- `takt manager` is now ready for serious day-to-day development use. Manager can carry a goal from specification through implementation and PR preparation or merge while preserving conversations across interruptions, waiting for CI outside the conversation, and giving people control over permissions and available workflows.
+- Manager goal proposals and goals can carry specifications (#1997, #2005). Goals that change code include a Gherkin specification, and Quint and Alloy specifications are added when the `assistant.formal_spec` mode is `true` or `'Y/n'`. Type `/verify` in a manager conversation (TUI or Slack) to generate new Quint and Alloy specifications from the current agreement and check them with the same checkers as interactive mode; the result is returned to the same conversation for manager to interpret. Verification is available only when the mode is `true` or `'Y/n'`; the default `y/N` leaves it unavailable. Specifications appear in the proposal display, and the final PR review task receives the saved specifications.
+- Added the `merge-prepare` builtin workflow, which performs the same preparation as `merge-review-fix-simple` through CI and then finishes without merging (#1989). `takt merge` reports prepared PRs separately from merged ones. Manager's `takt_merge_goal_pr` now queues a merge task as a goal task and returns immediately, and the goal PR is finished only through this merge task. After the task pushes to the PR branch, the local goal branch is fast-forwarded; if it has diverged or is checked out, it is left unchanged and reported.
+- Manager can ask a person a question that is not tied to a goal with `takt_ask_standalone_question`, for example when the goal for an event cannot be identified (#1987). The question is posted to Slack and sent through the same webhook notification as goal questions, and the answer starts a manager turn.
+- Manager can read a workflow's steps, transitions, and called workflows with `takt_get_workflow` before delegating work to a task (#1991).
+- The manager TUI shows what manager is doing during a turn: thinking, responding, or the tool in use (#1990).
+- Manager is notified when a PR waiting for merge becomes conflicting, once per conflict (#1995).
+- Manager can be restricted to selected workflows for new development tasks with `manager.workflows`, including a usage description for each candidate (#2020). Manager selects a workflow suited to the task from those candidates and their usage descriptions (#2032). The default candidates are `default` and `simple`; `workflows: all` keeps all workflows available. Existing task resumes, PR finishing, child workflow calls, and manual CLI use are not restricted.
+- Manager can register a one-line waiting command, such as `gh run watch --exit-status`, with `takt_wait_command` (#2024). The daemon runs it independently of the manager turn and returns a completion event with the exit status and the last 16 KiB of output. Commands time out after one hour by default, can wait up to 24 hours, and stop when their goal is paused or aborted or the daemon shuts down.
+
+### Changed
+
+- Manager accepts messages while a turn is running and processes them in order after the current turn, instead of rejecting them (#1953). Up to 32 messages or 1 MiB can wait per conversation.
+- Interrupting a manager turn (Esc or `takt daemon stop`) keeps the session, so the next message continues the same conversation with a note that the previous message was interrupted (#1984). Events that were being processed when the daemon stopped or restarted are delivered again on the next start (#2000).
+- Removed the manager permission judge, including tool classification, saved allow/deny decisions, read-scope checks, the Codex judgment hook, and the approval screens in the TUI and Slack (#1973). Manager can merge a goal PR when a person asks it directly, not only through director. Integrating into the target branch, force pushing, deleting remote branches or unsaved work, aborting goals, and posting outside the requested scope still require an explicit human instruction. The `manager.main_merge: auto` setting is a standing human instruction and permits merging without a separate instruction for each goal. Old `manager-permission-judge` settings in `runtime.yaml` and `manager.sensitive_paths` are read and ignored.
+- The daemon now works by receiving events and dispatching turns (#1960). Manager patrols each repository once per `manager.patrol_interval` (default now 1800 seconds) only when it has active goals, excluding goals waiting for merge (#1972, #1995). Patrols run in a new session separate from the conversation, so a long conversation is not re-read on every patrol (#2001). Patrols judge running tasks by whether their reports, review findings, and fix plans stay within the instructions and acceptance criteria, not by elapsed time or repeat counts (#1985). Director no longer patrols, and `director.patrol_interval` is ignored (#1963).
+- Pausing a goal now also stops its running run and leaves the task as a retryable failure; after the goal is resumed, manager continues the same task (#1964, #1965).
+- The manager TUI conversation shows only manager replies, notices, and goal registrations, not goal work logs (#1971). TAKT notices such as pause, resume, and abort are shown dimmed without the reply marker (#1981). The status line is combined into one line (two on narrow terminals), and the experimental notice is shown once at startup (#1975, #1978).
+- Slack notifications use a unified heading with the goal, include the PR number and link for goals waiting for merge, and list choices one per line with the recommended choice marked. Conversation replies are posted as Markdown blocks (#1996).
+- Rewrote the manager facets around judging by the goal's purpose as a development lead (#2004). Manager asks with separate choices for each option and the reason for asking, does not resume work until the reason for stopping is resolved, and does not decide an unsettled scope by itself (#1979, #1982). It dismisses review findings only when they are truly out of scope or ask for defenses against impossible premises (#1993), and it does not wait for external state changes within a turn (#1991).
+- Caccia judges findings with the PR's purpose in mind, and its conclusion (complete or abort) and abort reason now reach the judgment and the outer processing (#1994, #1998). Requesting goal completion again updates the existing PR description.
+- Updated the Pi SDK to 1.5.0 (#1956).
+- Manager permissions now default to `auto`, which uses provider-side AI review for Claude and Codex, instead of always granting full access (#2017). Set `manager.permission: full` to restore unrestricted execution, or override individual providers with `manager.provider_permissions`. Other providers continue to run with full permissions.
+- The manager TUI displays interim text during a turn, the current Bash description or tool name, and elapsed time (#2013). Long activity labels are truncated so the elapsed time remains visible; these transient updates are not posted to Slack.
+- Manager patrol times are saved per repository, so a due patrol is queued as soon as the daemon starts and restarting the daemon does not reset the interval (#2011). Goals with pending, running, or failed PR-finishing tasks remain patrol targets; only goals actually waiting for a human merge are excluded and counted separately in the status line (#2012, #2016).
+- Manager turn inputs now identify whether they came from a person, director, a saved inquiry answer, an event, a patrol, or the runtime (#2022). This prevents tool cancellations, environment notices, run reports, and manager's own records from being mistaken for human instructions, including after daemon restarts.
+- Builtin review and fix workflows reconsider the assumptions behind an earlier repair when the same in-scope problem recurs through a confirmed shared mechanism (#2021). Repair history, alternative methods, and verification results are carried through adjudication, planning, fixing, and final verification.
+
+### Fixed
+
+- Requesting `full` permission with Claude (including `takt manager`) no longer silently falls back to the default permission mode, which made MCP tools and piped Bash commands wait for approval and fail (#1983). When an organization policy disables bypass permissions, manager's own MCP tools are pre-approved and the Claude SDK switches to `auto` mode (#1986).
+- `takt manager`, `takt ui`, and the daemon no longer stop with `Registered project fingerprint does not match` or silently drop a project when the directory's device number changes on macOS or the repository is cloned again at the same path (#1992). Projects are identified by path only.
+- A goal whose PR was squash-merged can be completed, including a goal that was moved back to work after completion was requested (#1954). Manager no longer waits forever for a background process from an earlier turn, and no longer creates throwaway merge commits during final checks.
+- The clone of a task is deleted after its result is integrated into the goal branch, so finished task clones no longer fill the disk (#1957). `/requeue` and `/retry` (and the manager tools) resume from the newest run that saved a position, or from the first step if none did, instead of failing when the latest run stopped before saving a position.
+- The daemon finds the logs of tasks running in clones, so manager no longer receives false `watch_failed` notices (#1964).
+- The TUI loads the React production build, so long-running manager TUIs no longer accumulate performance entries, print `MaxPerformanceEntryBufferExceededWarning`, and grow in memory (#2003).
+- The SDK update prompt is shown outside the TUI instead of inside it, where the screen looked stuck on "thinking" (#1977). A failed or declined SDK installation from `/provider` no longer ends the conversation.
+- In the manager TUI, a goal proposal taller than the terminal no longer piles up the same screen in the scrollback on every redraw (#1952), and the confirmation box no longer stays on screen after **Register goal** is selected (#1980).
+- Task workspaces created with a Git reference clone now disable commit-graph reading during cloning, avoiding checkout failures caused by a Git bug after the reference repository's commit-graph is rebuilt (#2010).
+- Codex read-only steps can now use `network_access: true` without gaining filesystem write access (#2014). TAKT-managed permissions ignore user allow rules that could bypass these restrictions, while `permission_control: codex` leaves Phase 1 sandbox and network decisions to Codex.
+- Resuming a workflow partway through with Retry, Requeue, Instruct, or step selection restores the preceding steps' system contexts, effect results, and structured outputs (#2015). This prevents missing-context errors and avoids rerunning earlier steps; child workflow results are restored only for the same invocation.
+- Goal PR finishing tasks now pass the goal's out-of-scope instructions to reviewers, and PR reviews exclude changes merged in from the base branch (#2019). Reviews cover the PR's cumulative diff plus uncommitted and untracked changes instead.
+- Manager startup now keeps the authenticated daemon IPC connection through the first conversation open, preventing the daemon from idling out between the readiness check and open and causing `Daemon IPC identity mismatch` (#2030).
+- Replayed manager events no longer deliver a duplicate goal notification when the daemon stops after Slack delivery but before saving event completion. Notifications created through `takt_notify_goal` use a persistent ID derived from the event operation and notification content, so different notifications in the same turn remain distinct.
+
+### Internal
+
+- Added the repository-only `takt-prompt-engineering` workflow for facet changes and before/after eval comparison (#1951), along with manager eval cases.
+- Resolved npm audit vulnerabilities (#1959) and fixed flaky tests in CI and on macOS (#1958, #1966, #1967, #1976, #2002).
+- Fixed the `runtime.prepare` provider E2E workflow to use `edit: true`, since Codex runs `edit: false` steps in a read-only sandbox. The test now verifies that fixtures stay unchanged and both commands receive the required environment on their first and only invocation, and also covers a non-edit OpenCode step.
+- Local heavy integration tests now use half the available CPUs, capped at four workers (#2018). Removed redundant test coverage while retaining the underlying behavior checks (#2025).
+
 ## [0.74.0] - 2026-11-02
 
 ### Added

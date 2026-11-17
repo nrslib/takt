@@ -4,6 +4,7 @@ import { makeProvider } from './test-helpers.js';
 import type { Provider, ProviderAgent } from '../infra/providers/types.js';
 import type { FormalSpecVerificationResult } from '../features/interactive/formalSpecVerification.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../features/interactive/formalSpecVerification.js', () => ({
   runFormalSpecVerification: vi.fn(), cleanupFormalSpecVerificationArtifacts: vi.fn(),
@@ -24,6 +25,51 @@ function fixture(mode = true) {
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(runFormalSpecVerification).mockResolvedValue(verification); });
 afterEach(() => { vi.restoreAllMocks(); });
+it('forwards generation and interpretation tools with distinct call identities while retaining readonly permissions', async () => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'same', tool: 'Read', input: { file_path: 'spec.qnt' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'same', content: 'spec-result', isError: false } });
+    return { ...success, content: 'generated specification', structuredOutput: { message: 'verified', summary: null } };
+  });
+  await f.executor.execute({ ...f.input, onToolEvent });
+  expect(f.call).toHaveBeenCalledTimes(2);
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events.map((event) => event.type)).toEqual(['tool_use', 'tool_result', 'tool_use', 'tool_result']);
+  expect(events[0].toolActivity.callId).toBe(events[1].toolActivity.callId);
+  expect(events[2].toolActivity.callId).toBe(events[3].toolActivity.callId);
+  expect(events[0].toolActivity.callId).not.toBe(events[2].toolActivity.callId);
+  for (const [, options] of f.call.mock.calls) expect(options).toMatchObject({
+    permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+  });
+});
+it.each(['provided-id', ''])('identifies ID-less verify outputs and results in generation and interpretation (start ID=%j)', async (startId) => {
+  const f = fixture();
+  const onToolEvent = vi.fn();
+  f.call.mockImplementation(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: startId, tool: 'Read', input: { file_path: 'spec.qnt' } } });
+    options.onStream!({ type: 'tool_output', data: { tool: 'Read', output: 'reading specification' } });
+    options.onStream!({ type: 'tool_result', data: { content: 'spec-result', isError: false } });
+    return { ...success, content: 'generated specification', structuredOutput: { message: 'verified', summary: null } };
+  });
+  expect(await f.executor.execute({ ...f.input, onToolEvent })).toMatchObject({ message: 'verified' });
+  const events = onToolEvent.mock.calls.map(([event]) => event);
+  expect(events.map((event) => event.type)).toEqual(['tool_use', 'tool_output', 'tool_result', 'tool_use', 'tool_output', 'tool_result']);
+  for (const offset of [0, 3]) {
+    const id = events[offset].data.id;
+    expect(id).toEqual(expect.any(String));
+    expect(id).not.toBe('');
+    if (startId !== '') expect(id).toBe(startId);
+    expect(events[offset + 1].data.id).toBe(id);
+    expect(events[offset + 2].data.id).toBe(id);
+    expect(events[offset].toolActivity.callId).toBe(events[offset + 2].toolActivity.callId);
+  }
+  expect(events[0].toolActivity.callId).not.toBe(events[3].toolActivity.callId);
+  for (const [, options] of f.call.mock.calls) expect(options).toMatchObject({
+    permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+  });
+});
 it.each([
   { ending: 'done', cancelled: false }, { ending: 'throw', cancelled: false }, { ending: 'error', cancelled: false },
   { ending: 'done', cancelled: true }, { ending: 'throw', cancelled: true }, { ending: 'error', cancelled: true },
@@ -157,6 +203,22 @@ it('does not start checkers after cancellation during generation', async () => {
   expect(runFormalSpecVerification).not.toHaveBeenCalled();
 });
 
+
+it('adds the progress notes guidance to the manager, generator and interpreter prompts without replacing them', async () => {
+  const f = fixture();
+  f.call.mockResolvedValueOnce({ ...success, content: '```quint\nmodule csv {}\n```' });
+  f.call.mockResolvedValueOnce({ ...success, content: '', structuredOutput: { message: '検証結果', summary: null } });
+
+  await f.executor.execute(f.input);
+
+  const guidance = loadTemplate('progress_notes', 'ja');
+  const [manager, generator, interpreter] = f.setup.mock.calls.map(([agentSetup]) => agentSetup.systemPrompt!);
+  expect(f.setup).toHaveBeenCalledTimes(3);
+  expect(manager).toBe(`${guidance}\n\nmanager system prompt`);
+  expect(generator!.startsWith(`${guidance}\n\n`)).toBe(true);
+  expect(generator!.split(guidance)).toHaveLength(2);
+  expect(interpreter!.startsWith(`${guidance}\n\nmanager system prompt\n\n`)).toBe(true);
+});
 
 it.each([true, false])('uses manager-only generation guidance with comments=%s', async (comments) => {
   const f = fixture();

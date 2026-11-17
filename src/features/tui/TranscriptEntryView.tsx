@@ -2,9 +2,10 @@ import { Box, Static, Text, useStdout } from 'ink';
 import chalk from 'chalk';
 import { memo, type ReactElement } from 'react';
 import type { UserMessageColors } from './terminalColors.js';
-import { ASSISTANT_MARKER, USER_MARKER, MARKER_WIDTH, formatTranscriptEntryOutput } from './transcriptOutput.js';
+import { ASSISTANT_MARKER, THINKING_MARKER, TOOL_MARKER, USER_MARKER, MARKER_WIDTH, formatTranscriptEntryOutput } from './transcriptOutput.js';
 
-type TranscriptRole = 'system' | 'user' | 'assistant';
+/** `thinking` and `tool` are the finished work of a turn, committed once ahead of its reply. */
+type TranscriptRole = 'system' | 'user' | 'assistant' | 'thinking' | 'tool';
 
 export interface TranscriptEntry {
   readonly role: TranscriptRole;
@@ -32,6 +33,15 @@ export function TranscriptEntryView({ entry, userMessageColors }: TranscriptEntr
   if (entry.role === 'system') {
     return (
       <Box marginBottom={1} paddingLeft={MARKER_WIDTH}>
+        <Text dimColor>{entry.content}</Text>
+      </Box>
+    );
+  }
+
+  if (entry.role === 'thinking' || entry.role === 'tool') {
+    return (
+      <Box marginBottom={1}>
+        <Text dimColor>{entry.role === 'thinking' ? THINKING_MARKER : TOOL_MARKER}</Text>
         <Text dimColor>{entry.content}</Text>
       </Box>
     );

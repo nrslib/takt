@@ -546,7 +546,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: 'キャッシュなしの3モデル反復を行う production-condition suite である',
+    reason: '既存ケースと修正方式6種の日英・両フェーズ（25ケース）を3モデル・3反復で比較する',
   },
   'fix-plan-impact-closure-primary': {
     defaultEligible: false,
@@ -624,7 +624,7 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
     cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+    reason: '既存3ケースと修正方式6種の日英・両フェーズ（27ケース）を3モデルで比較する',
   },
   'review-adjudication-report': {
     defaultEligible: false,
@@ -719,6 +719,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'review-adjudication': ['review-adjudication', 'repair-strategy'],
+  'fix-plan-bounded-proof': ['fix-plan-bounded-proof', 'repair-strategy'],
   'adjudicator-no-fix': ADJUDICATOR_TARGETS,
   ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
     ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>

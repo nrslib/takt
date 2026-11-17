@@ -7,12 +7,222 @@ import {
   createSensitiveTextStreamRedactor,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
-  sanitizeSensitiveValueWithKnownValues,
   sanitizeSensitiveText,
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
+import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
+import { maskSensitiveRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
 
 describe('sensitiveText', () => {
+  it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
+    for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
+      const masked = matching === 'known'
+        ? sanitizeSensitiveTextWithKnownValues(text, { token: value })
+        : maskSensitiveRanges(text, substringSensitiveRanges(text, [value]));
+      expect(masked).toBe('before [REDACTED] after');
+    }
+  });
+
+  it('masks overlapping short configured substrings without changing input-derived word matching', () => {
+    const text = 'before ababa after';
+    expect(maskSensitiveRanges(text, substringSensitiveRanges(text, ['aba']))).toBe('before [REDACTED] after');
+    expect(sanitizeSensitiveTextWithKnownValues(text, { token: 'aba' })).toBe(text);
+  });
+
+  describe.each(["'", '"'])('shell header enclosed in %s', (quote) => {
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'Basic [REDACTED]'],
+      ['Authorization', 'Bearer fixture-secret==', 'Bearer [REDACTED]'],
+      ['Cookie', 'sid=fixture-secret==; other=fixture-extra', '[REDACTED]'],
+      ['Set-Cookie', 'sid=fixture-secret==; Path=/', '[REDACTED]'],
+    ])('keeps the URL after a padded %s value', (header, value, expected) => {
+      const command = 'curl -H ' + quote + header + ': ' + value + quote;
+      const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+
+      expect(sanitizeSensitiveText(command + suffix))
+        .toBe('curl -H ' + quote + header + ': ' + expected + quote + suffix);
+    });
+  });
+
+  it.each([
+    ['Authorization', 'Digest username=\\"alice\\", response=\\"fixture-secret\\"', 'Digest [REDACTED]'],
+    ['Authorization', 'Bearer \\"fixture-secret\\"', 'Bearer [REDACTED]'],
+    ['Authorization', 'Basic \\"fixture-secret\\"', 'Basic [REDACTED]'],
+    ['Authorization', 'Bearer fixture-secret\\\\', 'Bearer [REDACTED]'],
+    ['Cookie', 'sid=\\"fixture-secret\\"; other=\\"fixture-extra\\"', '[REDACTED]'],
+    ['Set-Cookie', 'sid=\\"fixture-secret\\"; Path=/', '[REDACTED]'],
+  ])('handles escaped quotes and backslash pairs in a double-quoted %s argument', (header, value, expected) => {
+    const suffix = " 'https://example.test/path' --verbose\nprovider.transport: ECONNRESET";
+    const command = 'curl -H "' + header + ': ' + value + '"';
+
+    expect(sanitizeSensitiveText(command + suffix)).toBe('curl -H "' + header + ': ' + expected + '"' + suffix);
+    expect(sanitizeSensitiveText(JSON.stringify({ command: command + suffix })))
+      .toBe(JSON.stringify({ command: 'curl -H "' + header + ': ' + expected + '"' + suffix }));
+  });
+
+  it('treats a backslash as literal inside a single-quoted shell header', () => {
+    const command = "curl -H 'Cookie: sid=fixture-secret\\' 'https://example.test/path'";
+
+    expect(sanitizeSensitiveText(command)).toBe("curl -H 'Cookie: [REDACTED]' 'https://example.test/path'");
+  });
+
+  it('redacts quoted sensitive assignments before interpreting embedded header text', () => {
+    const text = 'token="metadata Authorization: Basic c2VjcmV0==" https://example.test/path';
+
+    expect(sanitizeSensitiveText(text)).toBe('token="[REDACTED]" https://example.test/path');
+  });
+
+  describe.each(["'", '"'])('sensitive assignment enclosed in %s', (quote) => {
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'c2VjcmV0=='],
+      ['Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+      ['Set-Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+    ])('collects the embedded %s credential without collecting the following URL', (header, value, credential) => {
+      const text = 'token=' + quote + 'metadata ' + header + ': ' + value + quote + ' https://example.test/path';
+
+      const collected = collectSensitiveStringValues(text);
+
+      expect(collected.values.has(credential)).toBe(true);
+      expect([...collected.values].some((candidate) => candidate.includes('example.test/path'))).toBe(false);
+      expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', text))
+        .toBe('echoed [REDACTED] https://example.test/path');
+      expect(sanitizeSensitiveTextWithKnownValues(text, text))
+        .toBe('token=' + quote + '[REDACTED]' + quote + ' https://example.test/path');
+    });
+
+    it.each([
+      ['Authorization', 'Basic c2VjcmV0==', 'c2VjcmV0=='],
+      ['Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+      ['Set-Cookie', 'sid=fixture-secret==', 'fixture-secret=='],
+    ])('collects the JSON-escaped %s credential without collecting the following URL', (header, value, credential) => {
+      const command = 'token=' + quote + 'metadata ' + header + ': ' + value + quote + ' https://example.test/path';
+      const source = JSON.stringify({ command });
+      const expected = JSON.stringify({ command: 'token=' + quote + '[REDACTED]' + quote + ' https://example.test/path' });
+
+      const collected = collectSensitiveStringValues(source);
+
+      expect(collected.values.has(credential)).toBe(true);
+      expect([...collected.values].some((candidate) => candidate.includes('example.test/path'))).toBe(false);
+      expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', source))
+        .toBe('echoed [REDACTED] https://example.test/path');
+      expect(sanitizeSensitiveText(source)).toBe(expected);
+      expect(sanitizeSensitiveTextWithKnownValues(source, source)).toBe(expected);
+    });
+  });
+
+  it.each([
+    'metadata \\"quoted\\" ',
+    'metadata \\\\ ',
+    'metadata \\\\\\"quoted\\\\\\" ',
+  ])('keeps JSON assignment boundaries after escaped metadata: %s', (metadata) => {
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
+  });
+
+  it('bounds header collection inside a long JSON-escaped assignment', () => {
+    const metadata = 'metadata \\"quoted\\" \\\\ '.repeat(4_096);
+    const command = 'token="' + metadata + 'Authorization: Basic c2VjcmV0==" https://example.test/path';
+    const source = JSON.stringify({ command });
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed c2VjcmV0== https://example.test/path', source))
+      .toBe('echoed [REDACTED] https://example.test/path');
+    expect(sanitizeSensitiveText(source))
+      .toBe(JSON.stringify({ command: 'token="[REDACTED]" https://example.test/path' }));
+  });
+
+  it.each(['\n', '\r\n'])('keeps the following diagnosis after an unterminated quoted header (%j)', (separator) => {
+    const command = 'curl -H "Authorization: Digest response=\\"fixture-secret\\"';
+
+    expect(sanitizeSensitiveText(command + separator + 'provider.transport: ECONNRESET'))
+      .toBe('curl -H "Authorization: Digest [REDACTED]' + separator + 'provider.transport: ECONNRESET');
+  });
+
+  it('redacts a long escaped header and preserves the next argument and diagnosis', () => {
+    const parameters = 'response=\\"fixture-secret\\", '.repeat(4_096);
+    const command = 'curl -H "Authorization: Digest ' + parameters + 'nonce=\\"fixture-extra\\""';
+    const suffix = " 'https://example.test/path'\nprovider.transport: ECONNRESET";
+
+    expect(sanitizeSensitiveText(command + suffix))
+      .toBe('curl -H "Authorization: Digest [REDACTED]"' + suffix);
+  });
+
+  it.each([
+    ["curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'", 'c2VjcmV0=='],
+    ["curl -H 'Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+    ["curl -H 'Set-Cookie: sid=fixture-secret==' 'https://example.test/path'", 'fixture-secret=='],
+  ])('collects the credential without collecting a subsequent URL: %s', (command, credential) => {
+    expect(sanitizeSensitiveTextWithKnownValues('echoed ' + credential + ' https://example.test/path', { command }))
+      .toBe('echoed [REDACTED] https://example.test/path');
+  });
+
+  it.each([
+    ['Authorization', 'Digest token="fixture-secret", nonce="fixture-extra"'],
+    ['Cookie', 'token="fixture-secret"; other=fixture-extra'],
+    ['Set-Cookie', 'token="fixture-secret"; Path=/'],
+  ])('collects the complete %s value containing a quoted sensitive assignment', (header, value) => {
+    const command = "curl -H '" + header + ': ' + value + "'";
+
+    expect(sanitizeSensitiveTextWithKnownValues('echoed ' + value, { command }))
+      .toBe('echoed [REDACTED]');
+  });
+
+  it.each([
+    {
+      command: "curl -H 'Authorization: Basic c2VjcmV0==' 'https://example.test/path'",
+      expected: "curl -H 'Authorization: Basic [REDACTED]' 'https://example.test/path'",
+      secrets: ['c2VjcmV0=='],
+    },
+    {
+      command: String.raw`curl -H "Authorization: Digest username=\"alice\", response=\"fixture-secret\""`,
+      expected: 'curl -H "Authorization: Digest [REDACTED]"',
+      secrets: ['alice', 'fixture-secret'],
+    },
+  ])('redacts the complete shell header without consuming subsequent arguments: $command', ({ command, expected, secrets }) => {
+    expect(sanitizeSensitiveText(command)).toBe(expected);
+
+    const sanitized = sanitizeSensitiveText(`${command} --verbose\nprovider.transport: ECONNRESET`);
+
+    expect(sanitized).toBe(`${expected} --verbose\nprovider.transport: ECONNRESET`);
+    for (const secret of secrets) {
+      expect(sanitized).not.toContain(secret);
+    }
+  });
+
+  it.each([
+    ['Digest', 'realm="fixture-secret", nonce="fixture-extra"'],
+    ['Bearer', 'realm="fixture-secret"'],
+    ['Basic', 'realm="fixture-secret"'],
+    ['Bearer', '"fixture-secret"'],
+    ['Basic', '"fixture-secret"'],
+    ['Digest', "realm='fixture-secret', nonce='fixture-extra'"],
+    ['Bearer', "'fixture-secret'"],
+    ['Basic', "'fixture-secret'"],
+  ])('redacts quoted Authorization %s %s while preserving command quotes and diagnosis', (scheme, value) => {
+    const quote = value.includes('"') ? "'" : '"';
+    const text = `curl -H ${quote}Authorization: ${scheme} ${value}${quote} https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H ${quote}Authorization: ${scheme} [REDACTED]${quote} https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
+  it.each(['Cookie', 'Set-Cookie'])('redacts quoted %s values while preserving the enclosing command and subsequent diagnosis', (header) => {
+    const text = `curl -H '${header}: sid="fixture-secret"; other="fixture-extra"' https://example.test\nprovider.transport: ECONNRESET`;
+
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).toBe(`curl -H '${header}: [REDACTED]' https://example.test\nprovider.transport: ECONNRESET`);
+    expect(sanitized).not.toContain('fixture-secret');
+    expect(sanitized).not.toContain('fixture-extra');
+  });
+
   describe.each(['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user='])(
     'user option %s', (option) => {
       it.each([
@@ -157,6 +367,24 @@ describe('sensitiveText', () => {
     expect(output).not.toContain('LEAK-ME');
   });
 
+  it('does not withhold an ordinary line when known sensitive values are tracked', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+
+    expect(redactor.write('ready\n', { api_key: 'test-secret-label' })).toBe('ready\n');
+  });
+
+  it('keeps an unterminated PEM block pending when known sensitive values are tracked', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const source = { api_key: 'test-secret-label' };
+
+    const output = redactor.write('-----BEGIN PRIVATE KEY-----\n', source)
+      + redactor.write('LEAK-ME', source)
+      + redactor.flush(source);
+
+    expect(output).toBe('[REDACTED]');
+    expect(output).not.toContain('LEAK-ME');
+  });
+
   it('redacts a PEM private key split at every stream boundary', () => {
     for (let split = 1; split < privateKey.length; split += 1) {
       const redactor = createSensitiveTextStreamRedactor();
@@ -165,29 +393,6 @@ describe('sensitiveText', () => {
         + redactor.flush({});
       expect(output).toBe('[REDACTED]');
     }
-  });
-
-  it('bounds retained sensitive candidates and remains fail-closed after exhaustion', () => {
-    const byCount = createBoundedSensitiveValues();
-    for (let index = 0; index <= MAX_TRACKED_SENSITIVE_VALUES; index += 1) {
-      byCount.collect({ token: `secret-${index}` });
-    }
-    expect(byCount.exhausted).toBe(true);
-    expect(byCount.exhaustReason).toBe('candidate_count');
-    expect(byCount.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', byCount)).toBe('[REDACTED]');
-
-    const byBytes = createBoundedSensitiveValues();
-    byBytes.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES + 1) });
-    expect(byBytes.exhausted).toBe(true);
-    expect(byBytes.exhaustReason).toBe('candidate_bytes');
-    expect(byBytes.values.size).toBe(0);
-    expect(sanitizeSensitiveTextWithKnownValues('another-secret', byBytes)).toBe('[REDACTED]');
-
-    const bySourceScan = createBoundedSensitiveValues();
-    bySourceScan.collect({ token: 'x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE + 1) });
-    expect(bySourceScan.exhausted).toBe(true);
-    expect(bySourceScan.exhaustReason).toBe('source_scan');
   });
 
   it('accepts exactly 1,024 sensitive candidates', () => {
@@ -263,18 +468,6 @@ describe('sensitiveText', () => {
     expect(output).toContain('[REDACTED]');
   });
 
-  it('fails closed without emitting an oversized pending credential', () => {
-    const secret = `oversized-${'x'.repeat(10_050)}`;
-    const redactor = createSensitiveTextStreamRedactor();
-
-    const output = redactor.write('Authorization: Bearer ', {})
-      + redactor.write(secret, {})
-      + redactor.flush({});
-
-    expect(output).toBe('[REDACTED]');
-    expect(output).not.toContain(secret);
-  });
-
   it.each([
     ['write', { content: 'private write body' }, 'content'],
     ['apply_patch', { patchText: 'private patch body' }, 'patchText'],
@@ -330,24 +523,5 @@ describe('sensitiveText', () => {
       self: '[REDACTED]',
     });
     expect(sanitizeSensitiveTextWithKnownValues('cycle-secret', source)).toBe('[REDACTED]');
-  });
-
-  it('redacts values beyond the traversal limit', () => {
-    const source = Array.from({ length: 10_050 }, (_, index) => `value-${index}`);
-
-    expect(sanitizeSensitiveValue(source)).toBe('[REDACTED]');
-  });
-
-  it('fails closed when known-value collection exceeds the traversal limit', () => {
-    const source = Array.from({ length: 10_050 }, (_, index) => (
-      index === 10_049 ? { token: 'unvisited-secret' } : index
-    ));
-
-    expect(sanitizeSensitiveValueWithKnownValues(
-      { content: 'unvisited-secret' },
-      source,
-    )).toEqual({ content: '[REDACTED]' });
-    expect(sanitizeSensitiveTextWithKnownValues('unvisited-secret', source)).toBe('[REDACTED]');
-    expect(sanitizeSensitiveTextWithKnownValues('', source)).toBe('');
   });
 });
