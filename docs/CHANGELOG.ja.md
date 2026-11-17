@@ -21,6 +21,7 @@
 - `manager.preserve_goal_worktree: true` で、manager が結果を統合したあともゴールのタスクの worktree と実行レポートを残せるようにしました (#2039)。
 - `provider_options.claude.permissions.deny` で、`Read(./.env)` のような Claude Code の `permissions.deny` ルールを `claude-sdk` と `claude-headless` に渡せるようにしました。`import_user_read_deny: true` にすると、`~/.claude/settings.json` の `Read(` ルールも取り込みます (#1961)。
 - エージェントが作業中に短い進捗メモを残し、TAKT がそれを実行ごとに保存するようにしました (#2056)。コンテキストの圧縮、中断した試行、新しいセッションのあとに再開したステップは、最初からやり直さず記録された進捗から続けます。
+- workflow に `repository_identity: true` を宣言すると、clone で動くタスク（`worktree: true`）で `gh` と `glab` にプロジェクトのリポジトリを渡せるようにしました (#2029)。clone には `origin` がないため、これらの CLI は git リモートからリポジトリを特定できませんでした。宣言した workflow では、TAKT がプロジェクトルートの `origin` を読み、その workflow のエージェントのステップ、コマンドの品質ゲート、system の `command` 入力に `GH_REPO` または `GITLAB_REPO` を渡します。既定は無効で、判断は workflow ごとです。呼ばれた workflow は、呼び出し側の宣言を受け継がず、自身の宣言も失いません。リモートや認証情報は追加せず、利用者が設定した変数は上書きしません。環境変数に GitLab のトークンがあるときは、`GITLAB_HOST` が同じホストを指す場合に限って `GITLAB_REPO` を渡し、GitHub Enterprise のトークンがあるときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを渡します。詳しくは [`repository_identity`](workflows.ja.md#repository_identity) と [clone でのリポジトリの指定](configuration.ja.md#clone-でのリポジトリの指定) を参照してください。
 
 ### Changed
 
@@ -42,6 +43,7 @@
 - TUI のエディタに複数行のテキストを貼り付けたとき、LF・CRLF・CR のどの改行でも行が分かれたままになるようにしました。WSL2 から貼り付けた CR 改行のテキストも含みます (#2033)。
 - `takt_list_tasks` がタスクごとに Git の環境を作り直さないようにしました (#2061)。
 - プロジェクトルートが shallow clone のとき、worktree タスクが `Git clone failed` で失敗する問題を修正しました (#2028)。Git はエラーメッセージにリポジトリのパスを引用符付きで含める（"reference repository '<path>' is shallow"）ため、`--reference` なしの通常クローンへのフォールバックが動作していませんでした。引用符付きと引用符なしの両方の表記を判定するようにしました。
+- manager が、子ワークフローの中で実行中のステップを把握できるようにしました。`takt_get_run` が、最上位のステップから実行中のステップまでの経路 `currentStepPath` を、そのステップの開始時刻と実行回数とともに返します (#2068)。
 
 ### Internal
 

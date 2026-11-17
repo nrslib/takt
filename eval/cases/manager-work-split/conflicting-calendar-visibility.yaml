@@ -151,6 +151,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -204,6 +205,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: 予定を外部カレンダーへ同期し、一覧に表示する。
@@ -227,6 +229,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -260,6 +263,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -293,6 +297,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -526,6 +531,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 66
@@ -579,6 +585,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: Sync events to the external calendar and display them in the list.
@@ -602,6 +609,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 66
@@ -635,6 +643,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 66
@@ -668,6 +677,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 66

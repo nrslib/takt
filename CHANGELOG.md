@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `manager.preserve_goal_worktree: true` keeps a goal task's worktree and run reports after manager integrates its result (#2039).
 - `provider_options.claude.permissions.deny` passes Claude Code `permissions.deny` rules, such as `Read(./.env)`, to `claude-sdk` and `claude-headless`, and `import_user_read_deny: true` also imports the `Read(` rules from `~/.claude/settings.json` (#1961).
 - Agents now leave short progress notes as they work, and TAKT saves them in the run, so a step resumed after context compaction, an interrupted attempt, or a new session continues from the recorded progress instead of starting over (#2056).
+- A workflow can declare `repository_identity: true` to name the project's repository for `gh` and `glab` in a task that runs in a clone (`worktree: true`), where they cannot find it from git remotes because the clone has no `origin` (#2029). TAKT then reads the project root's `origin` and passes `GH_REPO` or `GITLAB_REPO` to that workflow's agent steps, command quality gates, and system `command` inputs, without adding a remote or a credential and without overriding a variable you set. It is off by default, and each workflow decides for itself: a called workflow neither inherits the caller's declaration nor loses its own. `GITLAB_REPO` is skipped while a GitLab token is set in the environment unless `GITLAB_HOST` names the same host, and a GitHub Enterprise Server host is skipped while an Enterprise token is set unless `GH_HOST` names it. See [`repository_identity`](docs/workflows.md#repository_identity) and [Repository identity in clones](docs/configuration.md#repository-identity-in-clones).
 
 ### Changed
 
@@ -42,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pasting multi-line text into the TUI editor keeps the line breaks for LF, CRLF, and CR newlines, including CR text pasted from WSL2 (#2033).
 - `takt_list_tasks` no longer sets up the Git environment again for every task (#2061).
 - Worktree tasks no longer fail with `Git clone failed` when the project root is a shallow clone (#2028). Git quotes the repository path in its "reference repository '<path>' is shallow" error, so the fallback to a plain clone without `--reference` was never triggered; the check now accepts both the quoted and unquoted wording.
+- Manager can see which step is running inside a child workflow. `takt_get_run` now returns `currentStepPath`, the path from the top-level step down to the running step, with that step's start time and execution count (#2068).
 
 ### Internal
 

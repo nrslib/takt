@@ -333,7 +333,7 @@ MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 cl
 
 ### `takt_list_tasks`、`takt_get_run` 和 `takt_tell_run`
 
-这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
+这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`currentStep` 是 run 记录中的当前 step，通常是顶层 step，但当顶层 parallel step 的分支开始其子 workflow 的 step 时，它变为该分支 step。`currentStepPath` 按顺序列出从顶层 workflow 到正在运行的末端 step 的每个 workflow 和 step，只有最后一个元素带有末端的 `startedAt` 和 `executionCount`。末端是顶层 step 本身、子 workflow 的 step、parallel step 本身，或 loop monitor 的判定 step（与触发它的 step 位于同一 workflow、以 `_loop_judge_` 开头的 step）。当 `currentStep` 指向顶层 parallel step 的分支，且该分支在该 parallel step 本次执行中最后开始的 step 正在运行时，路径依次为 parallel step、该分支 step、分支调用的子 workflow 的 step。该分支的这个 step 完成后，或分支的子 workflow 结束后，在分支的下一次开始被记录之前，末端是带有本次执行开始值的 parallel step 本身。`executionCount` 是最新日志中同一调用位置的末端 step 开始的次数；`0` 表示当前 step 的开始尚未记录（此时 `currentStepPath` 只包含 `currentStep`），`null` 表示未知。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
 
 `takt_list_tasks` 在单个任务的 worktree 验证或 run 元数据读取失败时仍返回全部任务。仅有问题的条目会在已取得的基本信息旁增加已清理的 `error` 字符串，其他条目的内容保持不变。不会读取验证失败的 worktree 中的 run 信息。队列本身无法读取或 `cwd` 超出允许范围时，仍返回整个工具的错误，不返回任务数组。
 

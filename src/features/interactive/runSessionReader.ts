@@ -18,6 +18,7 @@ import {
   lstatIfExists,
 } from '../../shared/utils/index.js';
 import { formatLiteralBlock } from './promptSections.js';
+import { CurrentStepTracker, type CurrentStepPath } from './runCurrentStep.js';
 import type { LiveInterventionState } from '../../core/workflow/live-intervention/types.js';
 import { formatLiveInterventionStateForPrompt } from '../../core/workflow/live-intervention/prompt.js';
 
@@ -116,6 +117,7 @@ export interface RunSessionContext {
   readonly currentIteration?: number;
   readonly currentStepStartedAt?: string;
   readonly currentStepExecutionCount?: number;
+  readonly currentStepPath?: CurrentStepPath;
   readonly phase?: 1 | 2 | 3;
   readonly stepLogs: readonly StepLogEntry[];
   readonly reports: readonly ReportEntry[];
@@ -1250,46 +1252,29 @@ function readSessionPage(selection: SessionLogSelection, meta: NonNullable<Retur
   const stepLogs: Record<string, unknown>[] = [];
   let totalCount = 0;
   let log: Record<string, unknown> | undefined;
-  let currentStepExecutionCount = 0;
-  let currentStepStartedAt: string | undefined;
-  const startCounts = new Map<string, number>();
-  let leaf: { step: string; workflow?: string; timestamp: string; stack?: SessionHistoryEntry['stack'] } | undefined;
+  let currentStepTracker = new CurrentStepTracker(meta);
   let listingBytes = 0;
   let pageFull = false;
   let active = false;
-  let hasStarts = false;
   const offset = options.view === undefined || options.view === 'summary' ? options.offset ?? 0 : 0;
   const consume = (line: string) => {
     if (!line.trim()) return;
     const record = parseNdjsonRecordWithPath(line, selection.path);
     if (record.type === 'workflow_start') {
       active = true;
-      hasStarts = false;
       stepLogs.length = 0;
       totalCount = 0;
       log = undefined;
-      currentStepExecutionCount = 0;
-      currentStepStartedAt = undefined;
-      startCounts.clear();
-      leaf = undefined;
+      currentStepTracker = new CurrentStepTracker(meta);
       listingBytes = 0;
       pageFull = false;
       return;
     }
     if (!active) return;
-    if (record.type === 'step_start') {
-      hasStarts = true;
-      const key = JSON.stringify([record.step, record.workflow]);
-      startCounts.set(key, (startCounts.get(key) ?? 0) + 1);
-      if (record.parallel === undefined || record.parallel.role === 'parent') leaf = record;
-      if (record.step === meta.currentStep && (record.workflow === undefined || record.workflow === meta.workflow)
-        && (record.stack === undefined || record.stack.length <= 1)
-        && (record.parallel === undefined || record.parallel.role === 'parent')) {
-        currentStepExecutionCount++;
-        if (record.iteration === meta.currentIteration) currentStepStartedAt = record.timestamp;
-      }
-    }
+    if (record.type === 'step_start') currentStepTracker.observeStart(record);
+    if (record.type === 'workflow_call_complete') currentStepTracker.observeWorkflowCallComplete(record);
     if (record.type !== 'step_complete') return;
+    currentStepTracker.observeStepComplete(record);
     const index = totalCount++;
     const summary = { index, step: record.step, persona: record.persona, status: record.status,
       timestamp: record.timestamp, iteration: record.iteration };
@@ -1333,13 +1318,7 @@ function readSessionPage(selection: SessionLogSelection, meta: NonNullable<Retur
     try { if (descriptor !== undefined) fs.closeSync(descriptor); }
     finally { fs.closeSync(selection.rootDescriptor); }
   }
-  if (currentStepStartedAt === undefined && leaf?.stack !== undefined && leaf.stack.length > 1
-    && leaf.stack[0]?.step === meta.currentStep) {
-    currentStepStartedAt = leaf.timestamp;
-    currentStepExecutionCount = startCounts.get(JSON.stringify([leaf.step, leaf.workflow]))!;
-  }
-  return { stepLogs, log, totalCount, currentStepStartedAt,
-    currentStepExecutionCount: hasStarts && meta.currentStep !== undefined ? currentStepExecutionCount : undefined };
+  return { stepLogs, log, totalCount, currentStepProgress: currentStepTracker.result() };
 }
 
 export function loadRunSessionPage(cwd: string, slug: string, options: RunSessionReadOptions): Record<string, unknown> {
@@ -1347,11 +1326,13 @@ export function loadRunSessionPage(cwd: string, slug: string, options: RunSessio
   if (meta === null) throw new Error(`Run not found: ${slug}`);
   const selection = findSessionLogFile(cwd, join(cwd, meta.logsDirectory));
   const session = selection === null ? undefined : readSessionPage(selection, meta, options);
+  const currentStepProgress = session?.currentStepProgress ?? new CurrentStepTracker(meta).result();
   const taskBytes = Buffer.byteLength(meta.task);
   const metadata = { workflow: meta.workflow, status: meta.status,
     currentStep: meta.currentStep ?? null, currentIteration: meta.currentIteration ?? null,
-    currentStepStartedAt: session?.currentStepStartedAt ?? null,
-    currentStepExecutionCount: session?.currentStepExecutionCount ?? null, phase: meta.phase ?? null,
+    currentStepStartedAt: currentStepProgress.startedAt ?? null,
+    currentStepExecutionCount: currentStepProgress.executionCount ?? null,
+    currentStepPath: currentStepProgress.path ?? null, phase: meta.phase ?? null,
     ...(options.view === 'task' ? {} : { taskOmission: {
       totalBytes: taskBytes, returnedBytes: 0, truncated: taskBytes > 0,
     } }) };
@@ -1427,32 +1408,19 @@ export function loadRunSessionContext(
   const logSelection = findSessionLogFile(cwd, logsDir);
 
   let stepLogs: StepLogEntry[] = [];
-  let currentStepStartedAt: string | undefined;
-  let currentStepExecutionCount: number | undefined;
+  const currentStepTracker = new CurrentStepTracker(meta);
   if (logSelection) {
     const sessionLog = readSelectedSessionLog(logSelection, logSelection.path);
     if (sessionLog) {
       stepLogs = buildStepLogs(sessionLog);
-      if (meta.currentStep !== undefined && sessionLog.stepStarts !== undefined) {
-        const starts = sessionLog.stepStarts.filter((start) => start.step === meta.currentStep
-          && (start.workflow === undefined || start.workflow === meta.workflow)
-          && (start.stack === undefined || start.stack.length <= 1)
-          && (start.parallel === undefined || start.parallel.role === 'parent'));
-        currentStepExecutionCount = starts.length;
-        currentStepStartedAt = starts.filter((start) => start.iteration === meta.currentIteration).at(-1)?.timestamp;
-        // A step that calls a child workflow records starts only under the child's step names.
-        const leaf = currentStepStartedAt === undefined
-          ? sessionLog.stepStarts.filter((start) => start.parallel === undefined || start.parallel.role === 'parent').at(-1)
-          : undefined;
-        if (leaf !== undefined && leaf.stack !== undefined && leaf.stack.length > 1
-          && leaf.stack[0]?.step === meta.currentStep) {
-          currentStepStartedAt = leaf.timestamp;
-          currentStepExecutionCount = sessionLog.stepStarts.filter((start) => start.step === leaf.step
-            && start.workflow === leaf.workflow).length;
-        }
-      }
+      for (const start of sessionLog.stepStarts ?? []) currentStepTracker.observeStart(start);
+      for (const complete of sessionLog.history) currentStepTracker.observeStepComplete(complete);
+      for (const complete of sessionLog.workflowCallCompletions ?? []) currentStepTracker.observeWorkflowCallComplete(complete);
     }
   }
+  const {
+    startedAt: currentStepStartedAt, executionCount: currentStepExecutionCount, path: currentStepPath,
+  } = currentStepTracker.result();
 
   const reportsDir = join(cwd, meta.reportDirectory);
   let reports: ReportEntry[];
@@ -1479,6 +1447,7 @@ export function loadRunSessionContext(
     ...(meta.currentIteration === undefined ? {} : { currentIteration: meta.currentIteration }),
     ...(currentStepStartedAt === undefined ? {} : { currentStepStartedAt }),
     ...(currentStepExecutionCount === undefined ? {} : { currentStepExecutionCount }),
+    ...(currentStepPath === undefined ? {} : { currentStepPath }),
     ...(meta.phase === undefined ? {} : { phase: meta.phase }),
     stepLogs,
     reports,

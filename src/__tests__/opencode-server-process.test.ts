@@ -105,6 +105,40 @@ describe('OpenCode server process', () => {
     createClientMock.mockReset();
   });
 
+  it('should pass repository identity to the server child without changing the parent environment', async () => {
+    const testChild = createTestChildProcess();
+    crossSpawnMock.mockReturnValue(testChild.child);
+    createClientMock.mockReturnValue({});
+
+    const originalGhRepo = process.env.GH_REPO;
+    let closeServer: (() => Promise<void>) | undefined;
+    process.env.GH_REPO = 'ambient/repo';
+    try {
+      const startOpenCodeServer = await getStartOpenCodeServer();
+      const startPromise = startOpenCodeServer({
+        ...startOptions(),
+        childProcessEnv: { GH_REPO: 'child/repo' },
+      });
+      testChild.stdout.emit('data', 'opencode server listening on http://127.0.0.1:62000\n');
+      const server = await startPromise;
+      closeServer = server.close;
+
+      expect(crossSpawnMock).toHaveBeenCalledWith(
+        'opencode',
+        ['serve', '--hostname=127.0.0.1', '--port=62000'],
+        expect.objectContaining({ env: expect.objectContaining({ GH_REPO: 'child/repo' }) }),
+      );
+      expect(process.env.GH_REPO).toBe('ambient/repo');
+    } finally {
+      try {
+        await closeServer?.();
+      } finally {
+        if (originalGhRepo === undefined) delete process.env.GH_REPO;
+        else process.env.GH_REPO = originalGhRepo;
+      }
+    }
+  });
+
   it.each(['stdin', 'stdout', 'stderr'] as const)(
     'should report a %s EPIPE after startup through onError',
     async (streamName) => {

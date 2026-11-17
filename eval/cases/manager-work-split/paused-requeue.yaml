@@ -156,6 +156,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-11-01T00:09:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: pause-replay, step: review, startedAt: 2026-11-01T00:09:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -208,6 +209,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-11-01T00:09:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: pause-replay, step: review, startedAt: 2026-11-01T00:09:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 60
@@ -467,6 +469,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-11-01T00:09:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: pause-replay, step: review, startedAt: 2026-11-01T00:09:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 61
@@ -519,6 +522,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-11-01T00:09:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: pause-replay, step: review, startedAt: 2026-11-01T00:09:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 61

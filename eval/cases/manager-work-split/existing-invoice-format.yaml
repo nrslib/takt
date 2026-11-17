@@ -159,6 +159,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 100
@@ -204,6 +205,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: invoice-export の成果を点検し、必要な修正と確認を済ませて PR を仕上げる。
@@ -227,6 +229,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 100
@@ -290,6 +293,7 @@ ja:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 100
@@ -346,6 +350,7 @@ ja:
         currentIteration: 1
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 78
@@ -383,6 +388,7 @@ ja:
         currentIteration: 1
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: 請求書番号を受け取る検索入口を既存の索引へ接続する。
@@ -675,6 +681,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -720,6 +727,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: Inspect invoice-export, complete necessary repairs and verification, and finish its PR.
@@ -743,6 +751,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -806,6 +815,7 @@ en:
         currentIteration: 2
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: fix, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 87
@@ -862,6 +872,7 @@ en:
         currentIteration: 1
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         taskOmission:
           totalBytes: 53
@@ -899,6 +910,7 @@ en:
         currentIteration: 1
         currentStepStartedAt: 2026-10-11T23:04:00.000Z
         currentStepExecutionCount: 1
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:04:00.000Z, executionCount: 1 }]
         phase: 1
         task:
           content: Connect the invoice-number search entry to the index.
