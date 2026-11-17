@@ -808,7 +808,7 @@ it('does not repeat a reply shown live when a later snapshot contains its saved 
 
 it.each(['live', 'snapshot'] as const)('clears the earlier log when the /clear notice arrives from the %s result and keeps later messages', async (source) => {
   const context = mount('en');
-  const { client } = context;
+  const { app, client } = context;
   const earlier = randomUUID();
   client.output({ kind: 'user_message', operationId: earlier, message: 'earlier question' });
   client.output({ kind: 'result', operationId: earlier, result: { kind: 'reply', message: 'earlier reply' } });
@@ -822,8 +822,13 @@ it.each(['live', 'snapshot'] as const)('clears the earlier log when the /clear n
   if (source === 'live') client.output({ kind: 'result', operationId, result });
   else client.change({ items: [...client.getSnapshot().items, savedResult(operationId, 2, result)] });
   await waitFor(() => expect(logLines()).toEqual([`system:${notice}`]));
+  // テスト用の出力は Static がそれまでに書き出した全行を毎回含むので、書き出した結果そのものを確かめられる。
+  await waitFor(() => expect(app.lastFrame()).toContain(notice));
+  expect(app.lastFrame()).not.toContain('earlier');
   client.output({ kind: 'user_message', operationId: randomUUID(), message: 'later question' });
   await waitFor(() => expect(logLines()).toEqual([`system:${notice}`, 'user:later question']));
+  await waitFor(() => expect(app.lastFrame()).toContain('later question'));
+  expect(app.lastFrame()).not.toContain('earlier');
 });
 
 it('ends the goal proposal request when its live result arrives after the snapshot showed the saved result', async () => {
