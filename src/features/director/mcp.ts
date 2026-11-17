@@ -47,13 +47,13 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
     inputSchema: listGoalsInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.infer<typeof listGoalsInputSchema> & { managerId: string }) => {
     const assignment = await resolveDirectorManager(configDirectory, value.managerId);
     if (!assignment.repositoryDirectories.includes(value.cwd)) throw new Error('Repository is outside manager assignment');
-    return listTaktGoals(value, { readOnly: true, allowedProjectRoot: value.cwd });
+    return listTaktGoals(value, { readOnly: true, allowedProjectRoot: value.cwd }, signal);
   }));
   server.registerTool('takt_get_goal', { description: 'Read saved goal detail; never read run internals.',
     inputSchema: getGoalInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.infer<typeof getGoalInputSchema> & { managerId: string }) => {
     const assignment = await resolveDirectorManager(configDirectory, value.managerId);
     if (!assignment.repositoryDirectories.includes(value.cwd)) throw new Error('Repository is outside manager assignment');
-    return getTaktGoal(value, { readOnly: true, allowedProjectRoot: value.cwd });
+    return getTaktGoal(value, { readOnly: true, allowedProjectRoot: value.cwd }, signal);
   }));
   server.registerTool('takt_list_manager_inquiries', { description: 'Read pending human inquiries of an assigned manager.',
     inputSchema: z.object({ managerId, ...page }).strict() }, guarded(async (value: { managerId: string; offset?: number; limit?: number }) => {
