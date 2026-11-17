@@ -75,6 +75,7 @@ import {
   resolveInheritedReviewReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
+import { omitRepositoryIdentityEnv } from '../../../shared/utils/repository-identity-env.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
 import { getAttachedWorkflowBundleNodeId, inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
@@ -218,7 +219,8 @@ export class WorkflowEngine extends EventEmitter {
         model: effectiveAutoRouting.router.model,
         providerOptions: effectiveAutoRouting.router.providerOptions,
         language: options.language,
-        childProcessEnv: options.childProcessEnv,
+        // Repository names are kept from the router (see routingSensitiveValues).
+        childProcessEnv: omitRepositoryIdentityEnv(options.childProcessEnv),
         abortSignal: options.abortSignal,
         failureDir: join(runPaths.runRootAbs, 'failures'),
       });

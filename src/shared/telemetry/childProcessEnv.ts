@@ -6,6 +6,11 @@ import {
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
 } from './otlp.js';
 import { buildChildProcessEnv } from '../utils/child-process-env.js';
+import {
+  isRepositoryIdentityEnvKey,
+  pickRepositoryIdentityEnv,
+  REPOSITORY_IDENTITY_ENV_KEYS,
+} from '../utils/repository-identity-env.js';
 
 const NESTED_OBSERVABILITY_ENV_KEYS = [
   'TAKT_OBSERVABILITY',
@@ -51,6 +56,25 @@ function isNestedObservabilityCleanupEnvKey(key: string): boolean {
   return NESTED_OBSERVABILITY_CLEANUP_ENV_KEY_SET.has(key);
 }
 
+/**
+ * A snapshot that holds only repository identity variables (observability
+ * disabled) must not replace the ambient observability variables.
+ */
+function replacesAmbientObservabilityEnv(childProcessEnv: Readonly<Record<string, string>>): boolean {
+  const keys = Object.keys(childProcessEnv);
+  return keys.length === 0 || keys.some((key) => !isRepositoryIdentityEnvKey(key));
+}
+
+/**
+ * The snapshot, unless it holds only repository identity variables: such a snapshot says nothing about
+ * observability, so callers that fall back to the ambient environment must still do so.
+ */
+export function observabilitySnapshotOf(
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> | undefined {
+  return childProcessEnv && replacesAmbientObservabilityEnv(childProcessEnv) ? childProcessEnv : undefined;
+}
+
 function pickStaticNestedObservabilityEnv(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv {
@@ -65,7 +89,7 @@ function pickStaticNestedObservabilityEnv(
       env[key] = value;
     }
   }
-  return env;
+  return { ...env, ...pickRepositoryIdentityEnv(childProcessEnv) };
 }
 
 export function pickNestedObservabilityEnv(
@@ -127,7 +151,7 @@ export function pickCommandGateNestedObservabilityEnv(
     }
     env[key] = value;
   }
-  return env;
+  return { ...env, ...pickRepositoryIdentityEnv(childProcessEnv) };
 }
 
 export function pickNestedOtelExporterOptionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -153,9 +177,10 @@ export function buildEnvWithNestedObservabilitySnapshot(
     return safeSource;
   }
 
+  const replacesObservability = replacesAmbientObservabilityEnv(childProcessEnv);
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(safeSource)) {
-    if (value !== undefined && !isNestedObservabilityCleanupEnvKey(key)) {
+    if (value !== undefined && !(replacesObservability && isNestedObservabilityCleanupEnvKey(key))) {
       env[key] = value;
     }
   }
@@ -169,7 +194,7 @@ export function getNestedObservabilityEnvFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
   const env = pickNestedObservabilityEnv(childProcessEnv);
-  const normalized = JSON.stringify(NESTED_OBSERVABILITY_ENV_KEYS
+  const normalized = JSON.stringify([...NESTED_OBSERVABILITY_ENV_KEYS, ...REPOSITORY_IDENTITY_ENV_KEYS]
     .map((key) => [key, env[key]])
     .filter(([, value]) => value !== undefined));
   return createHash('sha256').update(normalized).digest('hex');
@@ -199,12 +224,15 @@ export async function runWithNestedObservabilityProcessEnv<T>(
 
   const nextEnv = pickNestedObservabilityEnv(childProcessEnv);
   const previousEnv = new Map(
-    NESTED_OBSERVABILITY_CLEANUP_ENV_KEYS.map((key) => [key, process.env[key]] as const),
+    [...NESTED_OBSERVABILITY_CLEANUP_ENV_KEYS, ...REPOSITORY_IDENTITY_ENV_KEYS]
+      .map((key) => [key, process.env[key]] as const),
   );
 
   try {
-    for (const key of NESTED_OBSERVABILITY_CLEANUP_ENV_KEYS) {
-      delete process.env[key];
+    if (replacesAmbientObservabilityEnv(childProcessEnv)) {
+      for (const key of NESTED_OBSERVABILITY_CLEANUP_ENV_KEYS) {
+        delete process.env[key];
+      }
     }
     Object.assign(process.env, nextEnv);
     return await operation();

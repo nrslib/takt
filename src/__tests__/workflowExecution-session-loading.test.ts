@@ -6,6 +6,7 @@
  * while stateless restartPoint runs start with empty sessions.
  */
 
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1273,6 +1274,58 @@ describe('executeWorkflow session loading', () => {
     );
 
     expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
+  });
+
+  describe('repository identity for gh / glab', () => {
+    const identityKeys = ['GH_REPO', 'GITLAB_REPO'] as const;
+    const savedIdentityEnv = new Map(identityKeys.map((key) => [key, process.env[key]]));
+
+    function gitRepoWithOrigin(prefix: string): string {
+      const dir = createTempDir(prefix);
+      execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+      execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/owner/repo.git']);
+      return dir;
+    }
+
+    beforeEach(() => {
+      for (const key of identityKeys) delete process.env[key];
+    });
+
+    afterEach(() => {
+      for (const [key, value] of savedIdentityEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('should name the project repository for a task that runs in a clone', async () => {
+      const projectDir = gitRepoWithOrigin('takt-identity-project-');
+      const cloneDir = createTempDir('takt-identity-clone-');
+
+      await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
+
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+        GH_REPO: 'github.com/owner/repo',
+      });
+    });
+
+    it('should add nothing for a task that runs in the project root', async () => {
+      const projectDir = gitRepoWithOrigin('takt-identity-root-');
+
+      await executeWorkflow(makeConfig(), 'task', projectDir, { projectCwd: projectDir });
+
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
+    });
+
+    it('should keep a repository variable the caller already set', async () => {
+      process.env.GH_REPO = 'mine/other';
+      const projectDir = gitRepoWithOrigin('takt-identity-set-project-');
+      const cloneDir = createTempDir('takt-identity-set-clone-');
+
+      await executeWorkflow(makeConfig(), 'task', cloneDir, { projectCwd: projectDir });
+
+      expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({ GH_REPO: 'mine/other' });
+    });
   });
 });
 vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
