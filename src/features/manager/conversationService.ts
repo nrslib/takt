@@ -17,6 +17,7 @@ import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssign
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
@@ -63,6 +64,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : '' };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
+      const clear = human && command.kind === 'message' && command.text.trim() === CLEAR_COMMAND;
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
@@ -122,6 +124,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
+        if (clear) {
+          return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
+            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+        }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
           const verificationRepository = priorPending?.repositoryDirectory

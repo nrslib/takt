@@ -19,6 +19,7 @@ import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
@@ -43,7 +44,7 @@ import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
 import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
-  { command: '/verify', labelKey: 'interactive.commands.verify' }];
+  { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
@@ -70,6 +71,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
+  const clearOperation = useRef<string | null>(null);
   const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
@@ -230,6 +232,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
+    // 保存済みの結果がライブより先に届いても消すように、表示の入口で判定する。
+    if (clearOperation.current === operationId && result.kind === 'notice' && mounted.current) setEntries([]);
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
@@ -336,6 +340,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
       })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
