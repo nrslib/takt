@@ -274,6 +274,19 @@ it('rejects a withdrawn or replaced proposal before durable admission', async ()
   expect(f.ingress.accept).not.toHaveBeenCalled();
 });
 
+it('rejects a re-approval of a registered revision only when the proposal must still be pending', async () => {
+  const f = await fixture();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  snapshot.turnState.approval = { revision: 3, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: '/repo', state: 'registered' };
+  vi.mocked(f.ingress.snapshot).mockResolvedValue(snapshot);
+  const approve = (requirePending: boolean) => f.port.submit({ attachmentId: f.opened.attachmentId, requestId: `approve-${requirePending}`,
+    speaker: f.selected.speaker, command: { kind: 'approve_summary', revision: 3, requirePending, conversationId: f.selected.conversationId } });
+
+  expect(await approve(true)).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(f.ingress.accept).not.toHaveBeenCalled();
+  expect(await approve(false)).toMatchObject({ kind: 'accepted' });
+});
+
 it('admits director messages through the bus and waits for durable admission without self IPC', async () => {
   const saved = gate<DaemonStateReply>();
   const request = vi.fn(() => saved.promise);

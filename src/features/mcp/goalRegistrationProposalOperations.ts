@@ -97,7 +97,7 @@ export async function approveTaktGoalRegistration(
 ): Promise<CallToolResult> {
   try {
     const result = await submitOwnedRegistrationCommand(input, deps, signal,
-      (owner) => ({ kind: 'approve_summary', revision: input.revision, conversationId: owner.conversationId }));
+      (owner) => ({ kind: 'approve_summary', revision: input.revision, conversationId: owner.conversationId, requirePending: true }));
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
     if (result.kind !== 'goal_registered') throw new Error(`Unexpected goal registration result: ${result.kind}`);
     return jsonResult({ revision: input.revision, goal: result.goal });

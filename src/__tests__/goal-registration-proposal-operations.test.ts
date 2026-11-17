@@ -167,7 +167,7 @@ it('rejects a root outside the MCP scope before reading conversations', async ()
   expect(doubles.read).not.toHaveBeenCalled();
 });
 
-it('approves the pending proposal through the same command as the manager screen', async () => {
+it('approves the pending proposal only while that revision is still pending', async () => {
   acceptSubmission();
   const registered = goalRecord();
 
@@ -181,8 +181,7 @@ it('approves the pending proposal through the same command as the manager screen
   expect(doubles.constructClient.mock.calls[0]![0]).toEqual(repositoryAssignment);
   expect(doubles.connect).toHaveBeenCalledOnce();
   const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
-  expect(command).toEqual({ kind: 'approve_summary', revision, conversationId: ownerConversationId });
-  expect(command).not.toHaveProperty('requirePending');
+  expect(command).toEqual({ kind: 'approve_summary', revision, conversationId: ownerConversationId, requirePending: true });
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
     goal: expect.objectContaining({ id: registered.id }),
   });
