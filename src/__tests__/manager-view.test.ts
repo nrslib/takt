@@ -13,7 +13,7 @@ import { measureWidth } from '../shared/utils/grapheme.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../features/tui/terminalColors.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { approveSummary, cwd, DOWN, ENTER, ESC, ManagerClientDouble, mount, promptFrame, QUESTION_MENU, showProposal, typeAndSubmit, waitFor } from './helpers/manager-tui-fixtures.js';
+import { approveSummary, cwd, DOWN, ENTER, ESC, ManagerClientDouble, managerConversationId, mount, promptFrame, QUESTION_MENU, showProposal, typeAndSubmit, waitFor } from './helpers/manager-tui-fixtures.js';
 
 vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
   const actual = await original<typeof import('../features/tui/TranscriptEntryView.js')>();
@@ -840,6 +840,7 @@ it('accepts another registration when the live result of an approval arrives aft
   await waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summary.confirmation', 'en')));
   approveSummary(context);
   await waitFor(() => expect(client.commands()).toEqual([
-    { kind: 'approve_summary', revision: 4 }, { kind: 'approve_summary', revision: 4 },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId },
+    { kind: 'approve_summary', revision: 4, conversationId: managerConversationId },
   ]));
 });
