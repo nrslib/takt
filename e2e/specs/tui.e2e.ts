@@ -1325,7 +1325,13 @@ steps:
 
     // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
-    const screen = (await tui.visibleScreen()).join('\n');
+    // The notice reaches the byte history before Ink repaints the input box,
+    // so the box is awaited on the live screen instead of sampled once.
+    const screen = await tui.waitForScreen(
+      'the input box redrawn after the run finished',
+      (current) => current.includes('╰'),
+      60_000,
+    );
     expect(screen).toContain('╰');
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
