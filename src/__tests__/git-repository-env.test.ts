@@ -138,6 +138,12 @@ describe('buildRepositoryIdentityEnv', () => {
     expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', { GITLAB_TOKEN: 'x', GITLAB_HOST: 'gitlab.com' })).toEqual({});
   });
 
+  it('skips GITLAB_REPO when JOB_TOKEN is configured for another host', () => {
+    expect(buildRepositoryIdentityEnv(gitlab, 'gitlab', {
+      JOB_TOKEN: 'x', GITLAB_HOST: 'trusted.example',
+    })).toEqual({});
+  });
+
   it('compares the port too when a GitLab token is set', () => {
     const withPort = parseRemoteRepositoryUrl('https://gitlab.example.com:8443/group/project.git')!;
 

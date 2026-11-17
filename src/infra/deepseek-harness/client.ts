@@ -422,7 +422,11 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  return getNestedObservabilityEnvFingerprint(observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment());
+  const environment = observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment();
+  return getNestedObservabilityEnvFingerprint({
+    ...environment,
+    ...pickRepositoryIdentityEnv(childProcessEnv),
+  });
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */

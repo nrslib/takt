@@ -20,8 +20,8 @@ import {
 const GITHUB_DEFAULT_HOST = 'github.com';
 // gh sends these to a GitHub Enterprise Server host (`gh help environment`).
 const GITHUB_ENTERPRISE_TOKEN_KEYS = ['GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'] as const;
-// glab reads a token from these variables (`glab config --help`, `token` key).
-const GITLAB_ENV_TOKEN_KEYS = ['GITLAB_TOKEN', 'GITLAB_ACCESS_TOKEN', 'OAUTH_TOKEN'] as const;
+// glab reads tokens from these variables (`token` / `job_token` keys).
+const GITLAB_ENV_TOKEN_KEYS = ['GITLAB_TOKEN', 'GITLAB_ACCESS_TOKEN', 'OAUTH_TOKEN', 'JOB_TOKEN'] as const;
 // glab reads its default host from these variables, first one set wins.
 const GITLAB_ENV_HOST_KEYS = ['GITLAB_HOST', 'GITLAB_URI', 'GL_HOST'] as const;
 
