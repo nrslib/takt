@@ -287,6 +287,48 @@ describe('durable daemon event storage', () => {
     }
   });
 
+  it('restores legacy summary approvals and dismissals saved without a conversation id', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const target = conversationId({ kind: 'repository', repositoryDirectory: '/repo' });
+    const commands = [
+      { state: 'queued', command: { kind: 'approve_summary', revision: 1, conversationId: target, requirePending: true } },
+      { state: 'queued', command: { kind: 'dismiss_summary', revision: 2, conversationId: target } },
+      { state: 'settled', command: { kind: 'approve_summary', revision: 3, conversationId: target } },
+      { state: 'settled', command: { kind: 'dismiss_summary', revision: 4, conversationId: target } },
+    ] as const;
+    const saved = commands.map(({ state, command }, index): AcceptedEvent => ({
+      ...event(`${state}-${command.kind}`, index + 1), conversationId: target,
+      event: { kind: 'human_command', command, speaker: { namespace: 'test', id: 'human' } },
+    }));
+    for (const [index, input] of saved.entries()) {
+      await store.accept(input);
+      if (commands[index]?.state !== 'settled') continue;
+      await store.markStarted(input.eventId, result(input));
+      await store.saveResult(input.eventId, result(input));
+      await store.markSettled(input.eventId, result(input));
+    }
+    for (const name of await readdir(join(directory, 'daemon-events'))) {
+      if (!name.endsWith('.json')) continue;
+      const path = join(directory, 'daemon-events', name);
+      const record = JSON.parse(await readFile(path, 'utf8'));
+      delete record.event.event.command.conversationId;
+      if (record.result) delete record.result.event.event.command.conversationId;
+      await writePrivateFile(path, JSON.stringify(record));
+    }
+
+    const restarted = new FileEventStore(directory);
+    const restored = await restarted.restore();
+    const pending = [];
+    for await (const value of restored.pending) pending.push(value);
+    expect(restored.lastAcceptedSequence).toBe(4);
+    expect(pending.map(({ event: value }) => value).sort((a, b) => a.acceptedSequence - b.acceptedSequence)).toEqual(saved.slice(0, 2));
+    for (const [index, input] of saved.entries()) {
+      expect(await restarted.accept(input)).toEqual({ kind: 'duplicate', event: input, state: commands[index]?.state });
+    }
+    await expect(restarted.hasGoalRegistration('/repo', goalId)).resolves.toBe(false);
+  });
+
   it('rejects legacy permission fields on newly accepted answers', async () => {
     const store = new FileEventStore(await root());
     const answer = { ...event('new-answer', 1), event: { kind: 'inquiry_answer', command: {
