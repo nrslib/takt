@@ -18,7 +18,8 @@ export class DaemonNotifications {
   private readonly lock = new FileAsyncLock();
   /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
   private readonly index: { stamp: string | undefined; values: Map<string, Notification> } = { stamp: undefined, values: new Map() };
-  private prepared: Promise<void> | undefined;
+  /** 走査同士が索引を同時に書き換えないよう、refresh() の実行を直列化するための待ち行列。 */
+  private pending = Promise.resolve();
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
 
   async save(input: z.infer<typeof notification>, signal: AbortSignal): Promise<boolean> {
@@ -47,12 +48,14 @@ export class DaemonNotifications {
     for (const value of await this.refresh()) yield structuredClone(value);
   }
 
-  private async refresh(): Promise<Notification[]> {
-    this.prepared ??= ensurePrivateDirectory(this.directory).catch((error: unknown) => {
-      this.prepared = undefined;
-      throw error;
-    });
-    await this.prepared;
+  private refresh(): Promise<Notification[]> {
+    const operation = this.pending.then(() => this.scan());
+    this.pending = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async scan(): Promise<Notification[]> {
+    await ensurePrivateDirectory(this.directory);
     const info = await stat(this.directory);
     const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
     if (stamp === this.index.stamp) return [...this.index.values.values()];
