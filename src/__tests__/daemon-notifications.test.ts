@@ -272,6 +272,17 @@ describe('DaemonNotifications', () => {
     }
   });
 
+  it('reads the new content when a cached file is replaced by another writer', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await collect(notifications);
+    await unlink(join(directory, fileName('first')));
+    const writer = new DaemonNotifications(root);
+    await writer.save({ id: 'first', message: 'two' }, signal);
+
+    expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
+  });
+
   it('keeps failing on a broken notification file', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);

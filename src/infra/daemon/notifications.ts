@@ -19,7 +19,7 @@ export class DaemonNotifications {
   private readonly directory: string;
   private readonly lock = new FileAsyncLock();
   /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
-  private readonly index: { stamp: string | undefined; directoryId: string | undefined; values: Map<string, { value: Notification; bytes: number }>; cachedBytes: number; complete: boolean } = { stamp: undefined, directoryId: undefined, values: new Map(), cachedBytes: 0, complete: false };
+  private readonly index: { stamp: string | undefined; directoryId: string | undefined; values: Map<string, { value: Notification; bytes: number; identity: string }>; cachedBytes: number; complete: boolean } = { stamp: undefined, directoryId: undefined, values: new Map(), cachedBytes: 0, complete: false };
   /** 走査同士が索引を同時に書き換えないよう、refresh() の実行を直列化するための待ち行列。 */
   private pending = Promise.resolve();
   /** save() が書き込むたびに進む。走査の開始後に進んでいたら、その走査は stamp を記録しない。 */
@@ -47,7 +47,8 @@ export class DaemonNotifications {
       await writePrivateFile(path, serialized, signal);
       this.generation += 1;
       this.index.stamp = undefined;
-      this.retain(name, value, Buffer.byteLength(serialized));
+      const identity = await this.fileIdentityOf(path);
+      if (identity !== undefined) this.retain(name, value, Buffer.byteLength(serialized), identity);
       return true;
     }, { signal, timeoutMs: 5000 });
   }
@@ -82,18 +83,21 @@ export class DaemonNotifications {
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
       names.add(entry.name);
+      const path = join(this.directory, entry.name);
+      const identity = await this.fileIdentityOf(path);
       const cached = this.index.values.get(entry.name);
-      if (cached !== undefined) {
+      if (cached !== undefined && identity !== undefined && identity === cached.identity) {
         result.push(cached.value);
         continue;
       }
-      const content = await readEntirePrivateFile(join(this.directory, entry.name));
+      const content = await readEntirePrivateFile(path);
       if (content === undefined) throw new Error('Notification disappeared during read');
       const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
       if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
       result.push(value);
       // 走査の開始後に保存が完了していたら、保存した値は索引へ反映済みのため、読み取り中の内容で上書きしない。
-      if (generation === this.generation && !this.retain(entry.name, value, content.length)) complete = false;
+      // ファイルの同一性を確認できなかった場合も、保持せずに次の走査で読み直す。
+      if (identity === undefined || generation !== this.generation || !this.retain(entry.name, value, content.length, identity)) complete = false;
     }
     for (const [name, cached] of this.index.values) {
       if (!names.has(name)) {
@@ -110,15 +114,25 @@ export class DaemonNotifications {
     return result;
   }
 
+  /** ファイルの同一性を返す。取得できなかった場合は undefined を返す。 */
+  private async fileIdentityOf(path: string): Promise<string | undefined> {
+    try {
+      const info = await stat(path);
+      return JSON.stringify([info.dev, info.ino, info.mtimeMs, info.ctimeMs, info.size]);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** 保持済みの合計サイズが上限を超える場合は保持せず、保持できたら true を返す。 */
-  private retain(name: string, value: Notification, bytes: number): boolean {
+  private retain(name: string, value: Notification, bytes: number, identity: string): boolean {
     const existing = this.index.values.get(name);
     if (existing !== undefined) {
       this.index.cachedBytes -= existing.bytes;
       this.index.values.delete(name);
     }
     if (this.index.cachedBytes + bytes > MAX_CACHED_NOTIFICATION_BYTES) return false;
-    this.index.values.set(name, { value, bytes });
+    this.index.values.set(name, { value, bytes, identity });
     this.index.cachedBytes += bytes;
     return true;
   }
