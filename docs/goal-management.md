@@ -31,9 +31,9 @@ Start `takt manager` in an interactive terminal and describe the objective, scop
 
 Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting **Register goal** and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Ordinary consultation does not automatically generate a proposal. Once agreement is reached, manager suggests `/make-goal`; in both TUI and Slack, only explicit execution creates a proposal awaiting approval.
 
-The bottom status line shows the assignment name, counts of ongoing goals (active and paused), human merge waits and unanswered inquiries. Goals with pending or running finishing work, or whose last finishing task failed, count as ongoing. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal` and `/verify` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. Input starting with `/` other than `/make-goal` and `/verify` is sent to manager as a regular message.
+The bottom status line shows the assignment name, counts of ongoing goals (active and paused), human merge waits and unanswered inquiries. Goals with pending or running finishing work, or whose last finishing task failed, count as ongoing. Long assignment headings are truncated in the middle to preserve the counts; narrow terminals show the assignment and counts on two lines. The experimental notice appears once in yellow at the start of the transcript each time the TUI opens. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box offers `/make-goal`, `/verify` and `/clear` as completion candidates; use `↑↓` to choose one and `Tab` to accept it. `/clear` starts the conversation over: manager's AI begins a new session and earlier messages are no longer shown, while goals, proposals and saved records stay as they are. Input starting with `/` other than `/make-goal`, `/verify` and `/clear` is sent to manager as a regular message.
 
-Below the input box, key hints are followed by the status line (example below). The `/make-goal` and `/verify` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
+Below the input box, key hints are followed by the status line (example below). The `/make-goal`, `/verify` and `/clear` explanations appear in slash completion rather than as permanent hints. The full experimental notice appears once at startup.
 
 ```text
 Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^T Epics  ^C Exit
@@ -77,6 +77,8 @@ Use these tools for inquiries that do not belong to a goal.
 |------|---------|
 | `takt_list_standalone_inquiries` | Read unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time. |
 | `takt_withdraw_standalone_inquiry` | Withdraw an unanswered inquiry without a goal by passing its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged. |
+
+Every turn, manager receives a summary of the goals in its assigned repositories. The summary lists only goals that are not finished; for finished goals (completed or aborted) it receives only a per-repository count (`finishedGoalCount`). This keeps finished goals out of status reports, including after `/clear`. When manager needs a finished goal's contents, it reads them with `takt_list_goals` and `state: finished`. The `state` argument of `takt_list_goals` is `open` (not finished), `finished` (completed or aborted) or `all`; it defaults to `all`. `offset`, `limit` and `totalCount` apply to the filtered goals, and unreadable records are always returned as individual errors regardless of `state`.
 
 Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
 
@@ -195,7 +197,7 @@ Director cannot run shell commands, write files, or change settings. It does not
 
 Only when the human explicitly says, for example, “merge goal G,” does director ask G's manager to merge its PR using `takt merge`. Before forwarding, director uniquely identifies the repository, goal, and manager, checks that the current goal is `awaiting_merge`, and reads the saved PR number and URL. If the target is ambiguous, the state differs, the PR is missing, or reading fails, it reports the reason without forwarding. Director never performs the merge itself. The manager executes it through `takt_merge_goal_pr`, which invokes `takt merge`. Forwarding or accepting the request alone does not mean the merge succeeded; director reports success or failure from the later result with the same operation ID. At execution time, existing checks prevent merging if the goal is paused, aborted, no longer `awaiting_merge`, or has a different saved PR number.
 
-Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers.
+Manager listing (`takt_list_managers`) reports unreadable projects with reasons and continues with readable managers. The director's `takt_list_goals` accepts the same `state` filter as manager (`open`, `finished` or `all`, defaulting to `all`).
 
 ### Events and notifications
 
@@ -226,18 +228,20 @@ A post outside a thread receives a reply in that post's thread. Continue there; 
 
 Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`, separately from conversation replies. Both can be enabled together.
 
-## Answers, pause and abort
+## Answers, pause, abort and deletion
 
 Open menus with the following keys, including while manager is processing.
 
 | Key | Behavior |
 |-----|----------|
 | `Ctrl+R` | List unanswered inquiries with and without a goal together, then answer the selected inquiry. |
-| `Ctrl+G` | List only ongoing goals (active and paused) by short name and state. Use `↑↓` to select a goal and `Enter` to choose pause, resume or abort. |
+| `Ctrl+G` | List goals by short name and state, with ongoing goals (active and paused) first and finished goals (completed and aborted) after them. Use `↑↓` to select a goal and `Enter` to choose an operation: pause, resume or abort for an ongoing goal, and only delete for a finished goal. |
 
 Pausing stops new submissions, integrations, and running tasks. Stopped tasks remain as retryable failures, and their result events are deferred. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision.
+
+Deletion is a human operation for clearing out finished goals. After you confirm that it cannot be undone, it removes the goal record under `.takt/goals/<id>/` and the records of the goal's tasks from `tasks.yaml`. The goal branch, the integration branch and run records under `.takt/runs/` remain. The clone directories of failed tasks also remain, because they may hold work that was never pushed. If the goal still has a pending or running task, the TUI shows the reason and does not delete it. If a workspace Epic references the goal as a member or a fixed target, the TUI shows the referencing Epics and does not delete the goal, whether the Epic is active, completed or aborted. This also applies to Epics of other workspaces, such as the workspace a repository was removed from, and to deletion from a repository manager. Deletion is available only from `Ctrl+G` in the TUI; neither the manager nor the director AI has a tool for it.
 
 ### Answering inquiries
 
@@ -255,7 +259,7 @@ With any provider supporting the required MCP capability, ask manager to pause t
 
 Pausing also stops running tasks, which remain as retryable failures. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
-Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available.
+Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available. Deleting a finished goal cannot be requested in conversation; use `Ctrl+G`.
 
 ## Commands for waiting on external state
 

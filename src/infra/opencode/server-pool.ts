@@ -3,10 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '@opencode-ai/sdk/v2/types';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import {
-  getNestedObservabilityEnvFingerprint,
-  runWithNestedObservabilityProcessEnv,
-} from '../../shared/telemetry/index.js';
+import { getNestedObservabilityEnvFingerprint } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
@@ -165,49 +162,48 @@ async function createSharedServer(
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
   const registerListToolShim = runtime.generation === 'v1' && versionAllowsListToolShim(runtime.version);
-  const openCodeServer = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
-    startOpenCodeServer({
-      runtime,
-      ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
-      port,
-      timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
-      config: runtime.generation === 'v2' ? buildV2ServerConfig(
-        model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist,
-      ) : {
-        ...(model === undefined ? {} : { model, small_model: model }),
-        plugin: [
-          pluginPath('coerce-tool-args.js'),
-          ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
-        ],
-        permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
-        ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
-        agent: {
-          [TAKT_AGENT]: {
-            prompt: loadTemplate('opencode_agent_prompt', 'en', {
-              listFilesMethod: 'runs bash ls to list files in the directory',
-            }),
-            tools: { task: false },
-          },
-          [TAKT_AGENT_REVIEW]: {
-            prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
-              listFilesMethod: 'uses read tool on the directory to list files',
-            }),
-            tools: { task: false },
-          },
-          [TAKT_AGENT_REPORT]: {
-            prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
-          },
-          [TAKT_AGENT_READ]: {
-            prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
-            tools: { task: false },
-          },
+  const openCodeServer = await startOpenCodeServer({
+    runtime,
+    ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
+    port,
+    timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
+    ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
+    config: runtime.generation === 'v2' ? buildV2ServerConfig(
+      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist,
+    ) : {
+      ...(model === undefined ? {} : { model, small_model: model }),
+      plugin: [
+        pluginPath('coerce-tool-args.js'),
+        ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
+      ],
+      permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
+      ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+      agent: {
+        [TAKT_AGENT]: {
+          prompt: loadTemplate('opencode_agent_prompt', 'en', {
+            listFilesMethod: 'runs bash ls to list files in the directory',
+          }),
+          tools: { task: false },
         },
-        ...(serverConfig !== undefined
-          ? { mcp: serverConfig as NonNullable<Config['mcp']> }
-          : {}),
+        [TAKT_AGENT_REVIEW]: {
+          prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
+            listFilesMethod: 'uses read tool on the directory to list files',
+          }),
+          tools: { task: false },
+        },
+        [TAKT_AGENT_REPORT]: {
+          prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
+        },
+        [TAKT_AGENT_READ]: {
+          prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
+          tools: { task: false },
+        },
       },
-    }),
-  );
+      ...(serverConfig !== undefined
+        ? { mcp: serverConfig as NonNullable<Config['mcp']> }
+        : {}),
+    },
+  });
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
     if (closePromise !== undefined) return closePromise;

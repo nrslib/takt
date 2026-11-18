@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { isGoalFinished } from '../../infra/goals/activity.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
@@ -61,6 +62,7 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
     const offset = input.offset ?? 0;
     const limit = input.limit ?? 50;
     const { goals, errors } = await new GoalStore(input.cwd).list((goal) => {
+      if (input.state !== undefined && input.state !== 'all' && isGoalFinished(goal) !== (input.state === 'finished')) return undefined;
       const index = totalCount++;
       return index >= offset && index < offset + limit ? goalSummary(goal) : undefined;
     });

@@ -1,6 +1,6 @@
 import * as privateFiles from '../shared/utils/private-file.js';
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -89,6 +89,27 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
   expect(await getEpic({ ...owner, epicId: original.id })).toEqual(updated);
 });
 
+it('puts only open goals in the turn preamble and counts finished goals without their contents', async () => {
+  const open = { ...goalRecord(), objective: 'Open goal objective' };
+  const paused: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000001', objective: 'Paused goal objective', executionStatus: 'paused' };
+  const completed: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000002', objective: 'Completed goal objective', status: 'completed',
+    completion: { goalBranch: open.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40), summary: 'Done', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } };
+  const aborted: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000003', objective: 'Aborted goal objective', executionStatus: 'aborted' };
+  for (const goal of [open, paused, completed, aborted]) save(goal);
+
+  const businessContext = await buildTurnBusinessContext(assignment(), null, directory);
+
+  const memory = JSON.parse(businessContext).goals;
+  expect(memory.repositories).toEqual([expect.objectContaining({ repositoryDirectory: repository, goalCount: 2, finishedGoalCount: 2 })]);
+  expect(memory.repositories[0].goals.map((goal: { id: string }) => goal.id)).toEqual([open.id, paused.id]);
+  expect(memory.truncated).toBe(false);
+  for (const goal of [completed, aborted]) {
+    expect(businessContext).not.toContain(goal.id);
+    expect(businessContext).not.toContain(goal.objective);
+  }
+});
+
 it('projects each Epic on demand and preserves later read failures', async () => {
   const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Epics', repositoryDirectories: [] });
   const records = [epicRecord(), { ...epicRecord(), id: secondGoalId }]
@@ -136,6 +157,23 @@ it('reports corrupt tasks while projecting goals and inquiries with awaiting-mer
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([{ kind: 'display_event', event: {
     id: JSON.stringify(['diagnostic', tasksPath]), message: expect.stringContaining(tasksPath),
   } }]);
+});
+
+it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without a diagnostic', async (target) => {
+  const kept = goalRecord();
+  const deleted = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440000' };
+  save(kept); save(deleted);
+  const files = new DaemonDisplayFiles();
+  const read = files.goal.bind(files);
+  vi.spyOn(files, 'goal').mockImplementation(async (path) => {
+    if (basename(dirname(path)) === deleted.id) rmSync(target === 'goal.json' ? path : dirname(path), { recursive: true });
+    return read(path);
+  });
+
+  const items = await collect(conversationProjection(new DaemonRouting(directory), files, assignment()));
+
+  expect(items.filter((item) => item.kind === 'goal').map((item) => item.goal.id)).toEqual([kept.id]);
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
 });
 
 it('reads only the demanded goal payload and reports corruption discovered before the next pull', async () => {

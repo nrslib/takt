@@ -1198,6 +1198,9 @@ describe('MCP package entrypoint', () => {
         currentIteration: 2,
         currentStepStartedAt: '2026-09-09T00:02:00.000Z',
         currentStepExecutionCount: 1,
+        currentStepPath: [{
+          workflow: 'review-fix', step: 'implement', startedAt: '2026-09-09T00:02:00.000Z', executionCount: 1,
+        }],
         phase: 2,
         stepLogs: expect.arrayContaining([
           expect.objectContaining({ step: 'plan', persona: 'planner', status: 'done', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),

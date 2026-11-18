@@ -21,7 +21,7 @@ import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 import { publishPendingGoalAnswers, publishPendingInquiryAnswers, type PendingGoalAnswer } from './pendingInquiryAnswers.js';
-import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
+import { isGoalFinished, isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -54,7 +54,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
         goalReadFailed = true;
         this.onError(error);
       }, this.goalReader)) {
-        if (goal.status !== 'completed' && goal.executionStatus !== 'aborted') return true;
+        if (!isGoalFinished(goal)) return true;
       }
       // 読取失敗ではゴールの終了を確認できないため、daemon を維持する。
       if (goalReadFailed) return true;
@@ -191,7 +191,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
           await this.directorChanged(project.conversationId, project.repositoryDirectory, goal.id, { status: goal.status, executionStatus: goal.executionStatus,
             blockedNotifications: goal.blockedNotifications,
             pendingInquiries: (goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human').map((question) => question.id).sort() },
-          goal.status === 'completed' || goal.executionStatus === 'aborted');
+          isGoalFinished(goal));
           for (const question of goal.questions ?? []) {
             yield { conversationId: project.conversationId, target: { goalId: goal.id, repositoryDirectory: project.repositoryDirectory }, question };
           }

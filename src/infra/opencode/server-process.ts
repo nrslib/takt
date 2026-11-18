@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { crossSpawn } from '../../shared/utils/spawn.js';
-import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import type { OpenCodeRuntime } from './runtime.js';
 import type { ManagedOpenCodeTransport } from './transport.js';
 import { createV2Transport } from './v2-transport.js';
@@ -18,6 +18,7 @@ export interface OpenCodeServerStartOptions {
   timeoutMs: number;
   config: Record<string, unknown>;
   mcpServerNames?: readonly string[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface OpenCodeServerProcess {
@@ -137,7 +138,7 @@ export async function startOpenCodeServer(
     ['serve', `--hostname=${OPENCODE_SERVER_HOSTNAME}`, `--port=${options.port}`],
     {
       env: {
-        ...buildChildProcessEnv(),
+        ...buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config),
         ...(password === undefined ? {} : { OPENCODE_PASSWORD: password }),
       },

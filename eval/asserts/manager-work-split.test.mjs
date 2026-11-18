@@ -1757,6 +1757,30 @@ for (const lang of ['ja', 'en']) {
       }
     }
   });
+
+  test(`${lang}: running subworkflow progress passes a read-only answer and rejects every write`, () => {
+    const caseId = 'running-subworkflow-progress';
+    const fixture = loadManagerCase(caseId, lang);
+    const task = fixture.tasks.find(({ status }) => status === 'running');
+    const target = { cwd: fixture.cwd, goalId: fixture.goal.id };
+    const output = { response: { message: tr(
+      '在庫インポートは develop から呼ばれた development-core の write_tests を2回目として実行中です。',
+      'Inventory import is running write_tests of development-core, called from develop, for the second time.',
+    ), summary: null }, calls: [] };
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    for (const call of [
+      tellRun(fixture),
+      { tool: 'takt_stop_goal_task', arguments: { ...target, taskName: task.name, executionId: task.executionId } },
+      { tool: 'takt_requeue_goal_task', arguments: { ...target, taskName: task.name } },
+      enqueue(fixture, 'inventory-import'),
+      { tool: 'takt_record_goal_work_log', arguments: { ...target, summary: 'Reported the current step.' } },
+      { tool: 'takt_notify_goal', arguments: { ...target, kind: 'custom', body: 'Reported the current step.' } },
+    ]) {
+      assert.ok(managerWriteSchemas[call.tool].safeParse(call.arguments).success, call.tool);
+      assert.equal(score({ ...output, calls: [call] }, caseId, lang).pass, false, call.tool);
+    }
+  });
 }
 
 for (const lang of ['ja', 'en']) {

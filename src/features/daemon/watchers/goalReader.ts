@@ -8,7 +8,7 @@ export type WatchGoal = Pick<Goal, 'id' | 'status' | 'executionStatus' | 'questi
 type WatchReadOperation = { kind: 'goal'; cwd: string; goalId: string };
 export type WatchReadRequest = { id: number } & WatchReadOperation;
 type WatchReadResult = { kind: 'goal'; goal: WatchGoal };
-export type WatchReadReply = { id: number } & (({ ok: true } & WatchReadResult) | { ok: false; message: string });
+export type WatchReadReply = { id: number } & (({ ok: true } & WatchReadResult) | { ok: false; message: string; code?: 'ENOENT' });
 
 /** daemon ごとに1ワーカー、未完了の依頼は最大32件に制限する。 */
 export class WatchGoalReader {
@@ -39,7 +39,8 @@ export class WatchGoalReader {
         if (request === undefined) return;
         this.pending.delete(reply.id);
         if (reply.ok) request.resolve(reply);
-        else request.reject(new Error(reply.message));
+        // ワーカーの境界でエラーの型が落ちるため、ゴールが無いことだけは code で呼び出し側へ伝える。
+        else request.reject(Object.assign(new Error(reply.message), reply.code === undefined ? {} : { code: reply.code }));
         if (this.pending.size === 0) worker.unref();
       });
       worker.on('error', (error) => { void this.terminate(worker, error); });

@@ -190,6 +190,28 @@ it('lists all repository and workspace managers and reuses the existing paged go
   expect(run).not.toHaveBeenCalled();
 });
 
+it('filters an assigned manager repository goal list by state', async () => {
+  const repository = await seedManager('repository-state');
+  const open = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000001' };
+  const completed = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000002', status: 'completed' as const, completion: {
+    goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40), summary: 'Done',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false }, instructions: [],
+  } };
+  const aborted = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000003', executionStatus: 'aborted' as const };
+  for (const goal of [open, completed, aborted]) await new GoalStore(repository).create(goal);
+  const { client } = await connectMcp();
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const list = async (args: Record<string, unknown>) => {
+    const page = decoded(await client.callTool({ name: 'takt_list_goals', arguments: { managerId, cwd: repository, ...args } }));
+    return { ids: (page.goals as { id: string }[]).map(({ id }) => id), totalCount: page.totalCount, nextOffset: page.nextOffset };
+  };
+  expect(await list({})).toEqual({ ids: [open.id, completed.id, aborted.id], totalCount: 3, nextOffset: null });
+  expect(await list({ state: 'all' })).toEqual({ ids: [open.id, completed.id, aborted.id], totalCount: 3, nextOffset: null });
+  expect(await list({ state: 'open' })).toEqual({ ids: [open.id], totalCount: 1, nextOffset: null });
+  expect(await list({ state: 'finished', limit: 1 })).toEqual({ ids: [completed.id], totalCount: 2, nextOffset: 1 });
+  expect(await list({ state: 'finished', limit: 1, offset: 1 })).toEqual({ ids: [aborted.id], totalCount: 2, nextOffset: null });
+});
+
 it('uses global assistant settings and runtime profiles and rejects providers without strict tool support', () => {
   const project = join(directory, 'launching-repository', '.takt');
   mkdirSync(project, { recursive: true });

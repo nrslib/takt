@@ -5,7 +5,8 @@ import { goalSummary } from '../mcp/goalResponse.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 
 const GOAL_MEMORY_MAX_BYTES = 64 * 1024;
-const goalRetrieval = 'Read details from the referenced goal file or use takt_get_goal with path, recordId and offset/limit or textOffset/maxBytes. Use takt_list_goals with offset/limit for omitted goals. Read only the needed ranges.';
+const goalRetrieval = 'Read details from the referenced goal file or use takt_get_goal with path, recordId and offset/limit or textOffset/maxBytes. Use takt_list_goals with state open and offset/limit for omitted goals. Read only the needed ranges.';
+const goalMemoryRetrieval = `${goalRetrieval} goals lists only open goals; finished goals (completed or aborted) are counted in finishedGoalCount and can be read with takt_list_goals state finished.`;
 
 export function buildManagerGoalSummary(cwd: string, goal: Goal, tasks: readonly TaskState[]) {
   const summary = goalSummary(goal);
@@ -28,11 +29,12 @@ export function buildGoalMemory(repositories: readonly {
   repositoryDirectory: string;
   goals: ReturnType<typeof buildManagerGoalSummary>[] | undefined;
   goalCount?: number;
+  finishedGoalCount?: number;
   diagnostics: { goalId?: string; message: string }[];
 }[]): string {
   const memory: typeof repositories[number][] = [];
   let truncated = false;
-  const serialize = () => JSON.stringify({ repositories: memory, repositoryCount: repositories.length, truncated, retrieval: goalRetrieval });
+  const serialize = () => JSON.stringify({ repositories: memory, repositoryCount: repositories.length, truncated, retrieval: goalMemoryRetrieval });
   for (const repository of repositories) {
     const goals: ReturnType<typeof buildManagerGoalSummary>[] | undefined = repository.goals === undefined ? undefined : [];
     const entry = { ...repository, goals,

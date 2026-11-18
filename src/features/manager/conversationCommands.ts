@@ -2,6 +2,8 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { ConversationIdSchema, ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
 
+export const CLEAR_COMMAND = '/clear';
+
 const id = z.uuid();
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const ConversationCommandSchema = z.discriminatedUnion('kind', [
@@ -17,6 +19,6 @@ export const ConversationCommandSchema = z.discriminatedUnion('kind', [
       report: z.enum(['completed', 'unable']).optional(), scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional() }).strict(),
     source: z.enum(['tui', 'slack']).optional(),
   }).strict(),
-  ...(['pause_goal', 'resume_goal', 'abort_goal'] as const).map((kind) => z.object({ kind: z.literal(kind), goalId: id }).strict()),
+  ...(['pause_goal', 'resume_goal', 'abort_goal', 'delete_goal'] as const).map((kind) => z.object({ kind: z.literal(kind), goalId: id }).strict()),
   z.object({ kind: z.literal('abort_turn'), operationId: id, generation: revision.optional() }).strict(),
 ]);

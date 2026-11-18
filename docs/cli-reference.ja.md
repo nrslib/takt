@@ -80,7 +80,7 @@ takt update codex     # 指定対象だけを更新
 
 ## manager（実験的）
 
-manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/make-goal` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/clear` を送ると会話を新しく始めます。manager の AI は新しいセッションで応答し、それより前の会話は表示しませんが、ゴールや登録案はそのまま残ります。`/make-goal` と `/clear` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
 manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の発言、完了したツールの履歴、返事も、ターンごとにこの順で会話ログに再表示されます（Thinking とツールの合間に出た本文は除きます）。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
@@ -335,7 +335,7 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 
 ### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
 
-3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
+3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`currentStep` は run の記録上の現在 step で、通常はトップレベルの step ですが、トップレベルの parallel の step の分岐が子の workflow の step を開始するとその分岐の step になります。`currentStepPath` はトップレベルの workflow から実行中の末端の step までの workflow と step を順に返し、最後の要素だけが末端の `startedAt` と `executionCount` を持ちます。末端はトップレベルの step 自体、子の workflow の step、parallel の step 自体、または loop monitor の判定 step（判定を起こした step と同じ workflow の `_loop_judge_` で始まる step）です。`currentStep` がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並びます。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐の次の開始が記録されるまで parallel の step 自体が今回の実行の開始の値を持って末端になります。`executionCount` は最新のログで同じ呼出箇所の末端が開始された回数で、`0` は現在の step の開始がまだ記録されていないこと（このとき `currentStepPath` は `currentStep` だけを持つ）、`null` は不明であることを表します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
 
 `takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 

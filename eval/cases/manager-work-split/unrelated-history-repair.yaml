@@ -119,6 +119,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 119
@@ -178,6 +179,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         task:
           content: 指定期間の予約を既存の CSV 形式で出力する。開始日と終了日で絞り、日時順に並べる。
@@ -201,6 +203,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 119
@@ -234,6 +237,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 119
@@ -267,6 +271,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 119
@@ -295,6 +300,7 @@ ja:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 119
@@ -692,6 +698,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 127
@@ -751,6 +758,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         task:
           content: Export bookings for a specified date range in the existing CSV format. Filter by start and end date and order by date and time.
@@ -774,6 +782,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 127
@@ -807,6 +816,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 127
@@ -840,6 +850,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 127
@@ -868,6 +879,7 @@ en:
         currentIteration: 4
         currentStepStartedAt: 2026-10-11T23:30:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: implement, startedAt: 2026-10-11T23:30:00.000Z, executionCount: 2 }]
         phase: null
         taskOmission:
           totalBytes: 127

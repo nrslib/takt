@@ -156,6 +156,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: fix-verifier, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 2 }]
         phase: 1
         taskOmission:
           totalBytes: 57
@@ -208,6 +209,7 @@ ja:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: fix-verifier, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 2 }]
         phase: 1
         taskOmission:
           totalBytes: 57
@@ -443,6 +445,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: fix-verifier, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 2 }]
         phase: 1
         taskOmission:
           totalBytes: 56
@@ -495,6 +498,7 @@ en:
         currentIteration: 3
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 2
+        currentStepPath: [{ workflow: default, step: fix-verifier, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 2 }]
         phase: 1
         taskOmission:
           totalBytes: 56

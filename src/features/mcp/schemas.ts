@@ -84,6 +84,8 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   limit: goalReadLimitSchema,
   offset: readOffsetSchema,
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
+  state: z.enum(['open', 'finished', 'all']).optional()
+    .describe('Goals to list: open (not finished), finished (completed or aborted), or all. Defaults to all. offset, limit and totalCount apply to the filtered goals.'),
 });
 export const getWorkflowInputSchema = goalIdentityInputSchema.extend({
   workflow: z.string().trim().min(1).describe('Workflow name, scope reference or file path from takt_list_workflows.'),

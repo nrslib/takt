@@ -146,7 +146,7 @@ function expectGoalMemory(memory: string, goal: Goal): void {
   expect(JSON.parse(memory)).toEqual({
     repositoryCount: 1, truncated: false, retrieval: expect.any(String),
     repositories: [{
-      repositoryDirectory: cwd, goalCount: 1, diagnosticCount: 0, diagnostics: [],
+      repositoryDirectory: cwd, goalCount: 1, finishedGoalCount: 0, diagnosticCount: 0, diagnostics: [],
       goals: [{
         id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
         branch: goal.branch, integrationBranch: goal.integrationBranch,
@@ -535,29 +535,128 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
 });
 
-it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] excludes saved completed and aborted goals from the %s goal list', async (lang) => {
-  const completed: Goal = { ...goalRecord(), objective: 'Completed goal fixture', status: 'completed',
-    completion: {
-      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
-      summary: 'Integrated', instructions: ['Verified merge'],
-      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-    },
-  };
+const finishedCompletion = {
+  goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+  summary: 'Integrated', instructions: ['Verified merge'],
+  changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+};
+
+function menuRows(): string[] {
+  const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+  const menu = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+  return menu === undefined ? [] : menu.split('\n').slice(2, -2).map((row) => row.replace(/[│\s]+/gu, ' ').trim());
+}
+
+it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] lists saved completed and aborted goals after open goals in the %s goal list with only the delete action', async (lang) => {
+  const open: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Open goal fixture' };
+  const completed: Goal = { ...goalRecord(), objective: 'Completed goal fixture', status: 'completed', completion: finishedCompletion };
   const aborted: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001',
     objective: 'Aborted goal fixture', executionStatus: 'aborted' };
   await new GoalStore(cwd).create(completed);
+  await new GoalStore(cwd).create(open);
   const { store } = await mountGoalControls(lang, aborted);
+  const actions = (names: readonly string[]) => names.map((name) => getLabel(`manager.goalActions.${name}`, lang));
   await openMenu('goal');
-  await waitFor(() => {
-    const frame = app!.lastFrame()!;
-    expect(frame).toContain(getLabel('manager.selectionEmpty.goal', lang));
-    expect(frame).not.toContain(completed.objective);
-    expect(frame).not.toContain(aborted.objective);
-    expect(frame).not.toContain(getLabel('manager.selectionTitles.goal', lang));
-    expect(frame).not.toContain(getLabel('manager.selectionHint', lang));
-  });
+  await waitFor(() => expect(menuRows()).toEqual([
+    `${open.objective} — ${getLabel('manager.goalStates.active', lang)}`,
+    `${completed.objective} — ${getLabel('manager.goalStates.completed', lang)}`,
+    `${aborted.objective} — ${getLabel('manager.goalStates.aborted', lang)}`,
+  ]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual(actions(['pause', 'abort'])));
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
+  for (const index of [1, 2]) {
+    await openMenu('goal');
+    await waitFor(() => expect(menuRows()).toHaveLength(3));
+    for (let move = 0; move < index; move++) app!.stdin.write('\x1b[B');
+    app!.stdin.write('\r');
+    await waitFor(() => expect(menuRows()).toEqual(actions(['delete'])));
+    app!.stdin.write('\x1b[27u');
+    await waitFor(() => expect(menuRows()).toEqual([]));
+  }
   expect(await store.get(completed.id)).toEqual(completed);
   expect(await store.get(aborted.id)).toEqual(aborted);
+});
+
+it.each(['ja', 'en'] as const)('deletes a finished goal and its task records from the %s goal menu after one confirmation', async (lang) => {
+  const open: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Open goal fixture' };
+  const finished: Goal = { ...goalRecord(), objective: 'Finished goal fixture', status: 'completed', completion: finishedCompletion };
+  await new GoalStore(cwd).create(open);
+  const { store, call } = await mountGoalControls(lang, finished);
+  const runner = new TaskRunner(cwd);
+  runner.addTask('finished goal work', { slug: 'finished-goal-work', goal_id: finished.id });
+  runner.invalidatePendingGoalTasks(finished.id);
+  runner.addTask('open goal work', { slug: 'open-goal-work', goal_id: open.id });
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(2));
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]));
+  app!.stdin.write('\r');
+  await waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(getLabel('manager.deleteConfirmation', lang));
+    expect(frame.replace(/\s+/gu, ' ')).toContain(finished.objective);
+    expect(frame.replace(/[│\s]+/gu, '')).toContain(getLabel('manager.deleteWarning', lang).replace(/\s+/gu, ''));
+    expect(frame).toMatch(irreversibleWarning);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  confirmAbort();
+  await waitFor(() => expect(submit.mock.calls.map(([command]) => command)).toEqual([{ kind: 'delete_goal', goalId: finished.id }]));
+  await waitFor(() => expect(store.find(finished.id)).toBeUndefined());
+  expect(new TaskStore(cwd).read().tasks.map((task) => task.name)).toEqual(['open-goal-work']);
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toEqual([`${open.objective} — ${getLabel('manager.goalStates.active', lang)}`]));
+  expect(await store.get(open.id)).toEqual(open);
+  expect(call).not.toHaveBeenCalled();
+});
+
+it('keeps a finished goal when its deletion is cancelled', async () => {
+  const finished: Goal = { ...goalRecord(), objective: 'Finished goal fixture', executionStatus: 'aborted' };
+  const { store } = await mountGoalControls('en', finished);
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(1));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', 'en')]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.deleteConfirmation', 'en')));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.deleteConfirmation', 'en')));
+  expect(submit).not.toHaveBeenCalled();
+  expect(await store.get(finished.id)).toEqual(finished);
+});
+
+it.each(['abort', 'delete'] as const)('closes the %s confirmation and returns to the conversation when another operation removes its goal', async (kind) => {
+  const saved: Goal = kind === 'abort' ? { ...goalRecord(), objective: 'Abort target' }
+    : { ...goalRecord(), objective: 'Finished goal fixture', status: 'completed', completion: finishedCompletion };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  if (kind === 'abort') await selectGoal(saved, 'abort');
+  else {
+    await waitFor(() => expect(menuRows()).toHaveLength(1));
+    app!.stdin.write('\r');
+    await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', 'en')]));
+    app!.stdin.write('\r');
+  }
+  await expectAbortConfirmation(saved);
+  if (kind === 'abort') await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+  else await store.delete(saved.id, () => undefined);
+  await session!.refresh();
+  await waitFor(() => expect(session!.getSnapshot().items.some((item) => item.kind === 'goal' && item.goal.id === saved.id
+    && item.goal.status === saved.status && item.goal.executionStatus === saved.executionStatus)).toBe(false));
+  confirmAbort();
+  await waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame.replace(/[│\s]+/gu, '')).toContain(getLabel('manager.selectionChanged', 'en').replace(/\s+/gu, ''));
+    expect(frame.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  await send('Continue conversation');
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
 });
 
 it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
@@ -579,8 +678,8 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
     expect(list).toContain(other.objective);
     const row = list!.split('\n').find((line) => line.includes(saved.objective));
     expect(row).toContain(`${saved.objective} — ${getLabel(`manager.goalStates.${executionStatus}`, 'en')}`);
-    expect(list).not.toContain('Completed candidate');
-    expect(list).not.toContain('Aborted candidate');
+    expect(menuRows().slice(2)).toEqual([`Completed candidate — ${getLabel('manager.goalStates.completed', 'en')}`,
+      `Aborted candidate — ${getLabel('manager.goalStates.aborted', 'en')}`]);
   });
   app!.stdin.write('\x1b[B');
   app!.stdin.write('\r');
@@ -618,10 +717,14 @@ it.each([
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
   await openMenu('goal');
+  await waitFor(() => expect(menuRows()).toHaveLength(1));
+  app!.stdin.write('\r');
   await waitFor(() => {
-    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /(?:対象|ゴール).*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
+    expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]);
     expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
   expect(abort).not.toHaveBeenCalled();
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
@@ -652,7 +755,11 @@ it.each([
   await waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
   await openMenu('goal');
-  await waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
+  await waitFor(() => expect(menuRows()).toEqual([`${saved.objective} — ${getLabel('manager.goalStates.aborted', lang)}`]));
+  app!.stdin.write('\r');
+  await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', lang)]));
+  app!.stdin.write('\x1b[27u');
+  await waitFor(() => expect(menuRows()).toEqual([]));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   await remount(lang);

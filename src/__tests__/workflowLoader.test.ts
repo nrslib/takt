@@ -283,6 +283,23 @@ describe('loadWorkflowByIdentifier', () => {
     expect(workflow!.name).toBe('test-workflow');
   });
 
+  it('should load repository_identity and leave it unset by default', () => {
+    const defaultPath = join(tempDir, 'identity-default.yaml');
+    writeFileSync(defaultPath, SAMPLE_WORKFLOW);
+    const optInPath = join(tempDir, 'identity-opt-in.yaml');
+    writeFileSync(optInPath, `${SAMPLE_WORKFLOW}repository_identity: true\n`);
+
+    expect(loadWorkflowByIdentifier(defaultPath, tempDir)!.repositoryIdentity).toBeUndefined();
+    expect(loadWorkflowByIdentifier(optInPath, tempDir)!.repositoryIdentity).toBe(true);
+  });
+
+  it('should reject a non-boolean repository_identity', () => {
+    const filePath = join(tempDir, 'identity-invalid.yaml');
+    writeFileSync(filePath, `${SAMPLE_WORKFLOW}repository_identity: yes-please\n`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(/repository_identity/);
+  });
+
   it('should reject workflow provider/model settings and point to runtime.yaml', () => {
     const filePath = join(tempDir, 'model-null.yaml');
     writeFileSync(filePath, `name: model-null

@@ -140,7 +140,7 @@ beforeEach(() => {
   doubles.readTasks.mockResolvedValue([]);
   doubles.formalSpec.mockReturnValue({ mode: true, comments: false, modelCheckTimeoutSeconds: 42 });
   doubles.assignment.mockResolvedValue({ kind: 'repository', repositoryDirectory: '/repository', repositoryDirectories: ['/repository'] });
-  doubles.findGoal.mockReturnValue(undefined);
+  doubles.findGoal.mockImplementation((id: string) => id === goalRecord().id ? goalRecord() : undefined);
   doubles.getGoal.mockResolvedValue(goalRecord()); doubles.updateGoal.mockResolvedValue(goalRecord());
   doubles.validateBranches.mockImplementation(() => {});
 });
@@ -376,7 +376,7 @@ it('retains interrupted context when a command is rejected and a patrol does not
   await f.run(humanMessage('interrupted request'), controller);
   expect(await f.run({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
     command: { kind: 'dismiss_summary', revision: f.state().revision, conversationId: turnConversationId } })).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'stale_summary' } });
-  doubles.getGoal.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
+  doubles.findGoal.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
   await f.run({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goalRecord().id] });
   expect(f.execute).toHaveBeenCalledOnce();
   expect(f.state()).toMatchObject({ interruptedMessage: 'interrupted request' });
@@ -413,6 +413,39 @@ it('returns a system notice after dismissing a registration proposal without inv
   expect(f.execute).not.toHaveBeenCalled();
 });
 
+it('clears only the session ID and interrupted message on /clear without invoking AI', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' } };
+  f.input.state.interruptedMessage = 'undelivered request';
+  f.input.event.event = humanMessage(' /clear ');
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
+  expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
+    session: { ...f.input.state.session, sessionId: null }, interruptedMessage: null });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('starts the next message in a new session without the interrupted message after /clear', async () => {
+  const f = conversationFixture();
+  await f.run(humanMessage('before clear'));
+  const controller = new AbortController(); f.interruptNext(controller);
+  await f.run(humanMessage('undelivered request'), controller);
+  expect(f.state()).toMatchObject({ session: { sessionId: 'session-after' }, interruptedMessage: 'undelivered request' });
+
+  await f.run(humanMessage('/clear'));
+  await f.run(humanMessage('after clear'));
+
+  expect(f.execute).toHaveBeenCalledTimes(3);
+  expect(f.execute.mock.calls[2]![0].sessionId).toBeUndefined();
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('undelivered request');
+});
+
 it.each([
   { kind: 'pause_goal', status: 'paused', label: 'manager.goalPaused' },
   { kind: 'resume_goal', status: 'active', label: 'manager.goalResumed' },
@@ -432,11 +465,46 @@ it.each([
 it.each(['paused', 'aborted'] as const)('returns a system notice for an event on a %s goal without invoking AI', async (executionStatus) => {
   const f = fixture();
   const goal = { ...goalRecord(), executionStatus };
-  doubles.getGoal.mockResolvedValue(goal);
+  doubles.findGoal.mockReturnValue(goal);
   f.input.event.lane = 'other';
   f.input.event.event = { kind: 'goal_registered', repositoryDirectory: '/repository', goalId: goal.id };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice' } });
   expect(f.execute).not.toHaveBeenCalled();
+});
+it('discards an event accepted before its goal was deleted without an error or AI', async () => {
+  const f = fixture();
+  const deletedGoalId = randomUUID();
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'task_failed', task: { repositoryDirectory: '/repository', goalId: deletedGoalId, taskName: 'task', runSlug: 'run' },
+    result: { success: false, interrupted: true, workflowResult: 'error', failureReason: 'Interrupted by goal abort', shaUnavailableReason: 'Interrupted' } };
+  expect(await f.service.execute(f.input, f.io)).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+it.each([
+  { goal: 'deleted', executionStatus: undefined },
+  { goal: 'aborted', executionStatus: 'aborted' as const },
+])('handles a cancelled wait command completion for a $goal goal', async ({ executionStatus }) => {
+  const f = fixture();
+  const goalId = randomUUID();
+  doubles.findGoal.mockImplementation((id: string) => executionStatus !== undefined && id === goalId
+    ? { ...goalRecord(), id: goalId, executionStatus } : undefined);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'wait_command_completed', id: randomUUID(), repositoryDirectory: '/repository', goalId,
+    description: 'CI result', status: 'cancelled', exitCode: null, signal: null, outputTail: '', durationMs: 10 };
+  const outcome = await f.service.execute(f.input, f.io);
+  expect(doubles.findGoal).toHaveBeenCalledWith(goalId);
+  if (executionStatus === undefined) {
+    expect(outcome).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+  } else {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toMatchObject({ kind: 'wait_command_completed', goalId, status: 'cancelled' });
+  }
+  expect(doubles.notify).not.toHaveBeenCalled();
 });
 it.each<AssistantCliOverrides>([{ provider: 'codex' }, { model: 'custom' }, { provider: 'codex', model: 'custom' }])('keeps selection %j and session across human, director and completion turns', async (overrides) => {
   const f = fixture();
@@ -760,7 +828,7 @@ it.each([true, false])('settles a run loss observation without AI and invokes AI
 it('inspects active patrol goals together without resuming or updating the conversation session', async () => {
   const f = fixture();
   const active = goalRecord(); const paused = { ...goalRecord(), id: randomUUID(), executionStatus: 'paused' };
-  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : paused);
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : paused);
   f.input.event.lane = 'other';
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, paused.id] };
   const message = 'Patrol: 1 goal, no anomalies';
@@ -818,7 +886,7 @@ it('keeps the human session and runtime context when a patrol resolves a differe
 it.each(['paused', 'aborted', 'completed', 'awaiting_merge'] as const)('does not run a queued patrol when its goals have become %s', async (status) => {
   const f = fixture();
   const goal = goalRecord();
-  doubles.getGoal.mockResolvedValue(status === 'completed' || status === 'awaiting_merge' ? { ...goal, status } : { ...goal, executionStatus: status });
+  doubles.findGoal.mockReturnValue(status === 'completed' || status === 'awaiting_merge' ? { ...goal, status } : { ...goal, executionStatus: status });
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [goal.id] };
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: '' } });
   expect(f.resolve).not.toHaveBeenCalled();
@@ -828,7 +896,7 @@ it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed'] as const)('inc
   const f = fixture();
   const merging = { ...goalRecord(), status: 'awaiting_merge' };
   const waiting = { ...merging, id: randomUUID() };
-  doubles.getGoal.mockImplementation(async (id: string) => id === merging.id ? merging : waiting);
+  doubles.findGoal.mockImplementation((id: string) => id === merging.id ? merging : waiting);
   doubles.readTasks.mockResolvedValue([
     { goal_id: merging.id, merge_task: true, status },
     { goal_id: waiting.id, status: 'running' },
@@ -846,7 +914,7 @@ it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed'] as const)('inc
 it('delivers pr_conflicting for an awaiting-merge goal to the manager', async () => {
   const f = fixture();
   const goal = { ...goalRecord(), status: 'awaiting_merge' };
-  doubles.getGoal.mockResolvedValue(goal);
+  doubles.findGoal.mockReturnValue(goal);
   const evidence = { targetId: 'pr-1', generation: 'pr-1', observedAt: '2026-11-07T00:00:00Z',
     repositoryDirectory: '/repository', goalId: goal.id, url: 'https://github.com/owner/repo/pull/9' };
   const observation = { ...evidence, kind: 'pr_conflicting' as const };
@@ -862,7 +930,7 @@ it('continues patrolling ordinary active goals while excluding awaiting-merge go
   const f = fixture();
   const active = goalRecord();
   const waiting = { ...active, id: randomUUID(), status: 'awaiting_merge' };
-  doubles.getGoal.mockImplementation(async (id: string) => id === active.id ? active : waiting);
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : waiting);
   doubles.readTasks.mockRejectedValue(new Error('Invalid tasks YAML'));
   f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id, waiting.id] };
 
@@ -894,7 +962,7 @@ it('interrupts without reporting or executing when a task read fails after cance
 it.each([true, false])('reports unreadable goals and continues the patrol with readable goals (readable: %s)', async (readable) => {
   const f = fixture();
   const active = goalRecord(); const unreadable = randomUUID();
-  doubles.getGoal.mockImplementation(async (id: string) => {
+  doubles.findGoal.mockImplementation((id: string) => {
     if (id === unreadable) throw new Error('unreadable goal');
     return active;
   });
@@ -904,6 +972,24 @@ it.each([true, false])('reports unreadable goals and continues the patrol with r
   expect(f.execute).toHaveBeenCalledOnce();
   expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository',
     goalIds: readable ? [active.id] : [], unreadableGoalIds: [unreadable] });
+  expect(doubles.notify).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('drops goals deleted after the patrol was accepted (remaining active goal: %s)', async (remaining) => {
+  const f = fixture();
+  const active = goalRecord(); const deleted = randomUUID();
+  doubles.findGoal.mockImplementation((id: string) => id === active.id ? active : undefined);
+  f.input.event.lane = 'other';
+  f.input.event.event = { kind: 'patrol', repositoryDirectory: '/repository', goalIds: remaining ? [deleted, active.id] : [deleted] };
+  const outcome = await f.service.execute(f.input, f.io);
+  if (remaining) {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'reply' } });
+    expect(turnData(f.execute.mock.calls[0]![0].prompt).event).toEqual({ kind: 'patrol', repositoryDirectory: '/repository', goalIds: [active.id] });
+  } else {
+    expect(outcome).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+    expect(f.resolve).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+  }
   expect(doubles.notify).not.toHaveBeenCalled();
 });
 
@@ -1078,7 +1164,7 @@ it.each(['ja', 'en'] as const)('delivers a saved goal question and its human ans
   const answer = { text: 'Wait on X. Continue Y.', source: 'slack' as const, answeredAt: '2026-11-08T12:00:00Z' };
   const goal = { ...goalRecord(), questions: [{ id: questionId, kind: 'question' as const, recipient: 'human' as const,
     body: 'Continue verification of X?', status: 'answered' as const, answer }] };
-  doubles.getGoal.mockResolvedValue(goal);
+  doubles.findGoal.mockReturnValue(goal);
   f.resolve.mockResolvedValue({ provider: 'mock', model: null, language, contextKey: 'context', executor: { execute: f.execute } });
   await f.run({ kind: 'inquiry_answered', repositoryDirectory: '/repository', goalId: goal.id, questionId, answer });
   expect(turnData(f.execute.mock.calls[0]![0].prompt)).toMatchObject({ kind: 'inquiry_answered',

@@ -177,6 +177,35 @@ describe('manager summary transcript and terminal height', () => {
     } finally { context.dispose(); }
   });
 
+  it('erases the earlier log from the terminal on /clear, shows the notice and later messages, and keeps the log away after resizing', async () => {
+    const context = mountTerminal('en', null);
+    const notice = getLabel('manager.conversation.cleared', 'en');
+    try {
+      const earlier = randomUUID();
+      context.client.output({ kind: 'user_message', operationId: earlier, message: 'earlier question' });
+      context.client.output({ kind: 'result', operationId: earlier, result: { kind: 'reply', message: 'earlier reply' } });
+      await waitFor(async () => expect(await context.text()).toContain('earlier reply'));
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write('\x1b[200~/clear\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('/clear'));
+      context.stdin.write(ENTER);
+      await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: '/clear' }]));
+      const operationId = await context.client.operation();
+      context.client.output({ kind: 'result', operationId, result: { kind: 'notice', message: notice } });
+      await waitFor(async () => expect(await context.text()).toContain(notice));
+      expect(await context.text()).not.toContain('earlier');
+      context.client.output({ kind: 'user_message', operationId: randomUUID(), message: 'later question' });
+      await waitFor(async () => expect(await context.text()).toContain('later question'));
+      for (const columns of [60, 80]) {
+        context.resize(24, columns);
+        const text = await context.text();
+        expect(text).toContain(notice);
+        expect(text).toContain('later question');
+        expect(text).not.toContain('earlier');
+      }
+    } finally { context.dispose(); }
+  });
+
   it.each(['ja', 'en'] as const)('renders each proposal hint separator once before and during work in %s', async (lang) => {
     const context = mountTerminal(lang, makeSummary(4), 200);
     try {
