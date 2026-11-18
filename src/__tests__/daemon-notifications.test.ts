@@ -235,6 +235,43 @@ describe('DaemonNotifications', () => {
     }
   });
 
+  it('does not overwrite a value saved while its file was being read', async () => {
+    const writer = new DaemonNotifications(root);
+    await writer.save({ id: 'first', message: 'one' }, signal);
+    const notifications = new DaemonNotifications(root);
+
+    const mocked = vi.mocked(readEntirePrivateFile);
+    const original = mocked.getMockImplementation();
+    if (original === undefined) throw new Error('readEntirePrivateFile must keep its implementation');
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => { entered = resolve; });
+    let held = true;
+    mocked.mockImplementation(async (path) => {
+      const content = await original(path);
+      if (held && path.endsWith(fileName('first'))) {
+        held = false;
+        entered();
+        await barrier;
+      }
+      return content;
+    });
+    try {
+      const first = collect(notifications);
+      await barrierEntered;
+      await unlink(join(directory, fileName('first')));
+      await notifications.save({ id: 'first', message: 'two' }, signal);
+      release();
+
+      await first;
+      expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
+    } finally {
+      release();
+      mocked.mockImplementation(original);
+    }
+  });
+
   it('keeps failing on a broken notification file', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);

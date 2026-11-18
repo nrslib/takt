@@ -92,7 +92,8 @@ export class DaemonNotifications {
       const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
       if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
       result.push(value);
-      if (!this.retain(entry.name, value, content.length)) complete = false;
+      // 走査の開始後に保存が完了していたら、保存した値は索引へ反映済みのため、読み取り中の内容で上書きしない。
+      if (generation === this.generation && !this.retain(entry.name, value, content.length)) complete = false;
     }
     for (const [name, cached] of this.index.values) {
       if (!names.has(name)) {
