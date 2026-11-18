@@ -256,7 +256,7 @@ export class InstructionBuilder {
         stepIteration: this.context.stepIteration,
       }, 1, language),
       workingDirectory: this.context.cwd,
-      goalSpecificationNotice: escapeTemplateChars(renderGoalSpecificationNotice(this.context.goalSpecificationPaths, language)),
+      goalSpecificationNotice: renderGoalSpecificationNotice(this.context.goalSpecificationPaths, language),
       hasGitRules,
       gitRules,
       editRule,

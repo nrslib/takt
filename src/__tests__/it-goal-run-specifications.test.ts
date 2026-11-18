@@ -14,9 +14,12 @@ import { runAgent } from '../agents/runner.js';
 
 let project: string;
 const specifications = {
-  gherkin: 'Feature: Export\n  Scenario: CSV\n    Then export succeeds\n',
-  quint: 'module csv {\n  // ``` preserved\n}\n',
-  alloy: 'sig CSV {}\n',
+  gherkin: 'Feature: SavedGherkinExport\n  Scenario: CSV\n    Then export succeeds\n',
+  quint: 'module SavedQuintExport {\n  // ``` preserved\n}\n',
+  alloy: 'sig SavedAlloyExport {}\n',
+};
+const specificationMarkers: Record<string, string> = {
+  gherkin: 'SavedGherkinExport', quint: 'SavedQuintExport', alloy: 'SavedAlloyExport',
 };
 const runSlug = 'goal-specifications-run';
 const orderContent = '# Export CSV\n\nImplement AC-EXPORT-1.';
@@ -25,7 +28,7 @@ const specificationFiles: Record<string, string> = {
 };
 
 beforeEach(() => {
-  project = mkdtempSync(join(tmpdir(), 'takt-goal-run-specs-'));
+  project = mkdtempSync(join(tmpdir(), 'takt-goal-run-specs-{v2}-{{name}}-'));
   const workflows = join(project, '.takt', 'workflows');
   mkdirSync(workflows, { recursive: true });
   const personas = join(project, '.takt', 'facets', 'personas');
@@ -112,6 +115,7 @@ it.each([
       for (const [, prompt] of prompts) {
         expect(prompt).toContain(path);
         expect(prompt).not.toContain(body);
+        expect(prompt).not.toContain(specificationMarkers[notation]!);
       }
     }
   }

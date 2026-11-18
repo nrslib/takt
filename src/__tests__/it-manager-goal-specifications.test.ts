@@ -44,7 +44,7 @@ it.each([
   { outOfScope: [], scopeSection: [], constraints: ['Keep the existing API'] },
   { outOfScope: ['UI redesign', 'Dependency upgrades'], scopeSection: ['Out of scope:\n- UI redesign\n- Dependency upgrades'], constraints: ['Keep the existing API'] },
   { outOfScope: ['UI redesign'], scopeSection: ['Out of scope:\n- UI redesign'], constraints: [] },
-])('passes final PR review specifications as files while preserving scope: %j', async ({ outOfScope, scopeSection, constraints }) => {
+])('enqueues final PR review instructions and stages specifications while preserving scope: %j', async ({ outOfScope, scopeSection, constraints }) => {
   const specs = specifications;
   const goal = { ...goalRecord(), outOfScope, constraints, specifications: specs, status: 'awaiting_merge' as const,
     pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
@@ -69,7 +69,11 @@ it.each([
   const runPaths = buildRunPaths(cwd, 'final-review');
   const paths = stageGoalSpecificationsForExecution(cwd, task.data!.goal_id, runPaths);
   expect(readdirSync(join(runPaths.contextTaskAbs, 'specifications')).sort()).toEqual(['alloy.als', 'gherkin.feature', 'quint.qnt']);
-  expect(paths.map((path) => readFileSync(path, 'utf8'))).toEqual(Object.values(specs));
+  const directory = join(runPaths.contextTaskAbs, 'specifications');
+  expect(paths).toHaveLength(3);
+  expect(readFileSync(join(directory, 'gherkin.feature'), 'utf8')).toBe(specs.gherkin);
+  expect(readFileSync(join(directory, 'quint.qnt'), 'utf8')).toBe(specs.quint);
+  expect(readFileSync(join(directory, 'alloy.als'), 'utf8')).toBe(specs.alloy);
   for (const text of Object.values(specs)) expect(task.content).not.toContain(text);
 });
 it('indents continuation lines within out-of-scope, constraint, and acceptance-criteria items', async () => {

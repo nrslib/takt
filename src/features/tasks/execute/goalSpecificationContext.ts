@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import { GoalStore } from '../../../infra/goals/store.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
 
 const specificationFiles = {
   gherkin: 'gherkin.feature',
@@ -28,7 +29,11 @@ export function stageGoalSpecificationsForExecution(
     mkdirSync(directory, { recursive: true });
     for (const file of files) writeFileSync(file.path, file.content, 'utf8');
   } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], getErrorMessage(error), { cause: error });
+    }
     throw error;
   }
   return files.map((file) => file.path);
