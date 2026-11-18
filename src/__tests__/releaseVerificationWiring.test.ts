@@ -445,11 +445,11 @@ describe('release verification wiring', () => {
 
   it.each(['root', 'dir'] as const)('should use the scan directory from Vitest config (%s)', (setting) => {
     const result = executeHeavyItFixture('node_modules/vitest/vitest.mjs', [
-      'run', 'src/__tests__/it-heavy-guard-target.test.ts',
+      'run', 'src/__tests__/it-collision-it-heavy-guard-target.test.ts',
     ], {}, setting);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.passedTestTitles).toEqual(['requested']);
+    expect(result.passedTestTitles).toEqual(['outside selection']);
   });
 
   it('should skip Heavy IT setup when npm disables lifecycle scripts via the uppercase variable', () => {
