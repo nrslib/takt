@@ -43,7 +43,7 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
         id: conversationId(assignment), assignment,
       })), managers.length, offset, false, { errors });
     }));
-  server.registerTool('takt_list_goals', { description: 'Read saved goals and states of an assigned manager repository.',
+  server.registerTool('takt_list_goals', { description: 'Read saved goals and states of an assigned manager repository. Optional state selects open, finished (completed or aborted) or all goals (default all).',
     inputSchema: listGoalsInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.infer<typeof listGoalsInputSchema> & { managerId: string }) => {
     const assignment = await resolveDirectorManager(configDirectory, value.managerId);
     if (!assignment.repositoryDirectories.includes(value.cwd)) throw new Error('Repository is outside manager assignment');

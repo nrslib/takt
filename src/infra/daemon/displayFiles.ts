@@ -5,7 +5,7 @@ import { readPrivateFile } from './privateFile.js';
 const MAX_DISPLAY_BYTES = 4 * 1024 * 1024;
 export async function readDisplayFile(path: string): Promise<unknown> {
   const content = await readPrivateFile(path, MAX_DISPLAY_BYTES);
-  if (content === undefined) throw new Error(`Display file disappeared: ${path}`);
+  if (content === undefined) throw Object.assign(new Error(`Display file disappeared: ${path}`), { code: 'ENOENT' });
   return JSON.parse(content.toString('utf8')) as unknown;
 }
 

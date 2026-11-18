@@ -559,6 +559,7 @@ manager:
     continue: "Return to conversation without registering"
     dismissHint: "Returning to the conversation or typing changes dismisses this proposal."
   inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
+  inputUnavailableDuringDelete: "Cannot enter input during delete confirmation. Finish the confirmation before typing."
   conversationFailureNotification: |-
     Manager processing failed.
     Reason: {reason}
@@ -576,18 +577,22 @@ manager:
     pause: "Pause"
     resume: "Resume"
     abort: "Abort"
+    delete: "Delete"
   selectionHint: "↑↓ Choose / Enter Select / Esc Close"
   selectionEmpty:
     repository: "No assigned repositories."
     answer: "No pending inquiries to answer."
-    goal: "No ongoing goals to operate on."
+    goal: "No goals to operate on."
   goalRegistered: "Goal registered: {name} ({id})\n{branch}"
   goalPaused: "Goal paused: {goalId}"
   goalResumed: "Goal resumed: {goalId}"
+  goalDeleted: "Goal deleted: {goalId}"
   goalStates:
     active: "Active"
     paused: "Paused"
     awaiting_merge: "Awaiting merge"
+    completed: "Completed"
+    aborted: "Aborted"
   inquiryKinds:
     question: "Question"
     approval: "Approval"
@@ -615,6 +620,10 @@ manager:
   confirmAbort: "Abort goal"
   cancelAbort: "Cancel"
   abortChoiceHint: "↑ Abort / ↓ Cancel / Enter Select / Esc Back"
+  deleteConfirmation: "Confirm goal deletion"
+  deleteWarning: "Deletion cannot be undone. The goal record and the records of its tasks are removed. The goal branch, the integration branch, run records and the clone directories of failed tasks are kept."
+  confirmDelete: "Delete goal"
+  deleteChoiceHint: "↑ Delete / ↓ Cancel / Enter Select / Esc Back"
   description: "Open the experimental manager conversation TUI"
   experimentalNotice: "manager is experimental. Behavior, settings, and saved data formats may change without notice."
   costNotice: "manager automatically queues and runs tasks, which incurs provider API costs."

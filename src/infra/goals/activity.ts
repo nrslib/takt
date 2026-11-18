@@ -4,6 +4,10 @@ import type { TaskRecord } from '../task/schema.js';
 type GoalActivity = Pick<Goal, 'id' | 'status' | 'executionStatus'>;
 type MergeTaskActivity = Pick<TaskRecord, 'goal_id' | 'merge_task' | 'status'>;
 
+export function isGoalFinished(goal: Pick<Goal, 'status' | 'executionStatus'>): boolean {
+  return goal.status === 'completed' || goal.executionStatus === 'aborted';
+}
+
 export function isGoalAwaitingHumanMerge(goal: Pick<Goal, 'id' | 'status'>, tasks: readonly MergeTaskActivity[]): boolean {
   if (goal.status !== 'awaiting_merge') return false;
   const mergeTasks = tasks.filter((task) => task.goal_id === goal.id && task.merge_task === true);

@@ -405,6 +405,53 @@ describe('MCP goal operations', () => {
       expect(page.errorPage).toMatchObject({ totalCount: count, returnedCount: 0, omittedCount: count, offset: errorOffset, nextOffset: null, truncated: true });
     }
   });
+  describe('state filter', () => {
+    const completion = {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Integrated', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    };
+    const goals: Goal[] = [
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000001' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000002', status: 'completed', completion },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000003', executionStatus: 'paused' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000004', executionStatus: 'aborted' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000005', status: 'awaiting_merge', completion },
+    ];
+    const ids = (indices: number[]) => indices.map((index) => goals[index]!.id);
+    async function listIds(input: Omit<Parameters<typeof listTaktGoals>[0], 'cwd'>) {
+      const output = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', ...input }, {})).content)) as {
+        goals: { id: string }[]; totalCount: number; nextOffset: number | null;
+      };
+      return { ids: output.goals.map(({ id }) => id), totalCount: output.totalCount, nextOffset: output.nextOffset };
+    }
+    beforeEach(() => goalDoubles.list.mockResolvedValue({ goals, errors: [] }));
+
+    it.each([
+      { state: undefined, expected: [0, 1, 2, 3, 4] },
+      { state: 'all' as const, expected: [0, 1, 2, 3, 4] },
+      { state: 'open' as const, expected: [0, 2, 4] },
+      { state: 'finished' as const, expected: [1, 3] },
+    ])('lists $state goals', async ({ state, expected }) => {
+      expect(await listIds(state === undefined ? {} : { state })).toEqual({ ids: ids(expected), totalCount: expected.length, nextOffset: null });
+    });
+
+    it('pages and counts the filtered goals', async () => {
+      expect(await listIds({ state: 'open', limit: 2 })).toEqual({ ids: ids([0, 2]), totalCount: 3, nextOffset: 2 });
+      expect(await listIds({ state: 'open', limit: 2, offset: 2 })).toEqual({ ids: ids([4]), totalCount: 3, nextOffset: null });
+      expect(await listIds({ state: 'finished', offset: 1 })).toEqual({ ids: ids([3]), totalCount: 2, nextOffset: null });
+    });
+
+    it('keeps individual record errors regardless of the filter', async () => {
+      goalDoubles.list.mockResolvedValue({ goals, errors: invalidGoalErrors(1) });
+      const output = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', state: 'finished' }, {})).content));
+      expect(output.errors).toEqual([{ goalId: invalidGoalErrors(1)[0]!.goalId, error: expect.any(String) }]);
+    });
+
+    it('rejects an unknown state', () => {
+      expect(listGoalsInputSchema.safeParse({ cwd: '/repo', state: 'done' }).success).toBe(false);
+    });
+  });
   it('keeps healthy goal and individual error offsets independent', async () => {
     const goals = [goalRecord(), { ...goalRecord(), id: '750e8400-e29b-41d4-a716-446655440000' }];
     const errors = invalidGoalErrors(2);
