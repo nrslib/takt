@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { stageGoalSpecificationsForExecution } from '../features/tasks/execute/goalSpecificationContext.js';
@@ -19,7 +20,7 @@ it('removes partially staged files and preserves the write failure when cleanup 
 
   expect(() => stageGoalSpecificationsForExecution('/project', 'goal', paths)).toThrow(writeFailure);
   expect(writeFileSync).toHaveBeenCalledTimes(2);
-  expect(rmSync).toHaveBeenCalledExactlyOnceWith(`${paths.contextTaskAbs}/specifications`, { recursive: true, force: true });
+  expect(rmSync).toHaveBeenCalledExactlyOnceWith(join(paths.contextTaskAbs, 'specifications'), { recursive: true, force: true });
 });
 
 it('keeps the write failure as the primary cause and retains a cleanup failure', () => {

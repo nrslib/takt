@@ -7,6 +7,7 @@ import { GoalStore } from '../infra/goals/store.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const headSha = 'a'.repeat(40);
@@ -68,12 +69,14 @@ beforeEach(() => {
   invalidateAllResolvedConfigCache();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   rmSync(project, { recursive: true, force: true });
   invalidateAllResolvedConfigCache();
 });
 
 it('delivers saved specifications to the reviewer when a queued finishing task runs through the task entry point', async () => {
+  const writeLog = vi.spyOn(DebugLogger.prototype, 'writeLog');
   const goal = { ...goalRecord(), specifications, status: 'awaiting_merge' as const,
     pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
     completion: { goalBranch: goalRecord().branch, goalSha: headSha, targetBranch: 'main', summary: 'Evidence',
@@ -83,11 +86,12 @@ it('delivers saved specifications to the reviewer when a queued finishing task r
   runner.enqueuePrMergeTask({ goalId: goal.id, prNumber: 42, prUrl: goal.pullRequest.url,
     headBranch: goal.branch, baseBranch: 'main', headSha, headRepositoryUrl: repositoryUrl,
     headRepositoryPushUrls: [repositoryUrl], until: 'prepare', workflow: 'spec-review', method: 'squash',
-    worktreePath: join(project, 'clone'), threatCheckMaxDiffBytes: 1024 });
+    worktreePath: join(project, '.takt', 'worktrees', 'clone'), threatCheckMaxDiffBytes: 1024 });
   const task = runner.claimNextTasks(1)[0]!;
   for (const body of Object.values(specifications)) expect(task.content).not.toContain(body);
 
   expect(await executeAndCompleteTask(task, runner, project, undefined, { outputMode: 'silent' })).toBe(true);
+  expect(writeLog.mock.calls.filter(([level]) => level === 'ERROR')).toEqual([]);
 
   expect(runAgent).toHaveBeenCalledOnce();
   const [persona, prompt] = vi.mocked(runAgent).mock.calls[0]!;
@@ -108,5 +112,6 @@ it('delivers saved specifications to the reviewer when a queued finishing task r
     expect(readFileSync(path, 'utf8')).toBe(body);
     expect(prompt).not.toContain(body);
     expect(prompt).not.toContain(marker);
+    expect(task.content).not.toContain(marker);
   }
 });
