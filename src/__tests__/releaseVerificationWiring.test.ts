@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import type { JsonTestResults } from 'vitest/reporters';
 import {
   auditedIntegrationBoundaryTestFiles,
   fileSystemIntegrationTestFiles,
@@ -280,6 +281,7 @@ export default {
 
     const npmStub = join(root, 'npm-cli.js');
     const preparationLog = join(root, 'npm-args.json');
+    const reportPath = join(root, 'vitest-report.json');
     writeFileSync(npmStub, `
 import { writeFileSync } from 'node:fs';
 writeFileSync(process.env.TAKT_PREPARATION_LOG, JSON.stringify(process.argv.slice(2)));
@@ -290,6 +292,7 @@ writeFileSync(process.env.TAKT_PREPARATION_LOG, JSON.stringify(process.argv.slic
     ));
     const result = spawnSync(process.execPath, [
       join(process.cwd(), entrypoint), ...args, ...locationArgs, '--globals',
+      '--reporter=json', '--outputFile.json', reportPath,
     ], {
       encoding: 'utf8',
       cwd,
@@ -305,10 +308,18 @@ writeFileSync(process.env.TAKT_PREPARATION_LOG, JSON.stringify(process.argv.slic
     if (result.error !== undefined) {
       throw result.error;
     }
+    const report = result.status === 0
+      ? JSON.parse(readFileSync(reportPath, 'utf8')) as JsonTestResults
+      : undefined;
+    const passedTestTitles = report?.testResults
+      .flatMap(({ assertionResults }) => assertionResults)
+      .filter(({ status }) => status === 'passed')
+      .map(({ title }) => title)
+      .sort();
     return {
       status: result.status,
-      stdout: result.stdout,
       stderr: result.stderr,
+      passedTestTitles,
       preparation: existsSync(preparationLog) ? readFileSync(preparationLog, 'utf8') : '',
     };
   } finally {
@@ -424,64 +435,61 @@ describe('release verification wiring', () => {
     'src/__tests__/it-heavy-guard-target.test.ts',
   ])('should prepare and run only the explicitly selected Heavy IT file (%s)', (filter) => {
     const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
-      filter, '--reporter', 'verbose',
+      filter,
     ], {});
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.preparation).toBe(JSON.stringify(['run', 'test:deepseek-harness:types']));
-    expect(result.stdout).toContain('> requested');
-    expect(result.stdout).not.toContain('> outside selection');
-    expect(result.stdout).not.toContain('> caller directory');
+    expect(result.passedTestTitles).toEqual(['requested']);
   });
 
   it.each(['root', 'dir'] as const)('should use the scan directory from Vitest config (%s)', (setting) => {
     const result = executeHeavyItFixture('node_modules/vitest/vitest.mjs', [
-      'run', 'src/__tests__/it-heavy-guard-target.test.ts', '--reporter', 'verbose',
+      'run', 'src/__tests__/it-heavy-guard-target.test.ts',
     ], {}, setting);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('> requested');
-    expect(result.stdout).not.toContain('> caller directory');
+    expect(result.passedTestTitles).toEqual(['requested']);
   });
 
   it('should skip Heavy IT setup when npm disables lifecycle scripts via the uppercase variable', () => {
     const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
-      'src/__tests__/it-heavy-guard-target.test.ts', '--reporter', 'verbose',
+      'src/__tests__/it-heavy-guard-target.test.ts',
     ], { NPM_CONFIG_IGNORE_SCRIPTS: 'true' });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('> requested');
+    expect(result.passedTestTitles).toEqual(['requested']);
     expect(result.preparation).toBe('');
   });
 
   it.skipIf(process.platform === 'win32')('should prefer lowercase npm config when both spellings exist', () => {
     const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
-      'src/__tests__/it-heavy-guard-target.test.ts', '--reporter', 'verbose',
+      'src/__tests__/it-heavy-guard-target.test.ts',
     ], { npm_config_ignore_scripts: 'true', NPM_CONFIG_IGNORE_SCRIPTS: 'false' });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('> requested');
+    expect(result.passedTestTitles).toEqual(['requested']);
     expect(result.preparation).toBe('');
   });
 
   it.skipIf(process.platform === 'win32')('should prepare Heavy IT when the npm CLI re-enables lifecycle scripts', () => {
     const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
-      'src/__tests__/it-heavy-guard-target.test.ts', '--reporter', 'verbose',
+      'src/__tests__/it-heavy-guard-target.test.ts',
     ], { npm_config_ignore_scripts: '', NPM_CONFIG_IGNORE_SCRIPTS: 'true' });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('> requested');
+    expect(result.passedTestTitles).toEqual(['requested']);
     expect(result.preparation).toBe(JSON.stringify(['run', 'test:deepseek-harness:types']));
   });
 
   it('should allow an unscoped Heavy IT run in GitHub Actions pull-request CI', () => {
-    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
-      '--reporter', 'verbose',
-    ], { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'pull_request' });
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [], {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_EVENT_NAME: 'pull_request',
+    });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('> requested');
-    expect(result.stdout).toContain('> outside selection');
+    expect(result.passedTestTitles).toEqual(['outside selection', 'requested']);
   });
 
   it('should fail when the release log rejects the final result write', async () => {
