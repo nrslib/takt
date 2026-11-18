@@ -6,7 +6,7 @@ import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
 import { loadWorkflowByIdentifier } from '../config/index.js';
 import { checkWorkflowProviders } from '../config/runtime-provider/execution-preparation.js';
-import { withTaskRuntimeAssignment } from '../config/runtime-provider/invocation.js';
+import { validateTaskRuntimeAssignmentForSave, withTaskSaveRuntimeAssignment } from '../config/runtime-provider/invocation.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import {
   cleanupTaskSpecDirectory,
@@ -62,7 +62,8 @@ export async function saveEnqueuedTaskFile(
   const identifier = config.workflow ?? DEFAULT_WORKFLOW_NAME;
   const workflow = loadWorkflowByIdentifier(identifier, cwd);
   if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
-  const slug = await withTaskRuntimeAssignment(config.runtime_assignment, async () => {
+  validateTaskRuntimeAssignmentForSave(cwd, config.runtime_assignment);
+  const slug = await withTaskSaveRuntimeAssignment(config.runtime_assignment, async () => {
     await checkWorkflowProviders(cwd, cwd, workflow, {}, undefined, abortSignal);
     return summarizeTaskName(taskContent, { cwd });
   });

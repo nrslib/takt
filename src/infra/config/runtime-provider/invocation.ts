@@ -17,11 +17,26 @@ interface RuntimeProviderInvocation {
 
 let invocation: RuntimeProviderInvocation | undefined;
 
-const taskRuntimeAssignments = new AsyncLocalStorage<string>();
+const taskRuntimeAssignments = new AsyncLocalStorage<string | undefined>();
 
 /** action の実行中だけ、タスクの runtime assignment を設定する。undefined なら何も設定しない。 */
 export function withTaskRuntimeAssignment<T>(runtimeAssignment: string | undefined, action: () => T): T {
   return runtimeAssignment === undefined ? action() : taskRuntimeAssignments.run(runtimeAssignment, action);
+}
+
+/** 保存時は、割り当て未指定の場合も保存対象のタスクのスコープに切り替える。 */
+export function withTaskSaveRuntimeAssignment<T>(runtimeAssignment: string | undefined, action: () => T): T {
+  return taskRuntimeAssignments.run(runtimeAssignment, action);
+}
+
+/** CLI の指定とは独立に、保存する割り当てを実際に選択できることを確認する。 */
+export function validateTaskRuntimeAssignmentForSave(projectCwd: string, runtimeAssignment: string | undefined): void {
+  if (runtimeAssignment === undefined) return;
+  resolveRuntimeProviderFileWithOrigins({
+    globalConfigDir: getGlobalConfigDir(),
+    projectConfigDir: getProjectConfigDir(projectCwd),
+    ...invocationOptions(runtimeAssignment, invocation?.runtimeFilePath, projectCwd),
+  });
 }
 
 export function prepareRuntimeAssignmentInvocation(
