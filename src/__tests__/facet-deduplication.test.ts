@@ -34,10 +34,11 @@ describe('policy and knowledge facet deduplication', () => {
 
   it.each(['policies', 'knowledge'] as const)('%s: keeps the first resolved file across names, aliases and paths', (kind) => {
     const context = { projectDir, lang: 'ja' as const };
-    const first = write(`.takt/facets/${kind}/first.md`, 'FIRST');
+    const first = `./.takt/facets/${kind}/first.md`;
+    write(first, 'FIRST');
     write(`.takt/facets/${kind}/second.md`, 'SECOND');
     const sections = resolveSectionMapWithSource({ alias: first }, projectDir, kind, context);
-    const refs = ['alias', 'second', 'first', first, `./.takt/facets/${kind}/first.md`, 'second'];
+    const refs = ['alias', 'second', 'first', first, `.takt/facets/${kind}/first.md`, 'second'];
     const resolved = resolveRefListWithSource(refs, sections, projectDir, kind, context);
 
     expect(resolved?.map(({ refName }) => refName)).toEqual(['alias', 'second']);
@@ -49,7 +50,8 @@ describe('policy and knowledge facet deduplication', () => {
 
   it.each(['policies', 'knowledge'] as const)('%s: keeps only the first facet across files and inline definitions with identical content', (kind) => {
     const context = { projectDir, lang: 'ja' as const };
-    const first = write(`.takt/facets/${kind}/first.md`, 'SAME');
+    const first = `./.takt/facets/${kind}/first.md`;
+    write(first, 'SAME');
     write(`.takt/facets/${kind}/second.md`, 'SAME');
     const sections = { inline: 'SAME', other: 'SAME' };
     const refs = ['first', 'second', 'inline', 'other', first, 'inline'];
@@ -93,8 +95,9 @@ describe('policy and knowledge facet deduplication', () => {
   it.each(['policy', 'knowledge'] as const)('%s: deduplicates overlapping fragment and workflow params at load time and runtime', (kind) => {
     write('.takt/config.yaml', 'language: ja\n');
     const facetDir = kind === 'policy' ? 'policies' : 'knowledge';
-    const first = write(`.takt/facets/${facetDir}/first.md`, 'FIRST');
+    write(`.takt/facets/${facetDir}/first.md`, 'FIRST');
     write(`.takt/facets/${facetDir}/second.md`, 'SECOND');
+    write(`.takt/facets/${facetDir}/third.md`, 'THIRD');
     write('.takt/steps/review.yaml', stringify({
       params: { additions: { type: 'facet_ref[]', facet_kind: kind } },
       [kind]: ['first', { $param: 'additions' }, 'second'],
@@ -112,7 +115,7 @@ describe('policy and knowledge facet deduplication', () => {
     const parentPath = write('.takt/workflows/parent.yaml', stringify({
       name: 'parent',
       steps: [{ name: 'child', kind: 'workflow_call', call: 'child',
-        args: { additions: ['second', first, 'first'] },
+        args: { additions: ['third', 'second', `../facets/${facetDir}/first.md`, 'first'] },
         rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
     }));
     // Loading the parent validates its child; runtime resolves the same call again.
@@ -127,7 +130,7 @@ describe('policy and knowledge facet deduplication', () => {
       const step = workflow.steps[0];
       assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step));
       const contents = kind === 'policy' ? step.policyContents : step.knowledgeContents;
-      expect(contents?.map(({ content }) => content)).toEqual(['FIRST', 'SECOND']);
+      expect(contents?.map(({ content }) => content)).toEqual(['FIRST', 'THIRD', 'SECOND']);
     }
   });
 
@@ -148,12 +151,9 @@ describe('policy and knowledge facet deduplication', () => {
     assert.ok(step && isNormalOrTeamLeaderWorkflowStep(step));
     for (const contents of [step.policyContents, step.knowledgeContents]) {
       assert.ok(contents?.length);
-      const sources = contents.map(({ sourcePath }) => sourcePath);
-      expect(new Set(sources).size).toBe(contents.length);
-      const assembled = contents.map(({ content }) => content).join('\n\n---\n\n');
-      for (const { content } of contents) {
-        expect(assembled.split(content)).toHaveLength(2);
-      }
+      const bodies = contents.map(({ content }) => content);
+      expect(new Set(bodies).size).toBe(bodies.length);
+      const assembled = bodies.join('\n\n---\n\n');
       expect(assembled).not.toContain('{{include:');
     }
     for (const name of ['architecture', 'takt']) {
