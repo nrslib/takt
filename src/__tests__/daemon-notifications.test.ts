@@ -367,6 +367,25 @@ describe('DaemonNotifications', () => {
     expect((await iterator.next()).done).toBe(true);
   });
 
+  it('saves with a subject while another read is paused between values', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await notifications.save({ id: 'second', message: 'two' }, signal);
+
+    const iterator = notifications.iterate();
+    await iterator.next();
+    const saved = notifications.save({ id: 'third', message: 'three', subject: { key: 'goal', state: 'done' } }, signal);
+    const outcome = await Promise.race([
+      saved.then(() => 'saved' as const),
+      new Promise<'pending'>((resolve) => { setTimeout(() => { resolve('pending'); }, 500); }),
+    ]);
+
+    expect(outcome).toBe('saved');
+    expect(await saved).toBe(true);
+    await iterator.return(undefined);
+    expect((await collect(notifications)).map((value) => value.id).sort()).toEqual(['first', 'second', 'third']);
+  });
+
   it('keeps failing on a broken notification file', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);

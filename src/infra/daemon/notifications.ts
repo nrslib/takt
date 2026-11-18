@@ -39,7 +39,7 @@ export class DaemonNotifications {
         return false;
       }
       if (value.subject !== undefined) {
-        for await (const saved of this.iterate()) {
+        for await (const saved of this.storedNotifications()) {
           if (saved.subject?.key === value.subject.key && saved.subject.state === value.subject.state) return false;
         }
       }
@@ -55,6 +55,19 @@ export class DaemonNotifications {
 
   async *iterate(): AsyncGenerator<Notification> {
     for await (const value of this.refresh()) yield structuredClone(value);
+  }
+
+  /** 索引と待ち行列を使わず、保存済みの通知をディレクトリから直接読み取る。save() の重複確認専用。 */
+  private async *storedNotifications(): AsyncGenerator<Notification> {
+    await ensurePrivateDirectory(this.directory);
+    for await (const entry of await opendir(this.directory)) {
+      if (!entry.name.endsWith('.json')) continue;
+      const content = await readEntirePrivateFile(join(this.directory, entry.name));
+      if (content === undefined) throw new Error('Notification disappeared during read');
+      const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
+      if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
+      yield value;
+    }
   }
 
   private refresh(): AsyncGenerator<Notification> {
