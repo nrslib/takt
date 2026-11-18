@@ -1,6 +1,7 @@
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { createWorkspaceManagerContext, resolveManagerStartup } from './startupResolution.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { mountInk } from '../tui/inkMount.js';
@@ -46,6 +47,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     await client.connect();
     await mountInk<void>(({ settle }) => (
       <ManagerView cwd={cwd} assignment={assignment} lang={resolveConfigValue(cwd, 'language')} client={client}
+        refreshIntervalMs={resolveManagerConfig(cwd).refreshIntervalMs}
         initialDiagnostics={[]} onExit={() => settle()} />
     ), 'Manager TUI exited before completing its session');
   } catch (error) {
