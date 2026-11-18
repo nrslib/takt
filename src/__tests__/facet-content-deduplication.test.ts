@@ -54,8 +54,12 @@ describe.each(['policies', 'knowledge'] as const)('%s content deduplication', (f
       expect(resolved?.[0]).toMatchObject({ sourcePath: firstPath, refName: firstRef });
       expect(resolveRefList(refs, definitions, projectDir, facetType, context))
         .toEqual([sharedContent, 'UNIQUE']);
-      expect(resolveRefList(['inlineA', 'inlineB', secondRef], definitions, projectDir, facetType, context))
-        .toEqual([sharedContent]);
+      const inlineFirst = resolveRefListWithSource(
+        ['inlineA', 'inlineB', secondRef], definitions, projectDir, facetType, context,
+      );
+      expect(inlineFirst).toHaveLength(1);
+      expect(inlineFirst?.[0]).toMatchObject({ content: sharedContent, refName: 'inlineA' });
+      expect(inlineFirst?.[0]?.sourcePath).toBeUndefined();
     },
   );
 

@@ -96,6 +96,7 @@ describe('policy and knowledge facet deduplication', () => {
     write('.takt/config.yaml', 'language: ja\n');
     const facetDir = kind === 'policy' ? 'policies' : 'knowledge';
     write(`.takt/facets/${facetDir}/first.md`, 'FIRST');
+    write(`.takt/facets/${facetDir}/same-as-first.md`, 'FIRST');
     write(`.takt/facets/${facetDir}/second.md`, 'SECOND');
     write(`.takt/facets/${facetDir}/third.md`, 'THIRD');
     write('.takt/steps/review.yaml', stringify({
@@ -115,7 +116,7 @@ describe('policy and knowledge facet deduplication', () => {
     const parentPath = write('.takt/workflows/parent.yaml', stringify({
       name: 'parent',
       steps: [{ name: 'child', kind: 'workflow_call', call: 'child',
-        args: { additions: ['third', 'second', `../facets/${facetDir}/first.md`, 'first'] },
+        args: { additions: ['third', 'second', `../facets/${facetDir}/same-as-first.md`, 'first'] },
         rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
     }));
     // Loading the parent validates its child; runtime resolves the same call again.
