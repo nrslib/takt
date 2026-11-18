@@ -107,6 +107,17 @@ describe('DaemonNotifications', () => {
     expect((await collect(notifications)).map((value) => value.id)).toEqual(['second']);
   });
 
+  it('reads the new content when the directory is recreated and the same id is saved again', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await collect(notifications);
+    await rm(directory, { recursive: true, force: true });
+
+    await notifications.save({ id: 'first', message: 'two' }, signal);
+
+    expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
+  });
+
   it('keeps results consistent while a save overlaps reads', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);
