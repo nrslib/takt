@@ -77,10 +77,11 @@ describe('providerEventLogger', () => {
     const split = Math.max(1, secret.length - 1);
     logger.logEvent(context, { type: 'text', data: { text: 'before ' + secret.slice(0, split) } });
     logger.logEvent(context, { type: 'text', data: { text: secret.slice(split) + '123 end' } });
-    logger.flush();
+    logger.logEvent(context, { type: 'result', data: { result: 'done', sessionId: 'session', success: true } });
     const records = readFileSync(logger.filepath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ProviderEventLogRecord);
-    expect(records.map((record) => record.data.text).join('')).toBe('before [REDACTED]123 end');
-    for (const record of records) expect(record).toMatchObject({ provider: 'mock', provider_model: 'model',
+    const textRecords = records.filter((record) => record.event_type === 'text');
+    expect(textRecords.map((record) => record.data.text).join('')).toBe('before [REDACTED]123 end');
+    for (const record of textRecords) expect(record).toMatchObject({ provider: 'mock', provider_model: 'model',
       event_type: 'text', run_id: 'run', step: 'work' });
   });
 

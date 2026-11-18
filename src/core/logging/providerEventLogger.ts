@@ -57,7 +57,8 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
     for (const [key, stream] of streams) {
       if (context !== undefined && (stream.context.provider !== context.provider
         || stream.context.providerModel !== context.providerModel || stream.context.step !== context.step)) continue;
-      const text = stream.redactor.flush({ credentials: getExecutionSecrets() });
+      const credentials = getExecutionSecrets();
+      const text = stream.redactor.flush({ credentials }, credentials);
       if (text.length > 0) persist({ ...stream.record, data: { ...stream.record.data, [stream.field]: text } });
       streams.delete(key);
     }
@@ -75,14 +76,15 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
       const field = event.type === 'text' ? 'text' : event.type === 'thinking' ? 'thinking'
         : event.type === 'tool_output' ? 'output' : undefined;
       const text = field === undefined ? undefined : (event.data as unknown as Record<string, unknown>)[field];
-      if (field !== undefined && typeof text === 'string' && getExecutionSecrets().length > 0) {
+      const credentials = getExecutionSecrets();
+      if (field !== undefined && typeof text === 'string' && credentials.length > 0) {
         const key = JSON.stringify([context.provider, context.providerModel, context.step, event.type,
           event.type === 'tool_output' ? event.data.id : undefined]);
         const redactor = streams.get(key)?.redactor ?? createSensitiveTextStreamRedactor();
         let sanitized = '';
         // Feed bounded pieces so a large legitimate event does not exhaust the pending buffer.
         for (let offset = 0; offset < text.length; offset += 1024) {
-          sanitized += redactor.write(text.slice(offset, offset + 1024), { credentials: getExecutionSecrets() });
+          sanitized += redactor.write(text.slice(offset, offset + 1024), { credentials }, credentials);
         }
         record.data[field] = sanitized;
         streams.set(key, { context: { ...context }, record, field, redactor });
