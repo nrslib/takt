@@ -352,6 +352,21 @@ describe('DaemonNotifications', () => {
     }
   });
 
+  it('does not fail when a paused read overlaps a save that the cache cannot retain', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await notifications.save({ id: 'second', message: 'two' }, signal);
+    await collect(notifications);
+
+    const iterator = notifications.iterate();
+    expect((await iterator.next()).value).toEqual({ id: 'second', message: 'two' });
+    await unlink(join(directory, fileName('first')));
+    await notifications.save({ id: 'first', message: 'n'.repeat(17 * 1024 * 1024) }, signal);
+
+    expect((await iterator.next()).value).toEqual({ id: 'first', message: 'one' });
+    expect((await iterator.next()).done).toBe(true);
+  });
+
   it('keeps failing on a broken notification file', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);

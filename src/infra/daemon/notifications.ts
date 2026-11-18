@@ -80,9 +80,9 @@ export class DaemonNotifications {
     const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
     if (stamp === this.index.stamp && this.index.complete) {
       // 保持済みの通知も、走査と同じファイル名順で返す。
-      for (const name of [...this.index.values.keys()].sort((left, right) => left.localeCompare(right))) {
-        yield this.index.values.get(name)!.value;
-      }
+      // 返す途中で保存が索引を書き換えても壊れないよう、値そのものを先に確定させる。
+      const entries = [...this.index.values.entries()].sort(([left], [right]) => left.localeCompare(right));
+      for (const [, entry] of entries) yield entry.value;
       return;
     }
     const directoryId = JSON.stringify([info.dev, info.ino, info.birthtimeMs]);
