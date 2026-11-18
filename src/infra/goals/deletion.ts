@@ -18,20 +18,25 @@ export async function deleteFinishedGoal(
   managerWorkspaceId: string | undefined,
 ): Promise<void> {
   const goal: EpicMember = { repositoryDirectory: cwd, goalId };
-  // ワークスペースから外したリポジトリのゴールも、元のワークスペースの完了・中止したエピックが参照し続ける。
-  // 他のワークスペースにはこのリポジトリが入っていないのでメンバーを足せず、ロックなしで読むだけで足りる。
-  for (const workspace of await readWorkspaceRegistry(globalConfigDirectory)) {
-    if (workspace.id !== managerWorkspaceId) await assertGoalHasNoEpicReferences({ globalConfigDirectory, workspaceId: workspace.id }, goal);
-  }
   if (managerWorkspaceId === undefined) {
+    await assertNoWorkspaceEpicReferences(globalConfigDirectory, goal);
     await deleteGoalRecords(cwd, goalId);
     return;
   }
-  // エピックへのメンバー追加と競合しないよう、確認から削除までエピックのロックを持つ。
+  // 削除元のワークスペースのエピックへのメンバー追加とは、ロックで競合しないようにする。
+  // ロックを待つ間にリポジトリが別のワークスペースへ移り、そこでメンバーに足されることもあるため、
+  // 参照の確認はロックを取った後、削除の直前に全ワークスペースについて行う。
   await withWorkspaceEpicLock(globalConfigDirectory, managerWorkspaceId, async () => {
-    await assertGoalHasNoEpicReferences({ globalConfigDirectory, workspaceId: managerWorkspaceId }, goal);
+    await assertNoWorkspaceEpicReferences(globalConfigDirectory, goal);
     await deleteGoalRecords(cwd, goalId);
   });
+}
+
+// ワークスペースから外したリポジトリのゴールも、元のワークスペースの完了・中止したエピックが参照し続ける。
+async function assertNoWorkspaceEpicReferences(globalConfigDirectory: string, goal: EpicMember): Promise<void> {
+  for (const workspace of await readWorkspaceRegistry(globalConfigDirectory)) {
+    await assertGoalHasNoEpicReferences({ globalConfigDirectory, workspaceId: workspace.id }, goal);
+  }
 }
 
 async function deleteGoalRecords(cwd: string, goalId: string): Promise<void> {

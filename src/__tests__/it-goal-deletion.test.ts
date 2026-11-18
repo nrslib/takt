@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
 import { abortEpic, addEpicMember, createEpic } from '../infra/epics/index.js';
 import type { EpicOwner } from '../infra/epics/schema.js';
@@ -14,6 +14,21 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
 import { epicDefinition } from './helpers/epic-fixtures.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+
+const lockWait = vi.hoisted(() => ({ before: undefined as (() => Promise<void>) | undefined }));
+// ロックを待つ間に別の操作が進む順序を、時間に頼らず再現するため、次に取るロックの前に一度だけ処理を挟む。
+vi.mock('../infra/epics/lock.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../infra/epics/lock.js')>();
+  return {
+    ...original,
+    withWorkspaceEpicLock: async <T>(configDirectory: string, workspaceId: string, action: () => Promise<T>): Promise<T> => {
+      const before = lockWait.before;
+      lockWait.before = undefined;
+      if (before !== undefined) await before();
+      return original.withWorkspaceEpicLock(configDirectory, workspaceId, action);
+    },
+  };
+});
 
 const otherGoalId = '550e8400-e29b-41d4-a716-446655440001';
 const startedAt = '2026-11-18T00:00:00.000Z';
@@ -45,7 +60,10 @@ describe('deleteFinishedGoal', () => {
     git(cwd, 'branch', 'integration/goal');
   });
 
-  afterEach(() => rmSync(cwd, { recursive: true, force: true }));
+  afterEach(() => {
+    lockWait.before = undefined;
+    rmSync(cwd, { recursive: true, force: true });
+  });
 
   function addGoalTask(name: string, goal: string, status: 'pending' | 'running' | 'completed' | 'failed'): void {
     new TaskRunner(cwd).addTask(`${name} content`, { slug: name, goal_id: goal });
@@ -199,6 +217,29 @@ describe('deleteFinishedGoal', () => {
       await expect(deleteFinishedGoal(cwd, goalId, owner.globalConfigDirectory, undefined)).rejects.toThrow(epicId);
 
       expect(await new GoalStore(cwd).get(goalId)).toEqual(goal);
+    });
+
+    it('refuses when the repository moves to another workspace whose Epic adds the goal while the deletion waits for the lock', async () => {
+      const goal: Goal = { ...goalRecord(), status: 'completed', completion };
+      await new GoalStore(cwd).create(goal);
+      addGoalTask('goal-completed-task', goalId, 'completed');
+      const tasksBefore = new TaskStore(cwd).read();
+      let otherEpicId: string | undefined;
+      lockWait.before = async () => {
+        await removeWorkspaceRepository(owner.globalConfigDirectory, owner.workspaceId, cwd);
+        const other = await createWorkspace({ globalConfigDirectory: owner.globalConfigDirectory, name: 'other workspace', repositoryDirectories: [cwd] });
+        const otherOwner = { globalConfigDirectory: owner.globalConfigDirectory, workspaceId: other.id };
+        otherEpicId = (await createEpic({ ...otherOwner, ...epicDefinition(), reason: 'Check the integration' })).id;
+        await addEpicMember({ ...otherOwner, epicId: otherEpicId, member: { repositoryDirectory: cwd, goalId }, reason: 'Integrated goal' });
+      };
+
+      const deletion = deleteFinishedGoal(cwd, goalId, owner.globalConfigDirectory, owner.workspaceId);
+      await deletion.catch(() => undefined);
+
+      expect(otherEpicId).toBeDefined();
+      await expect(deletion).rejects.toThrow(otherEpicId!);
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(goal);
+      expect(new TaskStore(cwd).read()).toEqual(tasksBefore);
     });
 
     it('deletes a finished goal that no workspace Epic references', async () => {

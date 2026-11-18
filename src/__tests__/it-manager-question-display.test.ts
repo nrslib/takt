@@ -629,6 +629,36 @@ it('keeps a finished goal when its deletion is cancelled', async () => {
   expect(await store.get(finished.id)).toEqual(finished);
 });
 
+it.each(['abort', 'delete'] as const)('closes the %s confirmation and returns to the conversation when another operation removes its goal', async (kind) => {
+  const saved: Goal = kind === 'abort' ? { ...goalRecord(), objective: 'Abort target' }
+    : { ...goalRecord(), objective: 'Finished goal fixture', status: 'completed', completion: finishedCompletion };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const submit = vi.spyOn(session!, 'submit');
+  await openMenu('goal');
+  if (kind === 'abort') await selectGoal(saved, 'abort');
+  else {
+    await waitFor(() => expect(menuRows()).toHaveLength(1));
+    app!.stdin.write('\r');
+    await waitFor(() => expect(menuRows()).toEqual([getLabel('manager.goalActions.delete', 'en')]));
+    app!.stdin.write('\r');
+  }
+  await expectAbortConfirmation(saved);
+  if (kind === 'abort') await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+  else await store.delete(saved.id, () => undefined);
+  await session!.refresh();
+  await waitFor(() => expect(session!.getSnapshot().items.some((item) => item.kind === 'goal' && item.goal.id === saved.id
+    && item.goal.status === saved.status && item.goal.executionStatus === saved.executionStatus)).toBe(false));
+  confirmAbort();
+  await waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame.replace(/[│\s]+/gu, '')).toContain(getLabel('manager.selectionChanged', 'en').replace(/\s+/gu, ''));
+    expect(frame.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  await send('Continue conversation');
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
+});
+
 it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
   const executionStatus = command === 'resume' ? 'paused' : 'active';
   const saved: Goal = { ...goalRecord(), objective: 'Eligible first', executionStatus };

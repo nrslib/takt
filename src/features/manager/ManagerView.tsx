@@ -356,7 +356,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const changeGoal = async (kind: GoalOperation, target: ManagerGoalConfirmationTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
-    if (current === undefined) { append(getLabel('manager.selectionChanged', lang)); return; }
+    if (current === undefined) {
+      append(getLabel('manager.selectionChanged', lang));
+      // 確認の途中で対象が消えたら、確認を閉じないと通常の入力に戻れない。
+      if (confirmed) { setAbortTarget(null); resetChoice(); }
+      return;
+    }
     if ((kind === 'abort' || kind === 'delete') && !confirmed) { setAbortTarget({ goal: current, retry: false, kind }); return; }
     await send({ kind: `${kind}_goal`, goalId: current.id }, (id) => {
       goalOperations.current.set(id, { kind, goal: current });
