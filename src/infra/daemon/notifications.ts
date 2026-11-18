@@ -58,7 +58,11 @@ export class DaemonNotifications {
   }
 
   private refresh(): Promise<Notification[]> {
-    const operation = this.pending.then(() => this.scan());
+    const operation = this.pending.then(async () => {
+      const values = await this.scan();
+      // 走査の列挙順と索引の挿入順の違いで、読み取るたびに並びが変わらないようにする。
+      return values.sort((left, right) => left.id.localeCompare(right.id));
+    });
     this.pending = operation.then(() => undefined, () => undefined);
     return operation;
   }

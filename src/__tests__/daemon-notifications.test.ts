@@ -283,6 +283,36 @@ describe('DaemonNotifications', () => {
     expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
   });
 
+  it('returns notifications in the same order on every read', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await notifications.save({ id: 'second', message: 'two' }, signal);
+
+    const mockedOpendir = vi.mocked(opendir);
+    const actualOpendir = mockedOpendir.getMockImplementation();
+    if (actualOpendir === undefined) throw new Error('fs mocks must keep their implementations');
+    mockedOpendir.mockImplementation(async (path) => {
+      const dir = await actualOpendir(path);
+      if (path !== directory) return dir;
+      const entries: Dirent[] = [];
+      for await (const entry of dir) entries.push(entry);
+      const ordered = [
+        ...entries.filter((entry) => entry.name === fileName('second')),
+        ...entries.filter((entry) => entry.name !== fileName('second')),
+      ];
+      return (async function* () { yield* ordered; })() as unknown as Dir;
+    });
+    try {
+      const first = await collect(notifications);
+      const second = await collect(notifications);
+
+      expect(first.map((value) => value.id)).toEqual(['first', 'second']);
+      expect(second).toEqual(first);
+    } finally {
+      mockedOpendir.mockImplementation(actualOpendir);
+    }
+  });
+
   it('keeps failing on a broken notification file', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);
