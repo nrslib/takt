@@ -144,14 +144,15 @@ describe('manager conversation configuration and provider boundary', () => {
     );
   });
 
-  it('tells the manager how to select a configured runtime assignment', () => {
+  it('passes configured runtime assignment names and usage to the manager prompt', () => {
     saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: [{ 'defined-assignment': 'Explicit low priority' }] } });
     writeRuntimeAssignmentFixture(cwd, 'defined-assignment');
     const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
     const plan = createManagerConversationPlan(cwd, {});
-    expect(plan.strategy.systemPrompt).toContain('Explicit low priority');
-    expect(plan.strategy.systemPrompt).toContain('"name":"defined-assignment"');
-    expect(plan.strategy.systemPrompt).toContain('as runtimeAssignment to takt_enqueue_goal_task');
+    expect(plan.strategy.systemPrompt).toContain(JSON.stringify([{
+      repositoryDirectory: cwd,
+      assignments: [{ name: 'defined-assignment', usageDescription: 'Explicit low priority' }],
+    }]));
     expect(warning).not.toHaveBeenCalled();
   });
 

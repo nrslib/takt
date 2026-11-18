@@ -76,11 +76,11 @@ export function buildManagerSystemPrompt(fixture) {
     const system = production.buildManagerSystemPrompt({
       lang: fixture.lang, facets: { persona, policy, knowledge, instruction }, specificationConfiguration,
       formalSpecVerifierConstraints: loadFormalSpecVerifierConstraints(fixture.lang), repository: fixture.cwd,
-      mainMerge: fixture.mainMerge, concurrency: fixture.concurrency,
+      mainMerge: fixture.mainMerge, concurrency: fixture.concurrency, runtimeAssignments: [],
     });
     // Retain the older concurrency comparison as an eval-only transformation.
     return process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY === '1'
-      ? system.replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?$/, '') : system;
+      ? system.replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?/, '') : system;
   } finally {
     if (priorConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
     else process.env.TAKT_CONFIG_DIR = priorConfigDir;
