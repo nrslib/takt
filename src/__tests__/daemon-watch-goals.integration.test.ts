@@ -100,14 +100,34 @@ it('reports invalid goals and continues observing valid goals', async () => {
   expect(await reader.read(directory, valid.id)).toMatchObject({ id: valid.id });
 });
 
-it.each(['missing', 'invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
+it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without reporting an error', async (target) => {
+  const kept = goalRecord();
+  const deleted = { ...goalRecord(), id: randomUUID() };
+  for (const goal of [kept, deleted]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true }); await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const read = reader.read.bind(reader);
+  vi.spyOn(reader, 'read').mockImplementation(async (cwd, id) => {
+    const path = join(directory, '.takt', 'goals', id);
+    if (id === deleted.id) await rm(target === 'goal.json' ? join(path, 'goal.json') : path, { recursive: true });
+    return read(cwd, id);
+  });
+  const errors = vi.fn();
+  const ids = [];
+  for await (const goal of readWatchGoals(directory, errors, reader)) ids.push(goal.id);
+  expect(ids).toEqual([kept.id]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it.each(['invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
   const goal = GoalSchema.parse({ ...goalRecord(), executionStatus: 'aborted' });
   const inactivePath = join(directory, '.takt', 'goals', goal.id);
   const unreadablePath = join(directory, '.takt', 'goals', randomUUID());
   await mkdir(inactivePath, { recursive: true });
   await writeFile(join(inactivePath, 'goal.json'), JSON.stringify(goal));
   await mkdir(unreadablePath);
-  if (failure !== 'missing') await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
+  await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
   const errors = vi.fn();
   const { source, files } = await watchSource(errors);
   expect(await source.hasWork(files)).toBe(true);

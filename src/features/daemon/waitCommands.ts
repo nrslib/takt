@@ -5,6 +5,7 @@ import type { DaemonIngress } from '../../core/daemon/ports.js';
 import { MAX_WAIT_COMMAND_OUTPUT_BYTES, type WaitCommandCompleted, type WaitCommandInput } from '../../core/daemon/waitCommand.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
+import { isMissing } from './watchers/files.js';
 import type { WatchGoalReader } from './watchers/goalReader.js';
 import { startWaitCommand, type WaitCommandProcess, type WaitCommandStop } from './waitCommandProcess.js';
 
@@ -63,7 +64,11 @@ export class DaemonWaitCommands {
       try {
         const goal = await this.dependencies.goals.read(entry.repositoryDirectory, entry.input.goalId);
         if (goal.executionStatus === 'paused' || goal.executionStatus === 'aborted') void this.stop(entry, 'cancelled');
-      } catch (error) { this.dependencies.onError(error); }
+      } catch (error) {
+        // 削除されたゴールを指す完了イベントは会話のターンが AI に渡さずに捨てるため、待ちを続けずに止める。
+        if (isMissing(error)) void this.stop(entry, 'cancelled');
+        else this.dependencies.onError(error);
+      }
     }
     for (const [id, event] of this.pending) await this.deliver(id, event);
   }

@@ -1,4 +1,5 @@
-import { readdirSync, type Stats } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { readdirSync, renameSync, rmSync, type Stats } from 'node:fs';
 import { opendir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
@@ -123,6 +124,24 @@ export class GoalStore {
       onSaved?.();
       return goal;
     }));
+  }
+
+  /** Runs `beforeDelete` under the same locks as `update`; throw from it to keep the goal. */
+  async delete(id: string, beforeDelete: (goal: Goal) => void): Promise<void> {
+    const filePath = this.filePath(id);
+    assertSafePath(filePath, false);
+    const removed = join(this.cwd, '.takt', 'tmp', 'deleted-goals', randomUUID());
+    withFileLock(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
+      beforeDelete(this.getSync(id));
+      ensurePrivateDirectory(dirname(removed));
+      // 中身を消す途中で失敗しても一覧に半端なディレクトリを残さないよう、一覧の外へ一度で移してから消す。
+      renameSync(dirname(filePath), removed);
+    }));
+    try {
+      rmSync(removed, { recursive: true });
+    } catch (error) {
+      throw new Error(`Goal ${id} was deleted, but its files remain in ${removed}`, { cause: error });
+    }
   }
 
   async list(): Promise<GoalListResult>;

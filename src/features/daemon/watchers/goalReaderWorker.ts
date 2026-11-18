@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { GoalSchema, type Goal } from '../../../infra/goals/schema.js';
+import { isMissing } from './files.js';
 import type { WatchReadReply, WatchReadRequest, WatchGoal } from './goalReader.js';
 import { watchGoalDirectory } from './goalPaths.js';
 
@@ -19,7 +20,7 @@ port.on('message', (request: WatchReadRequest) => {
           break;
       }
     } catch (error) {
-      reply = { id: request.id, ok: false, message: error instanceof Error ? error.message : String(error) };
+      reply = { id: request.id, ok: false, message: error instanceof Error ? error.message : String(error), ...(isMissing(error) ? { code: 'ENOENT' } : {}) };
     }
     port.postMessage(reply);
   });

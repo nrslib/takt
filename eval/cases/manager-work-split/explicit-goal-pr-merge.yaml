@@ -126,6 +126,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 30
@@ -165,6 +166,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 検索ヘルプを更新する
@@ -188,6 +190,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 30
@@ -214,6 +217,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42
@@ -253,6 +257,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: エクスポートヘルプを更新する
@@ -276,6 +281,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 42
@@ -846,6 +852,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 18
@@ -885,6 +892,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Update search help
@@ -908,6 +916,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 18
@@ -934,6 +943,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 18
@@ -973,6 +983,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Update export help
@@ -996,6 +1007,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 18

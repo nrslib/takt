@@ -783,6 +783,24 @@ describe('local goal integration and inspection through manager MCP', () => {
     expect(responses[0]).toEqual(responses[1]);
   });
 
+  it('filters goals by state through manager and read-only MCP inputs', async () => {
+    const saved = await new GoalStore(cwd).get(goalId);
+    const aborted = await new GoalStore(cwd).create({ ...saved, id: '650e8400-e29b-41d4-a716-000000000001', executionStatus: 'aborted' });
+    const paused = await new GoalStore(cwd).create({ ...saved, id: '650e8400-e29b-41d4-a716-000000000002', executionStatus: 'paused' });
+    for (const toolSet of ['manager', 'read-only'] as const) await withServer(cwd, toolSet, async (client) => {
+      const list = async (args: Record<string, unknown>) => {
+        const result = await client.callTool({ name: 'takt_list_goals', arguments: { cwd, ...args } });
+        expect(result.isError).toBeUndefined();
+        const page = JSON.parse(firstTextContent(result.content));
+        return { ids: page.goals.map((goal: { id: string }) => goal.id), totalCount: page.totalCount, nextOffset: page.nextOffset };
+      };
+      expect(await list({})).toEqual({ ids: [goalId, aborted.id, paused.id], totalCount: 3, nextOffset: null });
+      expect(await list({ state: 'finished' })).toEqual({ ids: [aborted.id], totalCount: 1, nextOffset: null });
+      expect(await list({ state: 'open', limit: 1 })).toEqual({ ids: [goalId], totalCount: 2, nextOffset: 1 });
+      expect(await list({ state: 'open', limit: 1, offset: 1 })).toEqual({ ids: [paused.id], totalCount: 2, nextOffset: null });
+    });
+  });
+
   function configure(mode: 'auto' | 'approve' | undefined, target?: string, preserveGoalWorktree = false) {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),

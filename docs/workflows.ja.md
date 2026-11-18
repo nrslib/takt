@@ -1046,6 +1046,17 @@ steps:
 プリセットの解決は `provider_options.extends` と同一です（project → global → builtins、repertoire package スコープ対応）。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 検索 + network access）、`edit`（`readonly` + ファイルの作成・編集）、`enable-skills`（Codex の repo/user skills）です。未解決の名前は fail fast します。`system` / `workflow_call` step は `capabilities` を拒否します。
 
 
+### `repository_identity`
+
+`repository_identity: true` は、clone で動くタスク（`worktree: true`）で `gh` と `glab` にプロジェクトのリポジトリを伝えます。clone には読める `origin` リモートがないためです。TAKT はこの workflow のエージェントのステップ、コマンドの品質ゲート、system の `command` 入力に `GH_REPO` または `GITLAB_REPO` を渡します。リモートや認証情報は追加しません。
+
+```yaml
+repository_identity: true
+```
+
+既定は無効なので、リポジトリを操作しない workflow には何も渡しません。判断は workflow ごとです。呼ばれた workflow は、呼び出し側の宣言を受け継がず、自身の宣言も失いません。プロジェクトルートで動くタスクには渡さず、利用者が自分で設定した変数は上書きしません。変数やホストの規則、GitHub / GitLab の検出は [clone でのリポジトリの指定](configuration.ja.md#clone-でのリポジトリの指定) にあります。
+
+
 ### `workflow_config.runtime`
 
 workflow 実行前に走る prepare スクリプト。ビルトインプリセットの `node` / `gradle` は常に許可されます。カスタムスクリプトパスを使うには config 側で `workflow_runtime_prepare.custom_scripts: true` を有効にする必要があります。

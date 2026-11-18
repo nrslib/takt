@@ -90,6 +90,18 @@ export class TaskDeletionService {
     return true;
   }
 
+  /** Removes only the records; branches and clones stay as they are. */
+  deleteFinishedGoalTasks(goalId: string): void {
+    this.store.update((current) => {
+      const unfinished = current.tasks.filter((task) => task.goal_id === goalId
+        && (task.status === 'pending' || task.status === 'running'));
+      if (unfinished.length > 0) {
+        throw new Error(`Goal has pending or running tasks: ${unfinished.map((task) => task.name).join(', ')}`);
+      }
+      return { tasks: current.tasks.filter((task) => task.goal_id !== goalId) };
+    });
+  }
+
   private clearDeletionReservation(name: string, status: DeletableTaskStatus, deletionId: string): void {
     this.store.update((current) => ({
       tasks: current.tasks.map((task) => {

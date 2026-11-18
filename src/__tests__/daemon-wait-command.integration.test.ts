@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -73,7 +73,8 @@ async function daemonFixture(options?: { workspaceAlias: boolean }) {
   let repositoryDirectory = repository;
   if (options?.workspaceAlias) {
     const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'wait workspace', repositoryDirectories: [repository] });
-    repositoryDirectory = join(directory, 'saved-repository');
+    // ゴールの読み取りは .takt より下のシンボリックリンクを拒むため、別名はグローバル設定の .takt の外に置く。
+    repositoryDirectory = join(dirname(directory), 'saved-repository');
     await symlink(repository, repositoryDirectory, process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(join(directory, 'workspaces', workspace.id, 'workspace.json'),
       JSON.stringify({ ...workspace, repositoryDirectories: [join(directory, 'deleted-repository'), repositoryDirectory] }));
@@ -1319,6 +1320,18 @@ it.skipIf(process.platform === 'win32')('serializes daemon shutdown and overlapp
   expect(f.runner.calls).toHaveLength(1);
 });
 
+it('stops the process tree without reporting an error when its goal no longer exists', async () => {
+  const f = await registryFixture(); const marker = join(f.directory, 'missing-goal-pids');
+  await f.register(waitingTree(marker), { goalId: goalRecord().id });
+  const pids = await readPids(marker, f.events);
+  f.goals.read.mockRejectedValue(Object.assign(new Error(`ENOENT: no such file or directory, lstat '${goalRecord().id}'`), { code: 'ENOENT' }));
+  await f.registry.check();
+  await expect.poll(() => f.events.length).toBe(1);
+  expect(f.events[0]!.event).toMatchObject({ kind: 'wait_command_completed', status: 'cancelled', goalId: goalRecord().id });
+  expectStopped(pids);
+  await f.registry.check(); expect(f.events).toHaveLength(1); expect(f.errors).not.toHaveBeenCalled();
+});
+
 it('terminates the process tree on timeout and delivers one timed_out result', async () => {
   const f = await registryFixture(); const marker = join(f.directory, 'timeout-pids');
   await f.register(waitingTree(marker), { timeoutSeconds: processTimeoutSeconds });
@@ -1479,6 +1492,32 @@ it('observes a saved goal abort after the registering turn ends and delivers can
   expect(completed.input.event.event).toMatchObject({ kind: 'wait_command_completed', status: 'cancelled', goalId: goalRecord().id });
   expectStopped(pids);
   await f.runner.finish(completed);
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(2);
+});
+
+it('stops the wait for a goal deleted after the registering turn ends and discards its cancellation without an AI turn', async () => {
+  const f = await daemonFixture(); const marker = join(f.directory, 'deleted-goal-pids');
+  const goalDirectory = join(f.repository, '.takt', 'goals', goalRecord().id);
+  await mkdir(goalDirectory, { recursive: true });
+  await writeFile(join(goalDirectory, 'goal.json'), JSON.stringify(goalRecord()));
+  expect((await f.call({ command: waitingTree(marker), goalId: goalRecord().id })).isError).not.toBe(true);
+  const pids = await readPids(marker, []);
+  await f.runner.finish(f.active);
+  await rm(goalDirectory, { recursive: true });
+  await expect.poll(() => f.runner.calls.length, { timeout: 12_000 }).toBe(2);
+  const completed = await f.runner.started(2);
+  expect(completed.input.event.event).toMatchObject({ kind: 'wait_command_completed', status: 'cancelled', goalId: goalRecord().id });
+  expectStopped(pids);
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>();
+  const service = createConversationTurnService(f.directory, { async resolve() {
+    return { provider: 'mock', model: null, language: 'en', contextKey: 'deleted-goal-wait', executor: { execute } };
+  }, async close() {} });
+  const outcome = await service.execute(completed.input, { signal: completed.signal, progress() {},
+    request: (request) => f.dispatcher.request(completed.turn, request, completed.signal) });
+  expect(outcome).toEqual({ kind: 'completed', result: { kind: 'notice', message: '' } });
+  expect(execute).not.toHaveBeenCalled();
+  await f.runner.finish(completed, outcome);
   await f.dispatcher.drain();
   expect(f.runner.calls).toHaveLength(2);
 });

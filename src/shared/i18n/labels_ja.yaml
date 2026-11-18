@@ -559,6 +559,7 @@ manager:
     continue: "登録せずに会話に戻る"
     dismissHint: "会話に戻るか、修正内容を入力すると、この登録案は取り下げられます。"
   inputUnavailableDuringAbort: "中止の確認中は文字を入力できません。確認を終えてから入力してください。"
+  inputUnavailableDuringDelete: "削除の確認中は文字を入力できません。確認を終えてから入力してください。"
   conversationFailureNotification: |-
     manager の処理に失敗しました。
     理由: {reason}
@@ -576,18 +577,22 @@ manager:
     pause: "一時停止"
     resume: "再開"
     abort: "中止"
+    delete: "削除"
   selectionHint: "↑↓ 選択 / Enter 決定 / Esc 閉じる"
   selectionEmpty:
     repository: "担当のリポジトリはありません。"
     answer: "未回答の問い合わせはありません。"
-    goal: "操作できる進行中のゴールはありません。"
+    goal: "操作できるゴールはありません。"
   goalRegistered: "ゴール登録完了: {name} ({id})\n{branch}"
   goalPaused: "ゴールを一時停止しました: {goalId}"
   goalResumed: "ゴールを再開しました: {goalId}"
+  goalDeleted: "ゴールを削除しました: {goalId}"
   goalStates:
     active: "実行中"
     paused: "一時停止中"
     awaiting_merge: "マージ待ち"
+    completed: "完了"
+    aborted: "中止済み"
   inquiryKinds:
     question: "質問"
     approval: "承認"
@@ -615,6 +620,10 @@ manager:
   confirmAbort: "ゴールを中止する"
   cancelAbort: "キャンセル"
   abortChoiceHint: "↑ 中止 / ↓ キャンセル / Enter 決定 / Esc 戻る"
+  deleteConfirmation: "ゴールの削除を確認"
+  deleteWarning: "削除は取り消せません。ゴールの記録と、所属するタスクの記録を消します。ゴールのブランチ・取り込み先のブランチ・run の記録・失敗したタスクの clone のディレクトリは残ります。"
+  confirmDelete: "ゴールを削除する"
+  deleteChoiceHint: "↑ 削除 / ↓ キャンセル / Enter 決定 / Esc 戻る"
   description: "実験的な manager の会話 TUI を起動します"
   experimentalNotice: "manager\u00A0は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"

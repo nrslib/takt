@@ -122,9 +122,8 @@ it.each([
   const { app, selected } = mount();
   app.stdin.write('g');
   await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', 'en')));
-  expect(app.lastFrame()!.split('\n').filter((line) => /First active|Second active|First paused|Second paused/u.test(line))).toHaveLength(4);
-  expect(app.lastFrame()).not.toContain('Completed');
-  expect(app.lastFrame()).not.toContain('Aborted');
+  expect(app.lastFrame()!.split('\n').filter((line) => / — /u.test(line)).map((line) => line.split(' — ')[0]!.replace(/[│\s]+/gu, ' ').trim()))
+    .toEqual(['First active', 'Second active', 'First paused', 'Second paused', 'Completed', 'Aborted']);
   for (let move = 0; move < moves; move++) app.stdin.write('\x1b[B');
   app.stdin.write('\r');
   await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.goalActions.abort', 'en')));
@@ -138,8 +137,37 @@ it.each([
   { action: 'pause' as const, expected: ['active-first', 'active-second'] },
   { action: 'resume' as const, expected: ['paused-first', 'paused-second'] },
   { action: 'abort' as const, expected: ['active-first', 'active-second', 'paused-first', 'paused-second'] },
-])('keeps the existing $action eligibility rule for operation-time revalidation', ({ action, expected }) => {
+  { action: 'delete' as const, expected: ['completed', 'aborted'] },
+])('keeps the $action eligibility rule for operation-time revalidation', ({ action, expected }) => {
   expect(goals.filter((goal) => isGoalSelectionCandidate(action, goal)).map((goal) => goal.id)).toEqual(expected);
+});
+
+it.each([
+  { moves: 4, goal: goals[5]! },
+  { moves: 5, goal: goals[4]! },
+])('lists finished goals after ongoing ones and offers only delete for $goal.id', async ({ moves, goal }) => {
+  const { app, selected } = mount({ goals: [goals[5]!, goals[0]!, goals[4]!, goals[1]!, goals[2]!, goals[3]!], questions });
+  app.stdin.write('g');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', 'en')));
+  for (let move = 0; move < moves; move++) app.stdin.write('\x1b[B');
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.selectionTitles.action', 'en')));
+  expect(app.lastFrame()!.split('\n').slice(3, -2).map((row) => row.replace(/[│\s]+/gu, ' ').trim()))
+    .toEqual([getLabel('manager.goalActions.delete', 'en')]);
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(selected).toHaveBeenCalledExactlyOnceWith({ kind: 'delete', target: goal }));
+});
+
+it('closes a delete action when the finished goal disappears', async () => {
+  const { app, selected, refresh } = mount({ goals: [goals[4]!], questions });
+  app.stdin.write('g');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Completed'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.goalActions.delete', 'en')));
+  refresh({ goals: [], questions });
+  await vi.waitFor(() => expect(app.lastFrame()).toBe('Selection probe'));
+  app.stdin.write('\r');
+  expect(selected).not.toHaveBeenCalled();
 });
 
 it.each(['answer', 'goal'] as const)('moves a ten-row %s window without changing the selected target', async (kind) => {

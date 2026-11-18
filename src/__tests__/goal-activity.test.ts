@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGoalAwaitingHumanMerge, isGoalPatrolCandidate } from '../infra/goals/activity.js';
+import { isGoalAwaitingHumanMerge, isGoalFinished, isGoalPatrolCandidate } from '../infra/goals/activity.js';
 import type { TaskRecord } from '../infra/task/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -70,6 +70,18 @@ describe('goal activity', () => {
     const tasks: Task[] = [{ goal_id: goal.id, merge_task: true, status: 'running' }];
     expect(isGoalPatrolCandidate({ ...goal, executionStatus }, tasks)).toBe(false);
     expect(isGoalAwaitingHumanMerge(goal, tasks)).toBe(false);
+  });
+
+  it.each([
+    { status: 'completed', executionStatus: 'active', finished: true },
+    { status: 'completed', executionStatus: 'paused', finished: true },
+    { status: 'created', executionStatus: 'aborted', finished: true },
+    { status: 'awaiting_merge', executionStatus: 'aborted', finished: true },
+    { status: 'created', executionStatus: 'active', finished: false },
+    { status: 'created', executionStatus: 'paused', finished: false },
+    { status: 'awaiting_merge', executionStatus: 'active', finished: false },
+  ] as const)('treats $status/$executionStatus as finished: $finished', ({ status, executionStatus, finished }) => {
+    expect(isGoalFinished({ status, executionStatus })).toBe(finished);
   });
 
   it('patrols ordinary active goals and excludes completed goals', () => {

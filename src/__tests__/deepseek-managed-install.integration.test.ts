@@ -595,11 +595,11 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
       const manifest = JSON.parse(await readFile(join(directory, 'node_modules', packageName, 'package.json'), 'utf8')) as { version: string };
       return manifest.version;
     }));
-    expect(installedPiPackageVersions).toEqual(['1.5.0', '1.5.0']);
+    expect(installedPiPackageVersions).toEqual(['1.5.2', '1.5.2']);
     expect(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))).toMatchObject({
       dependencies: {
-        '@earendil-works/pi-ai': '1.5.0',
-        '@earendil-works/pi-coding-agent': '1.5.0',
+        '@earendil-works/pi-ai': '1.5.2',
+        '@earendil-works/pi-coding-agent': '1.5.2',
       },
     });
     const [piAgent] = loaded.modules;

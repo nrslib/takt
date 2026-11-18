@@ -70,14 +70,14 @@ function createDeepSeekFixture(): {
     },
     managed: {
       dependencies: managedDependencies,
-      overrides: { fflate: '0.8.3', '@earendil-works/pi-ai': '1.5.0' },
+      overrides: { fflate: '0.8.3', '@earendil-works/pi-ai': '1.5.2' },
     },
     lock: {
       packages: {
         '': { dependencies: { ...managedDependencies } },
         ...managedLockPackages,
         'node_modules/fflate': { version: '0.8.3' },
-        'node_modules/@earendil-works/pi-ai': { version: '1.5.0' },
+        'node_modules/@earendil-works/pi-ai': { version: '1.5.2' },
         'node_modules/@deepseek-ai/dsh-sdk-client': {
           version: SDK_VERSION,
           peerDependencies: {
@@ -326,7 +326,7 @@ describe('managed DeepSeek npm dependency graph', () => {
       fixture.managed,
       fixture.lock,
       fixture.constants,
-    )).toThrow('transitive Pi AI dependency to 1.5.0');
+    )).toThrow('transitive Pi AI dependency to 1.5.2');
   });
 
   it.each([

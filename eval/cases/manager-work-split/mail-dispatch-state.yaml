@@ -150,6 +150,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -227,6 +228,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: 予約確定処理とメール送信結果の扱いを実装する。
@@ -250,6 +252,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -283,6 +286,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -316,6 +320,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -349,6 +354,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -382,6 +388,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -415,6 +422,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -448,6 +456,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -481,6 +490,7 @@ ja:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 69
@@ -760,6 +770,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -837,6 +848,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         task:
           content: Implement appointment confirmation and handling of the mail-send result.
@@ -860,6 +872,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -893,6 +906,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -926,6 +940,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -959,6 +974,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -992,6 +1008,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -1025,6 +1042,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -1058,6 +1076,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
@@ -1091,6 +1110,7 @@ en:
         currentIteration: 7
         currentStepStartedAt: 2026-10-12T00:00:00.000Z
         currentStepExecutionCount: 3
+        currentStepPath: [{ workflow: peer-review, step: reviewers, startedAt: 2026-10-12T00:00:00.000Z, executionCount: 3 }]
         phase: 1
         taskOmission:
           totalBytes: 72
