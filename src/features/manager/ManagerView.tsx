@@ -11,13 +11,18 @@ import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
 import { formatPendingSummary } from './summaryDisplay.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
+import { ManagerEpicDialog, formatManagerEpicDetail } from './ManagerEpicDialog.js';
+import { layoutQuestionBody } from './questionBodyLayout.js';
+import { useManagerEpics } from './useManagerEpics.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
 import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
-import { PromptInput } from '../tui/PromptInput.js';
+import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
+import { layoutPromptRows } from '../tui/promptLayout.js';
 import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
@@ -30,10 +35,19 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
+import { ToolActivityView } from '../tui/ToolActivityView.js';
+import { MAX_QUEUE_ROWS, QueueView } from '../tui/QueueView.js';
+import { MARKER_WIDTH } from '../tui/transcriptOutput.js';
+import { ToolActivityDisplayStore, toolTurnKey } from './toolActivityDisplayStore.js';
+import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from '../tui/toolActivityViewState.js';
+import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
+import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
-  { command: '/verify', labelKey: 'interactive.commands.verify' }];
+  { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
+/** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
+const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -42,6 +56,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   onExit: () => void; initialDiagnostics: readonly string[];
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
+  const { display: toolDisplay, ready: toolReady } = useSyncExternalStore(toolDisplays.subscribe, toolDisplays.getSnapshot);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
@@ -49,12 +65,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
+  const [transcriptGeneration, setTranscriptGeneration] = useState(0);
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
+  const [toolView, setToolView] = useState(createToolActivityViewState);
+  const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
+  const clearOperation = useRef<string | null>(null);
   const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
@@ -63,6 +83,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
   const displayedResults = useRef(new Set<string>());
+  const handledResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
   const interruptedTurn = useRef<{ operationId: string; generation?: number } | null>(null);
   const clock = useRef<{ operationId: string; generation?: number; startedAt: number } | null>(null);
@@ -71,10 +92,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
   const savingAnswer = useRef<{ operationId: string | null } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
-  const { stdout } = useStdout();
+  const { stdout, write } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
+  const [rows, setRows] = useState(() => stdout.rows);
+  const toolColumns = useRef(columns);
+  toolColumns.current = columns;
   useEffect(() => {
-    const handleResize = (): void => { setColumns(stdout.columns); };
+    const handleResize = (): void => { setColumns(stdout.columns); setRows(stdout.rows); };
     stdout.on('resize', handleResize);
     return () => { stdout.off('resize', handleResize); };
   }, [stdout]);
@@ -115,19 +139,39 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const append = (content: string, role: TranscriptEntry['role'] = 'system'): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
+  const appendUserMessage = (message: { operationId: string; message: string }): void => {
+    if (displayedMessages.current.has(message.operationId)) return;
+    displayedMessages.current.add(message.operationId);
+    append(message.message, 'user');
+  };
+  const committedTools = useRef(new Set<string>());
+  const appendTool = (entry: ToolActivityEntry): void => {
+    const key = JSON.stringify([entry.context?.operationId, entry.context?.generation, entry.key]);
+    if (committedTools.current.has(key) || entry.status === 'running') return;
+    committedTools.current.add(key);
+    const content = completedToolTranscript(entry, toolColumns.current ?? 80, {
+      compact: '', expanded: '', more: getLabel('tui.ui.toolHistoryMore', lang), end: '', completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+      running: getLabel('tui.ui.toolHistoryRunning', lang),
+    });
+    if (mounted.current) setEntries((previous) => [...previous, { role: 'tool', content: toDisplayText(content) }]);
+  };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
     submitting.current++;
     setSending(true);
     try {
       const result = await client.submit(command, onAccepted);
-      if (result.kind === 'accepted') {
-        if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
-        return result.operationId;
-      }
+      // A queued message waits in the queue area above the input, not in the log:
+      // a line here would land in the middle of the turn that is still running.
+      if (result.kind === 'accepted') return result.operationId;
+      if (command.kind === 'message' && command.display !== false) append(command.text, 'user');
       append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
       if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       return null;
-    } catch (error) { append(getErrorMessage(error)); return null; }
+    } catch (error) {
+      // Acceptance may have succeeded before the connection failed. The next
+      // snapshot supplies its operationId; an anonymous local echo would duplicate it.
+      append(getErrorMessage(error)); return null;
+    }
     finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
@@ -141,6 +185,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
   const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
   if (currentAssignment.kind === 'daemon') throw new Error('Manager view received a director assignment');
+  const epicItems = snapshot.items.flatMap((item) => item.kind === 'epic' ? [item] : []);
+  const epics = useManagerEpics(epicItems);
+  const epicsOpen = epics.navigation !== null;
+  const epicDetailLines = epics.navigation?.kind !== 'detail' || epics.selected === undefined
+    ? [] : formatManagerEpicDetail(epics.selected, lang, bodyWidth);
   const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
   const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
     if (item.kind !== 'inquiry') return [];
@@ -182,19 +231,36 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
-  const showResult = (result: OperationResult, operationId: string): void => {
+  /** 結果を会話ログへ一度だけ積む。ライブの配送とスナップショットからの復元で同じ表示にする。 */
+  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
-    const goalOperation = goalOperations.current.get(operationId);
-    goalOperations.current.delete(operationId);
+    // 保存済みの結果がライブより先に届いても消すように、表示の入口で判定する。
+    if (clearOperation.current === operationId && result.kind === 'notice' && mounted.current) {
+      // Static は書き出した行を端末に残し、何件目まで書いたかも覚えている。配列を空にするだけでは
+      // 前の会話が画面に残り、続く通知も書かれないため、端末を消してから Static を作り直す。
+      // 消去は新しい Static が書き出す前に済ませる必要があるので、描画後の Effect ではなくここで行う。
+      if (stdout.isTTY) write(CLEAR_TERMINAL);
+      setEntries([]);
+      setTranscriptGeneration((generation) => generation + 1);
+    }
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
     else {
-      const message = goalOperation !== undefined && result.kind === 'notice'
-        ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message;
+      const message = goal !== undefined && result.kind === 'notice'
+        ? formatGoalName(goal.objective) + '\n' + result.message : result.message;
       append(message, result.kind === 'reply' ? 'assistant' : 'system');
     }
+    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
+  };
+  const showResult = (result: OperationResult, operationId: string): void => {
+    // 保存済みの結果がスナップショットから先に表示されていても、ライブの結果を受けた後処理は省かない。
+    if (handledResults.current.has(operationId)) return;
+    handledResults.current.add(operationId);
+    const goalOperation = goalOperations.current.get(operationId);
+    appendResult(result, operationId, goalOperation?.goal);
+    goalOperations.current.delete(operationId);
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
       ? { goal: goalOperation.goal, retry: true } : null);
     if (summaryOperation.current === operationId) {
@@ -202,7 +268,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       summaryOperation.current = null;
       setSummarizing(false);
     }
-    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
     if (savingAnswer.current?.operationId === operationId) savingAnswer.current = null;
@@ -216,19 +281,30 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useEffect(() => {
     mounted.current = true;
     let observedRunning = client.getSnapshot().state?.running;
-    const unsubscribeState = client.subscribe(() => {
-      const state = client.getSnapshot().state;
+    const observeState = (): void => {
+      const current = client.getSnapshot();
+      if (current.connection === 'connected' && current.readStatus === 'complete') {
+        for (const item of current.items) {
+          if (item.kind === 'user_message') {
+            if (!item.pending || current.state?.running?.operationId === item.operationId) appendUserMessage(item);
+          } else if (item.kind === 'tool_history') {
+            for (const entry of item.history.history.entries) appendTool(entry);
+          } else if (item.kind === 'turn_result') appendResult(item.result, item.operationId);
+        }
+      }
+      const state = current.state;
       if (state?.interrupted && state.running === null && observedRunning != null) {
         interruptedTurn.current = { operationId: observedRunning.operationId, generation: observedRunning.generation };
       }
       observedRunning = state?.running;
-    });
+    };
+    observeState();
+    const unsubscribeState = client.subscribe(observeState);
     const unsubscribe = client.onOutput((output) => {
       if (output.kind === 'user_message') {
-        if (!displayedMessages.current.has(output.operationId)) {
-          displayedMessages.current.add(output.operationId);
-          append(output.message, 'user');
-        }
+        appendUserMessage(output);
+      } else if (output.kind === 'tool_completed') {
+        if (toolDisplays.getSnapshot().ready) appendTool(output.entry);
       } else if (output.kind === 'result') {
         setActivity((current) => current?.operationId === output.operationId ? null : current);
         showResult(output.result, output.operationId);
@@ -268,14 +344,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
-    if (!summaryRequest) append(text, 'user');
-    else setSummarizing(true);
+    if (summaryRequest) setSummarizing(true);
     resetChoice();
     void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
-      ...(summaryRequest ? { display: false } : {}) },
+      ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
-        else displayedMessages.current.add(id);
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
       })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
@@ -314,13 +389,20 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
+    epics.close();
     clearAnswer(); setAbortTarget(null); resetChoice();
     if (!selection.open(kind, display)) append(getLabel('manager.selectionEmpty.' + kind, lang));
     void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
   };
+  const openEpics = (): void => {
+    clearAnswer();
+    if (!epicsOpen) setAbortTarget(null);
+    resetChoice(); selection.close(); epics.open();
+    void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
+  };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
-  const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
-  const summaryVisible = !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
+  const conversationInput = !epicsOpen && answerTarget === null && selection.selection === null && abortTarget === null;
+  const summaryVisible = !epicsOpen && !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
   const startupRepositoryDirectory = assignment.startupRepositoryDirectory ?? cwd;
@@ -333,7 +415,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     ? (busy ? 'manager.summaryInputHintWorking' : 'manager.summaryInputHint')
     : 'manager.inputHint', lang);
   const hintSeparator = selectingSummary ? ' / ' : '  ';
-  const hintItems = inputHint.split(hintSeparator);
+  const hintItems = inputHint.split(hintSeparator).map((item, index, items) =>
+    item + (index < items.length - 1 ? hintSeparator : ''));
   const statusDetails = getLabel('manager.counts', lang, {
     goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && !goal.awaitingHumanMerge).length),
     awaiting: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal) && goal.awaitingHumanMerge).length),
@@ -343,6 +426,84 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const availableHeadingWidth = statusWidth - measureWidth(` | ${statusDetails}`);
   const splitStatus = availableHeadingWidth < MIN_STATUS_HEADING_WIDTH;
   const headingWidth = Math.min(measureWidth(assignmentHeading), splitStatus ? statusWidth : availableHeadingWidth);
+  const epicTitleLines = epics.navigation === null ? [] : layoutQuestionBody(getLabel(
+    epics.navigation.kind === 'list' ? 'manager.epics.listTitle' : 'manager.epics.detailTitle', lang), bodyWidth);
+  const epicHintLines = epics.navigation === null ? [] : layoutQuestionBody(getLabel(
+    epics.navigation.kind === 'list' ? 'manager.epics.listHint' : 'manager.epics.detailHint', lang), bodyWidth);
+  const noticeMessages = [
+    ...(snapshot.connection === 'connected' ? [] : [getLabel('manager.conversation.disconnected', lang)]),
+    ...(snapshot.readStatus === 'reading' ? [getLabel('manager.conversation.reading', lang)] : []),
+    ...(snapshot.readStatus === 'incomplete' ? [getLabel('manager.conversation.incomplete', lang)] : []),
+    ...(state?.interrupted ? [getLabel('manager.conversation.interrupted', lang)] : []),
+  ];
+  const epicNoticeLines = epicsOpen ? noticeMessages.flatMap((text) => layoutQuestionBody(text, statusWidth)) : [];
+  const epicFooterLines: string[] = [];
+  if (epicsOpen) {
+    let line = '';
+    for (const item of hintItems) {
+      if (line !== '' && measureWidth(line + item) > statusWidth) {
+        epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
+        line = '';
+      }
+      line += item;
+    }
+    epicFooterLines.push(...layoutQuestionBody(line, statusWidth));
+  }
+  // Reserve dialog/prompt borders, status/footer rows and Ink's final line break.
+  const epicChromeRows = 2 + epicTitleLines.length + epicHintLines.length + epicNoticeLines.length
+    + 1 + 2 + epicFooterLines.length + (splitStatus ? 2 : 1) + 1;
+  const minimumEpicRows = epics.navigation?.kind === 'list' ? 2 : 1;
+  const epicPromptRows = Math.max(1, Math.min(MAX_VISIBLE_ROWS,
+    epicsOpen ? layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length : MAX_VISIBLE_ROWS,
+    (rows ?? 24) - epicChromeRows - minimumEpicRows));
+  const epicPageRows = Math.max(minimumEpicRows, (rows ?? 24) - epicChromeRows - epicPromptRows);
+  const toolContext = toolDisplay.history.entries().at(-1)?.context;
+  const toolTurn = running != null ? toolTurnKey(running) : toolContext?.operationId === undefined ? undefined
+    : toolTurnKey({ operationId: toolContext.operationId, generation: toolContext.generation });
+  const currentToolView = toolViewTurn.current === toolTurn ? toolView : createToolActivityViewState();
+  const allToolGroups = toolReady ? toolDisplay.groups() : [];
+  const toolGroups = currentToolView.expanded ? allToolGroups : allToolGroups.flatMap((group) => {
+    const entries = group.entries.filter((entry) => entry.status === 'running');
+    return entries.length === 0 ? [] : [{ ...group, summary: toolActivityGroupSummary(entries[0]!, entries.length), entries }];
+  });
+  const toolLabels = {
+    compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
+    more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang), running: getLabel('tui.ui.toolHistoryRunning', lang),
+  };
+  const toolPageColumns = (columns ?? 80) - MARKER_WIDTH;
+  const queuedMessages = snapshot.items.flatMap((item) => item.kind === 'user_message' && item.pending
+    && item.operationId !== running?.operationId ? [item.message] : []);
+  const queueRows = conversationInput && queuedMessages.length > 0
+    ? 1 + Math.min(MAX_QUEUE_ROWS, queuedMessages.length) : 0;
+  const hiddenQueued = queuedMessages.length - Math.max(0, queueRows - 1);
+  const queueHeading = [getLabel('tui.ui.queuedCount', lang, { count: String(queuedMessages.length) }),
+    ...(hiddenQueued > 0 ? [getLabel('tui.ui.queuedMore', lang, { count: String(hiddenQueued) })] : [])].join('  ');
+  const promptRows = Math.min(MAX_VISIBLE_ROWS, layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length);
+  const completionRows = conversationInput ? Math.min(3, slashCompletion.completions.length) : 0;
+  let hintRows = 1;
+  let hintRowWidth = 0;
+  for (const item of hintItems) {
+    const width = measureWidth(item);
+    if (hintRowWidth > 0 && hintRowWidth + width > statusWidth) {
+      hintRows++;
+      hintRowWidth = 0;
+    }
+    hintRowWidth += width;
+  }
+  const toolContentHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null ? 0
+    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows - queueRows
+      - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
+      - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
+  const toolHeight = !toolReady || allToolGroups.length === 0 ? 0
+    : toolGroups.length === 0 ? Math.min(1, toolContentHeight) : toolContentHeight;
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, toolPageColumns,
+    Math.max(0, toolHeight - 1), toolLabels);
+  useEffect(() => {
+    if (toolViewTurn.current === toolTurn) return;
+    toolViewTurn.current = toolTurn;
+    setToolView(createToolActivityViewState());
+  }, [toolTurn]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
@@ -354,7 +515,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
     abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
+    epicsOpen, openEpics,
+    handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
+    browseTools: (direction) => {
+      if (toolHeight <= 0) return;
+      setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
+        : moveToolActivityView(current,
+          toolActivityViewPage(toolDisplay, toolGroups, current, toolPageColumns, Math.max(0, toolHeight - 1), toolLabels), direction));
+    },
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   const baseLabel = activityLabel ?? (state?.queuedMessageCount
@@ -368,27 +537,32 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const statusLabel = elapsed === undefined ? displayedActivity
     : displayedActivity === '' ? elapsed : `${displayedActivity} ${elapsed}`;
   return <Box flexDirection="column">
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+    <TranscriptView key={transcriptGeneration} entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
-    {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
-    {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
-    {snapshot.readStatus === 'incomplete' && <Text>{getLabel('manager.conversation.incomplete', lang)}</Text>}
-    {state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
+    {epicsOpen ? epicNoticeLines.length > 0 && <Text wrap="truncate-end">{epicNoticeLines.join('\n')}</Text>
+      : noticeMessages.map((text) => <Text key={text}>{text}</Text>)}
+    {epics.navigation !== null && <ManagerEpicDialog navigation={epics.navigation} epics={epicItems} index={epics.index}
+      detailLines={epicDetailLines} pageRows={epicPageRows} titleLines={epicTitleLines} hintLines={epicHintLines}
+      lang={lang} workspace={currentAssignment.kind === 'workspace'} />}
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
-    {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
+    {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
+    {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
+    {queueRows > 0 && <QueueView heading={queueHeading}
+      lines={queuedMessages.slice(0, queueRows - 1).map((message) => sanitizeSensitiveText(message))} />}
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}
+      maxVisibleRows={epicsOpen ? epicPromptRows : undefined}
       completions={conversationInput ? slashCompletion.completions : []}
       completionIndex={slashCompletion.completionIndex}
-      disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
-    <Box flexWrap="wrap">{hintItems.map((item, index) => {
-      const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
-      return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
-    })}</Box>
+      maxVisibleCompletions={3}
+      disabled={epicsOpen || selection.selection !== null || abortTarget !== null || selectingSummary} />
+    {epicsOpen ? <Text dimColor wrap="truncate-end">{epicFooterLines.join('\n')}</Text> : <Box flexWrap="wrap">{hintItems.map((item) =>
+      <Box key={item} width={measureWidth(item)} flexShrink={0}><Text dimColor>{item}</Text></Box>,
+    )}</Box>}
     <Box flexDirection={splitStatus ? 'column' : 'row'} width={statusWidth}>
       <Box width={headingWidth} flexShrink={0}><Text dimColor wrap="truncate-middle">{assignmentHeading}</Text></Box>
       <Text dimColor wrap="truncate-end">{splitStatus ? statusDetails : ` | ${statusDetails}`}</Text>

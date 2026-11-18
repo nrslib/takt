@@ -11,8 +11,11 @@ import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { verifyManagerConversation } from './formalSpecVerification.js';
 import type { ResolvedFormalSpecConfiguration } from '../interactive/taskInstructionFormat.js';
-import { createTurnActivityReporter } from './turnActivity.js';
+import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
+import { randomUUID } from 'node:crypto';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 const managerToolNames = [
   ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
@@ -37,17 +40,33 @@ export interface ManagerTurnInput {
   onProviderOutput?: () => void;
   onActivity?: (activity: ConversationActivity) => void;
   onText?: (message: string) => void;
+  onToolEvent?: (event: ToolActivityEvent) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
 }
 
 export function createManagerTurnExecutor(cwd: string, plan: ManagerConversationPlan) {
-  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
+  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance(plan.strategy.systemPrompt, plan.ctx.lang) });
   return {
     execute(input: ManagerTurnInput) {
       const run = async () => {
         const signal = input.abortSignal;
         signal.throwIfAborted();
-        if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify);
+        const callId = randomUUID();
+        const unidentified = new Map<string, string[]>();
+        const identify = (event: ToolActivityEvent): ToolActivityEvent => {
+          const context = event.toolActivity ?? { callId };
+          const pending = unidentified.get(context.callId) ?? [];
+          unidentified.set(context.callId, pending);
+          const id = event.data.id || (event.type === 'tool_use' ? randomUUID()
+            : event.type === 'tool_result' ? event.data.completedToolIds?.[0] ?? pending[0] ?? randomUUID() : pending[0] ?? randomUUID());
+          if ((event.type === 'tool_use' || event.type === 'tool_output') && !pending.includes(id)) pending.push(id);
+          if (event.type === 'tool_result') {
+            const completed = [id, ...(event.data.completedToolIds ?? [])];
+            for (const value of completed) { const index = pending.indexOf(value); if (index >= 0) pending.splice(index, 1); }
+          }
+          return { ...event, data: { ...event.data, id }, toolActivity: context } as ToolActivityEvent;
+        };
+        if (input.verify !== undefined) return verifyManagerConversation(cwd, plan, input, input.verify, identify);
         let assignment = input.assignment;
         const reporter = createTurnActivityReporter((activity) => input.onActivity?.(activity), (message) => input.onText?.(message));
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
@@ -83,9 +102,8 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
             outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
             ...(input.recovery === undefined ? {} : { callerManagedSession: true as const }),
             mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
-            onStream: (event) => {
-              input.onProviderOutput?.();
-              if (!signal.aborted) reporter.onStream(event);
+            onStream: (raw) => {
+              const event = reportManagerStream(raw, identify, reporter, input);
               if (event.type === 'tool_use') {
                 if (addRepositoryTools.has(event.data.tool)) additions.add(event.data.id);
               }

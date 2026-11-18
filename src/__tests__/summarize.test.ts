@@ -32,6 +32,7 @@ import {
   resolveNonWorkflowProviderOptions,
 } from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues<'branchNameStrategy' | 'provider' | 'model'>);
@@ -67,6 +68,16 @@ beforeEach(() => {
 });
 
 describe('summarizeTaskName', () => {
+  it('composes the progress notes guidance into the summarizer system prompt', async () => {
+    mockProviderCall.mockResolvedValue({ persona: 'summarizer', status: 'done', content: 'add-auth', timestamp: new Date() });
+
+    await summarizeTaskName('long task name for testing', { cwd: '/project' });
+
+    const [agentSetup] = mockProviderSetup.mock.calls[0] as unknown as [{ systemPrompt: string }];
+    expect(agentSetup.systemPrompt.startsWith(`${loadTemplate('progress_notes', 'en')}\n\n`)).toBe(true);
+    expect(agentSetup.systemPrompt.endsWith(loadTemplate('score_slug_system_prompt', 'en'))).toBe(true);
+  });
+
   it('should return AI-generated slug for task name', async () => {
     // Given: AI returns a slug for input
     mockProviderCall.mockResolvedValue({

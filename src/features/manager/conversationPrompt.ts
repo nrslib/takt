@@ -44,7 +44,8 @@ export function buildManagerTurnPrompt(input: {
   switch (event.kind) {
     case 'human_command':
       if (event.command.kind !== 'message') throw new Error('Only message commands start model turns');
-      body = JSON.stringify({ speaker: event.speaker, text: event.command.text });
+      body = JSON.stringify({ speaker: event.speaker, text: event.command.text,
+        ...(event.command.requestProposal === true ? { requestProposal: true } : {}) });
       break;
     case 'director_message':
       kind = event.inquiryAnswer === undefined ? `director_message_${event.origin ?? 'unknown'}` : 'inquiry_answered';

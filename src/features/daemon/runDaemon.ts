@@ -1,4 +1,5 @@
 import { DaemonWaitCommands } from './waitCommands.js';
+import { startEpicWatcher } from './epicWatcher.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { homedir } from 'node:os';
@@ -70,6 +71,7 @@ export async function startDaemon(options: {
   let tasks: TaskDispatcher | undefined;
   let remoteWorkers: RemoteWorkerRuntime | undefined;
   let workerServer: Awaited<ReturnType<typeof createWorkerServer>> | undefined;
+  let epicWatcher: WatchLoop | undefined;
   let storageRetry: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
   let finishStartup!: () => void;
@@ -87,7 +89,7 @@ export async function startDaemon(options: {
     if (output.kind === 'notice' && id === conversationId({ kind: 'daemon' }) && (version.operationId === null || output.id.startsWith('result-'))) {
       await (await slackReady)?.notifications.deliver([{ id: output.id, message: output.message }]);
     }
-  }, reportDaemonError);
+  }, reportDaemonError, eventStore);
   const bus: DaemonBus = { post: (message) => dispatcher.post(message), request: (turn, request, signal) => dispatcher.request(turn, request, signal) };
   const runner = options.runnerFactory?.(bus) ?? createTurnProcessHost({ configDirectory: directory, bus, onError: reportDaemonError });
   const waitGoals = new WatchGoalReader();
@@ -103,7 +105,7 @@ export async function startDaemon(options: {
   const resources = { async close() {
     await startupFinished;
     const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
-      closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc), closeResource(taskPool)]);
+      closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc), closeResource(taskPool)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
     input.close();
     const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
@@ -111,7 +113,7 @@ export async function startDaemon(options: {
   } };
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
     ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
-  runner: { start(value, signal) { conversations.started(value); runner.start(value, signal); },
+  runner: { async start(value, signal) { await conversations.started(value); runner.start(value, signal); },
     interrupt: (turn) => runner.interrupt(turn), resultCommitted: (turn) => runner.resultCommitted(turn), close: () => closeResource(runner) },
   resources, limits: { maxPendingEvents, maxPendingBytes: 1024 * 1024 },
   onFailure: ({ phase, error }) => {
@@ -208,6 +210,7 @@ export async function startDaemon(options: {
         allowedUserIds: config.manager.slack.allowed_user_ids, language: config.language ?? global.language ?? 'en' });
     }
     ipc = await createConversationIpcServer(directory, options.owner, input);
+    epicWatcher = startEpicWatcher(conversations, dispatcher, reportDaemonError);
     options.signal.throwIfAborted();
     const files = new DaemonPersistedFiles(directory);
     const records = new FileWatchRecords(directory);
@@ -252,8 +255,10 @@ export async function startDaemon(options: {
     const idleAfter = Date.now() + 500;
     idleCheck = startWatchLoop(500, async () => {
       if (Date.now() < idleAfter || !idle()) return;
+      const attachmentGeneration = input.attachmentGeneration;
       await watchers?.drain();
-      if (!await watchSource.hasWork(files) && idle()) void close().catch(reportDaemonError);
+      // 確認中に接続が成立すると、切断済みでも保存内容が変わっている可能性がある。
+      if (!await watchSource.hasWork(files) && idle() && input.attachmentGeneration === attachmentGeneration) void close().catch(reportDaemonError);
     }, reportDaemonError);
     return { dispatcher, input, conversations, watchers, stopped, close,
       ...(workerServer === undefined ? {} : { workerPort: workerServer.port }) };

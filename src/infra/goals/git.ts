@@ -27,6 +27,21 @@ async function resolveDefaultBranchRef(cwd: string, branch: string, fetchSucceed
   return await hasExactRef(cwd, localRef, signal) ? localRef : remoteRef;
 }
 
+function resolveLocalBranchCommit(cwd: string, branch: string): string {
+  const ref = toLocalBranchRef(branch);
+  try {
+    return git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  } catch (error) {
+    throw new Error(`Unable to resolve local branch "${branch}" to a commit`, { cause: error });
+  }
+}
+
+export function validateGoalBranchReferences(cwd: string, requestedStart: string | undefined, requestedIntegration: string | undefined): void {
+  const configuredIntegration = requestedIntegration ?? resolveConfigValue(cwd, 'baseBranch');
+  const branches = new Set([requestedStart, configuredIntegration].filter((branch): branch is string => branch !== undefined));
+  for (const branch of branches) resolveLocalBranchCommit(cwd, branch);
+}
+
 export async function prepareGoalBranch(cwd: string, id: string, requestedStart: string | undefined,
   requestedIntegration: string | undefined, signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -47,14 +62,16 @@ export async function prepareGoalBranch(cwd: string, id: string, requestedStart:
       log.info('Failed to fetch from remote, continuing with local state', { startBranch, error: String(error) });
     }
   }
-  const startRef = requestedStart === undefined
-    ? await resolveDefaultBranchRef(cwd, startBranch, fetchSucceeded, signal)
-    : toLocalBranchRef(startBranch);
-  signal?.throwIfAborted();
-  const commit = git(cwd, ['rev-parse', '--verify', `${startRef}^{commit}`]);
-  if (configuredIntegration !== undefined) {
-    git(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(configuredIntegration)}^{commit}`]);
+  let commit: string;
+  if (requestedStart === undefined) {
+    const startRef = await resolveDefaultBranchRef(cwd, startBranch, fetchSucceeded, signal);
+    signal?.throwIfAborted();
+    commit = git(cwd, ['rev-parse', '--verify', `${startRef}^{commit}`]);
+  } else {
+    commit = resolveLocalBranchCommit(cwd, startBranch);
   }
+  signal?.throwIfAborted();
+  if (configuredIntegration !== undefined) resolveLocalBranchCommit(cwd, configuredIntegration);
   const branch = createTimestampedTaktBranchName(`goal-${id.slice(0, 8)}`);
   return { branch, startBranch, integrationBranch, commit };
 }

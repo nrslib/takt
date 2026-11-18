@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { DaemonBus, TurnRunner } from '../../core/daemon/ports.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
-import { MAX_PROCESS_PENDING_REQUESTS, MAX_PROCESS_SEND_BYTES, TURN_PROTOCOL_VERSION,
-  parseDaemonProcessMessage, parseTurnProcessMessage, processRequestBytes,
+import { TURN_PROTOCOL_VERSION, parseDaemonProcessMessage, parseTurnProcessMessage,
   type DaemonProcessMessage, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { spawnManagedProcess, type ManagedProcess } from '../../shared/utils/spawn.js';
+import { SerialSender } from '../../shared/utils/serialSender.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
@@ -28,10 +28,8 @@ interface ChildEntry {
   exited: boolean;
   active?: ActiveTurn;
   timer?: ReturnType<typeof setTimeout>;
-  requests: Map<string, { bytes: number; controller: AbortController }>;
-  requestBytes: number;
-  sendCount: number;
-  sendBytes: number;
+  requests: Map<string, AbortController>;
+  sender: SerialSender<DaemonProcessMessage>;
   termination?: Promise<void>;
   exit: Promise<void>;
 }
@@ -50,26 +48,16 @@ export function createTurnProcessHost(input: {
 
   const report = (promise: Promise<unknown>): void => { void promise.catch(input.onError); };
   const cancelRequests = (entry: ChildEntry): void => {
-    for (const request of entry.requests.values()) request.controller.abort();
+    for (const controller of entry.requests.values()) controller.abort();
     entry.requests.clear();
-    entry.requestBytes = 0;
   };
-  const send = (entry: ChildEntry, message: DaemonProcessMessage): void => {
-    parseDaemonProcessMessage(message, entry.launchId);
-    if (!entry.process.child.connected) throw new Error('Turn process IPC is disconnected');
-    const bytes = Buffer.byteLength(JSON.stringify(message));
-    if (entry.sendCount >= MAX_PROCESS_PENDING_REQUESTS || entry.sendBytes + bytes > MAX_PROCESS_SEND_BYTES) {
-      throw new Error('Turn process send capacity exceeded');
-    }
-    entry.sendCount++;
-    entry.sendBytes += bytes;
-    const release = (): void => { entry.sendCount--; entry.sendBytes -= bytes; };
-    try {
-      entry.process.child.send(message, (error: Error | null) => {
-        release();
-        if (error !== null) report(terminate(entry, 'Turn process IPC send failed'));
-      });
-    } catch (error) { release(); throw error; }
+  const send = (entry: ChildEntry, message: DaemonProcessMessage): Promise<void> => entry.sender.send(message);
+  /** 送信に失敗した子は、以後のメッセージを受け取れる保証がないため終了させる。 */
+  const deliver = (entry: ChildEntry, message: DaemonProcessMessage, failure: string): void => {
+    report(send(entry, message).catch((error: unknown) => {
+      input.onError(error);
+      return terminate(entry, failure);
+    }));
   };
   const postFinished = (turn: TurnIdentity, outcome: TurnOutcome): void => {
     const notification = input.bus.post({ kind: 'turn_finished', turn, outcome });
@@ -94,11 +82,10 @@ export function createTurnProcessHost(input: {
     try {
       if (!entry.exited) {
         if (entry.process.child.connected) {
-          try { send(entry, { ...envelope(entry), kind: 'shutdown' }); }
-          catch (error) {
+          void send(entry, { ...envelope(entry), kind: 'shutdown' }).catch((error: unknown) => {
             input.onError(error);
             if (process.platform !== 'win32') entry.process.child.kill('SIGTERM');
-          }
+          });
         } else if (process.platform !== 'win32') entry.process.child.kill('SIGTERM');
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -117,17 +104,14 @@ export function createTurnProcessHost(input: {
   const startReady = (entry: ChildEntry): void => {
     const active = entry.active;
     if (!entry.ready || active === undefined || active.finished || entry.stopping) return;
-    send(entry, { ...envelope(entry), kind: 'start_turn', input: active.input });
-    if (active.interrupted) send(entry, { ...envelope(entry), kind: 'interrupt', turn: active.input.turn });
+    deliver(entry, { ...envelope(entry), kind: 'start_turn', input: active.input }, 'Turn process start failed');
+    if (active.interrupted) deliver(entry, { ...envelope(entry), kind: 'interrupt', turn: active.input.turn }, 'Turn process interrupt failed');
   };
   const interrupt = (entry: ChildEntry): void => {
     const active = entry.active;
     if (active === undefined || active.finished || active.interrupted) return;
     active.interrupted = true;
-    if (entry.ready && !entry.stopping) {
-      try { send(entry, { ...envelope(entry), kind: 'interrupt', turn: active.input.turn }); }
-      catch { report(terminate(entry, 'Turn process interrupt failed')); }
-    }
+    if (entry.ready && !entry.stopping) deliver(entry, { ...envelope(entry), kind: 'interrupt', turn: active.input.turn }, 'Turn process interrupt failed');
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => { report(terminate(entry, 'Turn process did not interrupt')); }, INTERRUPT_GRACE_MS);
   };
@@ -157,10 +141,8 @@ export function createTurnProcessHost(input: {
         break;
       case 'daemon_request': {
         if (entry.requests.has(message.requestId)) throw new Error('Duplicate turn process request');
-        const bytes = processRequestBytes(entry.requests.size, entry.requestBytes, message);
         const controller = new AbortController();
-        entry.requests.set(message.requestId, { bytes, controller });
-        entry.requestBytes += bytes;
+        entry.requests.set(message.requestId, controller);
         try {
           let reply: DaemonStateReply;
           try { reply = await input.bus.request(message.turn, message.request, controller.signal); }
@@ -170,13 +152,10 @@ export function createTurnProcessHost(input: {
               message: 'Daemon state request did not complete' };
           }
           if (!entry.stopping && !entry.exited && entry.active === active) {
-            const response: DaemonProcessMessage = { ...envelope(entry), kind: 'daemon_reply', turn: message.turn,
-              requestId: message.requestId, reply };
-            processRequestBytes(0, 0, response);
-            send(entry, response);
+            await send(entry, { ...envelope(entry), kind: 'daemon_reply', turn: message.turn, requestId: message.requestId, reply });
           }
         } finally {
-          if (entry.requests.delete(message.requestId)) entry.requestBytes -= bytes;
+          entry.requests.delete(message.requestId);
         }
         break;
       }
@@ -187,11 +166,18 @@ export function createTurnProcessHost(input: {
       cwd: input.configDirectory, shell: false, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
       env: { ...process.env, TAKT_CONFIG_DIR: input.configDirectory, TAKT_SLACK_APP_TOKEN: undefined, TAKT_SLACK_BOT_TOKEN: undefined },
     }, undefined);
-    const entry: ChildEntry = { launchId: randomUUID(), process: managed, ready: false, stopping: false, exited: false,
-      requests: new Map(), requestBytes: 0, sendCount: 0, sendBytes: 0, exit: Promise.resolve() };
+    const launchId = randomUUID();
+    const entry: ChildEntry = { launchId, process: managed, ready: false, stopping: false, exited: false, requests: new Map(),
+      sender: new SerialSender((message, done) => {
+        parseDaemonProcessMessage(message, launchId);
+        if (!managed.child.connected) throw new Error('Turn process IPC is disconnected');
+        managed.child.send(message, done);
+      }),
+      exit: Promise.resolve() };
     owned.add(entry);
     entry.exit = managed.waitForExit().then(async () => {
       entry.exited = true;
+      entry.sender.close(new Error('Turn process exited'));
       // An unexpected leader exit can leave provider/MCP descendants in the owned group.
       // Detached automatic runs own a separate group and are not part of this cleanup.
       try { await managed.terminate(); }
@@ -207,6 +193,7 @@ export function createTurnProcessHost(input: {
         clearTimeout(entry.timer);
         cancelRequests(entry);
         entry.exited = true;
+        entry.sender.close(new Error('Turn process could not start'));
         owned.delete(entry);
         if (children.get(turn.turn.conversationId) === entry) children.delete(turn.turn.conversationId);
         finish(entry, { kind: 'failed', message: 'Turn process could not start' });
@@ -221,17 +208,15 @@ export function createTurnProcessHost(input: {
         await terminate(entry, 'Turn process protocol failed');
       }));
     });
-    managed.child.on('disconnect', () => { if (!entry.exited) report(terminate(entry, 'Turn process disconnected')); });
+    managed.child.on('disconnect', () => {
+      entry.sender.close(new Error('Turn process IPC is disconnected'));
+      if (!entry.exited) report(terminate(entry, 'Turn process disconnected'));
+    });
     managed.child.on('error', () => { report(terminate(entry, 'Turn process error')); });
     entry.timer = setTimeout(() => { report(terminate(entry, 'Turn process initialization timed out')); }, STARTUP_TIMEOUT_MS);
     children.set(turn.turn.conversationId, entry);
-    try {
-      send(entry, { ...envelope(entry), kind: 'initialize', conversationId: turn.turn.conversationId,
-        assignment: turn.state.assignment, configDirectory: input.configDirectory });
-    } catch (error) {
-      report(terminate(entry, 'Turn process initialization failed'));
-      throw error;
-    }
+    deliver(entry, { ...envelope(entry), kind: 'initialize', conversationId: turn.turn.conversationId,
+      assignment: turn.state.assignment, configDirectory: input.configDirectory }, 'Turn process initialization failed');
     return entry;
   };
   const runner: TurnRunner = {
@@ -265,8 +250,8 @@ export function createTurnProcessHost(input: {
     resultCommitted(turn) {
       const entry = children.get(turn.conversationId);
       if (entry?.active === undefined || !sameTurn(entry.active.input.turn, turn) || !entry.active.finished) return;
-      try { send(entry, { ...envelope(entry), kind: 'result_committed', turn }); entry.active = undefined; }
-      catch (error) { input.onError(error); report(terminate(entry, 'Turn result acknowledgement failed')); }
+      entry.active = undefined;
+      deliver(entry, { ...envelope(entry), kind: 'result_committed', turn }, 'Turn result acknowledgement failed');
     },
     interrupt(turn) {
       const entry = children.get(turn.conversationId);

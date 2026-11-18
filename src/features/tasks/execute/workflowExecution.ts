@@ -1,3 +1,4 @@
+import { isQuietMode } from '../../../shared/context.js';
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
@@ -7,6 +8,7 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
+import { resolveTaskRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -91,6 +93,7 @@ import { LiveInterventionFileStore } from '../../../infra/workflow/live-interven
 import { createOutputFns } from './outputFns.js';
 import { validateWorkflowReportReferences } from '../../../core/workflow/instruction/report-reference-validation.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { closeOpenCodeServersForExternalDirectories } from '../../../infra/opencode/server-pool.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -361,6 +364,7 @@ async function executeWorkflowInternal(
     });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
+  let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
   let cacciaFailure: { step: string; reason: string } | undefined;
   let activeStep: WorkflowStep;
@@ -441,16 +445,18 @@ async function executeWorkflowInternal(
         internalController: executionControl,
         getEngine: () => engine,
       });
-      const childProcessEnv = resolveNestedChildProcessEnv(
-        bootstrap.observability,
-        buildChildProcessEnv(),
-      );
+      const ambientEnv = buildChildProcessEnv();
+      const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv);
+      // Resolved for the run; each workflow's `repository_identity` decides whether it is passed on.
+      const repositoryIdentityEnv = resolveTaskRepositoryIdentityEnv(cwd, options.projectCwd, ambientEnv);
       const gitSafety = prExecution.prExecutionContext
         ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
         : {};
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
         abortSignal: executionControl.signal,
         onStream: handleProviderStream,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        streamQuiet: isQuietMode(),
         onProviderStream: (context, event) => {
           bootstrap.providerEventLogger.logEvent(context, event);
         },
@@ -481,6 +487,7 @@ async function executeWorkflowInternal(
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
         childProcessEnv,
+        repositoryIdentityEnv,
         language: options.language,
         provider: bootstrap.currentProvider,
         providerSource: bootstrap.currentProviderSource,
@@ -565,6 +572,7 @@ async function executeWorkflowInternal(
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
       });
+      openCodeExternalDirectories = engine.openCodeExternalDirectories;
 
       engine.on('step:start', (startedStep: WorkflowStep, _iteration, _instruction, _provider, _workflowName,
         _resumeStepName, _stepIteration, stack) => {
@@ -609,6 +617,8 @@ async function executeWorkflowInternal(
         out: bootstrap.out,
         prefixWriter: bootstrap.prefixWriter,
         displayRef: bootstrap.displayRef,
+        toolDisplayMode: bootstrap.toolDisplayMode,
+        flushStream: bootstrap.flushStream,
         handlerRef: bootstrap.handlerRef,
         usageEventLogger: bootstrap.usageEventLogger,
         analyticsEmitter: bootstrap.analyticsEmitter,
@@ -752,8 +762,15 @@ async function executeWorkflowInternal(
       finalizationIssues.push(...eventBridge.getFinalizationIssues());
     }
     captureError(cleanupErrors, () => bootstrap.warnIfAutoStrategyUnused());
+    captureError(cleanupErrors, () => bootstrap.flushStream());
     captureError(cleanupErrors, () => bootstrap.prefixWriter?.flush());
     captureError(cleanupErrors, () => abortHandler?.cleanup());
+    const externalDirectories = openCodeExternalDirectories;
+    if (externalDirectories !== undefined) {
+      await captureAsyncError(cleanupErrors, async () => {
+        await closeOpenCodeServersForExternalDirectories(externalDirectories);
+      });
+    }
     await captureAsyncError(
       cleanupErrors,
       () => bootstrap.observabilityHandle.shutdown(),

@@ -33,7 +33,7 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string, options?
     }
     return true;
   }
-  if (!task.branch) {
+  if (task.data?.worktree === false || !task.branch) {
     return true;
   }
   const branchOptions: [] | [DeleteBranchOptions] = options === undefined ? [] : [options];

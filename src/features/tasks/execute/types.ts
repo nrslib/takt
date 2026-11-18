@@ -1,3 +1,4 @@
+import type { ToolActivityDisplayMode } from '../../../shared/tool-activity/types.js';
 /**
  * Execution module type definitions
  */
@@ -230,6 +231,7 @@ export interface WorkflowExecutionOptions extends PrMergeOptions {
   /** Verified input supplied by an execution owner instead of live workflow discovery. */
   preparedWorkflowBundle?: import('./workflowExecutionBundle.js').PreparedWorkflowExecutionBundle;
   onLiveInterventionDelivery?: (instructionIds: readonly number[], context: import('../../../core/workflow/live-intervention/types.js').LiveInterventionDelivery) => void;
+  toolDisplayMode?: ToolActivityDisplayMode;
   /** System command permission resolved for this run, including the configuration source. */
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Header prefix for display */
@@ -356,6 +358,7 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions extends PrMergeOptions {
+  toolDisplayMode?: ToolActivityDisplayMode;
   /** System command permission resolved before changing the project checkout. */
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Goal ownership enables the terminal details used by the manager. */

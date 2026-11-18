@@ -23,15 +23,15 @@ const OVERRIDE_BRANCHES: OverrideBranch[] = [
     label: 'readonly',
     mode: 'readonly',
     allowedTools: undefined,
-    expectedOverride: ['read', 'grep', 'find', 'ls'],
-    expectedWithoutOverride: ['grep', 'find', 'ls'],
+    expectedOverride: ['read', 'grep', 'find', 'ls', 'bash'],
+    expectedWithoutOverride: ['grep', 'find', 'ls', 'bash'],
   },
   {
     label: 'edit',
     mode: 'edit',
     allowedTools: undefined,
-    expectedOverride: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'],
-    expectedWithoutOverride: ['grep', 'find', 'ls', 'edit', 'write', 'bash'],
+    expectedOverride: ['read', 'grep', 'find', 'ls', 'bash', 'edit', 'write'],
+    expectedWithoutOverride: ['grep', 'find', 'ls', 'bash', 'edit', 'write'],
   },
   {
     label: 'mode-unset allowlist',
@@ -105,8 +105,10 @@ describe('allowed-tool-edit-policy', () => {
     }
     expect(resolvePiActiveTools('full', [], [builtin, extension])).toEqual([]);
     expect(resolvePiActiveTools('full', undefined, [extension])).toEqual(['read']);
-    expect(resolvePiActiveTools('full', ['read', 'bash'], [extension]))
-      .toEqual(['read', 'bash']);
+    expect(resolvePiActiveTools('full', ['read', 'bash'], [
+      extension,
+      { name: 'bash', source: 'sdk' },
+    ])).toEqual(['bash']);
   });
 
   it('keeps an ordinary allowlist authoritative when Pi permission mode is unset', () => {
@@ -149,12 +151,15 @@ describe('allowed-tool-edit-policy', () => {
   it('should keep non-edit tools and remove edit tools from Claude allowed tools', () => {
     expect(keepsAllowedToolWithoutEdit('Read')).toBe(true);
     expect(keepsAllowedToolWithoutEdit(' Apply_Patch ')).toBe(false);
-    expect(keepsAllowedToolWithoutEdit('Bash')).toBe(false);
+    expect(keepsAllowedToolWithoutEdit('Bash')).toBe(true);
+    expect(keepsAllowedToolWithoutEdit('Edit')).toBe(false);
+    expect(keepsAllowedToolWithoutEdit('Write')).toBe(false);
+    expect(keepsAllowedToolWithoutEdit('Patch')).toBe(false);
   });
 
-  it('should remove Claude command and edit tool patterns by canonical tool name', () => {
-    expect(keepsAllowedToolWithoutEdit('Bash(python3 -m pytest:*)')).toBe(false);
-    expect(keepsAllowedToolWithoutEdit(' bash(which python3) ')).toBe(false);
+  it('should preserve Claude command patterns and remove edit patterns by canonical tool name', () => {
+    expect(keepsAllowedToolWithoutEdit('Bash(python3 -m pytest:*)')).toBe(true);
+    expect(keepsAllowedToolWithoutEdit(' bash(which python3) ')).toBe(true);
     expect(keepsAllowedToolWithoutEdit('Write(file_path:*)')).toBe(false);
     expect(keepsAllowedToolWithoutEdit('Read(file_path:*)')).toBe(true);
   });
@@ -167,13 +172,15 @@ describe('allowed-tool-edit-policy', () => {
     ]);
   });
 
-  it('should treat comma-separated Claude entries with unsafe tools as unsafe', () => {
-    expect(keepsAllowedToolWithoutEdit('Read,Bash')).toBe(false);
-    expect(keepsAllowedToolWithoutEdit('Read, Bash')).toBe(false);
-    expect(keepsAllowedToolWithoutEdit('Read, Bash(echo a,b)')).toBe(false);
+  it('should preserve comma-separated Claude shell entries but reject entries with edit tools', () => {
+    expect(keepsAllowedToolWithoutEdit('Read,Bash')).toBe(true);
+    expect(keepsAllowedToolWithoutEdit('Read, Bash')).toBe(true);
+    expect(keepsAllowedToolWithoutEdit('Read, Bash(echo a,b)')).toBe(true);
+    expect(keepsAllowedToolWithoutEdit('Read, Bash, Edit')).toBe(false);
+    expect(keepsAllowedToolWithoutEdit('Bash(echo a,b), Write(file_path:*)')).toBe(false);
   });
 
-  it('should remove Bash from Claude allowed tools for non-edit report steps', () => {
+  it('should preserve Bash and remove edit tools from Claude allowed tools for non-edit report steps', () => {
     expect(resolveAllowedToolsForProvider(
       {
         claude: {
@@ -183,6 +190,7 @@ describe('allowed-tool-edit-policy', () => {
             'Bash(python3 -m pytest:*)',
             ' bash(which python3) ',
             'Edit',
+            'Write',
             'Grep',
           ],
         },
@@ -190,36 +198,36 @@ describe('allowed-tool-edit-policy', () => {
       true,
       false,
       'claude',
-    )).toEqual(['Read', 'Grep']);
+    )).toEqual(['Read', 'Bash', 'Bash(python3 -m pytest:*)', 'bash(which python3)', 'Grep']);
   });
 
-  it('should normalize comma-separated Claude allowed tools before removing command tools', () => {
+  it('should normalize comma-separated Claude allowed tools while preserving command tools', () => {
     expect(resolveAllowedToolsForProvider(
       {
         claude: {
           allowedTools: [
             'Read,Bash',
             'Glob, Bash(which python3)',
-            'Grep,Bash(echo a,b)',
+            'Grep,Bash(echo a,b),Edit,Write',
           ],
         },
       },
       false,
       false,
       'claude',
-    )).toEqual(['Read', 'Glob', 'Grep']);
+    )).toEqual(['Read', 'Bash', 'Glob', 'Bash(which python3)', 'Grep', 'Bash(echo a,b)']);
   });
 
-  it('should remove Bash from Claude allowed tools when edit is false without output contracts', () => {
+  it('should keep Bash but remove Edit and Write when edit is false without output contracts', () => {
     expect(resolveAllowedToolsForProvider(
-      { claude: { allowedTools: ['Read', 'Bash'] } },
+      { claude: { allowedTools: ['Read', 'Bash', 'Edit', 'Write'] } },
       false,
       false,
       'claude',
-    )).toEqual(['Read']);
+    )).toEqual(['Read', 'Bash']);
   });
 
-  it('should remove Bash from OpenCode allowed tools when edit is false without output contracts', () => {
+  it('should remove only edit tools and keep Bash in OpenCode allowed tools when edit is false without output contracts', () => {
     expect(resolveAllowedToolsForProvider(
       { opencode: { allowedTools: ['read', 'bash', ' Bash ', 'edit', 'grep'] } },
       false,
@@ -233,15 +241,15 @@ describe('allowed-tool-edit-policy', () => {
       ['Read', 'Bash', 'Bash(python3 -m pytest:*)', 'Edit', 'Write', 'Grep'],
       false,
       'claude',
-    )).toEqual(['Read', 'Grep']);
+    )).toEqual(['Read', 'Bash', 'Bash(python3 -m pytest:*)', 'Grep']);
   });
 
-  it('should normalize comma-separated Claude part_allowed_tools before removing command tools', () => {
+  it('should normalize comma-separated Claude part_allowed_tools while preserving command tools', () => {
     expect(resolvePartAllowedToolsForProvider(
-      ['Read,Bash', 'Grep, Bash(which python3)'],
+      ['Read,Bash,Edit', 'Grep, Bash(which python3),Write'],
       false,
       'claude',
-    )).toEqual(['Read', 'Grep']);
+    )).toEqual(['Read', 'Bash', 'Grep', 'Bash(which python3)']);
   });
 
   it('should remove edit tools from OpenCode team leader part_allowed_tools when part_edit is false', () => {
@@ -258,7 +266,7 @@ describe('allowed-tool-edit-policy', () => {
       false,
       false,
       'pi',
-    )).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
+    )).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
   });
 
   it('should synthesize the Pi read-only ceiling for output-contract steps unless edit is true', () => {
@@ -267,7 +275,7 @@ describe('allowed-tool-edit-policy', () => {
       true,
       undefined,
       'pi',
-    )).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
+    )).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
     expect(resolveAllowedToolsForProvider(
       undefined,
       true,
@@ -285,22 +293,38 @@ describe('allowed-tool-edit-policy', () => {
       'pi',
     );
 
-    expect(allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
+    expect(allowedTools).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
   });
 
-  it('should keep only Pi read aliases when edit is false', () => {
+  it('should keep Pi read and shell aliases but remove Edit and Write when edit is false', () => {
     expect(resolvePartAllowedToolsForProvider(
       ['Read', 'Glob', 'Grep', 'Find', 'LS', 'CodeMode', 'Edit', 'Write', 'Bash', 'trusted_extension_tool'],
       false,
       'pi',
-    )).toEqual(['Read', 'Glob', 'Grep', 'Find', 'LS', 'CodeMode']);
+    )).toEqual(['Read', 'Glob', 'Grep', 'Find', 'LS', 'CodeMode', 'Bash']);
   });
 
   it('should expose the Pi read-only ceiling through the provider capability seam', () => {
-    expect(providerDefaultAllowedToolsWithoutEdit('pi')).toEqual(['read', 'grep', 'find', 'ls', 'codemode']);
+    expect(providerDefaultAllowedToolsWithoutEdit('pi')).toEqual(['read', 'grep', 'find', 'ls', 'bash', 'codemode']);
     expect(providerDefaultAllowedToolsWithoutEdit('claude')).toBeUndefined();
     expect(providerDefaultAllowedToolsWithoutEdit(undefined)).toBeUndefined();
   });
+
+  it.each(['readonly', 'full', undefined] as const)(
+    'keeps Pi Bash provenance checks and explicit allowlists in %s mode', (mode) => {
+      const sdkBash = { name: 'bash', source: 'sdk' };
+      const extensionBash = { name: 'bash', source: 'extension', sourcePath: '/trusted.ts' };
+
+      expect(keepsPiToolWithoutEdit(' Bash ')).toBe(true);
+      expect(resolvePiActiveTools(mode, ['Bash', 'Edit', 'Write'].filter(keepsPiToolWithoutEdit), [sdkBash]))
+        .toEqual(['bash']);
+      expect(resolvePiActiveTools(mode, ['Bash'], [extensionBash])).toEqual([]);
+      expect(resolvePiActiveTools(mode, ['Bash'], [extensionBash], ['/trusted.ts'])).toEqual(['bash']);
+      expect(resolvePiActiveTools(mode, ['Read'], [sdkBash, extensionBash], ['/trusted.ts']))
+        .toEqual([]);
+      expect(resolvePiActiveTools(mode, [], [sdkBash, extensionBash], ['/trusted.ts'])).toEqual([]);
+    },
+  );
 
   it('should preserve an explicit empty Pi allowlist as deny-all', () => {
     expect(resolvePiActiveTools(

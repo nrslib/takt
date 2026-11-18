@@ -17,7 +17,6 @@ export function reply<T>(): Reply<T> {
 }
 
 export type Completion<T> = { ok: true; value: T } | { ok: false; error: unknown };
-export type OwnerSnapshot = Omit<ConversationSnapshot, 'operationId' | 'generation'>;
 
 export type DispatcherNotice =
   | { kind: 'restore_sequence'; sequence: number }
@@ -33,8 +32,8 @@ export type DispatcherNotice =
   | { kind: 'request'; turn: TurnIdentity; request: DaemonStateRequest; signal: AbortSignal; reply: Reply<DaemonStateReply> }
   | { kind: 'request_completed'; turn: TurnIdentity; id: number; result: Completion<DaemonStateReply> }
   | { kind: 'result_saved' | 'result_applied' | 'result_settled' | 'result_committed'; turn: TurnIdentity; attempt: number; result: Completion<void> }
-  | { kind: 'snapshot'; conversationId: string; reply: Reply<ConversationSnapshot> }
-  | { kind: 'snapshot_read'; id: number; conversationId: string; reply: Reply<ConversationSnapshot>; result: Completion<OwnerSnapshot> }
+  | { kind: 'snapshot'; capture?: (snapshot: ConversationSnapshot) => void; conversationId: string; toolHistory: boolean; reply: Reply<ConversationSnapshot> }
+  | { kind: 'snapshot_read'; id: number; conversationId: string; reply: Reply<ConversationSnapshot>; result: Completion<ConversationSnapshot> }
   | { kind: 'control'; event: ControlEvent; response: { reply: Reply<ControlReceipt> } }
   | { kind: 'runner_closed' | 'resources_closed'; result: Completion<void> }
   | { kind: 'shutdown_drained' }

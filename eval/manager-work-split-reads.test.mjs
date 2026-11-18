@@ -61,6 +61,14 @@ function saveTasks(cwd, fixture) {
   return tasks;
 }
 
+// Steps of child workflows are logged under their own names, while run metadata keeps the top-level step,
+// or the branch step when the child workflow runs in a branch of a top-level parallel step.
+const metaStep = (record) => {
+  const [top, branch] = record.stack ?? [];
+  if (top === undefined) return record.step;
+  return top.kind === 'parallel' && branch !== undefined ? branch.step : top.step;
+};
+
 function assertRunTimeline(artifact, task) {
   const { meta, sessionLog } = artifact;
   assert.equal(sessionLog[0].type, 'workflow_start');
@@ -81,6 +89,8 @@ function assertRunTimeline(artifact, task) {
       assert.equal(record.iteration, ++iteration, 'Iteration increments for each step start');
       active = record;
       lastStarted = record;
+    } else if (record.type === 'workflow_call_start') {
+      assert.equal(active, undefined, 'A workflow call starts between sequential steps');
     } else if (record.type === 'step_complete') {
       assert.ok(active, 'A step completion needs a matching start');
       assert.equal(record.step, active.step);
@@ -98,14 +108,47 @@ function assertRunTimeline(artifact, task) {
   assert.equal(ended, meta.status !== 'running');
   if (meta.currentStep !== undefined) {
     assert.ok(lastStarted);
-    assert.equal(meta.currentStep, lastStarted.step);
+    assert.equal(meta.currentStep, metaStep(lastStarted));
     assert.equal(meta.currentIteration, lastStarted.iteration);
   }
   if (meta.status === 'running') {
     assert.ok(active, 'A running fixture must have an unfinished step');
     assert.equal(meta.currentIteration, active.iteration);
-    assert.equal(meta.currentStep, active.step);
+    assert.equal(meta.currentStep, metaStep(active));
     assert.equal(meta.endTime, undefined);
+  }
+}
+
+const builtinWorkflow = (lang, name) => parse(readFileSync(new URL(`../builtins/${lang}/workflows/${name}.yaml`, import.meta.url), 'utf8'));
+const builtinStep = (lang, frame) => builtinWorkflow(lang, frame.workflow).steps.find(({ name }) => name === frame.step);
+
+// Workflow stacks name the builtin workflows the fixture claims to run, so every start must be one the engine can
+// write for those definitions: a workflow call is logged as workflow_call_start rather than step_start, child steps
+// run inside a started call, and each start follows the initial step or a rule of the previous step in its workflow.
+function assertBuiltinWorkflowStarts({ meta, sessionLog }, lang) {
+  const scopes = new Map([[JSON.stringify([]), { previous: undefined, counts: new Map() }]]);
+  for (const record of sessionLog.filter(({ type }) => ['workflow_call_start', 'step_start'].includes(type))) {
+    const leaf = record.stack.at(-1);
+    const parents = record.stack.slice(0, -1);
+    const step = builtinStep(lang, leaf);
+    assert.ok(step, `${leaf.workflow}/${leaf.step} is a builtin step`);
+    assert.equal(step.kind ?? 'agent', leaf.kind);
+    assert.equal(record.type === 'workflow_call_start', leaf.kind === 'workflow_call');
+    assert.equal(leaf.workflow, parents.length === 0 ? meta.workflow : builtinStep(lang, parents.at(-1)).call);
+    const scope = scopes.get(JSON.stringify(parents));
+    assert.ok(scope, `${leaf.workflow}/${leaf.step} runs inside a started workflow call`);
+    if (scope.previous === undefined) assert.equal(leaf.step, builtinWorkflow(lang, leaf.workflow).initial_step);
+    else assert.ok(builtinStep(lang, { workflow: leaf.workflow, step: scope.previous }).rules
+      .some(({ next }) => next === leaf.step), `${scope.previous} -> ${leaf.step}`);
+    const occurrence = (scope.counts.get(leaf.step) ?? 0) + 1;
+    assert.equal(leaf.occurrence, occurrence);
+    scope.counts.set(leaf.step, occurrence);
+    scope.previous = leaf.step;
+    if (record.type === 'workflow_call_start') {
+      assert.equal(record.childWorkflow, step.call);
+      assert.equal(record.callInstance, occurrence);
+      scopes.set(JSON.stringify(record.stack), { previous: undefined, counts: new Map() });
+    }
   }
 }
 
@@ -264,6 +307,7 @@ test('all fixture run reads match the production paged reader over saved artifac
       for (const artifact of fixture.runArtifacts) {
         const task = fixture.tasks.find((task) => task.runSlug === artifact.meta.runSlug);
         assertRunTimeline(artifact, task);
+        if (artifact.sessionLog.some(({ stack }) => stack !== undefined)) assertBuiltinWorkflowStarts(artifact, lang);
         if (task.status === 'failed') {
           const metadata = resolveRetryMetadataFromRunMeta(artifact.meta);
           assert.equal(task.startStep, metadata.startStep);

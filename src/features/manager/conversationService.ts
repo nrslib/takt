@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
 import { buildManagerTurnPrompt } from './conversationPrompt.js';
 import { eventGoalReference } from '../../core/daemon/events.js';
@@ -10,13 +11,16 @@ import { TurnConversationState } from '../daemonTurn/conversationState.js';
 import { buildTurnBusinessContext } from '../daemonTurn/turnContext.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ManagerTurnInput } from './turnExecutor.js';
+import type { IdentifiedToolActivityEvent } from '../../shared/tool-activity/types.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { registerReservedGoal } from '../../infra/goals/service.js';
+import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
+import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { ensureManagerRun } from './autoRun.js';
@@ -60,6 +64,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : '' };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
+      const clear = human && command.kind === 'message' && command.text.trim() === CLEAR_COMMAND;
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
@@ -67,15 +72,22 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
+        if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
+          if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
+          return { kind: 'completed', result: { kind: 'notice', message: '' } };
+        }
         const candidate = eventGoalReference(event);
         if (candidate !== undefined && !assignment.repositoryDirectories.includes(candidate.repositoryDirectory)) throw new ConversationError('invalid_assignment');
         reference = candidate;
         if (patrol) {
-          const store = new GoalStore(event.repositoryDirectory);
-          const reads = await Promise.allSettled(event.goalIds.map((id) => store.get(id)));
+          if (event.workspaceId !== undefined && (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId)) throw new ConversationError('invalid_assignment');
+          const reads = await Promise.allSettled(event.goalIds.map((id) => {
+            if (event.repositoryDirectory === undefined) throw new ConversationError('invalid_assignment');
+            return new GoalStore(event.repositoryDirectory).get(id);
+          }));
           // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
           let tasks: readonly WatchTask[] = [];
-          try { tasks = await readWatchTasks(event.repositoryDirectory); }
+          try { if (event.repositoryDirectory !== undefined) tasks = await readWatchTasks(event.repositoryDirectory); }
           catch {
             io.signal.throwIfAborted();
             // 読取失敗は見回り対象の選定側が知らせるため、ターン内では通知しない。
@@ -86,7 +98,14 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           const patrolEvent = { ...event,
             goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
             ...(unreadableGoalIds.length === 0 ? {} : { unreadableGoalIds }) };
-          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          const epicIds: string[] = [];
+          if (event.workspaceId !== undefined) {
+            for await (const epic of new DaemonEpicFiles(configDirectory).list(event.workspaceId)) {
+              if (epic.status === 'active' && event.epicIds?.includes(epic.id)) epicIds.push(epic.id);
+            }
+          }
+          if (patrolEvent.goalIds.length === 0 && unreadableGoalIds.length === 0 && epicIds.length === 0) return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          if (event.epicIds !== undefined) patrolEvent.epicIds = epicIds;
           promptEvent = patrolEvent;
         }
         if (event.kind === 'watch_observation' && event.observation.kind === 'run_process_lost') {
@@ -105,6 +124,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
+        if (clear) {
+          return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
+            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+        }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
           const verificationRepository = priorPending?.repositoryDirectory
@@ -136,13 +159,33 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             nextRevision(state.current.revision);
             const reservation = existing?.revision === command.revision ? existing
               : { state: 'reserved' as const, revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory };
-            // The reservation must be durable before creating a goal or its Git resources.
-            await state.save({ approval: reservation });
-            io.signal.throwIfAborted();
-            const goal = await registerReservedGoal({ ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
-            return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
-              approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
-            }) };
+            let reservationSaved = existing?.state === 'reserved';
+            try {
+              if (new GoalStore(reservation.repositoryDirectory).find(reservation.goalId) === undefined) {
+                validateGoalBranchReferences(reservation.repositoryDirectory, priorPending.summary.startBranch, priorPending.summary.integrationBranch);
+              }
+              if (!reservationSaved) {
+                // The reservation must be durable before creating a goal or its Git resources.
+                await state.save({ approval: reservation });
+                reservationSaved = true;
+              }
+              io.signal.throwIfAborted();
+              const goal = await registerReservedGoal({ ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
+              return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
+                approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
+              }) };
+            } catch (error) {
+              if (reservationSaved) {
+                try {
+                  if (!await hasGoalRegistrationArtifacts(reservation.repositoryDirectory, reservation.goalId)) {
+                    await state.save({ approval: null });
+                  }
+                } catch (reconciliationError) {
+                  throw new Error(`Goal registration failed: ${String(error)}; reservation reconciliation failed: ${String(reconciliationError)}`, { cause: error });
+                }
+              }
+              throw error;
+            }
           }
         } else if (command.kind === 'message') {
           const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
@@ -160,7 +203,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               }
             }
             language = resolved.language;
-            const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending);
+            const businessContext = assignment.kind === 'daemon' ? '' : await buildTurnBusinessContext(assignment, priorPending, configDirectory);
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
               ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
@@ -176,6 +219,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               abortSignal: io.signal,
               onActivity: (activity) => io.progress(activity),
               onText: (message) => io.progress({ kind: 'turn_text', message }),
+              onToolEvent: (event) => {
+                if (event.toolActivity === undefined || event.data.id === undefined || event.data.id === '') throw new Error('Missing tool call identity');
+                return io.progress({ kind: 'tool_event', eventId: randomUUID(), event: {
+                  ...event, toolActivity: { ...event.toolActivity, operationId: input.turn.operationId, generation: input.turn.generation },
+                } as IdentifiedToolActivityEvent });
+              },
               patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
             });
@@ -188,14 +237,15 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               io.progress(getLabel('manager.conversation.assignment_changed', language));
             }
             let pending: PendingSummary | null = null;
-            if (output.summary !== null) {
-              if (!human || assignment.kind === 'daemon') throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && (!human || assignment.kind === 'daemon')) throw new Error('Event turns cannot propose a registration');
+            if (output.summary !== null && human && command.requestProposal === true && !verify && assignment.kind !== 'daemon') {
               const { repositoryDirectory: requested, ...summary } = output.summary;
               const target = requested ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
               if (target === undefined) throw new ConversationError('invalid_assignment');
               const repositoryDirectory = await resolveAssignedProjectRoot(target, assignment);
               if (!latest.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
               validateManagerSummary(summary);
+              validateGoalBranchReferences(repositoryDirectory, summary.startBranch, summary.integrationBranch);
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({

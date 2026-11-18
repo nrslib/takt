@@ -14,15 +14,23 @@ function mergeTreeFailure(message: string, version: string | undefined): Error {
   return new Error(`Git >= 2.38 is required for git merge-tree --write-tree.${detected ? ` Detected Git: ${detected}.` : ''} ${message}`);
 }
 
+export async function buildGoalGitEnvironment(
+  cwd: string, signal: AbortSignal | undefined,
+): Promise<NodeJS.ProcessEnv> {
+  return buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }, signal);
+}
+
 export async function runGoalGit(
   cwd: string, args: readonly string[], limit: number, signal: AbortSignal | undefined,
   acceptedCodes: readonly number[] = [0],
+  env?: NodeJS.ProcessEnv,
 ): Promise<GoalGitOutput> {
   signal?.throwIfAborted();
+  const environment = env ?? await buildGoalGitEnvironment(cwd, signal);
   const managed = spawnManagedProcess('git', [
     '-c', 'commit.gpgSign=false', '-c', 'merge.gpgSign=false', ...args,
   ], {
-    cwd, env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }, signal),
+    cwd, env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   }, signal);
   const { child } = managed;
@@ -53,7 +61,7 @@ export async function runGoalGit(
     const message = `Goal Git ${args[0]} failed (${result.signal ?? result.code}): ${Buffer.concat(errors).toString('utf8').trim()}`;
     if (result.signal === null && result.code !== null && args[0] === 'merge-tree' && args[1] === '--write-tree') {
       // Version diagnostics must not replace the original merge failure.
-      const version = await goalGitText(cwd, ['--version'], signal).catch(() => undefined);
+      const version = await goalGitText(cwd, ['--version'], signal, environment).catch(() => undefined);
       throw mergeTreeFailure(message, version);
     }
     throw new Error(message);
@@ -61,13 +69,17 @@ export async function runGoalGit(
   return { output: Buffer.concat(chunks), truncated, code: result.code };
 }
 
-export async function goalGitText(cwd: string, args: readonly string[], signal: AbortSignal | undefined): Promise<string> {
-  const result = await runGoalGit(cwd, args, 8 * 1024 * 1024, signal);
+export async function goalGitText(
+  cwd: string, args: readonly string[], signal: AbortSignal | undefined, env?: NodeJS.ProcessEnv,
+): Promise<string> {
+  const result = await runGoalGit(cwd, args, 8 * 1024 * 1024, signal, [0], env);
   return completeOutput(result).trim();
 }
 
-export async function resolveGoalBranchSha(cwd: string, branch: string, signal: AbortSignal | undefined): Promise<string> {
-  return goalGitText(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(branch)}^{commit}`], signal);
+export async function resolveGoalBranchSha(
+  cwd: string, branch: string, signal: AbortSignal | undefined, env?: NodeJS.ProcessEnv,
+): Promise<string> {
+  return goalGitText(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(branch)}^{commit}`], signal, env);
 }
 
 export async function fetchGoalIntegrationBranchSha(cwd: string, branch: string, signal: AbortSignal | undefined): Promise<string> {
@@ -79,8 +91,10 @@ export async function fetchGoalIntegrationBranchSha(cwd: string, branch: string,
   return goalGitText(cwd, ['rev-parse', '--verify', `${remoteRef}^{commit}`], signal);
 }
 
-export async function isGoalCommitIncluded(cwd: string, source: string, target: string, signal: AbortSignal | undefined): Promise<boolean> {
-  const result = await runGoalGit(cwd, ['merge-base', '--is-ancestor', source, target], 0, signal, [0, 1]);
+export async function isGoalCommitIncluded(
+  cwd: string, source: string, target: string, signal: AbortSignal | undefined, env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const result = await runGoalGit(cwd, ['merge-base', '--is-ancestor', source, target], 0, signal, [0, 1], env);
   return result.code === 0;
 }
 

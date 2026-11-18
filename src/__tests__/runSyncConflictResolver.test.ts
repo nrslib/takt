@@ -49,6 +49,9 @@ describe('runSyncConflictResolver', () => {
       if (name === 'sync_conflict_resolver_message') {
         return `message:${vars?.originalInstruction ?? ''}`;
       }
+      if (name === 'progress_notes') {
+        return 'progress-notes-guidance';
+      }
       throw new Error(`Unexpected template: ${name}`);
     });
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined });
@@ -86,6 +89,20 @@ describe('runSyncConflictResolver', () => {
       onStream,
     });
     expect(mockResolveNonWorkflowProviderOptions).toHaveBeenCalledWith('/repo', undefined, undefined, 'codex');
+  });
+
+  it('composes the progress notes guidance into the conflict-resolver system prompt', async () => {
+    await runSyncConflictResolver({
+      projectCwd: '/repo',
+      cwd: '/repo/worktree',
+      originalInstruction: 'Resolve conflicts',
+    });
+
+    const provider = mockGetProvider.mock.results[0]!.value as { setup: ReturnType<typeof vi.fn> };
+    const [agentSetup] = provider.setup.mock.calls[0] as [{ name: string; systemPrompt: string }];
+    expect(agentSetup.name).toBe('conflict-resolver');
+    expect(agentSetup.systemPrompt.split('\n\n')).toEqual(['progress-notes-guidance', 'system-prompt']);
+    expect(mockLoadTemplate).toHaveBeenCalledWith('progress_notes', 'ja');
   });
 
   it('passes the shared auto-approve handler only when sync_conflict_resolver enables it', async () => {

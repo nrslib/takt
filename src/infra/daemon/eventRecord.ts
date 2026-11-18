@@ -1,9 +1,9 @@
 import { WaitCommandCompletedSchema } from '../../core/daemon/waitCommand.js';
+import { EpicEventSchema, PatrolEventSchema } from '../../core/daemon/epicEvent.js';
 import { z } from 'zod/v4';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, PendingSummarySchema } from '../conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../goals/schema.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
-import { MAX_PROCESS_MESSAGE_BYTES } from '../../core/daemon/processProtocol.js';
 import type { AcceptedEvent, EventInput } from '../../core/daemon/events.js';
 import type { ConversationChange, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
 import { conversationId } from '../conversations/identity.js';
@@ -33,6 +33,7 @@ const observation = z.discriminatedUnion('kind', [
 ]);
 const inquiryAnswer = z.object({ questionId: id, question: z.string().optional(), answer: GoalAnswerSchema }).strict();
 const event = z.discriminatedUnion('kind', [
+  EpicEventSchema,
   WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: ConversationCommandSchema.refine((command) => command.kind !== 'abort_turn' && command.kind !== 'answer_question'),
@@ -44,7 +45,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('goal_registered'), repositoryDirectory: z.string(), goalId: id }).strict(),
   z.object({ kind: z.literal('goal_resumed'), repositoryDirectory: z.string(), goalId: id, origin: GoalExecutionOriginSchema.optional() }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
-  z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
+  PatrolEventSchema,
 ]);
 export const EventInputSchema = z.object({
   eventId: id, requestId: id, conversationId: id, source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']),
@@ -113,7 +114,7 @@ const storedEvent = z.preprocess((input) => {
 }, storedAcceptedEvent).transform(normalizeStoredWorkspaceAnswer);
 export const StoredTurnSchema = z.object({ conversationId: id, operationId: id, generation: sequence }).strict() satisfies z.ZodType<TurnIdentity>;
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
   session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),

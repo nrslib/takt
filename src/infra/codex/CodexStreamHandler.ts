@@ -19,6 +19,17 @@ export type CodexItem = {
   [key: string]: unknown;
 };
 
+const CODEX_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'command_execution',
+  'mcp_tool_call',
+  'web_search',
+  'file_change',
+]);
+
+export function isCodexToolItem(item: CodexItem): boolean {
+  return CODEX_TOOL_ITEM_TYPES.has(item.type);
+}
+
 /** Tracking state for stream offsets during a single Codex thread run */
 export interface StreamTrackingState {
   startedItems: Set<string>;

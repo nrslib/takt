@@ -17,6 +17,7 @@ import type { AgentResponse, NormalAgentWorkflowStep, WorkflowConfig } from '../
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { cleanupWorkflowEngine } from './engine-test-helpers.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-sdk.js'));
 vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: () => ({}) }));
@@ -24,7 +25,7 @@ vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: () => 
 const { threads, turns, configs } = vi.hoisted(() => ({
   threads: [] as ThreadOptions[],
   configs: [] as CodexOptions[],
-  turns: [] as Array<{ threadOptions: ThreadOptions; schemaProperties: Record<string, unknown>; resumed: boolean }>,
+  turns: [] as Array<{ threadOptions: ThreadOptions; schemaProperties: Record<string, unknown>; resumed: boolean; input: unknown }>,
 }));
 const { claudeCall, openCodeCall, spawnProcess } = vi.hoisted(() => ({
   claudeCall: vi.fn<(_name: string, _prompt: string, options: ClaudeCallOptions) => Promise<AgentResponse>>(),
@@ -49,9 +50,9 @@ vi.mock('@openai/codex-sdk', () => {
     const id = sessionId ?? `thread-${threads.length}`;
     return {
       id,
-      runStreamed: async (_input: unknown, turnOptions?: TurnOptions) => {
+      runStreamed: async (input: unknown, turnOptions?: TurnOptions) => {
         const properties = (turnOptions?.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
-        turns.push({ threadOptions: options, schemaProperties: properties, resumed: sessionId !== undefined });
+        turns.push({ threadOptions: options, schemaProperties: properties, resumed: sessionId !== undefined, input });
         const text = Object.hasOwn(properties, 'done')
           ? JSON.stringify({ done: true, reasoning: 'finished', cancelPartIds: [], parts: [] })
           : Object.hasOwn(properties, 'parts')
@@ -118,6 +119,9 @@ describe('edit=false Phase 1 permission wiring', () => {
     return new OptionsBuilder(
       { projectCwd: cwd, provider: 'codex', ...engineOptions },
       () => cwd, () => cwd, () => undefined, () => '.takt/reports', () => 'ja', () => 'test',
+      () => undefined,
+      () => 'task',
+      () => ({ kind: 'not_a_git_repository' as const }),
     );
   }
 
@@ -208,6 +212,35 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(judgeTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'read-only' : undefined);
   });
 
+  it('gives the fresh-session loop judge the progress notes guidance but no notes location', async () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'monitor', max_steps: 5, initial_step: 'review',
+      steps: [
+        { name: 'review', edit: false, instruction: 'Review', rules: [{ condition: 'done', next: 'fix' }] },
+        { name: 'fix', instruction: 'Fix', rules: [{ condition: 'done', next: 'review' }] },
+      ],
+      loop_monitors: [{ cycle: ['review', 'fix'], threshold: 1, judge: {
+        instruction: 'Decide whether to stop', rules: [{ condition: 'stop', next: 'COMPLETE' }],
+      } }],
+    }, cwd);
+    engine = new WorkflowEngine(workflow, cwd, 'Review', {
+      projectCwd: cwd, provider: 'codex', language: 'en', structuredCaller: new ProviderNeutralStructuredCaller(),
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason: string) => abortReasons.push(reason));
+    expect((await engine.run()).status, abortReasons.join('\n')).toBe('completed');
+
+    const guidance = loadTemplate('progress_notes', 'en');
+    const notesLocation = /progress-notes\/[0-9a-f]{64}\.log/;
+    const inputs = turns.map((turn) => ({ judge: Object.hasOwn(turn.schemaProperties, 'content'), input: String(turn.input) }));
+    const judgeInputs = inputs.filter(({ judge }) => judge).map(({ input }) => input);
+    const stepInputs = inputs.filter(({ judge }) => !judge).map(({ input }) => input);
+    expect(judgeInputs).toHaveLength(1);
+    expect(judgeInputs[0]).toContain(guidance);
+    expect(judgeInputs[0]).not.toMatch(notesLocation);
+    expect(stepInputs.some((input) => notesLocation.test(input))).toBe(true);
+  });
+
   it.each([
     { edit: false, permissionControl: 'takt', sandbox: 'read-only' },
     { edit: false, permissionControl: 'codex', sandbox: undefined },
@@ -240,17 +273,17 @@ describe('edit=false Phase 1 permission wiring', () => {
     expect(partTurns[0]?.threadOptions.sandboxMode).toBe(permissionControl === 'takt' ? 'workspace-write' : undefined);
   });
 
-  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and tool filter for edit=false', async (provider) => {
+  it.each(['claude', 'claude-sdk'] as const)('preserves %s permission mode and Bash while filtering edit tools for edit=false', async (provider) => {
     const options = builder({
       provider,
       providerOptions: { claude: { allowedTools: ['Read', 'Grep', 'Write', 'Edit', 'Bash'] } },
     }).buildAgentOptions(reviewStep);
-    expect(options.allowedTools).toEqual(['Read', 'Grep']);
+    expect(options.allowedTools).toEqual(['Read', 'Grep', 'Bash']);
     expect((await runAgent(undefined, 'Review', options)).status).toBe('done');
     const callOptions = claudeCall.mock.calls[0]![2];
     expect(callOptions.permissionMode).toBe('edit');
     expect(buildSdkOptions(callOptions)).toMatchObject({
-      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep'],
+      permissionMode: 'acceptEdits', allowedTools: ['Read', 'Grep', 'Bash'],
     });
   });
 

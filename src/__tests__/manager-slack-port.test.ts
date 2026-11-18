@@ -383,7 +383,7 @@ it('stops receiving and releases accepted attachments on close without posting n
   expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
   expect(client.postThreadMessage).toHaveBeenCalledOnce();
 });
-it('turns an inquiry reply into an answer command without creating a conversation message', async () => {
+it.each(['80', '/make-goal'])('turns inquiry reply %s into an answer command without requesting a proposal', async (text) => {
   const { port, input } = fixture();
   const question = createInquiry({ body: 'Width?' });
   const target = { goalId: '550e8400-e29b-41d4-a716-446655440000', repositoryDirectory: '/canonical' };
@@ -391,9 +391,9 @@ it('turns an inquiry reply into an answer command without creating a conversatio
   vi.mocked(input.open).mockImplementation(async () => ({ attachmentId: 'read-attachment', read: read([{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }]) }));
   vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read([{ kind: 'inquiry', inquiry: { target, question, objective: 'Goal' } }]) });
   vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
-  await port.receive(endpoint, '80');
+  await port.receive(endpoint, text);
   expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: {
-    kind: 'answer_question', target, questionId: question.id, answer: { text: '80' }, source: 'slack',
+    kind: 'answer_question', target, questionId: question.id, answer: { text }, source: 'slack',
   } }));
   await port.close();
 });
@@ -418,6 +418,23 @@ it('rejects an unreadable inquiry binding without misrouting its answer as conve
   await port.close();
 });
 
+
+it.each(['ja', 'en'] as const)('marks only explicit /make-goal messages as proposal requests in Slack (%s)', async (language) => {
+  const { port, input } = fixture(language);
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  try {
+    for (const text of ['hello', '/make-goal please', getLabel('manager.goSummaryRequest', language), '  /make-goal  ']) {
+      await port.receive(endpoint, text);
+    }
+    expect(vi.mocked(input.submit).mock.calls.map(([request]) => request.command)).toEqual([
+      { kind: 'message', text: 'hello' },
+      { kind: 'message', text: '/make-goal please' },
+      { kind: 'message', text: getLabel('manager.goSummaryRequest', language) },
+      { kind: 'message', text: getLabel('manager.goSummaryRequest', language), display: false, requestProposal: true },
+    ]);
+  } finally { await port.close(); }
+});
 
 it('passes a human /verify message from Slack to the manager conversation', async () => {
   const { port, input } = fixture();

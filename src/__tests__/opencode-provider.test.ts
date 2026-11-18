@@ -375,7 +375,8 @@ describe('OpenCodeProvider tool naming addendum', () => {
           return `allowed tools: ${allowedTools.join(', ')}`;
         },
       );
-      agentRunnerMocks.loadTemplateMock.mockReset().mockReturnValue('template');
+      // Each template renders as its own name so the composed system prompt shows which parts it holds.
+      agentRunnerMocks.loadTemplateMock.mockReset().mockImplementation((name: string) => `[${name}]`);
       agentRunnerMocks.loadProjectConfigMock.mockReset().mockReturnValue({ provider: 'opencode' });
       agentRunnerMocks.loadGlobalConfigMock.mockReset().mockReturnValue({
         language: 'en',
@@ -407,8 +408,14 @@ describe('OpenCodeProvider tool naming addendum', () => {
       expect(onPromptResolved).toHaveBeenCalledTimes(1);
       const call = onPromptResolved.mock.calls[0]?.[0];
       expect(call).toBeDefined();
-      expect(agentRunnerMocks.loadTemplateMock).not.toHaveBeenCalled();
-      expect(call.systemPrompt).toBe('');
+      expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledWith('progress_notes', 'en');
+      expect(agentRunnerMocks.loadTemplateMock).not.toHaveBeenCalledWith(
+        'provider_runtime_system_prompt',
+        expect.anything(),
+        expect.anything(),
+      );
+      // Only the progress notes guidance remains; the runtime addendum is left out.
+      expect(call.systemPrompt).toBe('[progress_notes]');
       expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith([], undefined, undefined, expect.objectContaining({ allowedTools: [] }));
     });
 
@@ -425,15 +432,16 @@ describe('OpenCodeProvider tool naming addendum', () => {
       expect(onPromptResolved).toHaveBeenCalledTimes(1);
       const call = onPromptResolved.mock.calls[0]?.[0];
       expect(call).toBeDefined();
-      expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledTimes(1);
+      expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledWith('progress_notes', 'en');
       expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledWith(
         'provider_runtime_system_prompt',
         'en',
         expect.objectContaining({
-          providerRuntimeInstructions: expect.any(String),
+          providerRuntimeInstructions: 'runtime instructions',
         }),
       );
-      expect(call.systemPrompt).toBe('template');
+      // The guidance is composed ahead of the runtime prompt, which is kept whole.
+      expect(call.systemPrompt).toBe('[progress_notes]\n\n[provider_runtime_system_prompt]');
       expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(undefined, undefined, undefined, expect.objectContaining({ allowedTools: undefined }));
     });
 
@@ -451,15 +459,15 @@ describe('OpenCodeProvider tool naming addendum', () => {
       expect(onPromptResolved).toHaveBeenCalledTimes(1);
       const call = onPromptResolved.mock.calls[0]?.[0];
       expect(call).toBeDefined();
-      expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledTimes(1);
+      expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledWith('progress_notes', 'en');
       expect(agentRunnerMocks.loadTemplateMock).toHaveBeenCalledWith(
         'provider_runtime_system_prompt',
         'en',
         expect.objectContaining({
-          providerRuntimeInstructions: expect.any(String),
+          providerRuntimeInstructions: 'allowed tools: read, edit, write',
         }),
       );
-      expect(call.systemPrompt).toBe('template');
+      expect(call.systemPrompt).toBe('[progress_notes]\n\n[provider_runtime_system_prompt]');
       expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(['read', 'edit', 'write'], undefined, undefined, expect.objectContaining({ allowedTools: ['read', 'edit', 'write'] }));
     });
   });

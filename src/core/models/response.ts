@@ -50,6 +50,8 @@ export interface AgentResponse {
   persona: string;
   status: Status;
   content: string;
+  /** Provider-confirmed visible assistant text from an incomplete turn, never diagnostics. */
+  partialOutput?: string;
   timestamp: Date;
   sessionId?: string;
   /** Error message when the query failed (e.g., API error, rate limit) */

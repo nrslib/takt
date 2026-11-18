@@ -6,6 +6,7 @@ import { getPreviousOutput } from '../../../core/workflow/engine/state-manager.j
 import { ensurePrivateDirectory, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { buildCommandEnv, MAX_COMMAND_OUTPUT_BYTES, runBoundedCommand } from '../../../shared/utils/bounded-command-runner.js';
 import { redactExecutionSecrets, redactExecutionValue } from '../../../shared/utils/execution-secrets.js';
+import { pickRepositoryIdentityEnv } from '../../../shared/utils/repository-identity-env.js';
 
 export async function resolveCommandInput(
   input: Extract<WorkflowSystemInput, { type: 'command' }>,
@@ -21,7 +22,10 @@ export async function resolveCommandInput(
   ensurePrivateDirectory(directory);
   const responsePath = join(directory, 'response.txt');
   writePrivateFile(responsePath, redactExecutionSecrets(previous?.content ?? ''));
-  const env = buildCommandEnv(process.env);
+  const env: NodeJS.ProcessEnv = {
+    ...buildCommandEnv(process.env),
+    ...pickRepositoryIdentityEnv(options.childProcessEnv),
+  };
   env.TAKT_PREVIOUS_RESPONSE_FILE = responsePath;
   if (previous?.structuredOutput !== undefined) {
     const structuredPath = join(directory, 'structured-output.json');

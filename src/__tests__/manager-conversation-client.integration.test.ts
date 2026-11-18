@@ -9,7 +9,8 @@ import { cleanup, render } from 'ink-testing-library';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
-import { join } from 'node:path';
+import * as toolActivityView from '../features/tui/ToolActivityView.js';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
@@ -25,6 +26,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { removeDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { writeLegacyConversation, conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationId } from '../infra/conversations/identity.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -39,6 +41,14 @@ import { makeProvider } from './test-helpers.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { deferred, humanTurnText } from './helpers/daemon-turn.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
+import { stripAnsi } from '../shared/utils/text.js';
+import { createWorkspace, removeWorkspaceRepository } from '../infra/config/global/workspaceRegistry.js';
+import { abortEpic, addEpicMember, completeEpic, createEpic, getEpic, recordEpicVerificationResult,
+  startEpicVerification, updateEpicDefinition } from '../infra/epics/index.js';
+import { removeManagerRepository } from '../features/manager/workspaceOperations.js';
+import { EpicStore } from '../infra/epics/store.js';
+import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
+import { completedEpicGoal, epicDefinition, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
@@ -54,6 +64,11 @@ vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
   const actual = await original<typeof import('../features/tui/TranscriptEntryView.js')>();
   return { ...actual, TranscriptView: vi.fn((props: Parameters<typeof actual.TranscriptView>[0]) =>
     createElement(actual.TranscriptView, props)) };
+});
+vi.mock('../features/tui/ToolActivityView.js', async (original) => {
+  const actual = await original<typeof import('../features/tui/ToolActivityView.js')>();
+  return { ...actual, ToolActivityView: vi.fn((props: Parameters<typeof actual.ToolActivityView>[0]) =>
+    createElement(actual.ToolActivityView, props)) };
 });
 
 let directory: string;
@@ -95,6 +110,896 @@ beforeEach(async () => {
 });
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
+
+function useToolProvider(call: ProviderAgent['call']): void {
+  const executor = createManagerTurnExecutor(repository, {
+    ctx: { providerType: 'mock', lang: 'en', model: undefined, provider: makeProvider({ setup: () => ({ call }) }) },
+    strategy: { systemPrompt: 'manager' },
+  });
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'tool-history', executor });
+}
+
+function toolReply(message = 'Tool turn finished') {
+  return { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
+    structuredOutput: { message, summary: null } };
+}
+
+function currentToolPage() {
+  const props = vi.mocked(toolActivityView.ToolActivityView).mock.lastCall?.[0];
+  expect(props, 'ManagerView should render the shared tool activity view').toBeDefined();
+  return props!;
+}
+
+function committedToolRows(): string {
+  const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+  const user = entries.map((entry) => entry.role).lastIndexOf('user');
+  return entries.slice(user + 1).filter((entry) => entry.role === 'tool').map((entry) => entry.content).join('\n');
+}
+
+/** The expanded rows of the tool history; the view goes back to compact afterwards. */
+async function expandedToolRows(app: ReturnType<typeof render>): Promise<string> {
+  const rows = await browseToolPage(app, '\x0f');
+  await browseToolPage(app, '\x0f');
+  return rows;
+}
+
+function toolRows(): string {
+  const page = currentToolPage();
+  return page.state.expanded ? page.page.rows.join('\n') : [committedToolRows(), ...page.page.rows].filter(Boolean).join('\n');
+}
+
+async function browseToolPage(app: ReturnType<typeof render>, key: string): Promise<string> {
+  const before = currentToolPage();
+  app.stdin.write(key);
+  await waitFor(() => expect(currentToolPage().state).not.toEqual(before.state));
+  return toolRows();
+}
+
+it.each(['before publication', 'after publication'])(
+  'keeps completed history when a snapshot starts %s of the completion event', async (timing) => {
+  const firstDone = deferred<void>(); const secondDone = deferred<void>();
+  const startSecondTool = deferred<void>(); const secondResult = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = ++invocation;
+    if (index === 2) await startSecondTool.promise;
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    if (index === 1) { options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'previous', isError: false } }); await firstDone.promise; }
+    else { await secondResult.promise; options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'ready', isError: false } }); await secondDone.promise; }
+    return toolReply();
+  }));
+  const connections = observeIpcConnections(); await client.connect(); await complete(); await snapshotView();
+  const append = daemonFiles.appendPrivateFile;
+  const saving = deferred<void>(); const publish = deferred<void>();
+  try {
+    await client.submit({ kind: 'message', text: 'Previous turn' });
+    await waitFor(() => expect(toolRows()).toContain('previous'));
+    firstDone.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
+    await client.submit({ kind: 'message', text: 'Current turn' }); await fixture.executing(2);
+    const operationId = client.getSnapshot().state!.running!.operationId;
+    vi.spyOn(daemonFiles, 'appendPrivateFile').mockImplementation(async (path, content) => {
+      if (path.endsWith(join('conversation-tool-history', `${client.getSnapshot().state!.conversationId}.jsonl`))
+        && content.includes(operationId) && content.includes('turn-2.ts') && content.includes('ready')) {
+        saving.resolve(); await publish.promise;
+      }
+      await append(path, content);
+    });
+    startSecondTool.resolve(); secondResult.resolve(); await saving.promise;
+    const snapshot = vi.spyOn(service, 'snapshot');
+    const refreshing = timing === 'before publication' ? refreshSnapshot(client, connections[0]!) : undefined;
+    if (refreshing !== undefined) await waitFor(() => expect(snapshot).toHaveBeenCalled());
+    publish.resolve();
+    if (refreshing !== undefined) await refreshing;
+    else await refreshSnapshot(client, connections[0]!);
+    await waitFor(() => expect(toolRows()).toContain('turn-2.ts'));
+    expect(client.getSnapshot().items.find((item) => item.kind === 'tool_history' && item.history.operationId === operationId)).toMatchObject({ history: { operationId } });
+    expect(toolRows()).toContain('ready');
+    secondResult.resolve();
+    secondDone.resolve(); await fixture.settled();
+    await waitFor(() => expect(toolRows()).toContain('ready'));
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+    expect(toolRows()).toContain('ready');
+  } finally { publish.resolve(); firstDone.resolve(); startSecondTool.resolve(); secondResult.resolve(); secondDone.resolve(); await fixture.settled(); }
+});
+
+it('keeps the previous tool history after a tool-free turn and its displayed transcript on reconnect', async () => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ === 0) {
+      options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'previous.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'previous-result', isError: false } });
+      await finish.promise;
+    }
+    return toolReply();
+  }));
+  const connections = observeIpcConnections(); await client.connect(); await complete(); await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Previous tools' });
+    await waitFor(() => expect(toolRows()).toContain('previous-result'));
+    finish.resolve(); await fixture.settled(); await refreshSnapshot(client, connections[0]!);
+    await client.submit({ kind: 'message', text: 'No tools this turn' }); await fixture.settled();
+    await refreshSnapshot(client, connections[0]!);
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(1);
+    connections[0]!.socket.destroy(); await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(client.getSnapshot().items.filter((item) => item.kind === 'tool_history')).toHaveLength(1);
+    const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+    expect(text.split('previous-result')).toHaveLength(2);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('restores a tool-free human turn before later background tools on attachment and reconnect', async () => {
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (++invocation === 2) {
+      options.onStream!({ type: 'tool_use', data: { id: 'background', tool: 'Read', input: { file_path: 'background.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'background', content: 'background-tool-result', isError: false } });
+    }
+    return toolReply();
+  }));
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Earlier tool-free question' }); await fixture.settled();
+  expect(await fixture.dispatcher.accept({ eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationRecord(repository).id,
+    source: 'daemon', occurredAt: new Date().toISOString(), event: { kind: 'director_message', text: 'Inspect in background',
+      directorConversationId: conversationId({ kind: 'daemon' }) } })).toMatchObject({ kind: 'accepted' });
+  await fixture.settled();
+  client.close(); client = new ConversationIpcClient(assignment);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const assertOrder = (): void => {
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    const question = entries.findIndex((entry) => entry.role === 'user' && entry.content === 'Earlier tool-free question');
+    const tool = entries.findIndex((entry) => entry.content.includes('background-tool-result'));
+    expect(question).toBeGreaterThanOrEqual(0);
+    expect(tool).toBeGreaterThan(question);
+    expect(entries.filter((entry) => entry.content.includes('background-tool-result'))).toHaveLength(1);
+    expect(entries.filter((entry) => entry.content === 'Earlier tool-free question')).toHaveLength(1);
+  };
+  await waitFor(assertOrder);
+  connections[0]!.socket.destroy();
+  await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+  await waitFor(assertOrder);
+});
+
+it('restores a saved reply after its message and tools on a restarted screen and keeps each once after reconnect', async () => {
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'reply.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'tool', content: 'reply-tool-result', isError: false } });
+    return toolReply('Saved manager reply');
+  }));
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Question before restart' }); await fixture.settled();
+  client.close(); client = new ConversationIpcClient(assignment);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const assertLog = (): void => {
+    const log = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.flatMap((entry) =>
+      entry.content === 'Question before restart' ? [`${entry.role}:question`] : entry.content.includes('reply-tool-result') ? [`${entry.role}:tool`]
+        : entry.content === 'Saved manager reply' ? [`${entry.role}:reply`] : []);
+    expect(log).toEqual(['user:question', 'tool:tool', 'assistant:reply']);
+  };
+  await waitFor(assertLog);
+  connections[0]!.socket.destroy();
+  await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+  await refreshSnapshot(client, connections[1]!);
+  assertLog();
+});
+
+it('appends the previous tool transcript before the next user message', async () => {
+  const secondTurn = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ === 0) {
+      options.onStream!({ type: 'tool_use', data: { id: 'previous', tool: 'Read', input: { file_path: 'previous.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'previous', content: 'previous-result', isError: false } });
+      return toolReply();
+    }
+    await secondTurn.promise;
+    return toolReply('Second turn');
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'First question' }); await fixture.settled();
+    await waitFor(() => expect(toolRows()).toContain('previous-result'));
+
+    app.stdin.write('Next question'); app.stdin.write('\r');
+    await fixture.executing(2);
+    await waitFor(() => {
+      const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+      expect(entries.some((entry) => entry.content.includes('Next question'))).toBe(true);
+      expect(entries.some((entry) => entry.content.includes('previous-result'))).toBe(true);
+    });
+    const entries = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    const historyIndex = entries.findIndex((entry) => entry.content.includes('previous-result'));
+    const questionIndex = entries.findIndex((entry) => entry.role === 'user' && entry.content.includes('Next question'));
+    expect(historyIndex).toBeGreaterThanOrEqual(0);
+    expect(questionIndex).toBeGreaterThan(historyIndex);
+    expect(entries.filter((entry) => entry.content.includes('previous-result'))).toHaveLength(1);
+  } finally { secondTurn.resolve(); await fixture.settled(); }
+});
+
+it.each(['human', 'background'] as const)('keeps a queued accepted message in snapshot state without overtaking the %s turn', async (kind) => {
+  const release = deferred<void>();
+  let calls = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const current = ++calls;
+    if (current === 1) {
+      await release.promise;
+      options.onStream!({ type: 'tool_use', data: { id: 'first', tool: 'Read', input: { file_path: 'first.ts' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'first', content: 'first tool result', isError: false } });
+    }
+    return toolReply(current === 1 ? 'first reply' : 'second reply');
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  const log = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.flatMap((entry) =>
+    entry.role === 'user' || entry.content === 'first reply' || entry.content === 'second reply' ? [entry.content]
+      : entry.content.includes('first tool result') ? ['tool'] : []);
+  try {
+    if (kind === 'human') await client.submit({ kind: 'message', text: 'first input' });
+    else await fixture.dispatcher.accept({ eventId: randomUUID(), requestId: randomUUID(), conversationId: conversationRecord(repository).id,
+      source: 'daemon', occurredAt: new Date().toISOString(), event: { kind: 'director_message', text: 'Inspect', directorConversationId: conversationId({ kind: 'daemon' }) } });
+    await fixture.executing(1);
+    const next = await client.submit({ kind: 'message', text: 'next input' });
+    expect(next.kind).toBe('accepted');
+    await client.refresh(); await complete();
+    expect(client.getSnapshot().items).toContainEqual(expect.objectContaining({ kind: 'user_message', message: 'next input', pending: true }));
+    expect(log()).not.toContain('next input');
+    release.resolve(); await fixture.settled();
+    await waitFor(() => expect(log()).toEqual([...(kind === 'human' ? ['first input'] : []), 'tool', 'first reply', 'next input', 'second reply']));
+    await client.refresh(); await complete();
+    expect(log().filter((message) => message === 'next input')).toHaveLength(1);
+  } finally { release.resolve(); await fixture.settled(); }
+});
+
+it('displays each streamed tool output in the history', async () => {
+  const finish = deferred<void>();
+  const lines = ['streamed-line-0', 'streamed-line-1', 'streamed-line-2'];
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'npm test' } } });
+    for (const line of lines) {
+      options.onStream!({ type: 'tool_output', data: { id: 'long', tool: 'Bash', output: `${line}\n` } });
+      await waitFor(() => expect(toolRows()).toContain(line));
+    }
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Run the long tool' });
+    await waitFor(() => expect(toolRows()).toContain(lines.at(-1)));
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([1, 2])('retains each of %s identical completed results once after unfinished removal and display changes on the same screen', async (count) => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'unfinished', tool: 'Bash', input: { command: 'background' } } });
+    for (let index = 0; index < count; index++) {
+      options.onStream!({ type: 'tool_use', data: { id: `completed-${index}`, tool: 'Read', input: { file_path: `file-${index}.ts` } } });
+      options.onStream!({ type: 'tool_result', data: { id: `completed-${index}`, content: 'ready', isError: false } });
+    }
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Keep visible completed results' });
+    await waitFor(() => expect(toolRows().split('\n').filter((row) => row === 'ready')).toHaveLength(count));
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await waitFor(() => expect(toolRows()).not.toContain('background'));
+    await browseToolPage(app, '\x0f');
+    while (currentToolPage().page.hasMore) await browseToolPage(app, '\x1b[6~');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    columns.mockReturnValue(40); app.stdout.emit('resize');
+    await waitFor(() => { for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(40); });
+    await browseToolPage(app, '\x0f');
+    await client.submit({ kind: 'message', text: 'Advance to the next turn' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split('\n').filter((line) => line === 'ready')).toHaveLength(count);
+      expect(text).not.toContain('background');
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([
+  'printf abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  "printf '途中…完了'",
+])('retains the exact displayed input in the next transcript after resizing the same screen: %s', async (command) => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'summary', tool: 'Bash', input: { command } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'summary', content: 'ready', isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  const columns = vi.spyOn(app.stdout, 'columns', 'get');
+  columns.mockReturnValue(40); app.stdout.emit('resize');
+  try {
+    await client.submit({ kind: 'message', text: 'Show the command' });
+    await waitFor(() => expect(committedToolRows()).toMatch(/^Bash .* ✓(?: |$)/mu));
+    const committed = committedToolRows();
+    for (const row of committed.split('\n')) expect(measureWidth(row)).toBeLessThanOrEqual(40);
+    columns.mockReturnValue(80); app.stdout.emit('resize');
+    expect(committedToolRows()).toBe(committed);
+    await browseToolPage(app, '\x0f');
+    expect(toolRows()).toContain(command);
+    await browseToolPage(app, '\x0f');
+    finish.resolve(); await fixture.settled();
+    await client.submit({ kind: 'message', text: 'Advance to another turn' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split(committed)).toHaveLength(2);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('retains the received start and completion times once after compact display and finite expanded pages on the same screen', async () => {
+  const finish = deferred<void>(); let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'timed', tool: 'Bash', input: { command: 'printf ready' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'timed', content: 'ready', isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView();
+  vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(32); app.stdout.emit('resize');
+  try {
+    await client.submit({ kind: 'message', text: 'Show exact times' });
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .* ✓(?: |$)/mu));
+    await client.refresh(); await complete();
+    const committed = committedToolRows();
+    const item = client.getSnapshot().items.find((value) => value.kind === 'tool_history');
+    expect(item?.kind).toBe('tool_history');
+    if (item?.kind !== 'tool_history') throw new Error('Missing received tool history');
+    const entry = item.history.history.entries[0]!;
+    expect(entry.startedAt).toEqual(expect.any(Number)); expect(entry.completedAt).toEqual(expect.any(Number));
+    const timing = `success @${entry.startedAt} → @${entry.completedAt} (${Math.max(0, entry.completedAt! - entry.startedAt!)} ms)`;
+    const observed: string[] = [];
+    await browseToolPage(app, '\x0f');
+    for (let page = 0; page < 30; page++) {
+      observed.push(...currentToolPage().page.rows);
+      if (!currentToolPage().page.hasMore) break;
+      await browseToolPage(app, '\x1b[6~');
+    }
+    expect(observed.join('')).toContain(timing);
+    expect(currentToolPage().page.hasMore).toBe(false);
+    finish.resolve(); await fixture.settled();
+    await client.submit({ kind: 'message', text: 'Advance after viewing the times' }); await fixture.settled();
+    await waitFor(() => {
+      const text = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries.map((entry) => entry.content).join('\n');
+      expect(text.split(committed)).toHaveLength(2);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([5, 6])('fits a %s line draft and expanded results while resizing the same screen without losing its cursor', async (lineCount) => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'printf long' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: Array.from({ length: 100 }, (_, i) => `result-${i}`).join('\n'), isError: false } });
+    await finish.promise; return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView(); const submit = vi.spyOn(client, 'submit');
+  const lines = Array.from({ length: lineCount }, (_, index) => `下書き${index + 1}を保持`);
+  const draft = lines.join('\n');
+  try {
+    await client.submit({ kind: 'message', text: 'Show detailed results with my draft' });
+    await waitFor(() => expect(toolRows()).toContain('result-0'));
+    app.stdin.write('\x1b[200~' + draft + '\x1b[201~');
+    await waitFor(() => expect(app.lastFrame()).toContain(lines.at(-1)!));
+    app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
+    await browseToolPage(app, '\x0f');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    for (const width of [80, 40, 80]) {
+      columns.mockReturnValue(width); app.stdout.emit('resize');
+      await waitFor(() => {
+        const frame = app.lastFrame()!; const start = frame.lastIndexOf('✓ Bash');
+        expect(start).toBeGreaterThanOrEqual(0);
+        const live = frame.slice(start).trimEnd().split('\n');
+        for (const line of lines) expect(live.join('\n')).toContain(line);
+        for (const row of live) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+        expect(live.length).toBeLessThanOrEqual(24);
+        expect(currentToolPage().state.expanded).toBe(true);
+        expect(currentToolPage().page.hasMore).toBe(true);
+      });
+    }
+    app.stdin.write('追記');
+    await waitFor(() => expect(app.lastFrame()).toContain('追記保持'));
+    finish.resolve(); await fixture.settled();
+    app.stdin.write('\r');
+    await waitFor(() => expect(submit.mock.calls.some(([command]) => command.kind === 'message'
+      && command.text === draft.slice(0, -2) + '追記' + draft.slice(-2))).toBe(true));
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([false, true])('retains one timed tool entry across duplicate delivery, repeated snapshots and reconnect with failure=%s', async (isError) => {
+  const result = deferred<void>(); const finish = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'tool-1', tool: 'Bash', input: { command: 'printf history-ready' } } });
+    await result.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'tool-1', content: 'history-ready', isError } });
+    await finish.promise;
+    return toolReply();
+  });
+  useToolProvider(call);
+  const progress = vi.spyOn(fixture.conversations, 'progress');
+  const outputs = vi.fn(); client.onOutput(outputs);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  try {
+    expect(await client.submit({ kind: 'message', text: 'Track one tool' })).toMatchObject({ kind: 'accepted' });
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .*printf history-ready … running$/mu));
+    const startedAt = (await expandedToolRows(app)).match(/running @(\d+)/u)![1];
+    result.resolve();
+    await waitFor(() => expect(toolRows()).toMatch(isError ? /^Bash .* ✗(?: |$)/mu : /^Bash .* ✓(?: |$)/mu));
+    const completed = toolRows();
+    expect(completed.split('\n').filter((row) => /^Bash .* [✓✗](?: |$)/u.test(row))).toHaveLength(1);
+    expect(completed).toContain('history-ready');
+    const details = await expandedToolRows(app);
+    expect(details).toContain(`${isError ? 'failure' : 'success'} @${startedAt}`);
+    expect(details).toMatch(/→ @\d+.*\(\d+ ms\)/u);
+    const events = progress.mock.calls.filter(([, message]) => JSON.stringify(message).includes('"id":"tool-1"'));
+    expect(events).toHaveLength(2);
+    const toolOutputs = () => outputs.mock.calls.filter(([output]) => JSON.stringify(output).includes('"tool-1"'));
+    const deliveredCount = toolOutputs().length;
+    expect(deliveredCount).toBeGreaterThan(0);
+    await refreshSnapshot(client, connections[0]!);
+    await refreshSnapshot(client, connections[0]!);
+    for (const [turn, message] of events) await fixture.dispatcher.post({ kind: 'turn_progress', turn, message });
+    await fixture.dispatcher.drain();
+    await refreshSnapshot(client, connections[0]!);
+    expect(toolRows()).toBe(completed);
+    expect(await expandedToolRows(app)).toBe(details);
+    expect(toolOutputs()).toHaveLength(deliveredCount);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(toolRows()).toBe(completed);
+    expect(await expandedToolRows(app)).toBe(details);
+    expect(toolOutputs()).toHaveLength(deliveredCount);
+    expect(app.lastFrame()).toContain('history-ready');
+    finish.resolve(); await fixture.settled();
+    await refreshSnapshot(client, connections[1]!);
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    expect(toolRows()).toBe(completed);
+    expect(app.lastFrame()).toContain('history-ready');
+    expect(call).toHaveBeenCalledOnce();
+  } finally { result.resolve(); finish.resolve(); await fixture.settled(); }
+});
+
+it.each(['operationId', 'generation'] as const)('rejects an old result when only %s differs while reusing the provider tool ID', async (different) => {
+  const finishes = [deferred<void>(), deferred<void>()];
+  const results = [deferred<void>(), deferred<void>()];
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = invocation++;
+    options.onStream!({ type: 'tool_use', data: { id: 'tool-1', tool: 'Read', input: { file_path: `turn-${index}.ts` } } });
+    await results[index]!.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'tool-1', content: `turn-${index}-result`, isError: index === 0 } });
+    await finishes[index]!.promise;
+    return toolReply(`Turn ${index} finished`);
+  }));
+  const progress = vi.spyOn(fixture.conversations, 'progress');
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'First turn' });
+    await waitFor(() => expect(toolRows()).toContain('turn-0.ts'));
+    results[0]!.resolve();
+    await waitFor(() => expect(toolRows()).toContain('turn-0-result'));
+    const old = progress.mock.calls.find(([, message]) => JSON.stringify(message).includes('turn-0-result'));
+    expect(old).toBeDefined();
+    finishes[0]!.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Second turn' });
+    await waitFor(() => expect(toolRows()).toContain('turn-1.ts'));
+    const current = client.getSnapshot().state!.running!;
+    const turn = { ...old![0], operationId: current.operationId, generation: current.generation!,
+      [different]: different === 'operationId' ? old![0].operationId : old![0].generation };
+    expect(turn[different]).not.toBe(current[different]);
+    const runningRows = toolRows();
+    await fixture.dispatcher.post({ kind: 'turn_progress', turn, message: old![1] });
+    await fixture.dispatcher.drain();
+    await refreshSnapshot(client, connections[0]!);
+    expect(toolRows()).toBe(runningRows);
+    expect(toolRows()).not.toContain('turn-0-result');
+    results[1]!.resolve();
+    await waitFor(() => expect(toolRows()).toContain('turn-1-result'));
+    expect(app.lastFrame()).toContain('turn-1-result');
+    expect(toolRows()).toMatch(/^Read turn-1\.ts ✓(?: |$)/mu);
+    expect(toolRows()).not.toContain('✗');
+    const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    expect(transcript.filter((entry) => JSON.stringify(entry).includes('turn-0-result'))).toHaveLength(1);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(toolRows()).toContain('turn-1-result');
+    expect(toolRows()).not.toContain('turn-0-result');
+    expect(vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+      .filter((entry) => JSON.stringify(entry).includes('turn-0-result'))).toHaveLength(1);
+    expect(app.lastFrame()).toContain('Turn 0 finished');
+  } finally { for (const value of [...results, ...finishes]) value.resolve(); await fixture.settled(); }
+});
+
+it.each([false, true])('restores a tool result completed during disconnection on the same client and screen with failure=%s', async (isError) => {
+  const finish = deferred<void>(); const reconnect = deferred<void>(); const opening = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'offline-tool', tool: 'Bash', input: { command: 'printf offline-result' } } });
+    await finish.promise;
+    options.onStream!({ type: 'tool_result', data: { id: 'offline-tool', content: 'offline-result', isError } });
+    return toolReply();
+  });
+  useToolProvider(call);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const open = service.open.bind(service);
+  vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+    opening.resolve(); await reconnect.promise; return open(...args);
+  });
+  try {
+    await client.submit({ kind: 'message', text: 'Complete while disconnected' });
+    await waitFor(() => expect(toolRows()).toMatch(/^Bash .*printf offline-result … running$/mu));
+    const conversationId = client.getSnapshot().state!.conversationId;
+    connections[0]!.socket.destroy();
+    await opening.promise;
+    expect(client.getSnapshot().connection).not.toBe('connected');
+    expect(fixture.activeOperationCount).toBe(1);
+    expect(call.mock.calls[0]![1].abortSignal?.aborted).toBe(false);
+    finish.resolve(); await fixture.settled();
+    expect(fixture.activeOperationCount).toBe(0);
+    expect(client.getSnapshot().connection).not.toBe('connected');
+    reconnect.resolve();
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete',
+      state: { conversationId, running: null } }));
+    await waitFor(() => expect(toolRows()).toMatch(isError ? /^Bash .* ✗(?: |$)/mu : /^Bash .* ✓(?: |$)/mu));
+    expect(app.lastFrame()).toContain('offline-result');
+    const completed = toolRows();
+    expect(completed.split('\n').filter((row) => /^Bash .* [✓✗](?: |$)/u.test(row))).toHaveLength(1);
+    await refreshSnapshot(client, connections[1]!);
+    await refreshSnapshot(client, connections[1]!);
+    expect(toolRows()).toBe(completed);
+    expect(call).toHaveBeenCalledOnce();
+    expect(app.lastFrame()).toContain('offline-result');
+  } finally { finish.resolve(); reconnect.resolve(); await fixture.settled(); }
+});
+
+it('restores an accepted message after disconnect before its start notification and never appends it twice', async () => {
+  const reached = deferred<void>(); const release = deferred<void>();
+  const markStarted = fixture.events.markStarted.bind(fixture.events);
+  vi.spyOn(fixture.events, 'markStarted').mockImplementationOnce(async (...args) => {
+    reached.resolve(); await release.promise; return markStarted(...args);
+  });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  const live = vi.fn(); const detach = client.onOutput(live);
+  const messages = () => vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+    .filter((entry) => entry.role === 'user' && entry.content === 'Accepted before disconnect');
+  try {
+    const accepted = await client.submit({ kind: 'message', text: 'Accepted before disconnect' }, () => connections[0]!.socket.destroy());
+    expect(accepted.kind).toBe('accepted');
+    await reached.promise;
+    expect(live.mock.calls.flatMap(([output]) => output.kind === 'user_message' ? [output] : [])).toEqual([]);
+    await waitFor(() => expect(connections).toHaveLength(2)); await complete();
+    await waitFor(() => expect(messages()).toHaveLength(1));
+    expect(client.getSnapshot().items).toContainEqual(expect.objectContaining({ kind: 'user_message', message: 'Accepted before disconnect' }));
+    release.resolve(); await fixture.settled();
+    await client.refresh(); await complete();
+    expect(live.mock.calls.flatMap(([output]) => output.kind === 'user_message' ? [output] : [])).toHaveLength(1);
+    expect(messages()).toHaveLength(1);
+  } finally { release.resolve(); detach(); await fixture.settled(); }
+});
+
+it('restores the current running tool without output and excludes the old turn after reconnect', async () => {
+  const finishes = [deferred<void>(), deferred<void>()];
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const index = invocation++;
+    options.onStream!({ type: 'tool_use', data: { id: 'reused', tool: 'Read', input: { file_path: index === 0 ? 'stale.ts' : 'current.ts' } } });
+    options.onStream!({ type: 'tool_output', data: { id: 'reused', tool: 'Read', output: 'streamed before disconnect\n' } });
+    await finishes[index]!.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Start unfinished tool' });
+    await waitFor(() => expect(toolRows()).toContain('stale.ts'));
+    finishes[0]!.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Start next turn' });
+    await waitFor(() => expect(toolRows()).toContain('current.ts'));
+    expect(toolRows()).not.toContain('stale.ts');
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(currentToolPage().page.rows.join('\n')).toContain('current.ts');
+    expect(currentToolPage().page.rows.join('\n')).not.toContain('streamed before disconnect');
+    expect(client.getSnapshot().state?.running).not.toBeNull();
+    expect(toolRows()).not.toContain('stale.ts');
+    const transcript = vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries;
+    expect(transcript.filter((entry) => JSON.stringify(entry).includes('stale.ts'))).toEqual([]);
+  } finally { for (const value of finishes) value.resolve(); await fixture.settled(); }
+});
+
+it('reads completed tool history on refresh without duplicating the conversation log', async () => {
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'refresh.ts' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'read', content: 'persisted-result', isError: false } });
+    return toolReply();
+  }));
+  await client.connect(); await complete(); await snapshotView();
+  await client.submit({ kind: 'message', text: 'Run a tool' }); await fixture.settled();
+  await waitFor(() => expect(committedToolRows()).toContain('persisted-result'));
+  const committed = committedToolRows();
+  await waitFor(() => expect(client.getSnapshot().items.some((item) => item.kind === 'tool_history'
+    && item.history.history.entries.some((entry) => entry.result === 'persisted-result'))).toBe(true));
+  await client.refresh(); await complete();
+  expect(committedToolRows()).toBe(committed);
+
+});
+
+it.each([
+  ['plain text', 'ready', 'ready'],
+  ['stored masked text', 'secret123 ready', '[REDACTED] ready'],
+  ['ANSI split secret', 'ready sec\x1b[31mret123\x1b[0m', 'ready [REDACTED]'],
+  ['allowed JSON', '{"stdout":"ready secret123","api\\u005fkey":"secret123"}', 'ready [REDACTED]'],
+  ['unknown JSON field', '{"private_blob":{"text":"非公開本文"}}', '[structured output omitted]'],
+  ['JSON array', '[{"text":"非公開本文"}]', '[structured output omitted]'],
+  ['incomplete JSON', '{"stdout":"非公開本文', '[structured output omitted]'],
+])('sanitizes %s in the manager compact and expanded view before and after reconnect', async (_name, content, expected) => {
+  const finish = deferred<void>();
+  let invocation = 0;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    if (invocation++ > 0) return toolReply('Next turn');
+    options.onStream!({ type: 'tool_use', data: { id: 'safe-json', tool: 'Bash', input: { command: 'printf ready\x1b[2J', token: 'secret123' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'safe-json', content, isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const check = () => {
+    const rows = toolRows().split('\n');
+    expect(rows).toContain(expected);
+    for (const row of rows) for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b', '{', '}']) {
+      expect(row).not.toContain(forbidden);
+    }
+  };
+  try {
+    await client.submit({ kind: 'message', text: 'Show a safe result' });
+    await waitFor(check);
+    const saved = (await fixture.store.readToolHistories(client.getSnapshot().state!.conversationId)).at(-1);
+    expect(saved?.history.entries[0]?.result).toBe(stripAnsi(content).replaceAll('secret123', '[REDACTED]'));
+    expect(JSON.stringify(saved)).not.toContain('secret123');
+    await browseToolPage(app, '\x0f'); check();
+    expect(currentToolPage().state.expanded).toBe(true);
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    check();
+    await browseToolPage(app, '\x0f'); check();
+    expect(currentToolPage().state.expanded).toBe(false);
+    finish.resolve(); await fixture.settled();
+    await waitFor(() => expect(client.getSnapshot().state?.running).toBeNull());
+    await client.submit({ kind: 'message', text: 'Keep the displayed history in the transcript' });
+    await fixture.settled();
+    await waitFor(() => expect(vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries
+      .some((entry) => entry.content.includes(expected))).toBe(true));
+    for (const entry of vi.mocked(transcriptView.TranscriptView).mock.lastCall![0].entries) {
+      for (const forbidden of ['secret123', '非公開本文', 'private_blob', '\x1b']) expect(entry.content).not.toContain(forbidden);
+    }
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('commits each of five completed reads to the log and exposes every path and result through bounded detail pages', async () => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    for (let index = 0; index < 5; index++) {
+      options.onStream!({ type: 'tool_use', data: { id: `read-${index}`, tool: 'Read', input: { file_path: `日本語-${index}.ts` } } });
+      options.onStream!({ type: 'tool_result', data: { id: `read-${index}`, content: `read-result-${index}`, isError: false } });
+    }
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Read five files' });
+    await waitFor(() => expect(committedToolRows().match(/^Read .* ✓(?: |$)/gmu)).toHaveLength(5));
+    const compactResults = toolRows().match(/read-result-\d/gu) ?? [];
+    expect(compactResults.length).toBeGreaterThanOrEqual(1);
+    expect(compactResults).toHaveLength(5);
+    const pages = [await browseToolPage(app, '\x0f')];
+    for (let page = 0; page < 30 && currentToolPage().page.hasMore; page++) {
+      pages.push(await browseToolPage(app, '\x1b[6~'));
+    }
+    expect(currentToolPage().page.hasMore).toBe(false);
+    for (let index = 0; index < 5; index++) {
+      expect(pages.join('\n')).toContain(`日本語-${index}.ts`);
+      expect(pages.join('\n')).toContain(`read-result-${index}`);
+    }
+    expect(pages.length).toBeGreaterThan(1);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('commits concurrent tools in completion delivery order and matches a delayed background failure', async () => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'background', tool: 'Bash', input: { command: 'background-command' } } });
+    options.onStream!({ type: 'tool_use', data: { id: 'later', tool: 'Grep', input: { pattern: 'later-search' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'later', content: 'later-success', isError: false } });
+    options.onStream!({ type: 'tool_result', data: { id: 'background', content: 'background-failure', isError: true } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Wait for background completion' });
+    await waitFor(() => expect(toolRows()).toContain('background-failure'));
+    const rows = toolRows();
+    const first = rows.indexOf('Grep Used Grep later-search ✓'); const second = rows.indexOf('Bash Ran background-command ✗');
+    expect(first).toBeGreaterThanOrEqual(0); expect(second).toBeGreaterThan(first);
+    const later = rows.slice(first, second); const background = rows.slice(second);
+    expect(background).toContain('background-failure'); expect(background).not.toContain('later-success');
+    expect(later).toContain('later-success'); expect(later).not.toContain('background-failure');
+    const completed = (await fixture.store.readToolHistories(client.getSnapshot().state!.conversationId)).at(-1);
+    const entries = completed!.history.entries;
+    expect(entries.map((entry) => entry.toolId)).toEqual(['later', 'background']);
+    expect(app.lastFrame()).toContain('background-failure');
+    expect(app.lastFrame()).toContain('later-success');
+    expect(app.lastFrame()).toContain('Bash Ran background-command ✗');
+    expect(app.lastFrame()).toContain('Grep Used Grep later-search ✓');
+    const expanded = await browseToolPage(app, '\x0f');
+    expect(expanded.split('\n')).toContain('✗ Bash Ran');
+    expect(expanded.split('\n')).toContain('✓ Grep Used Grep');
+    expect(expanded).toContain('background-command');
+    expect(expanded).toContain('background-failure');
+    expect(expanded).toContain('later-search');
+    expect(expanded).toContain('later-success');
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('keeps the selected slash completion and running turn while toggling and paging tool history', async () => {
+  const finish = deferred<void>();
+  let signal: AbortSignal | undefined;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    signal = options.abortSignal;
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'completion-history' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: Array<string>(50).fill('completion-result').join('\n'), isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete(); const app = await snapshotView();
+  const submit = vi.spyOn(client, 'submit');
+  try {
+    await client.submit({ kind: 'message', text: 'Show history beside completions' });
+    await waitFor(() => expect(toolRows()).toContain('completion-result'));
+    app.stdin.write('/');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /make-goal'));
+    app.stdin.write('\x1b[B');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify'));
+    const running = client.getSnapshot().state!.running;
+    for (const key of ['\x0f', '\x1b[6~', '\x1b[5~', '\x0f']) {
+      await browseToolPage(app, key);
+      expect(app.lastFrame()).toContain('❯ /verify');
+      expect(client.getSnapshot().state!.running).toEqual(running);
+      expect(signal?.aborted).toBe(false);
+    }
+    app.stdin.write('\t');
+    await waitFor(() => expect(app.lastFrame()).toContain('❯ /verify '));
+    expect(submit.mock.calls.filter(([command]) => command.kind === 'message')).toHaveLength(1);
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it('preserves a Japanese draft and insertion point while paging a long result to its end, resizing and reconnecting on the same screen', async () => {
+  const finish = deferred<void>();
+  const lines = Array.from({ length: 180 }, (_, index) => `row-${String(index).padStart(3, '0')} ${'日本語'.repeat(20)}`);
+  expect(Buffer.byteLength(lines.join('\n'))).toBeGreaterThan(16 * 1024);
+  let signal: AbortSignal | undefined;
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    signal = options.abortSignal;
+    options.onStream!({ type: 'tool_use', data: { id: 'long', tool: 'Bash', input: { command: 'printf long-result' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'long', content: lines.join('\n'), isError: false } });
+    options.onStream!({ type: 'tool_use', data: { id: 'running', tool: 'Grep', input: { pattern: 'still-running' } } });
+    await finish.promise;
+    return toolReply();
+  }));
+  const connections = observeIpcConnections();
+  await client.connect(); await complete(); const app = await snapshotView();
+  const submit = vi.spyOn(client, 'submit');
+  try {
+    await client.submit({ kind: 'message', text: 'Inspect long output' });
+    await waitFor(() => expect(toolRows()).toContain('row-000'));
+    const compactRows = toolRows().match(/row-\d{3}/gu) ?? [];
+    expect(compactRows.length).toBeGreaterThanOrEqual(1);
+    expect(compactRows.length).toBeLessThanOrEqual(3);
+    app.stdin.write('日本語下書き');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語下書き'));
+    app.stdin.write('\x1b[D'); app.stdin.write('\x1b[D');
+    const running = { ...client.getSnapshot().state!.running! };
+    const pages = [await browseToolPage(app, '\x0f')];
+    for (let page = 0; page < 100 && currentToolPage().page.hasMore; page++) {
+      pages.push(await browseToolPage(app, '\x1b[6~'));
+      expect(currentToolPage().page.rows.length).toBeLessThan(24);
+    }
+    expect(currentToolPage().page.hasMore).toBe(false);
+    expect(pages.join('\n')).toContain('row-000');
+    expect(pages.join('\n')).toContain(`row-${String(lines.length - 1).padStart(3, '0')}`);
+    expect(pages.join('\n')).toContain('still-running');
+    expect(pages.at(-1)).toContain('running');
+    await browseToolPage(app, '\x1b[5~');
+    const columns = vi.spyOn(app.stdout, 'columns', 'get');
+    for (const width of [40, 100, 80]) {
+      const beforeResize = toolRows();
+      columns.mockReturnValue(width); app.stdout.emit('resize');
+      await waitFor(() => {
+        expect(app.lastFrame()).toContain('日本語下書き');
+        expect(toolRows()).not.toBe(beforeResize);
+        for (const row of currentToolPage().page.rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+      });
+    }
+    connections[0]!.socket.destroy();
+    await waitFor(() => expect(connections).toHaveLength(2));
+    await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+    expect(client.getSnapshot().state?.running).toEqual(running);
+    expect(signal?.aborted).toBe(false);
+    app.stdin.write('追記');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語下追記書き'));
+    app.stdin.write('\r');
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text: '日本語下追記書き' }, expect.any(Function)));
+    app.stdin.write('\x1b[27u');
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+  } finally { finish.resolve(); await fixture.settled(); }
+});
+
+it.each([32, 40])('reserves wrapped control hints and the draft before filling tool detail pages at width %s', async (width) => {
+  const finish = deferred<void>();
+  useToolProvider(vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    options.onStream!({ type: 'tool_use', data: { id: 'bounded', tool: 'Bash', input: { command: 'printf bounded-result' } } });
+    options.onStream!({ type: 'tool_result', data: { id: 'bounded',
+      content: Array.from({ length: 120 }, (_, index) => `result-line-${index}`).join('\n'), isError: false } });
+    await finish.promise;
+    return toolReply();
+  }));
+  await client.connect(); await complete();
+  const pending = client.getSnapshot().state!.pending!;
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
+  const app = await snapshotView();
+  try {
+    await client.submit({ kind: 'message', text: 'Fill the current detail page' });
+    await waitFor(() => expect(toolRows()).toContain('result-line-0'));
+    app.stdin.write('日本語の下書き');
+    await waitFor(() => expect(app.lastFrame()).toContain('日本語の下書き'));
+    await browseToolPage(app, '\x0f');
+    const previousHeight = currentToolPage().height;
+    vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(width); app.stdout.emit('resize');
+    await waitFor(() => {
+      expect(currentToolPage().height).not.toBe(previousHeight);
+      expect(currentToolPage().state.expanded).toBe(true);
+      expect(currentToolPage().page.hasMore).toBe(true);
+      const frame = app.lastFrame()!;
+      const start = frame.lastIndexOf('✓ Bash');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const liveRows = frame.slice(start).trimEnd().split('\n');
+      for (const row of liveRows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+      expect(liveRows.join('\n')).toContain('日本語の下書き');
+      expect(liveRows.join('').replace(/\s/gu, '')).toContain(getLabel('manager.inputHint', 'en').replace(/\s/gu, ''));
+      expect(liveRows.length).toBeLessThanOrEqual(24);
+    });
+  } finally { finish.resolve(); await fixture.settled(); }
+});
 
 it('refreshes human merge wait and ongoing counts through IPC when finishing work runs, fails and is retried', async () => {
   const goal: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
@@ -208,6 +1113,7 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
     expect(activities().at(-1).activity).toEqual({ kind: 'responding' });
     expect(transcript()).toEqual([...initialEntries, { role: 'user', content: 'Show activity' },
       { role: 'assistant', content: prose },
+      { role: 'tool', content: expect.stringContaining('private-result-marker') },
       { role: 'assistant', content: 'Final activity reply' }]);
     const delivered = outputs.mock.calls.map(([output]) => output);
     expect(delivered.filter((output) => output.kind === 'turn_text').map((output) => output.message)).toEqual([
@@ -234,36 +1140,46 @@ it.each([false, true])('delivers Bash descriptions and ordered text through IPC 
     read.cancel();
     for (const persisted of [writes.mock.calls, savedResults.mock.calls, items, client.getSnapshot()]) {
       const json = JSON.stringify(persisted);
-      for (const transient of ['見回りの予定のコードを読む', prose, '調べがつきました。']) expect(json).not.toContain(transient);
-      expect(json).not.toContain('private-');
+      for (const transient of [prose, '調べがつきました。', 'private-reasoning-marker']) expect(json).not.toContain(transient);
       JSON.parse(json, (key, value: unknown) => {
         expect(key).not.toBe('activity');
         return value;
       });
     }
-    expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-');
+    expect(JSON.stringify(outputs.mock.calls)).not.toContain('private-reasoning-marker');
   } finally { useTool.resolve(); respond.resolve(); finish.resolve(); await fixture.settled(); service.detach(slackOpen.attachmentId); }
 });
 
 it('does not transfer text after interruption during its conversation read', async () => {
-  const controller = new AbortController();
-  const entered = deferred<void>();
-  const release = deferred<void>();
+  const finish = deferred<void>();
+  execute.mockImplementationOnce(async (input) => {
+    await finish.promise;
+    return { message: 'Held read turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
   const outputs = vi.fn(); client.onOutput(outputs);
   await client.connect(); await complete();
-  const conversationId = client.getSnapshot().state!.conversationId;
-  const read = fixture.store.read.bind(fixture.store);
-  vi.spyOn(fixture.store, 'read').mockImplementationOnce(async (id) => {
-    entered.resolve(); await release.promise; return read(id);
-  });
-  const progress = fixture.conversations.progress({ conversationId, operationId: randomUUID(), generation: 1 },
-    { kind: 'turn_text', message: '本文を配送しない' }, controller.signal);
   try {
+    await client.submit({ kind: 'message', text: 'Hold the conversation read' });
+    await fixture.executing(1);
+    await waitFor(() => expect(client.getSnapshot().state?.running).not.toBeNull());
+    const state = client.getSnapshot().state!;
+    const turn = { conversationId: state.conversationId, operationId: state.running!.operationId, generation: state.running!.generation! };
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const read = fixture.store.read.bind(fixture.store);
+    vi.spyOn(fixture.store, 'read').mockImplementationOnce(async (id) => { entered.resolve(); await release.promise; return read(id); });
+    // 会話の区間を読取で止めている間に中断し、止めを解いた後に本文が配送されないことを確かめる。
+    const refreshing = fixture.conversations.refresh(turn.conversationId);
     await entered.promise;
+    const controller = new AbortController();
+    const interrupted = fixture.conversations.progress(turn, { kind: 'turn_text', message: '本文を配送しない' }, controller.signal);
     controller.abort();
-    release.resolve(); await progress;
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'turn_text')).toEqual([]);
-  } finally { release.resolve(); await progress; }
+    release.resolve();
+    await Promise.all([refreshing, interrupted]);
+    await fixture.conversations.progress(turn, { kind: 'turn_text', message: '中断していない本文' }, new AbortController().signal);
+    await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_text', message: '中断していない本文' })));
+    expect(outputs.mock.calls.flatMap(([output]) => output.kind === 'turn_text' ? [output.message] : [])).toEqual(['中断していない本文']);
+  } finally { finish.resolve(); await fixture.settled(); }
 });
 
 it('suppresses patrol text while showing its Bash description and elapsed time on the connected screen', async () => {
@@ -338,12 +1254,10 @@ it('keeps already displayed text but suppresses buffered and late text after int
   } finally { finish.resolve(); await fixture.settled(); }
 });
 
-it.each([false, true])('displays next-turn text once after an interrupted turn with its running state delayed=%s', async (delayed) => {
+it('displays next-turn text once after an interrupted turn on the same FIFO connection', async () => {
   const finishFirst = deferred<void>();
   const emitText = deferred<void>();
   const finishNext = deferred<void>();
-  const reading = deferred<void>();
-  const releaseRunning = deferred<void>();
   const message = '次のターンを調べています。';
   execute.mockImplementationOnce(async (input) => {
     input.onText!('中断前に表示する文');
@@ -373,28 +1287,15 @@ it.each([false, true])('displays next-turn text once after an interrupted turn w
     await waitFor(() => expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true }));
     await waitFor(() => expect(app.lastFrame()).toContain('Turn interrupted'));
 
-    const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
-    vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
-      const read = await snapshot(id);
-      reading.resolve();
-      await releaseRunning.promise;
-      return read;
-    });
     const accepted = await client.submit({ kind: 'message', text: 'Start the next turn' });
     expect(accepted.kind).toBe('accepted');
     if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
-    await reading.promise;
-    if (!delayed) {
-      releaseRunning.resolve();
-      await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
-    }
+    await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
     emitText.resolve();
     await waitFor(() => expect(outputs).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'turn_text', operationId: accepted.operationId, message,
     })));
-    if (delayed) expect(client.getSnapshot().state).toMatchObject({ running: null, interrupted: true });
     await waitFor(() => expect(textEntries()).toEqual([{ role: 'assistant', content: message }]));
-    releaseRunning.resolve();
     await waitFor(() => expect(client.getSnapshot().state?.running?.operationId).toBe(accepted.operationId));
     expect(textEntries()).toHaveLength(1);
     finishNext.resolve(); await fixture.settled();
@@ -404,7 +1305,7 @@ it.each([false, true])('displays next-turn text once after an interrupted turn w
     expect(transcript().findIndex((entry) => entry.content === message))
       .toBeLessThan(transcript().findIndex((entry) => entry.content === 'Next turn completed'));
   } finally {
-    finishFirst.resolve(); emitText.resolve(); releaseRunning.resolve(); finishNext.resolve(); await fixture.settled();
+    finishFirst.resolve(); emitText.resolve(); finishNext.resolve(); await fixture.settled();
   }
 });
 
@@ -486,7 +1387,7 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
     finishNext.resolve();
     await finished.promise;
     const settling = await readState();
-    expect(settling).toMatchObject({ operationId: null, state: { running: { operationId: accepted.operationId } } });
+    expect(settling).toMatchObject({ operationId: accepted.operationId, state: { running: { operationId: accepted.operationId } } });
     expect(apply).not.toHaveBeenCalled();
     expect(outputs).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_text', message }));
     expect(assistantEntries()).toEqual([...initialEntries, { role: 'assistant', content: '中断前に表示する文' }]);
@@ -507,7 +1408,7 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
     }).toEqual({
       startedInterrupted: false,
       settlingInterrupted: false,
-      clientBeforeText: { operationId: refreshBeforeText ? null : accepted.operationId, interrupted: false },
+      clientBeforeText: { operationId: accepted.operationId, interrupted: false },
       entries: [
         ...initialEntries,
         { role: 'assistant', content: '中断前に表示する文' },
@@ -522,98 +1423,24 @@ it.each([false, true])('preserves next-turn text while settling with a snapshot 
   }
 });
 
-it('shows the latest early activity when a connected TUI finally receives the delayed running state', async () => {
-  const reading = deferred<void>();
-  const releaseRunning = deferred<void>();
-  const finish = deferred<void>();
-  const outputs = vi.fn(); client.onOutput(outputs);
-  const connections = observeIpcConnections();
-  await client.connect(); await complete();
-  const app = await snapshotView();
-  const observed = vi.fn();
-  const receiver = new ConversationTransferReceiver(client.getSnapshot().state!.conversationId, {
-    state: vi.fn(), item: vi.fn(), remove: vi.fn(), output: observed, read: vi.fn(),
-  });
-  receiver.authenticated();
-  const decoder = new frames.ConversationFrameDecoder();
-  const transfers = new Set<string>();
-  connections[0]!.socket.on('data', (chunk: Buffer) => {
-    for (const frame of decoder.decode(chunk)) {
-      const envelope = frame as { output?: { kind: string; purpose?: string; transferId: string } };
-      const output = envelope.output;
-      if (output === undefined) continue;
-      if (output.kind === 'transfer_start' && output.purpose === 'output') transfers.add(output.transferId);
-      if (transfers.has(output.transferId)) receiver.receive(frame);
-      if (output.kind === 'transfer_end' || output.kind === 'transfer_error') transfers.delete(output.transferId);
-    }
-  });
-  const snapshot = fixture.dispatcher.snapshot.bind(fixture.dispatcher);
-  vi.spyOn(fixture.dispatcher, 'snapshot').mockImplementationOnce(async (id) => {
-    const read = await snapshot(id);
-    reading.resolve();
-    await releaseRunning.promise;
-    return read;
-  });
-  execute.mockImplementationOnce(async (input) => {
-    input.onActivity!({ kind: 'thinking' });
-    input.onActivity!({ kind: 'tool', tool: 'EarlyTool' });
-    await finish.promise;
-    return { message: 'Early activity turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
-  });
-  try {
-    const accepted = await client.submit({ kind: 'message', text: 'Start with delayed running' });
-    expect(accepted.kind).toBe('accepted');
-    if (accepted.kind !== 'accepted') throw new Error('Turn was not accepted');
-    await reading.promise;
-    await waitFor(() => expect(observed).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'activity', activity: { kind: 'tool', tool: 'EarlyTool' },
-    }), expect.anything()));
-    expect(client.getSnapshot().state!.running).toBeNull();
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([]);
-    expect(app.lastFrame()).not.toContain('EarlyTool');
-
-    releaseRunning.resolve();
-
-    await waitFor(() => expect(app.lastFrame()).toContain('EarlyTool'));
-    expect(outputs.mock.calls.filter(([output]) => output.kind === 'activity')).toEqual([[expect.objectContaining({
-      operationId: accepted.operationId, activity: { kind: 'tool', tool: 'EarlyTool' },
-    })]]);
-    finish.resolve();
-    await fixture.settled();
-    await waitFor(() => {
-      expect(app.lastFrame()).toContain('Early activity turn completed');
-      expect(app.lastFrame()).not.toContain('EarlyTool');
-    });
-  } finally { releaseRunning.resolve(); finish.resolve(); await fixture.settled(); }
-});
-
 it('restores current activity for a late TUI and after reconnect, then forgets it when the turn ends', async () => {
   const finish = deferred<void>();
-  const readingThinking = deferred<void>();
-  const releaseThinking = deferred<void>();
-  let holdThinking = false;
-  const read = fixture.store.read.bind(fixture.store);
-  vi.spyOn(fixture.store, 'read').mockImplementation(async (id) => {
-    if (holdThinking) {
-      holdThinking = false;
-      readingThinking.resolve();
-      await releaseThinking.promise;
-    }
-    return read(id);
-  });
   execute.mockImplementationOnce(async (input) => {
-    holdThinking = true;
     input.onActivity!({ kind: 'thinking' });
     input.onActivity!({ kind: 'tool', tool: 'ReconnectTool' });
     await finish.promise;
     return { message: 'Reconnected turn completed', summary: null, sessionId: 'session', assignment: input.assignment };
   });
   const connections = observeIpcConnections();
+  const firstOutputs = vi.fn();
+  client.onOutput(firstOutputs);
   await client.connect(); await complete();
   const beforeTurn = Date.now();
   await client.submit({ kind: 'message', text: 'Start before attaching' });
   await fixture.executing(1);
-  await readingThinking.promise;
+  await waitFor(() => expect(firstOutputs).toHaveBeenCalledWith(expect.objectContaining({
+    kind: 'activity', activity: { kind: 'tool', tool: 'ReconnectTool' },
+  })));
   await waitFor(() => expect(client.getSnapshot().state?.running?.startedAt).toBeGreaterThanOrEqual(beforeTurn));
   const startedAt = client.getSnapshot().state!.running!.startedAt;
   expect(startedAt).toBeLessThanOrEqual(Date.now());
@@ -627,9 +1454,6 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
     expect(client.getSnapshot().state?.running?.startedAt).toBe(startedAt);
     await waitFor(() => expect(activities()).toHaveLength(1));
     expect(activities()[0]).toMatchObject({ activity: { kind: 'tool', tool: 'ReconnectTool' } });
-    releaseThinking.resolve();
-    await fixture.dispatcher.drain();
-    expect(activities()).toHaveLength(1);
     // 接続完了後にマウントしても、初期配送の現在値を表示できる。
     const app = await snapshotView();
     await waitFor(() => expect(app.lastFrame()).toContain('ReconnectTool'));
@@ -654,7 +1478,7 @@ it('restores current activity for a late TUI and after reconnect, then forgets i
     await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
     expect(activities()).toHaveLength(2);
     expect(app.lastFrame()).not.toContain('ReconnectTool');
-  } finally { releaseThinking.resolve(); finish.resolve(); await fixture.settled(); }
+  } finally { finish.resolve(); await fixture.settled(); }
 });
 
 it('restores cached activity after an initial transfer fails and a snapshot retry succeeds', async () => {
@@ -756,8 +1580,8 @@ it.each([
       return { kind: 'accepted', operationId: randomUUID() };
     });
     const snapshot = service.snapshot.bind(service);
-    vi.spyOn(service, 'snapshot').mockImplementation((id) => {
-      const reading = snapshot(id).then(async (read) => {
+    vi.spyOn(service, 'snapshot').mockImplementation((id, request) => {
+      const reading = snapshot(id, request).then(async (read) => {
         if (++reads >= 2) readsEntered.release();
         await released.promise; return read;
       });
@@ -840,6 +1664,32 @@ it('connects to the current daemon when the previous daemon stops during assignm
   }
 });
 
+it('continues ordinary TUI consultation without saving or displaying an unsolicited summary', async () => {
+  const summary = { objective: 'Unsolicited proposal', outOfScope: [], acceptanceCriteria: ['done'], constraints: [] };
+  const generate = vi.fn(async (_input: ManagerTurnInput) => ({ message: 'Use /make-goal', summary, sessionId: 'session', assignment }));
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
+  const registration = vi.spyOn(goalService, 'registerReservedGoal');
+  await client.connect(); await complete();
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  await waitFor(() => expect(app.lastFrame()).toContain('CSV出力'));
+  const submissions = vi.spyOn(client, 'submit');
+
+  app.stdin.write('\x1b[200~We have agreed\x1b[201~');
+  await waitFor(() => expect(app.lastFrame()).toContain('❯ We have agreed'));
+  app.stdin.write('\r');
+  await waitFor(() => expect(submissions).toHaveBeenCalledWith({ kind: 'message', text: 'We have agreed' }, expect.any(Function)));
+  await submissions.mock.results.at(-1)!.value;
+  await fixture.settled();
+
+  await waitFor(() => expect(app.lastFrame()).toContain('Use /make-goal'));
+  expect(app.lastFrame()).not.toContain(summary.objective);
+  expect(client.getSnapshot().state).toMatchObject({ pending: null, approval: null, running: null });
+  const record = conversationRecord(repository);
+  expect((await new ConversationStateStore(directory).read(record.id))?.record).toMatchObject({ pending: null, approval: null });
+  expect((await new GoalStore(repository).list()).goals).toEqual([]);
+  expect(registration).not.toHaveBeenCalled();
+});
+
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const outputs: unknown[] = []; client.onOutput((output) => outputs.push(output));
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
@@ -858,7 +1708,7 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   }
   app.stdin.write('\r');
   await waitFor(() => expect(submissions.mock.calls.map(([command]) => command)).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
   ]));
   await expect(submissions.mock.results[0]!.value).resolves.toMatchObject({ kind: 'accepted' });
   await fixture.settled();
@@ -896,10 +1746,10 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
   await client.connect(); await complete();
   const entered = gate(); const released = gate();
   const snapshot = service.snapshot.bind(service);
-  vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+  vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
     const read = await snapshot(id);
-    if (phase === 'transfer') return heldRead(read, entered, released);
-    entered.release(); await released.promise; return read;
+    if (phase === 'transfer') { const held = heldRead(read, entered, released); request?.enqueueSnapshot?.(held); return held; }
+    entered.release(); await released.promise; request?.enqueueSnapshot?.(read); return read;
   });
   const registration = vi.spyOn(goalService, 'registerReservedGoal').mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
     const goal = { ...goalRecord(), id, objective, outOfScope, acceptanceCriteria, constraints }; saveGoal(goal); return goal;
@@ -922,12 +1772,18 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
     expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
-    // The server finishes the current input batch before accepting another one.
-    if (phase === 'response') released.release();
-    expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
     const record = conversationRecord(repository);
     await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
       .toMatchObject({ revision: 4, state: 'registered' }));
+    let answered = false;
+    const submitted = (submissions.mock.results[0]!.value as Promise<unknown>).then((value) => { answered = true; return value; });
+    if (phase === 'transfer') {
+      // 応答も同じ接続の FIFO に積まれるため、送り始めた読取が終わるまで受理の応答は届かない。
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(answered).toBe(false);
+    }
+    released.release();
+    expect(await submitted).toMatchObject({ kind: 'accepted' });
     expect(registration).toHaveBeenCalledOnce();
   } finally { released.release(); await refreshing.catch(() => {}); app.unmount(); }
 });
@@ -936,8 +1792,7 @@ it('does not send approval before the initial transfer ends and enables it on th
   const entered = gate(); const released = gate();
   const open = service.open.bind(service);
   vi.spyOn(service, 'open').mockImplementation(async (...args) => {
-    const opened = await open(...args);
-    return { ...opened, read: heldRead(opened.read, entered, released) };
+    return open(args[0], args[1], (read, attachmentId) => args[2]?.(heldRead(read, entered, released), attachmentId));
   });
   await client.connect();
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
@@ -989,13 +1844,14 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
       await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
       saveGoal(goal);
       const snapshot = service.snapshot.bind(service);
-      vi.spyOn(service, 'snapshot').mockImplementation(async (id) => heldRead(await snapshot(id), entered, released));
+      vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
+        const held = heldRead(await snapshot(id), entered, released); request?.enqueueSnapshot?.(held); return held;
+      });
       refreshing = client.refresh();
     } else {
       const open = service.open.bind(service);
       vi.spyOn(service, 'open').mockImplementation(async (...args) => {
-        const opened = await open(...args);
-        return { ...opened, read: heldRead(opened.read, entered, released) };
+        return open(args[0], args[1], (read, attachmentId) => args[2]?.(heldRead(read, entered, released), attachmentId));
       });
       const index = connection.mock.calls.findIndex(([bytes]) => String(bytes).includes('"method":"open"'));
       (connection.mock.contexts[index] as net.Socket).destroy();
@@ -1032,9 +1888,9 @@ it.each([
   const connection = vi.spyOn(net.Socket.prototype, 'write');
   const notifications = gate();
   const open = service.open.bind(service);
-  vi.spyOn(service, 'open').mockImplementation((input, delivery) => open(input, {
+  vi.spyOn(service, 'open').mockImplementation((input, delivery, enqueueSnapshot) => open(input, {
     deliver: async (...args) => { await notifications.promise; return delivery.deliver(...args); },
-  }));
+  }, enqueueSnapshot));
   const pending = { ...conversationRecord(repository).pending!, revision: 5,
     summary: { objective: 'Latest proposal five', outOfScope: [], acceptanceCriteria: ['Latest accepted'], constraints: [] } };
   doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: {
@@ -1074,12 +1930,12 @@ it.each([
     const other = await open(selected, { deliver: async () => ({ kind: 'delivered' }) });
     await other.read.items[Symbol.asyncIterator]().return?.();
     await service.submit({ attachmentId: other.attachmentId, requestId: randomUUID(), speaker: selected.speaker,
-      command: { kind: 'message', text: 'Produce the next proposal' } });
+      command: { kind: 'message', text: 'Produce the next proposal', requestProposal: true } });
     await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending, running: null }));
     expect(client.getSnapshot().state?.pending?.revision).toBe(4);
-    vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+    vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
       const read = await snapshot(id); const wait = gate(); reads.push({ read, release: wait.release });
-      await wait.promise; trace.push({ kind: 'snapshot_resolved', transferId: read.transferId }); return read;
+      await wait.promise; trace.push({ kind: 'snapshot_resolved', transferId: read.transferId }); request?.enqueueSnapshot?.(read); return read;
     });
     const openWrite = connection.mock.calls.findIndex(([bytes]) => String(bytes).includes('"method":"open"'));
     const socket = connection.mock.contexts[openWrite] as net.Socket;
@@ -1158,7 +2014,8 @@ async function displayedSelection(key: string, kind: 'answer' | 'goal') {
 it('re-resolves an invalidated repository attachment into its new workspace without replaying a rejected mutation', async () => {
   await client.connect(); await complete();
   const original = client.getSnapshot().state!.conversationId;
-  assignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'Promoted workspace', repositoryDirectories: [repository] };
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Promoted workspace', repositoryDirectories: [repository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   doubles.assignment.mockResolvedValue(assignment);
   const rejected = await client.submit({ kind: 'message', text: 'Do not replay this request' });
   expect(rejected).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
@@ -1533,7 +2390,8 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
 it('keeps events for identical goals in different workspace repositories across delta reads', async () => {
   const secondRepository = join(directory, 'second-repository');
   mkdirSync(secondRepository, { recursive: true });
-  assignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'Workspace', repositoryDirectories: [repository, secondRepository] };
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Workspace', repositoryDirectories: [repository, secondRepository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   doubles.assignment.mockResolvedValue(assignment);
   client.close();
   client = new ConversationIpcClient(assignment, { provider: 'mock' });
@@ -1638,12 +2496,13 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
   saveGoal(updated);
   const released = vi.fn();
   const snapshot = service.snapshot.bind(service);
-  vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+  vi.spyOn(service, 'snapshot').mockImplementation(async (id, request) => {
     const read = await snapshot(id);
-    return { ...read, items: (async function* () {
+    const observed = { ...read, items: (async function* () {
       try { yield* read.items; }
       finally { released(); }
     })() };
+    request?.enqueueSnapshot?.(observed); return observed;
   });
   const write = frames.writeConversationFrame;
   let failedTransfer: string | undefined;
@@ -1676,7 +2535,7 @@ it('reuses unchanged goal files and reloads modified or deleted goals on the sam
   const [goal, other] = seedSnapshotGoals(2, 0, 0);
   const connections = observeIpcConnections();
   const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
-  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => path.endsWith('/goal.json'));
+  const goalReads = () => reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json');
   await client.connect(); await complete();
   expect(goalReads()).toHaveLength(2);
   reads.mockClear();
@@ -1755,4 +2614,275 @@ it('reprojects unchanged goal files when notification policy changes on the same
   await refreshSnapshot(client, observation);
   expect(events()).toHaveLength(1);
   expect(events()[0]).toMatchObject({ event: { message: expect.stringContaining('Policy-controlled notice') } });
+});
+
+async function seedEpicSnapshot() {
+  const secondRepository = join(directory, 'second-repository');
+  mkdirSync(secondRepository);
+  const workspace = await createWorkspace({ globalConfigDirectory: directory, name: '連携確認',
+    repositoryDirectories: [repository, secondRepository] });
+  assignment = { kind: 'workspace', workspaceId: workspace.id, name: workspace.name,
+    repositoryDirectories: workspace.repositoryDirectories };
+  doubles.assignment.mockResolvedValue(assignment);
+  const goal = completedEpicGoal('b'.repeat(40), 'a'.repeat(40));
+  saveGoal(goal);
+  saveGoal(goal, secondRepository);
+  const members = [repository, secondRepository].map((repositoryDirectory) => ({ repositoryDirectory, goalId: goal.id }));
+  const started = beginEpicVerification({ ...epicRecord(), workspaceId: workspace.id, members,
+    targets: members.map((member) => ({ ...member, targetSha: goal.completion!.targetSha! })) }, verificationRunId, verificationStartedAt);
+  const completed = finishEpic(applyEpicVerificationResult(started.epic, verificationResultFor(started.run)));
+  await new EpicStore(directory, workspace.id).create(completed);
+  client.close();
+  client = new ConversationIpcClient(assignment, { provider: 'mock' });
+  return { workspace, completed, run: started.run,
+    context: { globalConfigDirectory: directory, workspaceId: workspace.id, epicId: completed.id } };
+}
+
+function displayedEpics(value: ConversationIpcClient) {
+  return value.getSnapshot().items.filter((item: { kind: string }) => item.kind === 'epic');
+}
+
+async function openEpicDetail(app: ReturnType<typeof render>, objective: string, targetSha: string) {
+  vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(160);
+  Object.defineProperty(app.stdout, 'rows', { configurable: true, value: 80 });
+  app.stdout.emit('resize');
+  await waitFor(() => expect(app.lastFrame()).toContain('╭'));
+  app.stdin.write('\x14');
+  await waitFor(() => expect(app.lastFrame()).toContain(objective));
+  app.stdin.write('\r');
+  await waitFor(() => expect(app.lastFrame()).toContain(targetSha));
+}
+
+function epicEvidenceRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /current.*evidence/iu.test(line));
+  expect(row, '現在の証拠を検証履歴と区別して表示する').toBeDefined();
+  return row!;
+}
+
+function epicStatusRow(app: ReturnType<typeof render>): string {
+  const row = app.lastFrame()!.split('\n').find((line) => /status\s*:/iu.test(line));
+  expect(row, 'Epic自体の状態をメンバーの状態と区別して表示する').toBeDefined();
+  return row!;
+}
+
+it('updates existing Epic evidence on the same IPC client and restores one current item after reconnect', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toMatchObject([{ kind: 'epic', epic: { ...f.completed,
+    currentEvidence: { id: f.run.id, result: verificationResultFor(f.run) } },
+    memberProgress: f.completed.members.map((member) => ({ ...member, status: 'completed', executionStatus: 'active' })), recovery: [] }]);
+  expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+  expect(epicEvidenceRow(app)).toContain(f.run.id);
+
+  const reason = '接続中に結合確認手順を改訂する';
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['改訂した手順'] } }, reason });
+  const changed = await getEpic(f.context);
+  const delta = await refreshSnapshot(client, connections[0]!);
+  expect(delta.items.filter((item: { kind: string }) => item.kind === 'epic')).toHaveLength(1);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { ...changed, status: 'active',
+    verificationRuns: [expect.objectContaining({ id: f.run.id, invalidationReason: reason })] } }]);
+  expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+    expect(epicStatusRow(app)).toMatch(/active|in progress/iu);
+  });
+  expect((await refreshSnapshot(client, connections[0]!)).items).toEqual([]);
+
+  connections[0]!.socket.destroy();
+  await waitFor(() => {
+    expect(connections).toHaveLength(2);
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(connections[1]!.snapshots[0]?.complete).toBe(true);
+  });
+  expect(displayedEpics(client)).toMatchObject([{ epic: changed }]);
+  expect(displayedEpics(client)[0]).not.toHaveProperty('epic.currentEvidence');
+  expect(displayedGoals(client)).toHaveLength(2);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => {
+    expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha);
+    expect(app.lastFrame()!.split(f.completed.objective)).toHaveLength(2);
+  });
+});
+
+it('shows creation, member changes and stale results on the same IPC-backed Epic screen before explicit completion', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, f.completed.objective, f.completed.targets[0]!.targetSha);
+
+  const replacement = { ...completedEpicGoal('d'.repeat(40), 'e'.repeat(40)), id: randomUUID() };
+  saveGoal(replacement);
+  const reason = 'Add the corrected API goal';
+  await addEpicMember({ ...f.context, member: { repositoryDirectory: repository, goalId: replacement.id }, reason });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(replacement.id);
+    expect(app.lastFrame()).toMatch(/3\s*\/\s*3/u);
+    expect(app.lastFrame()).toContain(reason);
+    expect(epicEvidenceRow(app)).not.toContain(f.run.id);
+  });
+
+  const old = await startEpicVerification(f.context);
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Recheck the corrected API'] } },
+    reason: 'Change the integration procedure while verification is running' });
+  const current = await startEpicVerification(f.context);
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(old) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(current.id);
+    expect(app.lastFrame()).toContain(old.id);
+    expect(app.lastFrame()).toMatch(/stale/iu);
+    expect(epicEvidenceRow(app)).not.toContain(old.id);
+  });
+  await expect(completeEpic(f.context)).rejects.toThrow();
+  expect(await getEpic(f.context)).toMatchObject({ status: 'active', runningVerification: { id: current.id } });
+
+  await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(current) });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicEvidenceRow(app)).toContain(current.id));
+  await completeEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(/completed/iu));
+
+  app.stdin.write('\x1b[27u');
+  await waitFor(() => expect(app.lastFrame()).not.toContain(f.completed.targets[0]!.targetSha));
+  const created = await createEpic({ globalConfigDirectory: directory, workspaceId: f.workspace.id,
+    ...epicDefinition(), objective: 'New Epic created while the list is open', reason: 'Request another integration check' });
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(app.lastFrame()).toContain(created.objective));
+  expect(displayedEpics(client)).toHaveLength(2);
+});
+
+it('retains a running verification for result recovery across an IPC reconnect without replaying it', async () => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { verificationProcedure: { version: 2, steps: ['Explicit recovery check'] } }, reason: 'Require another check' });
+  const run = await startEpicVerification(f.context);
+  const stored = await getEpic(f.context);
+  const connections = observeIpcConnections();
+  const submit = vi.spyOn(client, 'submit');
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, stored.objective, stored.targets[0]!.targetSha);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+    expect(epicEvidenceRow(app)).not.toContain(run.id);
+  });
+  connections[0]!.socket.destroy();
+  await waitFor(() => {
+    expect(connections).toHaveLength(2);
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(connections[1]!.snapshots[0]?.complete).toBe(true);
+    expect(app.lastFrame()).toContain(run.id);
+    expect(app.lastFrame()).toMatch(/recover|confirm.*result|result.*confirm/iu);
+  });
+  expect(submit).not.toHaveBeenCalled();
+  expect(await getEpic(f.context)).toEqual(stored);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { runningVerification: { id: run.id } }, recovery: [{ id: run.id }] }]);
+});
+
+it.each(['complete', 'abort'] as const)('updates the same Epic detail after %s and repository removal while preserving its saved history', async (operation) => {
+  const f = await seedEpicSnapshot();
+  await updateEpicDefinition({ ...f.context, changes: { objective: 'Epic retained across repository removal' }, reason: 'Reopen integration work' });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  const app = await snapshotView();
+  await openEpicDetail(app, 'Epic retained across repository removal', f.completed.targets[0]!.targetSha);
+  await expect(removeManagerRepository(assignment, repository, directory)).rejects.toThrow();
+  if (operation === 'complete') {
+    const run = await startEpicVerification(f.context);
+    await recordEpicVerificationResult({ ...f.context, result: verificationResultFor(run) });
+    await completeEpic(f.context);
+  } else await abortEpic({ ...f.context, reason: 'Stop integration without changing member goals' });
+  const saved = await getEpic(f.context);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => expect(epicStatusRow(app)).toMatch(operation === 'complete' ? /completed/iu : /aborted/iu));
+
+  for (const repositoryDirectory of f.workspace.repositoryDirectories) {
+    await removeManagerRepository(assignment, repositoryDirectory, directory);
+  }
+  assignment = { ...assignment, repositoryDirectories: [] };
+  doubles.assignment.mockResolvedValue(assignment);
+  await refreshSnapshot(client, connections[0]!);
+  await waitFor(() => {
+    expect(app.lastFrame()).toContain(saved.objective);
+    expect(app.lastFrame()).toContain(saved.targets[0]!.targetSha);
+    expect(app.lastFrame()).toContain(f.run.id);
+    expect(app.lastFrame()).toMatch(/unknown|unavailable|not (?:available|loaded)/iu);
+  });
+  expect(displayedGoals(client)).toEqual([]);
+  expect(displayedEpics(client)).toMatchObject([{ epic: saved, memberProgress: [] }]);
+  expect(await getEpic(f.context)).toEqual(saved);
+});
+
+it('restores completed Epic history after repository removal without reading removed member goals', async () => {
+  const f = await seedEpicSnapshot();
+  for (const repositoryDirectory of assignment.repositoryDirectories) {
+    await removeWorkspaceRepository(directory, f.workspace.id, repositoryDirectory);
+  }
+  assignment = { ...assignment, repositoryDirectories: [] };
+  doubles.assignment.mockResolvedValue(assignment);
+  const reads = vi.spyOn(daemonFiles, 'readPrivateFile');
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toMatchObject([{ epic: { ...f.completed,
+    currentEvidence: { id: f.run.id } } }]);
+  expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toEqual([]);
+  expect(displayedGoals(client)).toEqual([]);
+});
+
+it('does not commit the delta baseline after a later Epic read failure and resends the repaired change', async () => {
+  const f = await seedEpicSnapshot();
+  const later = { ...epicRecord(), id: '950e8400-e29b-41d4-a716-446655440000', workspaceId: f.workspace.id };
+  await new EpicStore(directory, f.workspace.id).create(later);
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toHaveLength(2);
+  await updateEpicDefinition({ ...f.context, changes: { objective: 'Changed before later read failure' }, reason: 'Update objective' });
+  const path = join(directory, 'workspaces', f.workspace.id, 'epics', later.id, 'epic.json');
+  writeFileSync(path, '{');
+  await client.refresh();
+  await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }, { epic: later }]);
+  writeFileSync(path, JSON.stringify(later));
+  const repaired = await refreshSnapshot(client, connections.at(-1)!);
+  expect(repaired.items.filter((item) => item.kind === 'epic')).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }]);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, objective: 'Changed before later read failure' } }, { epic: later }]);
+  expect((await refreshSnapshot(client, connections.at(-1)!)).items).toEqual([]);
+});
+
+it('rejects an Epic from another workspace before replacing the existing item and accepts a repaired transfer', async () => {
+  const f = await seedEpicSnapshot();
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+  expect(displayedEpics(client)).toHaveLength(1);
+  const before = displayedEpics(client);
+  const transfer = frames.conversationTransferFrames;
+  const foreignWorkspaceId = randomUUID();
+  const corrupted = vi.spyOn(frames, 'conversationTransferFrames').mockImplementation((id, metadata, purpose, items) =>
+    transfer(id, metadata, purpose, (async function* () {
+      for await (const item of items) {
+        if (purpose === 'snapshot' && typeof item === 'object' && item !== null && 'kind' in item && item.kind === 'epic'
+          && 'epic' in item && typeof item.epic === 'object' && item.epic !== null) {
+          yield { ...item, epic: { ...item.epic, workspaceId: foreignWorkspaceId } };
+        } else yield item;
+      }
+    })()));
+  await updateEpicDefinition({ ...f.context, changes: { objective: '転送中に改訂した目的' }, reason: '目的を改訂する' });
+  await client.refresh();
+  await waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
+  expect(displayedEpics(client)).toEqual(before);
+  corrupted.mockRestore();
+  await waitFor(() => expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' }));
+  await refreshSnapshot(client, connections.at(-1)!);
+  expect(displayedEpics(client)).toMatchObject([{ epic: { id: f.completed.id, workspaceId: f.workspace.id,
+    objective: '転送中に改訂した目的' } }]);
 });

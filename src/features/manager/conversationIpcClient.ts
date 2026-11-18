@@ -38,7 +38,6 @@ export class ConversationIpcClient {
   private listeners = new Set<() => void>();
   private outputs = new Set<(output: Output) => void>();
   private activity: Extract<Output, { kind: 'activity' }> | undefined;
-  private pendingActivity: Extract<Output, { kind: 'activity' }> | undefined;
   private receiver: ConversationTransferReceiver | undefined;
   private resolved: ConversationOpen | undefined;
   private attachmentId: string | undefined;
@@ -124,17 +123,8 @@ export class ConversationIpcClient {
     const running = this.view.state?.running;
     if (this.view.connection === 'disconnected' || running?.operationId !== this.activity?.operationId
       || running?.generation !== this.activity?.generation) this.activity = undefined;
-    let activityResumed = false;
-    if (this.view.connection === 'disconnected' || change.state === null || change.state?.running === null) {
-      this.pendingActivity = undefined;
-    } else if (this.pendingActivity !== undefined && running?.operationId === this.pendingActivity.operationId
-      && running.generation === this.pendingActivity.generation) {
-      this.activity = this.pendingActivity;
-      this.pendingActivity = undefined;
-      activityResumed = true;
-    }
     for (const listener of this.listeners) listener();
-    if ((previousConnection !== 'connected' || activityResumed) && this.view.connection === 'connected' && this.activity !== undefined) {
+    if (previousConnection !== 'connected' && this.view.connection === 'connected' && this.activity !== undefined) {
       for (const listener of this.outputs) listener(this.activity);
     }
   }
@@ -154,7 +144,7 @@ export class ConversationIpcClient {
       this.items.clear();
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
-        state: (next) => this.update({ state: next }),
+        state: (next) => { this.update({ state: next }); },
         item: (item) => {
           const key = snapshotItemKey(item);
           this.readItems.set(key, item);
@@ -163,16 +153,10 @@ export class ConversationIpcClient {
         remove: (key) => { this.removed.add(key); },
         output: (output) => {
           if (output.kind === 'activity') {
-            const running = this.view.state?.running;
-            if (running?.operationId !== output.operationId || running.generation !== output.generation) {
-              this.pendingActivity = output;
-              return;
-            }
             this.activity = output;
             if (this.view.connection !== 'connected') return;
           } else if (output.kind === 'result') {
             if (output.operationId === this.activity?.operationId) this.activity = undefined;
-            if (output.operationId === this.pendingActivity?.operationId) this.pendingActivity = undefined;
           }
           for (const listener of this.outputs) listener(output);
         },

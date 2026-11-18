@@ -9,12 +9,15 @@ import {
   getFormalSpecVerificationArtifactPaths, getFormalSpecRetainedArtifactsMessage,
 } from '../interactive/formalSpecPrompts.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { AgentResponse } from '../../core/models/response.js';
-import { createTurnActivityReporter } from './turnActivity.js';
+import { createTurnActivityReporter, reportManagerStream } from './turnActivity.js';
 import { callWithManagerSessionRecovery } from './sessionRecovery.js';
+import { withToolActivityCall } from '../../shared/tool-activity/stream.js';
+import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 
 function assertSuccess(response: AgentResponse): void {
   if (response.status === 'done') return;
@@ -24,6 +27,7 @@ function assertSuccess(response: AgentResponse): void {
 
 export async function verifyManagerConversation(
   cwd: string, plan: ManagerConversationPlan, input: ManagerTurnInput, configuration: ResolvedFormalSpecConfiguration & { repositoryDirectory: string },
+  identify: (event: ToolActivityEvent) => ToolActivityEvent,
 ) {
   const { ctx } = plan;
   const unchanged = { summary: null, sessionId: input.sessionId, assignment: input.assignment };
@@ -34,17 +38,14 @@ export async function verifyManagerConversation(
     sessionId: input.sessionId, abortSignal: input.abortSignal,
     permissionMode: 'readonly' as const, internalAgentIsolation: 'strict-readonly' as const,
     callerManagedSession: true as const,
-    onStream: (event: Parameters<typeof reporter.onStream>[0]) => {
-      input.onProviderOutput?.();
-      if (!input.abortSignal.aborted) reporter.onStream(event);
-    },
+    onStream: (raw: Parameters<typeof reporter.onStream>[0]) => { reportManagerStream(raw, identify, reporter, input); },
   };
-  const generator = ctx.provider.setup({ name: 'manager', systemPrompt: [
+  const generator = ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance([
     buildFormalSpecGenerationSystemPrompt(ctx.lang),
     loadTemplate('manager_formal_spec_instructions', ctx.lang, {
       formalSpecComments: configuration.comments, formalSpecVerifierConstraints: '', verificationRepository: JSON.stringify(configuration.repositoryDirectory),
     }),
-  ].join('\n\n') });
+  ].join('\n\n'), ctx.lang) });
   const prompt = buildFormalSpecGenerationPrompt(ctx.lang, input.recovery?.context);
   let generated: AgentResponse;
   try {
@@ -64,13 +65,14 @@ export async function verifyManagerConversation(
     input.abortSignal.throwIfAborted();
     if (!verification.verificationStarted) return { ...unchanged, sessionId: generated.sessionId,
       message: [generated.content, verification.message, retained].filter(Boolean).join('\n\n') };
-    const interpreter = ctx.provider.setup({ name: 'manager', systemPrompt: [
+    const interpreter = ctx.provider.setup({ name: 'manager', systemPrompt: withProgressNotesGuidance([
       plan.strategy.systemPrompt,
       buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
-    ].join('\n\n') });
+    ].join('\n\n'), ctx.lang) });
     try {
       interpreted = await interpreter.call(buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang), {
         ...options, sessionId: generated.sessionId,
+        onStream: withToolActivityCall(options.onStream),
         allowedTools: ['Read'], allowReadonlyFileRead: true,
         readonlyFileReadPaths: getFormalSpecVerificationArtifactPaths(verification),
         outputSchema: getManagerOutputSchema(ctx.providerType),

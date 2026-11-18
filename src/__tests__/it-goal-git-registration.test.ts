@@ -253,9 +253,12 @@ describe('Goal Git registration with saved branches and real commits', () => {
     }
     const refsBefore = git(['for-each-ref', '--format=%(refname) %(objectname)']);
 
+    const expectedError = scenario.startBranch === undefined
+      ? /rev-parse --verify refs\/(?:heads|remotes\/origin)\/missing\^\{commit\}/
+      : 'Unable to resolve local branch "missing" to a commit';
     await expect(createGoal({ cwd, id: goalId, ...goalInput(),
       startBranch: scenario.startBranch, integrationBranch: scenario.integrationBranch,
-    })).rejects.toThrow(/rev-parse --verify refs\/(?:heads|remotes\/origin)\/missing\^\{commit\}/);
+    })).rejects.toThrow(expectedError);
 
     expect(existsSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'))).toBe(false);
     expect(await new GoalStore(cwd).list()).toEqual({ goals: [], errors: [] });

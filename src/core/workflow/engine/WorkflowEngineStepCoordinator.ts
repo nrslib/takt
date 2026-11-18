@@ -20,7 +20,7 @@ import type {
 } from '../types.js';
 import type { WorkflowStepAbortSignalContext } from './step-deadline.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
-import type { PreparedInstruction } from '../instruction/prepared-instruction.js';
+import type { PreparedStepInstruction } from '../instruction/prepared-instruction.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
@@ -53,7 +53,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-      prebuiltInstruction?: PreparedInstruction,
+      prebuiltInstruction?: PreparedStepInstruction,
       runtime?: RuntimeStepResolution,
       preparedExecution?: PreparedNormalStepExecution,
     ) => Promise<StepRunResult>;
@@ -72,7 +72,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       fallbackContext?: FallbackContext,
-    ) => PreparedInstruction;
+    ) => PreparedStepInstruction;
     buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
     drainReportFiles: () => Array<{
       step: WorkflowStep;
@@ -336,7 +336,7 @@ export class WorkflowEngineStepCoordinator {
 
   async runStep(
     step: WorkflowStep,
-    prebuiltInstruction?: PreparedInstruction,
+    prebuiltInstruction?: PreparedStepInstruction,
     runtime?: RuntimeStepResolution,
     stepIteration?: number,
     preparedExecution?: PreparedNormalStepExecution,
@@ -460,7 +460,7 @@ export class WorkflowEngineStepCoordinator {
     step: WorkflowStep,
     stepIteration: number,
     fallbackContext?: FallbackContext,
-  ): PreparedInstruction {
+  ): PreparedStepInstruction {
     return this.deps.stepExecutor.prepareInstruction(
       step,
       stepIteration,

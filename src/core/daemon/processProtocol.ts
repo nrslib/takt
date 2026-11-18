@@ -1,6 +1,7 @@
 import { WaitCommandCompletedSchema, WaitCommandInputSchema } from './waitCommand.js';
+import { EpicEventSchema, PatrolEventSchema } from './epicEvent.js';
 import { z } from 'zod/v4';
-import { ConversationActivitySchema, ConversationTextSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
+import { ConversationActivitySchema, ConversationToolEventSchema, MAX_CONVERSATION_TEXT_BYTES as MAX_PROCESS_PROGRESS_BYTES } from '../../shared/types/conversation-activity.js';
 import { ConversationCommandSchema } from '../../features/manager/conversationCommands.js';
 import { ApprovalSchema, DirectorMessageOriginSchema, ConversationActorSchema, ConversationAgentOverridesSchema, ConversationAssignmentSchema, PendingSummarySchema } from '../../infra/conversations/schema.js';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalSchema, GoalTaskResultSchema } from '../../infra/goals/schema.js';
@@ -8,17 +9,11 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
-// 旧形式の中断文と次のイベントを同じ start_turn で転送できるようにする。
-export const MAX_PROCESS_MESSAGE_BYTES = 12 * 1024 * 1024;
-export const MAX_PROCESS_PENDING_REQUESTS = 32;
-export const MAX_PROCESS_PENDING_BYTES = 1024 * 1024;
-export const MAX_PROCESS_SEND_BYTES = MAX_PROCESS_MESSAGE_BYTES;
 export { MAX_PROCESS_PROGRESS_BYTES };
-export const MAX_PROCESS_DELIVERY_PORTS = 32;
 
 const id = z.string().min(1).max(128);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
 const TurnIdentitySchema = z.object({ conversationId: id, operationId: id, generation: version.refine((v) => v > 0) }).strict() satisfies z.ZodType<TurnIdentity>;
 const session = z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict();
 const state = z.object({ version, assignment: ConversationAssignmentSchema, session,
@@ -52,6 +47,7 @@ const answerCommand = z.custom<Extract<TurnEvent, { kind: 'inquiry_answer' }>['c
   return parsed.success && parsed.data.kind === 'answer_question';
 });
 const event = z.discriminatedUnion('kind', [
+  EpicEventSchema,
   WaitCommandCompletedSchema,
   z.object({ kind: z.literal('inquiry_answered'), ...repositoryGoal, goalId: id, questionId: id, answer: GoalAnswerSchema }).strict(),
   z.object({ kind: z.literal('human_command'), command: humanCommand, speaker: ConversationActorSchema,
@@ -63,7 +59,7 @@ const event = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('goal_registered'), ...repositoryGoal }).strict(),
   z.object({ kind: z.literal('goal_resumed'), ...repositoryGoal, origin: GoalExecutionOriginSchema.optional() }).strict(),
   z.object({ kind: z.literal('watch_observation'), observation }).strict(),
-  z.object({ kind: z.literal('patrol'), repositoryDirectory: z.string().min(1), goalIds: z.array(z.uuid()).min(1) }).strict(),
+  PatrolEventSchema,
 ]);
 const acceptedEvent = z.object({ eventId: id, requestId: id, conversationId: id,
   source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']), occurredAt: z.iso.datetime(), event,
@@ -86,6 +82,7 @@ const start = z.object({ event: acceptedEvent, turn: TurnIdentitySchema, state }
   value.event.conversationId === value.turn.conversationId && value.event.operationId === value.turn.operationId) satisfies z.ZodType<TurnStart>;
 
 const stateRequest = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('publish_epic_events'), workspaceId: z.uuid(), epicId: z.uuid(), reason: z.string().trim().min(1) }).strict(),
   WaitCommandInputSchema.extend({ kind: z.literal('wait_command') }).strict(),
   z.object({ kind: z.literal('publish_workspace_inquiry_answer'), questionId: z.uuid() }).strict(),
   z.object({ kind: z.literal('save_conversation'), change }).strict(),
@@ -99,12 +96,13 @@ const admission = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rejected'), reason: z.enum(['capacity', 'storage', 'stopping']) }).strict(),
 ]);
 const stateReply = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('epic_events_published') }).strict(),
   z.object({ kind: z.literal('wait_command_registered'), id: z.uuid() }).strict(),
   z.object({ kind: z.literal('state_saved'), version, duplicate: z.boolean() }).strict(),
   z.object({ kind: z.literal('event_accepted'), admission }).strict(),
   z.object({ kind: z.literal('notification_saved'), notificationId: id }).strict(),
   z.object({ kind: z.literal('delivery'), conversationId: id, assignment: ConversationAssignmentSchema,
-    connectedPorts: z.array(id).max(MAX_PROCESS_DELIVERY_PORTS) }).strict(),
+    connectedPorts: z.array(id) }).strict(),
   z.object({ kind: z.literal('error'), code: z.enum(['stale_turn', 'version_conflict', 'forbidden', 'capacity', 'storage', 'stopping']), message: text }).strict(),
 ]);
 export type DaemonStateRequest = z.infer<typeof stateRequest>;
@@ -121,7 +119,8 @@ const daemonMessage = z.discriminatedUnion('kind', [
 const childMessage = z.discriminatedUnion('kind', [
   z.object({ ...common, kind: z.literal('ready') }).strict(),
   z.object({ ...common, kind: z.literal('turn_progress'), turn: TurnIdentitySchema,
-    message: z.union([z.string().refine((v) => Buffer.byteLength(v) <= MAX_PROCESS_PROGRESS_BYTES), ConversationActivitySchema, ConversationTextSchema]) }).strict(),
+    message: z.union([z.string(), ConversationActivitySchema, z.object({ kind: z.literal('turn_text'), message: z.string() }).strict(),
+      ConversationToolEventSchema]) }).strict(),
   z.object({ ...common, kind: z.literal('turn_finished'), turn: TurnIdentitySchema, outcome }).strict(),
   z.object({ ...common, kind: z.literal('shutdown_complete') }).strict(),
   z.object({ ...common, kind: z.literal('daemon_request'), turn: TurnIdentitySchema, requestId: id, request: stateRequest }).strict(),
@@ -129,52 +128,36 @@ const childMessage = z.discriminatedUnion('kind', [
 export type DaemonProcessMessage = z.infer<typeof daemonMessage>;
 export type TurnProcessMessage = z.infer<typeof childMessage>;
 
-/** Node IPC の送受信双方で使う。JSON で失われる関数・signal・循環参照も拒否する。 */
-function messageBytes(value: unknown): number {
-  const pending = [{ value, depth: 0 }];
-  let nodes = 0;
-  let bytes = 0;
-  while (pending.length > 0) {
-    const item = pending.pop()!;
-    if (++nodes > 65536 || item.depth > 32) throw new Error('Process message structure exceeds capacity');
-    const entry = item.value;
-    if (typeof entry === 'string') bytes += Buffer.byteLength(entry);
-    else if (entry !== null && typeof entry === 'object') {
-      if (!Array.isArray(entry) && Object.getPrototypeOf(entry) !== Object.prototype) throw new Error('Process message must contain JSON data');
-      for (const [key, child] of Object.entries(entry)) {
-        bytes += Buffer.byteLength(key);
-        pending.push({ value: child, depth: item.depth + 1 });
-      }
-    } else if (entry !== null && typeof entry !== 'boolean' && !(typeof entry === 'number' && Number.isFinite(entry))) {
+/** Node IPC の送受信双方で使う。JSON で失われる関数・signal などの値と、走査が終わらない循環参照を拒否する。 */
+function assertJsonData(value: unknown): void {
+  const ancestors = new Set<object>();
+  const work: Array<{ value: unknown; exit: boolean }> = [{ value, exit: false }];
+  while (work.length > 0) {
+    const item = work.pop()!;
+    const current = item.value;
+    if (item.exit) { ancestors.delete(current as object); continue; }
+    if (current === null || typeof current === 'string' || typeof current === 'boolean') continue;
+    if (typeof current === 'number' && Number.isFinite(current)) continue;
+    if (typeof current !== 'object' || !Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype) {
       throw new Error('Process message must contain JSON data');
     }
-    if (bytes > MAX_PROCESS_MESSAGE_BYTES) throw new Error('Process message exceeds byte capacity');
+    if (ancestors.has(current)) throw new Error('Process message must not contain cycles');
+    ancestors.add(current);
+    work.push({ value: current, exit: true });
+    for (const child of Object.values(current)) work.push({ value: child, exit: false });
   }
-  const serialized = JSON.stringify(value);
-  const size = Buffer.byteLength(serialized);
-  if (size > MAX_PROCESS_MESSAGE_BYTES) throw new Error('Process message exceeds byte capacity');
-  return size;
 }
 
 export function parseDaemonProcessMessage(value: unknown, launchId: string): DaemonProcessMessage {
-  messageBytes(value);
+  assertJsonData(value);
   const message = daemonMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;
 }
 
 export function parseTurnProcessMessage(value: unknown, launchId: string): TurnProcessMessage {
-  messageBytes(value);
+  assertJsonData(value);
   const message = childMessage.parse(value);
   if (message.launchId !== launchId) throw new Error('Stale process launch');
   return message;
-}
-
-/** 送信前に予約する。返信・切断・取消で件数とバイト数を必ず解放する。 */
-export function processRequestBytes(pendingCount: number, pendingBytes: number, message: DaemonProcessMessage | TurnProcessMessage): number {
-  if (message.kind !== 'daemon_request' && message.kind !== 'daemon_reply') throw new Error('Expected a process request or reply');
-  const size = messageBytes(message);
-  if (!Number.isSafeInteger(pendingCount) || pendingCount < 0 || !Number.isSafeInteger(pendingBytes) || pendingBytes < 0
-    || pendingCount >= MAX_PROCESS_PENDING_REQUESTS || pendingBytes + size > MAX_PROCESS_PENDING_BYTES) throw new Error('Process requests exceed capacity');
-  return size;
 }

@@ -1,6 +1,7 @@
 import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
 import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
 import { jsonResult } from './response.js';
+import { EPIC_TOOL_NAMES, registerEpicTools } from './epicOperations.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -10,6 +11,7 @@ import {
   getWorkflowInputSchema,
   getGoalInputSchema,
   enqueueTaskInputSchema,
+  createGoalInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
   cleanupTasksInputSchema,
@@ -27,6 +29,7 @@ import {
   askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  answerGoalQuestionInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -41,7 +44,7 @@ import {
   tellTaktRun,
   type McpOperationDependencies,
 } from './operations.js';
-import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { createTaktGoal, enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
 import { getTaktWorkflow } from './workflowOperations.js';
 import { resolveManagerWorkflowSelection } from '../manager/workflowSelection.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
@@ -58,7 +61,7 @@ import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
-import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -94,6 +97,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
+  ...EPIC_TOOL_NAMES,
   ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace',
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
@@ -211,6 +215,12 @@ export function createTaktMcpServer(
     }, false));
   }
   if (options.toolSet === 'manager') {
+    registerEpicTools(server, { globalConfigDirectory, currentAssignment, withTurn, turnSignal,
+      changed: options.requestDaemon === undefined ? undefined : async (workspaceId, epicId, reason) => {
+        const reply = await options.requestDaemon!({ kind: 'publish_epic_events', workspaceId, epicId, reason });
+        if (reply.kind === 'error') throw new Error(reply.message);
+        if (reply.kind !== 'epic_events_published') throw new Error('Unexpected Epic event reply');
+      } });
     const connection = options.goalExecutionConnection;
     if (connection !== undefined) {
       const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>
@@ -294,7 +304,7 @@ export function createTaktMcpServer(
       title: 'Read manager work', description: 'Read recent manager work in reverse saved order with optional limit (1-50) and offset. Read full entries with takt_get_goal path workLog, recordId, and a text field path. Responses fit 64 KiB, with explicit truncation.', inputSchema: listGoalRecordsInputSchema,
     }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
     server.registerTool('takt_ask_goal_question', {
-      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Tool approvals are retired and cannot be created. Answers are supplied by people through TUI or Slack. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
+      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Tool approvals are retired and cannot be created. Answers are supplied by people through TUI or Slack, or with takt_answer_goal_question. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
       inputSchema: askGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question failed', (deps) => askTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))));
     server.registerTool('takt_list_goal_questions', {
@@ -345,7 +355,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Prepare or merge a goal PR',
-      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare workflow handles preparation through review, CodeRabbit and CI; custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
+      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare and merge-review-fix-simple workflows handle target-branch integration, CodeRabbit feedback, and CI waiting. For both initial synchronization and resynchronization, a clean base sync skips the full review; after AI conflict resolution, review and fixes run before push. Custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
       inputSchema: mergeGoalPrInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {
@@ -388,6 +398,24 @@ export function createTaktMcpServer(
       },
       (input, extra) => operation(input.cwd, 'Task enqueue failed', (deps) => enqueueTaktTask(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
+    server.registerTool(
+      'takt_create_goal',
+      {
+        title: 'Create TAKT goal',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd the absolute path to the Git repository root. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        inputSchema: createGoalInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_answer_goal_question',
+      {
+        title: 'Answer a goal question',
+        description: 'Answer one pending question on a goal. Use answer.text for a question and answer.report (completed or unable) for an operation_request. The answer is recorded with source mcp. If delivery to the manager fails after the answer is saved, the answer stays saved and the TAKT daemon delivers it later; do not answer again. Questions for retired approval inquiries cannot be answered. Responses fit 64 KiB, with explicit truncation. Read the saved answer with takt_get_goal_question and path answer.text.',
+        inputSchema: answerGoalQuestionInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
   }
 
   server.registerTool(
@@ -429,7 +457,7 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[1],
     {
       title: 'Get TAKT run details',
-      description: 'Read run metadata and body-free step/report lists with offset/limit. Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 task text; pass task.nextOffset as offset to continue. Use view log and optional stepIndex (default last) for a log tail, or view report and report filename for one report. Use view instructions with offset/limit (1-50) to list saved instructions, then instructionId and offset/maxBytes for their forward UTF-8 text. Text uses offset/maxBytes; log offset counts backwards from the end. Follow nextOffset to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read run metadata and body-free step/report lists with offset/limit. currentStep is the current step recorded for the run: the top-level step, or the branch step once a branch of a top-level parallel step starts a step of its child workflow. currentStepPath lists the running position as { workflow, step } entries from the top-level workflow down to the leaf step (the top-level step itself, a step inside child workflows, a parallel step itself, or a _loop_judge_ step in the workflow of the step that triggered it), and only its last entry carries startedAt and executionCount. When currentStep names a top-level parallel branch, the path goes through the parallel step and that branch while the latest step started in that branch in the current run of the parallel step runs. Once that step has completed or the child workflow of the branch has ended, the leaf is the parallel step itself, with the start of its current run, until the branch logs its next start. currentStepStartedAt and currentStepExecutionCount are the same values and belong to that leaf, not to currentStep. executionCount counts starts of the leaf from the same call site in the latest log; 0 means its start is not logged yet and the path holds only currentStep, and null means unknown. Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 task text; pass task.nextOffset as offset to continue. Use view log and optional stepIndex (default last) for a log tail, or view report and report filename for one report. Use view instructions with offset/limit (1-50) to list saved instructions, then instructionId and offset/maxBytes for their forward UTF-8 text. Text uses offset/maxBytes; log offset counts backwards from the end. Follow nextOffset to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: getRunInputSchema,
     },
     (input) => operation(input.cwd, 'Run read failed', (deps) => getTaktRun(projectInput(input, deps), deps)),

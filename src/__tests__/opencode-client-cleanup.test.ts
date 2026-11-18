@@ -543,12 +543,16 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   });
 
-  it('fails an attempt when the sensitive candidate count is exhausted', async () => {
+  it('continues an attempt when the sensitive candidate tracking limit is reached', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-sensitive-source-limit';
-    const events = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => (
-      sensitiveToolPartUpdated(sessionId, `tool-${index}`, `secret-${index}`)
-    ));
+    const events: unknown[] = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => ({
+      type: 'message.part.updated', properties: { part: {
+        id: `tool-${index}`, sessionID: sessionId, type: 'tool', callID: `call-${index}`, tool: 'remote',
+        state: { status: 'completed', input: { token: `secret-${index}` }, output: 'ok', title: 'done' },
+      } },
+    }));
+    events.push(textPartUpdated(sessionId, 'ordinary', 'ordinary progress\n'), sessionIdle(sessionId));
     const stream = new MockEventStream(events, sessionId);
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -569,8 +573,9 @@ describe('OpenCodeClient stream cleanup', () => {
       model: 'opencode/big-pickle',
     });
 
-    expect(result.status).toBe('error');
-    expect(result.error).toContain('candidate_count');
+    expect(result.status).toBe('done');
+    expect(result.error).toBeUndefined();
+    expect(result.content).toBe('ordinary progress');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -631,7 +636,6 @@ describe('OpenCodeClient stream cleanup', () => {
       model: 'opencode/big-pickle',
     });
     expect(result.status).toBe('done');
-    expect(result.error ?? '').not.toContain('sensitive_sources');
   });
 
   it('should consume stream events while promptAsync is still pending', async () => {

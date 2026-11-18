@@ -23,7 +23,7 @@ vi.mock('../core/workflow/run/resume-report-reference-snapshot.js', () => ({
 }));
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: () => mocks.out,
-  createPrefixedStreamHandler: vi.fn(),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 vi.mock('../infra/config/index.js', () => ({
   loadGlobalConfig: () => ({}), loadProjectConfig: () => ({}),

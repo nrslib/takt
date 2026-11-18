@@ -3,10 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from '@opencode-ai/sdk/v2/types';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import {
-  getNestedObservabilityEnvFingerprint,
-  runWithNestedObservabilityProcessEnv,
-} from '../../shared/telemetry/index.js';
+import { getNestedObservabilityEnvFingerprint } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
@@ -14,6 +11,7 @@ import { cleanupPendingModelSelectionSessions } from './model-selection-session-
 import { startOpenCodeServer } from './server-process.js';
 import { openCodeRuntimeSelection, resolveOpenCodeRuntime } from './runtime.js';
 import { buildV2ServerConfig } from './v2-config.js';
+import { buildOpenCodeV1ExternalDirectoryPermissions, normalizeOpenCodeExternalDirectories } from './external-directories.js';
 import type { ManagedOpenCodeTransport, OpenCodeTransport } from './transport.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 
@@ -29,6 +27,7 @@ export type OpencodeClient = OpenCodeTransport;
 
 interface SharedServer {
   key: string;
+  externalDirectoryAllowlist: readonly string[];
   client: ManagedOpenCodeTransport;
   close: () => Promise<void>;
   onError: (listener: (error: Error) => void) => () => void;
@@ -46,6 +45,7 @@ interface SharedServerQueueEntry {
 }
 
 interface SharedServerEntry {
+  externalDirectoryAllowlist: readonly string[];
   server?: SharedServer;
   initPromise?: Promise<SharedServer>;
 }
@@ -89,17 +89,18 @@ function buildSharedServerKey(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   mcpIdentity: string | undefined,
   skillsEnabled: boolean,
+  externalDirectoryAllowlist: readonly string[],
 ): string {
   const runtime = openCodeRuntimeSelection();
   return JSON.stringify([model, apiKey, getNestedObservabilityEnvFingerprint(childProcessEnv), mcpIdentity ?? '', runtime,
-    ...(runtime.generation === 'v2' ? [skillsEnabled] : []),
+    ...(runtime.generation === 'v2' ? [skillsEnabled] : []), externalDirectoryAllowlist,
   ]);
 }
 
-function getSharedServerEntry(key: string): SharedServerEntry {
+function getSharedServerEntry(key: string, externalDirectoryAllowlist: readonly string[]): SharedServerEntry {
   const existing = sharedServers.get(key);
   if (existing !== undefined) return existing;
-  const entry: SharedServerEntry = {};
+  const entry: SharedServerEntry = { externalDirectoryAllowlist };
   sharedServers.set(key, entry);
   return entry;
 }
@@ -156,51 +157,53 @@ async function createSharedServer(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   serverConfig: Record<string, unknown> | undefined,
   skillsEnabled: boolean,
+  externalDirectoryAllowlist: readonly string[],
 ): Promise<SharedServer> {
   const runtime = await resolveOpenCodeRuntime();
   const port = await getFreePort();
   const registerListToolShim = runtime.generation === 'v1' && versionAllowsListToolShim(runtime.version);
-  const openCodeServer = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
-    startOpenCodeServer({
-      runtime,
-      ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
-      port,
-      timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
-      config: runtime.generation === 'v2' ? buildV2ServerConfig(model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled) : {
-        ...(model === undefined ? {} : { model, small_model: model }),
-        plugin: [
-          pluginPath('coerce-tool-args.js'),
-          ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
-        ],
-        permission: { external_directory: 'deny' },
-        ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
-        agent: {
-          [TAKT_AGENT]: {
-            prompt: loadTemplate('opencode_agent_prompt', 'en', {
-              listFilesMethod: 'runs bash ls to list files in the directory',
-            }),
-            tools: { task: false },
-          },
-          [TAKT_AGENT_REVIEW]: {
-            prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
-              listFilesMethod: 'uses read tool on the directory to list files',
-            }),
-            tools: { task: false },
-          },
-          [TAKT_AGENT_REPORT]: {
-            prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
-          },
-          [TAKT_AGENT_READ]: {
-            prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
-            tools: { task: false },
-          },
+  const openCodeServer = await startOpenCodeServer({
+    runtime,
+    ...(runtime.generation === 'v2' ? { mcpServerNames: Object.keys(serverConfig ?? {}) } : {}),
+    port,
+    timeoutMs: OPENCODE_SERVER_START_TIMEOUT_MS,
+    ...(childProcessEnv === undefined ? {} : { childProcessEnv }),
+    config: runtime.generation === 'v2' ? buildV2ServerConfig(
+      model, apiKey, pluginPath('v2-session'), serverConfig, skillsEnabled, externalDirectoryAllowlist,
+    ) : {
+      ...(model === undefined ? {} : { model, small_model: model }),
+      plugin: [
+        pluginPath('coerce-tool-args.js'),
+        ...(registerListToolShim ? [pluginPath('list-tool.js')] : []),
+      ],
+      permission: buildOpenCodeV1ExternalDirectoryPermissions(externalDirectoryAllowlist),
+      ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+      agent: {
+        [TAKT_AGENT]: {
+          prompt: loadTemplate('opencode_agent_prompt', 'en', {
+            listFilesMethod: 'runs bash ls to list files in the directory',
+          }),
+          tools: { task: false },
         },
-        ...(serverConfig !== undefined
-          ? { mcp: serverConfig as NonNullable<Config['mcp']> }
-          : {}),
+        [TAKT_AGENT_REVIEW]: {
+          prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
+            listFilesMethod: 'uses read tool on the directory to list files',
+          }),
+          tools: { task: false },
+        },
+        [TAKT_AGENT_REPORT]: {
+          prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
+        },
+        [TAKT_AGENT_READ]: {
+          prompt: loadTemplate('opencode_read_agent_prompt', 'en'),
+          tools: { task: false },
+        },
       },
-    }),
-  );
+      ...(serverConfig !== undefined
+        ? { mcp: serverConfig as NonNullable<Config['mcp']> }
+        : {}),
+    },
+  });
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
     if (closePromise !== undefined) return closePromise;
@@ -226,6 +229,7 @@ async function createSharedServer(
   log.debug('OpenCode server started', { model, port });
   const sharedServer: SharedServer = {
     key,
+    externalDirectoryAllowlist,
     client: openCodeServer.client,
     close,
     onError: openCodeServer.onError,
@@ -247,11 +251,16 @@ export async function acquireOpenCodeClient(
   preparedMcp?: { serverConfig?: Record<string, unknown>; identity?: string; dispose?: () => Promise<void> },
   skillsEnabled = false,
   executionContext?: OpenCodeExecutionContext,
+  externalDirectoryAllowlist?: readonly string[],
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   throwIfForcedShutdownRequested();
-  const key = buildSharedServerKey(model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled);
-  const entry = getSharedServerEntry(key);
+  const normalizedExternalDirectories = normalizeOpenCodeExternalDirectories(externalDirectoryAllowlist);
+  const key = buildSharedServerKey(
+    model, apiKey, childProcessEnv, preparedMcp?.identity, skillsEnabled,
+    normalizedExternalDirectories,
+  );
+  const entry = getSharedServerEntry(key, normalizedExternalDirectories);
   const sessionKey = sessionId ?? '';
   const acquireSelectedServer = (server: SharedServer): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> => {
     executionContext?.selectSdk(server.client.sdkState);
@@ -265,7 +274,10 @@ export async function acquireOpenCodeClient(
   }
   if (entry.server !== undefined) return acquireSelectedServer(entry.server);
 
-  const initPromise = createSharedServer(key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled)
+  const initPromise = createSharedServer(
+    key, model, apiKey, childProcessEnv, preparedMcp?.serverConfig, skillsEnabled,
+    normalizedExternalDirectories,
+  )
     .then((server) => {
       entry.server = server;
       server.onError((error) => invalidateSharedServer(server, error));
@@ -391,6 +403,28 @@ export function resetSharedServerPool(): void {
     if (entry.server !== undefined) void entry.server.close().catch(() => undefined);
   }
   sharedServers.clear();
+}
+
+export async function closeOpenCodeServersForExternalDirectories(
+  normalizedDirectories: readonly string[],
+): Promise<void> {
+  const allowlistIdentity = JSON.stringify(normalizedDirectories);
+  if (allowlistIdentity === '[]') return;
+
+  const entries: SharedServerEntry[] = [];
+  for (const [key, entry] of sharedServers) {
+    if (JSON.stringify(entry.externalDirectoryAllowlist) !== allowlistIdentity) continue;
+    sharedServers.delete(key);
+    entries.push(entry);
+  }
+  await Promise.allSettled(entries.flatMap((entry) => entry.initPromise === undefined ? [] : [entry.initPromise]));
+
+  const servers = entries.flatMap((entry) => entry.server === undefined ? [] : [entry.server]);
+  const results = await Promise.allSettled(servers.map((server) => server.close()));
+  const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Failed to close OpenCode servers for completed run context');
+  }
 }
 
 export function prepareSharedServerPoolForForcedShutdown(): Promise<void> {

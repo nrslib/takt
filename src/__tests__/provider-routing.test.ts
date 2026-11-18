@@ -82,6 +82,9 @@ function createBuilder(
     () => '.takt/runs/provider-routing/reports',
     () => 'ja',
     () => 'provider-routing-test',
+    () => undefined,
+    () => 'task',
+    () => ({ kind: 'not_a_git_repository' as const }),
   );
 }
 

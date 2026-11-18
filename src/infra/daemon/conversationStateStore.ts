@@ -4,18 +4,20 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnResult } from '../../core/daemon/messages.js';
-import { MAX_PROCESS_MESSAGE_BYTES, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
+import type { DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { ConversationChangeSchema, StoredTurnSchema } from './eventRecord.js';
 import { ApprovalSchema, ConversationAgentOverridesSchema, ConversationIdSchema, ConversationRecordSchema,
   PendingSummarySchema, type ConversationRecord } from '../conversations/schema.js';
 import { FileAsyncLock } from './lock.js';
-import { ensurePrivateDirectory, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { appendPrivateFile, ensurePrivateDirectory, readEntirePrivateFile, writePrivateFile } from './privateFile.js';
+import { ManagerToolActivityEntrySchema } from '../../shared/tool-activity/schema.js';
+import { limitToolOutput, SAVED_TOOL_OUTPUT_BYTES } from '../../shared/tool-activity/outputLimit.js';
+import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool-activity/types.js';
 
 const MAX_RECEIPTS = 32;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
-const MAX_CONVERSATION_BYTES = 12 * 1024 * 1024;
 const id = z.string().min(1).max(128);
-const text = z.string().max(MAX_PROCESS_MESSAGE_BYTES);
+const text = z.string();
 const messageDigest = z.string().regex(/^[a-f0-9]{64}$/);
 const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const receiptChange = z.object({
@@ -46,6 +48,8 @@ interface StoredConversation {
   record: ConversationRecord;
   metadata: z.infer<typeof metadata>;
 }
+const completedToolRecord = z.object({ kind: z.literal('completed'),
+  entry: ManagerToolActivityEntrySchema.refine((entry) => entry.status !== 'running') }).strict();
 
 function receiptChangeFor(change: ConversationChange): z.infer<typeof receiptChange> | ConversationChange {
   const { interruptedMessage, ...fields } = change;
@@ -64,14 +68,20 @@ function receiptMatches(entry: z.infer<typeof receipt>, turn: TurnIdentity, chan
 
 export class ConversationStateStore {
   private readonly directory: string;
+  private readonly toolHistoryDirectory: string;
   private readonly lock = new FileAsyncLock();
 
-  constructor(configDirectory: string) { this.directory = join(configDirectory, 'conversations'); }
+  constructor(configDirectory: string) {
+    this.directory = join(configDirectory, 'conversations');
+    this.toolHistoryDirectory = join(configDirectory, 'conversation-tool-history');
+  }
 
   private path(id: string): string { return join(this.directory, `${ConversationIdSchema.parse(id)}.json`); }
 
+  private toolHistoryPath(id: string): string { return join(this.toolHistoryDirectory, `${ConversationIdSchema.parse(id)}.jsonl`); }
+
   private async load(id: string): Promise<StoredConversation | undefined> {
-    const content = await readPrivateFile(this.path(id), MAX_CONVERSATION_BYTES);
+    const content = await readEntirePrivateFile(this.path(id));
     if (content === undefined) return undefined;
     const value: unknown = JSON.parse(content.toString('utf8'));
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid stored conversation');
@@ -96,6 +106,44 @@ export class ConversationStateStore {
   async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
     const stored = await this.load(id);
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
+  }
+
+  async readToolHistories(id: string): Promise<ToolActivityTurnState[]> {
+    const content = await readEntirePrivateFile(this.toolHistoryPath(id));
+    if (content === undefined) return [];
+    const lines = content.toString('utf8').split('\n');
+    lines.pop();
+    const turns = new Map<string, ToolActivityTurnState>();
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      let raw: unknown;
+      // mainのセッションJSONL読取と同じく、途切れたJSON行は読み飛ばす。
+      try { raw = JSON.parse(line) as unknown; }
+      catch { continue; }
+      const parsed = completedToolRecord.safeParse(raw);
+      if (!parsed.success) continue;
+      const entry = parsed.data.entry;
+      const { operationId, generation } = entry.context;
+      if (operationId === undefined || generation === undefined) continue;
+      const key = JSON.stringify([operationId, generation]);
+      let turn = turns.get(key);
+      if (turn === undefined) {
+        turn = { operationId, generation, finished: true, history: { entries: [] } };
+        turns.set(key, turn);
+      }
+      if (!turn.history.entries.some((saved) => saved.key === entry.key)) turn.history.entries.push(entry);
+    }
+    return [...turns.values()];
+  }
+
+  async appendCompletedTool(turn: TurnIdentity, entry: ToolActivityEntry): Promise<void> {
+    const hasResult = entry.result !== undefined && entry.result !== '';
+    const output = hasResult ? '' : limitToolOutput(entry.output, SAVED_TOOL_OUTPUT_BYTES);
+    const result = entry.result === undefined ? undefined : limitToolOutput(entry.result, SAVED_TOOL_OUTPUT_BYTES);
+    const record = completedToolRecord.parse({ kind: 'completed', entry: { ...entry, output, ...(result === undefined ? {} : { result }) } });
+    await ensurePrivateDirectory(this.toolHistoryDirectory);
+    // 前の追記が途中で失敗していても、新しい記録を同じ行へ連結しない。
+    await appendPrivateFile(this.toolHistoryPath(turn.conversationId), `\n${JSON.stringify(record)}\n`);
   }
 
   async *iterate(): AsyncGenerator<ConversationRecord> {
@@ -131,7 +179,6 @@ export class ConversationStateStore {
 
   private async write(stored: StoredConversation, signal?: AbortSignal): Promise<void> {
     const content = JSON.stringify({ ...ConversationRecordSchema.parse(stored.record), daemonState: stored.metadata });
-    if (Buffer.byteLength(content) > MAX_CONVERSATION_BYTES) throw new Error('Conversation exceeds storage capacity');
     await writePrivateFile(this.path(stored.record.id), content, signal);
   }
 
@@ -173,7 +220,7 @@ export class ConversationStateStore {
         const savedChange = receiptChangeFor(change);
         const receipts = [...stored.metadata.receipts, { turn: identity, change: savedChange, version: nextVersion }].slice(-MAX_RECEIPTS);
         while (receipts.length > 1 && Buffer.byteLength(JSON.stringify(receipts)) > MAX_RECEIPT_BYTES) receipts.shift();
-        await this.write({ record: checked.data, metadata: { version: nextVersion,
+        await this.write({ record: checked.data, metadata: { ...stored.metadata, version: nextVersion,
           receipts } }, signal);
         return committed = { kind: 'state_saved', version: nextVersion, duplicate: false };
       }, { signal, timeoutMs: 5000 });

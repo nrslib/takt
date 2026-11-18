@@ -852,6 +852,17 @@ steps:
     capabilities: [edit, enable-skills]
 ```
 
+### `repository_identity`
+
+`repository_identity: true` 会在 clone 中运行的任务（`worktree: true`）里为 `gh` 和 `glab` 提供项目仓库，因为 clone 中没有可读的 `origin` remote。TAKT 会把 `GH_REPO` 或 `GITLAB_REPO` 传给该 workflow 的 agent 步骤、命令质量门禁和 system `command` 输入；不会添加 remote 或凭据。
+
+```yaml
+repository_identity: true
+```
+
+默认关闭，因此不操作仓库的 workflow 不会收到任何变量。每个 workflow 自行决定：被调用的 workflow 既不继承调用方的声明，也不会失去自己的声明。在项目根目录运行的任务不提供，已经自行设置的变量不会被覆盖。变量、主机规则以及 GitHub / GitLab 检测见 [clone 中的仓库标识](configuration.zh-CN.md#clone-中的仓库标识)。
+
+
 ### `workflow_config.runtime`
 
 在 workflow 执行前准备运行环境。builtin `node`/`gradle` preset 始终允许；自定义脚本需要 `workflow_runtime_prepare.custom_scripts: true`：
@@ -1110,6 +1121,6 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 GitLab 也提供 MR 详情和 CI 状态，原因是 `github_unavailable` 的 `skipped` 会继续等待返回 head 的 CI。合并方式和 head 限制仍不受支持，传入这些参数的 `merge_pr` 会失败。
 
-合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `sync → commit_and_push → caccia → wait_ci → merge_pr` 执行。初次同步和重新同步均遵循相同条件：无冲突时跳过完整审查，直接进入 push → Caccia → 返回 head 的 CI 等待；AI 解决冲突后，必须先完成审查和修复，再执行 `commit_and_push`。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。Git push 本身不会启动 Caccia。PR 发布后的自动 Caccia 遵循[配置参考](./configuration.md#caccia-review-loop)中的启用条件、排除条件和执行顺序。
 
-`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功的行为不变，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。CI 首次通过时不执行恢复流程，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。

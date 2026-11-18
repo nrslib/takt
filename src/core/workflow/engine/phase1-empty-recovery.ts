@@ -291,6 +291,14 @@ export async function runPhase1WithEmptyRecovery(
     return { attempt, response };
   };
 
+  const assignment = options.workflowMeta?.context?.assignment;
+  const continuationInstruction = assignment === undefined
+    ? PHASE1_EMPTY_CONTINUATION_INSTRUCTION
+    : [
+        renderPhaseContext(assignment, 1, options.language ?? 'en'),
+        PHASE1_EMPTY_CONTINUATION_INSTRUCTION,
+      ].join('\n\n');
+
   let current = await execute('initial', options.instruction, options.initialSessionId);
 
   if (
@@ -314,13 +322,6 @@ export async function runPhase1WithEmptyRecovery(
       options.discardSession(options.initialSessionId);
       current = await execute('empty_fresh', options.instruction, undefined);
     } else {
-      const assignment = options.workflowMeta?.context?.assignment;
-      const continuationInstruction = assignment === undefined
-        ? PHASE1_EMPTY_CONTINUATION_INSTRUCTION
-        : [
-            renderPhaseContext(assignment, 1, options.language ?? 'en'),
-            PHASE1_EMPTY_CONTINUATION_INSTRUCTION,
-          ].join('\n\n');
       current = await execute(
         'empty_continuation',
         continuationInstruction,
@@ -331,30 +332,34 @@ export async function runPhase1WithEmptyRecovery(
 
   if (!isEmptyPhase1Response(current.response)) {
     if (
-      (current.attempt.reason === 'empty_continuation'
-        || current.attempt.reason === 'empty_fresh')
+      current.attempt.reason === 'empty_fresh'
       && isProviderErrorEligibleForFreshRetry(current.response)
       && executionCount < MAX_PHASE1_EXECUTIONS
     ) {
       options.recordSupersededAttempt?.(current.response, current.attempt);
       options.discardSession(options.initialSessionId);
       current = await execute('provider_error_fresh', options.instruction, undefined);
-    } else {
+    } else if (
+      current.attempt.reason !== 'empty_continuation'
+      || !isProviderErrorEligibleForFreshRetry(current.response)
+    ) {
       return { response: current.response, finalAttempt: current.attempt };
     }
   }
 
-  if (!isEmptyPhase1Response(current.response)) {
-    return { response: current.response, finalAttempt: current.attempt };
-  }
-
   if (
     current.attempt.reason === 'empty_continuation'
+    && current.response.sessionId !== undefined
     && executionCount < MAX_PHASE1_EXECUTIONS
   ) {
     options.recordSupersededAttempt?.(current.response, current.attempt);
-    options.discardSession(options.initialSessionId);
-    current = await execute('empty_fresh', options.instruction, undefined);
+    // The first continuation is short. If it also fails, rebuild the current instruction with its
+    // notes and delivered interventions, but keep the same session so completed tools are not fresh-replayed.
+    current = await execute(
+      'empty_continuation',
+      options.instruction,
+      current.response.sessionId,
+    );
   }
 
   if (isEmptyPhase1Response(current.response)) {

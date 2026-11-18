@@ -196,6 +196,27 @@ function createRunDir(
   return runDir;
 }
 
+function stackFrame(workflow: string, step: string, kind: string, occurrence = 1) {
+  return { workflow, workflow_ref: `builtin:${workflow}`, step, kind, occurrence };
+}
+
+/** The session logger writes a step_complete with the step, iteration, workflow, stack, and parallel identity of its start. */
+function completionOf(start: Record<string, unknown>, timestamp: string): Record<string, unknown> {
+  const { step, persona, iteration, workflow, stack, parallel } = start;
+  return { type: 'step_complete', step, persona, iteration, status: 'done', content: '', instruction: '', workflow, stack, parallel, timestamp };
+}
+
+function writeSessionLog(runDir: string, records: readonly Record<string, unknown>[]): void {
+  writeFileSync(join(runDir, 'logs', 'session.jsonl'), records.map((record) => JSON.stringify(record)).join('\n'));
+}
+
+async function readCurrentStepFromBothReaders(cwd: string, slug: string) {
+  const { parseNdjsonLogContent: parse } = await vi.importActual<typeof import('../infra/fs/session.js')>('../infra/fs/session.js');
+  const page = loadRunSessionPage(cwd, slug, { maxBytes: 4096 });
+  mockParseNdjsonLogContent.mockImplementationOnce(parse);
+  return { page, context: loadRunSessionContext(cwd, slug) };
+}
+
 describe('listRecentRuns', () => {
   let tmpDir: string;
 
@@ -384,12 +405,20 @@ describe('loadRunSessionContext', () => {
     const context = loadRunSessionContext(tmpDir, slug);
     expect(context).toMatchObject({ currentStep: 'implement', currentIteration: 3, currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
     expect(context.stepLogs[0]).toMatchObject({ timestamp: '2026-10-14T00:02:00Z', iteration: 1 });
-    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
+    const page = loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 });
+    expect(page).toMatchObject({ currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'implement', startedAt: '2026-10-14T00:04:00Z', executionCount: 2 },
+    ]);
     const next = { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 4, timestamp: '2026-10-14T00:05:00Z' };
     writeFileSync(logPath, JSON.stringify({ type: 'workflow_start', task: '巡回の材料', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' }) + '\n' + JSON.stringify(next));
     mockParseNdjsonLogContent.mockImplementationOnce(parse);
     expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
-    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: null, currentStepExecutionCount: 0 });
+    const restarted = loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 });
+    expect(restarted).toMatchObject({ currentStepStartedAt: null, currentStepExecutionCount: 0 });
+    expect(restarted.currentStepPath).toEqual([
+      { workflow: 'default', step: 'implement', startedAt: null, executionCount: 0 },
+    ]);
   });
 
   it('takes timing and execution count from the running child step when the current step calls a child workflow', async () => {
@@ -397,25 +426,30 @@ describe('loadRunSessionContext', () => {
     const slug = 'patrol-child-run';
     const runDir = createRunDir(tmpDir, slug, {
       task: '子のワークフロー', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
-      currentStep: 'develop', currentIteration: 1, phase: 1,
+      currentStep: 'develop', currentIteration: 3, phase: 1,
     });
-    const stack = (step: string) => [
+    const stack = (step: string, occurrence = 1) => [
       { workflow: 'default', workflow_ref: 'builtin:default', step: 'develop', kind: 'workflow_call', occurrence: 1 },
-      { workflow: 'development-core', workflow_ref: 'builtin:development-core', step, kind: 'agent', occurrence: 1 },
+      { workflow: 'development-core', workflow_ref: 'builtin:development-core', step, kind: 'agent', occurrence },
     ];
     writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
       { type: 'workflow_start', task: '子のワークフロー', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
       { type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, workflow: 'development-core', stack: stack('plan'), timestamp: '2026-10-14T00:01:00Z' },
       { type: 'step_start', step: 'fix', persona: 'coder', iteration: 2, workflow: 'development-core', stack: stack('fix'), timestamp: '2026-10-14T00:02:00Z' },
-      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', stack: stack('fix'), timestamp: '2026-10-14T00:05:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', stack: stack('fix', 2), timestamp: '2026-10-14T00:05:00Z' },
     ].map((record) => JSON.stringify(record)).join('\n'));
     mockParseNdjsonLogContent.mockImplementationOnce(parse);
     expect(loadRunSessionContext(tmpDir, slug)).toMatchObject({
       currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
     });
-    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({
+    const page = loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 });
+    expect(page).toMatchObject({
       currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
     });
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'develop' },
+      { workflow: 'development-core', step: 'fix', startedAt: '2026-10-14T00:05:00Z', executionCount: 2 },
+    ]);
   });
 
   it('does not report a child step of an earlier parent step as the current step', async () => {
@@ -423,11 +457,11 @@ describe('loadRunSessionContext', () => {
     const slug = 'patrol-other-parent';
     const runDir = createRunDir(tmpDir, slug, {
       task: '子のワークフロー', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
-      currentStep: 'review', currentIteration: 4, phase: 1,
+      currentStep: 'review', currentIteration: 2, phase: 1,
     });
     writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
       { type: 'workflow_start', task: '子のワークフロー', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
-      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', timestamp: '2026-10-14T00:05:00Z',
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 1, workflow: 'development-core', timestamp: '2026-10-14T00:05:00Z',
         stack: [
           { workflow: 'default', workflow_ref: 'builtin:default', step: 'develop', kind: 'workflow_call', occurrence: 1 },
           { workflow: 'development-core', workflow_ref: 'builtin:development-core', step: 'fix', kind: 'agent', occurrence: 1 },
@@ -435,7 +469,568 @@ describe('loadRunSessionContext', () => {
     ].map((record) => JSON.stringify(record)).join('\n'));
     mockParseNdjsonLogContent.mockImplementationOnce(parse);
     expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
-    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 }).currentStepStartedAt).toBeNull();
+    const page = loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 });
+    expect(page.currentStepStartedAt).toBeNull();
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'review', startedAt: null, executionCount: 0 },
+    ]);
+  });
+
+  it('returns every workflow and step from the top-level step down to the running leaf of a deeply nested call', async () => {
+    const slug = 'deep-child-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '深い子のワークフロー', workflow: 'takt-default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'develop', currentIteration: 3, phase: 1,
+    });
+    const stack = (step: string, occurrence = 1) => [
+      stackFrame('takt-default', 'develop', 'workflow_call'),
+      stackFrame('development-core', 'implement', 'workflow_call'),
+      stackFrame('tdd-core', step, 'agent', occurrence),
+    ];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '深い子のワークフロー', workflowName: 'takt-default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'write_tests', persona: 'coder', iteration: 1, workflow: 'tdd-core', stack: stack('write_tests'), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'implement_code', persona: 'coder', iteration: 2, workflow: 'tdd-core', stack: stack('implement_code'), timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'write_tests', persona: 'coder', iteration: 3, workflow: 'tdd-core', stack: stack('write_tests', 2), timestamp: '2026-11-17T00:03:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'takt-default', step: 'develop' },
+      { workflow: 'development-core', step: 'implement' },
+      { workflow: 'tdd-core', step: 'write_tests', startedAt: '2026-11-17T00:03:00Z', executionCount: 2 },
+    ]);
+    expect(page).toMatchObject({
+      currentStep: 'develop', currentIteration: 3,
+      currentStepStartedAt: '2026-11-17T00:03:00Z', currentStepExecutionCount: 2,
+    });
+    expect(context).toMatchObject({
+      currentStep: 'develop', currentStepStartedAt: '2026-11-17T00:03:00Z', currentStepExecutionCount: 2,
+      currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('keeps a nested parallel parent as the leaf while child workflows of its branches run', async () => {
+    const slug = 'nested-parallel-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '並列レビュー', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'develop', currentIteration: 2, phase: 1,
+    });
+    const parallelStack = [stackFrame('default', 'develop', 'workflow_call'), stackFrame('development-core', 'reviewers', 'parallel')];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '並列レビュー', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'development-core', stack: parallelStack,
+        parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'check', persona: 'security', iteration: 2, workflow: 'security-review',
+        stack: [...parallelStack, stackFrame('development-core', 'security-review', 'workflow_call'), stackFrame('security-review', 'check', 'agent')],
+        parallel: { role: 'workflow_call_participant', participationId: 'call:1', parentParticipationId: 'parallel:1' }, timestamp: '2026-11-17T00:03:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'develop' },
+      { workflow: 'development-core', step: 'reviewers', startedAt: '2026-11-17T00:01:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1 });
+    expect(context).toMatchObject({
+      currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('goes through the top-level branch named by currentStep and keeps a parallel step inside that branch as the leaf', async () => {
+    const slug = 'parallel-inside-parallel-branch';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '並列の中の並列', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'security', currentIteration: 3, phase: 1,
+    });
+    const outer = stackFrame('default', 'reviewers', 'parallel');
+    const inner = [outer, stackFrame('default', 'security', 'workflow_call'), stackFrame('security-review', 'checks', 'parallel')];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '並列の中の並列', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'default', stack: [outer],
+        parallel: { role: 'parent', participationId: 'parallel:outer' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'checks', persona: 'checks', iteration: 2, workflow: 'security-review', stack: inner,
+        parallel: { role: 'parent', participationId: 'parallel:inner' }, timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'scan', persona: 'security', iteration: 3, workflow: 'secret-scan',
+        stack: [...inner, stackFrame('security-review', 'secrets', 'workflow_call'), stackFrame('secret-scan', 'scan', 'agent')],
+        parallel: { role: 'workflow_call_participant', participationId: 'call:inner', parentParticipationId: 'parallel:inner' },
+        timestamp: '2026-11-17T00:03:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'reviewers' },
+      { workflow: 'default', step: 'security' },
+      { workflow: 'security-review', step: 'checks', startedAt: '2026-11-17T00:02:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep: 'security', currentStepStartedAt: '2026-11-17T00:02:00Z', currentStepExecutionCount: 1 });
+    expect(context.currentStepPath).toEqual(page.currentStepPath);
+  });
+
+  it('reports the running child step of the top-level parallel branch that currentStep names', async () => {
+    const slug = 'top-level-parallel-branch-child';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '並列の分岐の子', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'security', currentIteration: 2, phase: 1,
+    });
+    const reviewers = stackFrame('default', 'reviewers', 'parallel');
+    const branchChild = (branch: string, workflow: string, step: string) => [
+      reviewers, stackFrame('default', branch, 'workflow_call'), stackFrame(workflow, step, 'agent'),
+    ];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '並列の分岐の子', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'default', stack: [reviewers],
+        parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'bench', persona: 'perf', iteration: 2, workflow: 'perf-review', stack: branchChild('perf', 'perf-review', 'bench'),
+        parallel: { role: 'workflow_call_participant', participationId: 'call:perf', parentParticipationId: 'parallel:1' },
+        timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'check', persona: 'security', iteration: 2, workflow: 'security-review',
+        stack: branchChild('security', 'security-review', 'check'),
+        parallel: { role: 'workflow_call_participant', participationId: 'call:security', parentParticipationId: 'parallel:1' },
+        timestamp: '2026-11-17T00:03:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'reviewers' },
+      { workflow: 'default', step: 'security' },
+      { workflow: 'security-review', step: 'check', startedAt: '2026-11-17T00:03:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep: 'security', currentStepStartedAt: '2026-11-17T00:03:00Z', currentStepExecutionCount: 1 });
+    expect(context).toMatchObject({
+      currentStep: 'security', currentStepStartedAt: '2026-11-17T00:03:00Z', currentStepExecutionCount: 1,
+      currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('returns the started position of the top-level branch that currentStep names after a sibling branch started a step', async () => {
+    const slug = 'top-level-branch-after-sibling-start';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '分岐へ戻る', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'security', currentIteration: 3, phase: 1,
+    });
+    const reviewers = stackFrame('default', 'reviewers', 'parallel');
+    const checks = [reviewers, stackFrame('default', 'security', 'workflow_call'), stackFrame('security-review', 'checks', 'parallel')];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '分岐へ戻る', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'default', stack: [reviewers],
+        parallel: { role: 'parent', participationId: 'parallel:outer' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'checks', persona: 'checks', iteration: 2, workflow: 'security-review', stack: checks,
+        parallel: { role: 'parent', participationId: 'parallel:inner' }, timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'bench', persona: 'perf', iteration: 2, workflow: 'perf-review',
+        stack: [reviewers, stackFrame('default', 'perf', 'workflow_call'), stackFrame('perf-review', 'bench', 'agent')],
+        parallel: { role: 'workflow_call_participant', participationId: 'call:perf', parentParticipationId: 'parallel:outer' },
+        timestamp: '2026-11-17T00:03:00Z' },
+      { type: 'step_start', step: 'scan', persona: 'security', iteration: 3, workflow: 'secret-scan',
+        stack: [...checks, stackFrame('security-review', 'secrets', 'workflow_call'), stackFrame('secret-scan', 'scan', 'agent')],
+        parallel: { role: 'workflow_call_participant', participationId: 'call:secrets', parentParticipationId: 'parallel:inner' },
+        timestamp: '2026-11-17T00:04:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'reviewers' },
+      { workflow: 'default', step: 'security' },
+      { workflow: 'security-review', step: 'checks', startedAt: '2026-11-17T00:02:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep: 'security', currentStepStartedAt: '2026-11-17T00:02:00Z', currentStepExecutionCount: 1 });
+    expect(context).toMatchObject({
+      currentStepStartedAt: '2026-11-17T00:02:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('does not take the child step of a sibling branch for the top-level branch that currentStep names', async () => {
+    const slug = 'top-level-parallel-sibling-branch';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '別の分岐', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'security', currentIteration: 2, phase: 1,
+    });
+    const reviewers = stackFrame('default', 'reviewers', 'parallel');
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '別の分岐', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'default', stack: [reviewers],
+        parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'bench', persona: 'perf', iteration: 2, workflow: 'perf-review',
+        stack: [reviewers, stackFrame('default', 'perf', 'workflow_call'), stackFrame('perf-review', 'bench', 'agent')],
+        parallel: { role: 'workflow_call_participant', participationId: 'call:perf', parentParticipationId: 'parallel:1' },
+        timestamp: '2026-11-17T00:02:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page).toMatchObject({
+      currentStep: 'security', currentStepStartedAt: null, currentStepExecutionCount: 0,
+      currentStepPath: [{ workflow: 'default', step: 'security', startedAt: null, executionCount: 0 }],
+    });
+    expect(context.currentStepStartedAt).toBeUndefined();
+    expect(context).toMatchObject({ currentStepExecutionCount: 0, currentStepPath: page.currentStepPath });
+  });
+
+  describe('when the latest child step of the top-level branch that currentStep names has completed', () => {
+    const reviewers = stackFrame('default', 'reviewers', 'parallel');
+    const reviewersStart = {
+      type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow: 'default', stack: [reviewers],
+      parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:01:00Z',
+    };
+    const branchChildStart = (branch: string, workflow: string, step: string, iteration: number, timestamp: string) => ({
+      type: 'step_start', step, persona: branch, iteration, workflow,
+      stack: [reviewers, stackFrame('default', branch, 'workflow_call'), stackFrame(workflow, step, 'agent')],
+      parallel: { role: 'workflow_call_participant', participationId: `call:${branch}`, parentParticipationId: 'parallel:1' },
+      timestamp,
+    });
+    const checkStart = branchChildStart('security', 'security-review', 'check', 2, '2026-11-17T00:02:00Z');
+    const benchStart = branchChildStart('perf', 'perf-review', 'bench', 2, '2026-11-17T00:03:00Z');
+    const writeBranchRun = (slug: string, meta: Record<string, unknown>, records: readonly Record<string, unknown>[]) => {
+      const runDir = createRunDir(tmpDir, slug, {
+        task: '分岐の子の完了', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z', currentStep: 'security', ...meta,
+      });
+      writeSessionLog(runDir, [
+        { type: 'workflow_start', task: '分岐の子の完了', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+        reviewersStart,
+        ...records,
+      ]);
+    };
+    const parallelStepPath = [{ workflow: 'default', step: 'reviewers', startedAt: '2026-11-17T00:01:00Z', executionCount: 1 }];
+
+    it('returns the top-level parallel step when an agent branch reports a phase with the parallel step iteration', async () => {
+      // step:complete keeps the branch as the current step, and updatePhase then pairs it with the agent branch iteration.
+      writeBranchRun('top-level-branch-child-completed', { currentIteration: 1, phase: 3 }, [
+        checkStart, benchStart, completionOf(checkStart, '2026-11-17T00:04:00Z'),
+      ]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-child-completed');
+
+      expect(page).toMatchObject({
+        currentStep: 'security', currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath,
+      });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath,
+      });
+    });
+
+    it('returns the top-level parallel step while the next child step of the branch is not logged yet', async () => {
+      // updateStep names the branch with the iteration of a start that the session log has not recorded yet.
+      writeBranchRun('top-level-branch-next-start-not-logged', { currentIteration: 3 }, [
+        checkStart, benchStart, completionOf(checkStart, '2026-11-17T00:04:00Z'),
+      ]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-next-start-not-logged');
+
+      expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath,
+      });
+    });
+
+    it('returns the next child step of the branch once it starts', async () => {
+      const reportStart = branchChildStart('security', 'security-review', 'report', 3, '2026-11-17T00:05:00Z');
+      writeBranchRun('top-level-branch-next-child-started', { currentIteration: 3, phase: 1 }, [
+        checkStart, benchStart, completionOf(checkStart, '2026-11-17T00:04:00Z'), reportStart,
+      ]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-next-child-started');
+
+      expect(page.currentStepPath).toEqual([
+        { workflow: 'default', step: 'reviewers' },
+        { workflow: 'default', step: 'security' },
+        { workflow: 'security-review', step: 'report', startedAt: '2026-11-17T00:05:00Z', executionCount: 1 },
+      ]);
+      expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 1 });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+      });
+    });
+
+    it('returns the top-level parallel step after the child workflow of the branch ends without completing its last step', async () => {
+      // A step that throws logs no step_complete, so only the workflow_call_complete of the branch shows that it ended.
+      writeBranchRun('top-level-branch-call-ended', { currentIteration: 1, phase: 1 }, [
+        benchStart, checkStart,
+        { type: 'workflow_call_complete', workflow: 'default', step: 'security', childWorkflow: 'security-review', callInstance: 1,
+          stack: [reviewers, stackFrame('default', 'security', 'workflow_call')],
+          parallel: { role: 'workflow_call_participant', participationId: 'call:security', parentParticipationId: 'parallel:1' },
+          status: 'aborted', abortReason: 'check failed', timestamp: '2026-11-17T00:04:00Z' },
+      ]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-call-ended');
+
+      expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:01:00Z', currentStepExecutionCount: 1, currentStepPath: parallelStepPath,
+      });
+    });
+  });
+
+  describe('when the top-level parallel step runs again', () => {
+    const reviewers = (occurrence: number) => stackFrame('default', 'reviewers', 'parallel', occurrence);
+    const checkStart = (run: number, iteration: number, timestamp: string) => ({
+      type: 'step_start', step: 'check', persona: 'security', iteration, workflow: 'security-review',
+      stack: [reviewers(run), stackFrame('default', 'security', 'workflow_call', run), stackFrame('security-review', 'check', 'agent')],
+      parallel: { role: 'workflow_call_participant', participationId: `call:security:${run}`, parentParticipationId: `parallel:${run}` },
+      timestamp,
+    });
+    const reviewersStart = (run: number, iteration: number, timestamp: string) => ({
+      type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration, workflow: 'default', stack: [reviewers(run)],
+      parallel: { role: 'parent', participationId: `parallel:${run}` }, timestamp,
+    });
+    const fixStart = {
+      type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'default', stack: [stackFrame('default', 'fix', 'agent')],
+      timestamp: '2026-11-17T00:03:00Z',
+    };
+    const writeRerunRun = (slug: string, currentIteration: number, startsOfNewRun: readonly Record<string, unknown>[]) => {
+      const runDir = createRunDir(tmpDir, slug, {
+        task: 'parallel の再実行', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+        currentStep: 'security', currentIteration,
+      });
+      writeSessionLog(runDir, [
+        { type: 'workflow_start', task: 'parallel の再実行', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+        reviewersStart(1, 1, '2026-11-17T00:01:00Z'),
+        checkStart(1, 2, '2026-11-17T00:02:00Z'),
+        completionOf(checkStart(1, 2, '2026-11-17T00:02:00Z'), '2026-11-17T00:02:30Z'),
+        completionOf(reviewersStart(1, 1, '2026-11-17T00:01:00Z'), '2026-11-17T00:02:40Z'),
+        fixStart,
+        completionOf(fixStart, '2026-11-17T00:03:30Z'),
+        reviewersStart(2, 4, '2026-11-17T00:04:00Z'),
+        ...startsOfNewRun,
+      ]);
+    };
+
+    it('does not take the branch start of the earlier run while the branch start of the new run is not logged yet', async () => {
+      // updateStep names the branch with the iteration of its first start in the new run before the log records it.
+      writeRerunRun('top-level-branch-rerun-not-logged', 5, []);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-rerun-not-logged');
+
+      expect(page).toMatchObject({
+        currentStep: 'security', currentStepStartedAt: null, currentStepExecutionCount: 0,
+        currentStepPath: [{ workflow: 'default', step: 'security', startedAt: null, executionCount: 0 }],
+      });
+      expect(context.currentStepStartedAt).toBeUndefined();
+      expect(context).toMatchObject({ currentStepExecutionCount: 0, currentStepPath: page.currentStepPath });
+    });
+
+    it('takes the branch start of the new run when an agent branch reports a phase with the iteration of the new run', async () => {
+      writeRerunRun('top-level-branch-rerun-agent-phase', 4, [checkStart(2, 5, '2026-11-17T00:05:00Z')]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-rerun-agent-phase');
+
+      expect(page.currentStepPath).toEqual([
+        { workflow: 'default', step: 'reviewers' },
+        { workflow: 'default', step: 'security' },
+        { workflow: 'security-review', step: 'check', startedAt: '2026-11-17T00:05:00Z', executionCount: 2 },
+      ]);
+      expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 2 });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 2, currentStepPath: page.currentStepPath,
+      });
+    });
+
+    it('returns the parallel step of the new run after the branch child step of the new run completes', async () => {
+      const checkOfNewRun = checkStart(2, 5, '2026-11-17T00:05:00Z');
+      writeRerunRun('top-level-branch-rerun-child-completed', 5, [checkOfNewRun, completionOf(checkOfNewRun, '2026-11-17T00:06:00Z')]);
+
+      const { page, context } = await readCurrentStepFromBothReaders(tmpDir, 'top-level-branch-rerun-child-completed');
+
+      const parallelStepPath = [{ workflow: 'default', step: 'reviewers', startedAt: '2026-11-17T00:04:00Z', executionCount: 2 }];
+      expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 2, currentStepPath: parallelStepPath });
+      expect(context).toMatchObject({
+        currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 2, currentStepPath: parallelStepPath,
+      });
+    });
+  });
+
+  it('counts a child step separately for each calling step and leaves out parallel branches that run the same child', async () => {
+    const slug = 'same-child-two-callers';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '同じ子を2箇所から', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'fix', currentIteration: 4, phase: 1,
+    });
+    const calledFrom = (...callers: ReturnType<typeof stackFrame>[]) => [...callers, stackFrame('development-core', 'implement', 'agent')];
+    const reviewers = stackFrame('default', 'reviewers', 'parallel');
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '同じ子を2箇所から', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, workflow: 'development-core',
+        stack: calledFrom(stackFrame('default', 'develop', 'workflow_call')), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 2, workflow: 'default', stack: [reviewers],
+        parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 3, workflow: 'development-core',
+        stack: calledFrom(reviewers, stackFrame('default', 'rework', 'workflow_call')),
+        parallel: { role: 'workflow_call_participant', participationId: 'call:1', parentParticipationId: 'parallel:1' },
+        timestamp: '2026-11-17T00:03:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 4, workflow: 'development-core',
+        stack: calledFrom(stackFrame('default', 'fix', 'workflow_call')), timestamp: '2026-11-17T00:04:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'fix' },
+      { workflow: 'development-core', step: 'implement', startedAt: '2026-11-17T00:04:00Z', executionCount: 1 },
+    ]);
+    expect(context).toMatchObject({
+      currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('reports a loop judge running inside a child workflow as the leaf with its own start and count', async () => {
+    const slug = 'child-loop-judge';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '子の中の loop judge', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'develop', currentIteration: 4, phase: 1,
+    });
+    const triggeredBy = (step: string, occurrence: number) => [
+      stackFrame('default', 'develop', 'workflow_call'), stackFrame('development-core', step, 'agent', occurrence),
+    ];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '子の中の loop judge', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 1, workflow: 'development-core', stack: triggeredBy('fix', 1), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 2, workflow: 'development-core', stack: triggeredBy('fix', 2), timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', stack: triggeredBy('fix', 3), timestamp: '2026-11-17T00:03:00Z' },
+      { type: 'step_start', step: '_loop_judge_review_fix', persona: 'loop-judge', iteration: 4, workflow: 'development-core',
+        stack: triggeredBy('fix', 3), timestamp: '2026-11-17T00:04:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'develop' },
+      { workflow: 'development-core', step: '_loop_judge_review_fix', startedAt: '2026-11-17T00:04:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep: 'develop', currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 1 });
+    expect(context.currentStepPath).toEqual(page.currentStepPath);
+  });
+
+  it('reports a top-level loop judge as the leaf while currentStep stays at the step that triggered it', async () => {
+    const slug = 'top-level-loop-judge';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'トップレベルの loop judge', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'fix', currentIteration: 3, phase: 1,
+    });
+    const fix = (occurrence: number) => [stackFrame('default', 'fix', 'agent', occurrence)];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: 'トップレベルの loop judge', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 1, workflow: 'default', stack: fix(1), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 2, workflow: 'default', stack: fix(2), timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: '_loop_judge_review_fix', persona: 'loop-judge', iteration: 3, workflow: 'default', stack: fix(2),
+        timestamp: '2026-11-17T00:03:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: '_loop_judge_review_fix', startedAt: '2026-11-17T00:03:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep: 'fix', currentStepStartedAt: '2026-11-17T00:03:00Z', currentStepExecutionCount: 1 });
+    expect(context.currentStepPath).toEqual(page.currentStepPath);
+  });
+
+  it.each([
+    { position: 'at the top level', currentStep: 'reviewers', callers: [] },
+    { position: 'inside a child workflow', currentStep: 'develop', callers: [stackFrame('default', 'develop', 'workflow_call')] },
+  ])('reports a loop judge started by a parallel step $position as the leaf instead of the parallel step', async ({ currentStep, callers }) => {
+    const slug = `parallel-loop-judge-${currentStep}`;
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '並列の loop judge', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep, currentIteration: 4, phase: 1,
+    });
+    const workflow = callers.length === 0 ? 'default' : 'development-core';
+    const reviewers = (occurrence: number) => [...callers, stackFrame(workflow, 'reviewers', 'parallel', occurrence)];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '並列の loop judge', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 1, workflow, stack: reviewers(1),
+        parallel: { role: 'parent', participationId: 'parallel:1' }, timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 2, workflow, stack: [...callers, stackFrame(workflow, 'fix', 'agent')],
+        timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'reviewers', persona: 'reviewers', iteration: 3, workflow, stack: reviewers(2),
+        parallel: { role: 'parent', participationId: 'parallel:2' }, timestamp: '2026-11-17T00:03:00Z' },
+      { type: 'step_start', step: '_loop_judge_reviewers_fix', persona: 'loop-judge', iteration: 4, workflow, stack: reviewers(2),
+        parallel: { role: 'direct_participant', participationId: 'participant:judge', parentParticipationId: 'parallel:2' },
+        timestamp: '2026-11-17T00:04:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      ...callers.map((frame) => ({ workflow: frame.workflow, step: frame.step })),
+      { workflow, step: '_loop_judge_reviewers_fix', startedAt: '2026-11-17T00:04:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStep, currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 1 });
+    expect(context).toMatchObject({
+      currentStepStartedAt: '2026-11-17T00:04:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('counts only the starts after the latest workflow_start when one log holds several runs of the workflow', async () => {
+    const slug = 'resumed-in-one-log';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '再開', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'implement', currentIteration: 1, phase: 1,
+    });
+    const implement = (occurrence: number) => [stackFrame('default', 'implement', 'agent', occurrence)];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '再開', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, workflow: 'default', stack: implement(1), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 2, workflow: 'default',
+        stack: [stackFrame('default', 'review', 'agent')], timestamp: '2026-11-17T00:02:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 3, workflow: 'default', stack: implement(2), timestamp: '2026-11-17T00:03:00Z' },
+      { type: 'workflow_start', task: '再開', workflowName: 'default', startTime: '2026-11-17T00:04:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, workflow: 'default', stack: implement(2), timestamp: '2026-11-17T00:05:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page.currentStepPath).toEqual([
+      { workflow: 'default', step: 'implement', startedAt: '2026-11-17T00:05:00Z', executionCount: 1 },
+    ]);
+    expect(page).toMatchObject({ currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 1 });
+    expect(context).toMatchObject({
+      currentStepStartedAt: '2026-11-17T00:05:00Z', currentStepExecutionCount: 1, currentStepPath: page.currentStepPath,
+    });
+  });
+
+  it('does not report the previous child step while the start of the current iteration is not logged yet', async () => {
+    const slug = 'child-start-not-logged';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '書込前', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'develop', currentIteration: 3, phase: 1,
+    });
+    const child = (step: string) => [stackFrame('default', 'develop', 'workflow_call'), stackFrame('development-core', step, 'agent')];
+    writeSessionLog(runDir, [
+      { type: 'workflow_start', task: '書込前', workflowName: 'default', startTime: '2026-11-17T00:00:00Z' },
+      { type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, workflow: 'development-core', stack: child('plan'), timestamp: '2026-11-17T00:01:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 2, workflow: 'development-core', stack: child('implement'), timestamp: '2026-11-17T00:02:00Z' },
+    ]);
+
+    const { page, context } = await readCurrentStepFromBothReaders(tmpDir, slug);
+
+    expect(page).toMatchObject({
+      currentStep: 'develop', currentStepStartedAt: null, currentStepExecutionCount: 0,
+      currentStepPath: [{ workflow: 'default', step: 'develop', startedAt: null, executionCount: 0 }],
+    });
+    expect(context.currentStepStartedAt).toBeUndefined();
+    expect(context).toMatchObject({ currentStepExecutionCount: 0, currentStepPath: page.currentStepPath });
+  });
+
+  it('reports only the top-level step without timing when no session log exists, and no path before any step starts', () => {
+    createRunDir(tmpDir, 'finished-without-log', {
+      task: '完了済み', workflow: 'default', status: 'completed', startTime: '2026-11-17T00:00:00Z',
+      currentStep: 'review', currentIteration: 4,
+    });
+    createRunDir(tmpDir, 'not-started', {
+      task: '未開始', workflow: 'default', status: 'running', startTime: '2026-11-17T00:00:00Z',
+    });
+
+    expect(loadRunSessionPage(tmpDir, 'finished-without-log', { maxBytes: 4096 })).toMatchObject({
+      currentStep: 'review', currentStepStartedAt: null, currentStepExecutionCount: null,
+      currentStepPath: [{ workflow: 'default', step: 'review', startedAt: null, executionCount: null }],
+    });
+    expect(loadRunSessionPage(tmpDir, 'not-started', { maxBytes: 4096 })).toMatchObject({
+      currentStep: null, currentStepStartedAt: null, currentStepExecutionCount: null, currentStepPath: null,
+    });
   });
 
   it('preserves complete task strings for the ordinary reader and prompt formatter', () => {

@@ -372,7 +372,7 @@ MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 cl
 
 ### `takt_list_tasks`、`takt_get_run` 和 `takt_tell_run`
 
-这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
+这三个工具都要求绝对路径的项目 `cwd`，并限制在 server 允许的项目根目录内。`takt_list_tasks` 返回名称、摘要、状态、workflow、run slug 和可用的当前 step，但不返回日志或 report 正文。`takt_get_run` 接收列表中的 `runSlug`，返回该 run 的 step 日志、report 和追加指令投递状态。`currentStep` 是 run 记录中的当前 step，通常是顶层 step，但当顶层 parallel step 的分支开始其子 workflow 的 step 时，它变为该分支 step。`currentStepPath` 按顺序列出从顶层 workflow 到正在运行的末端 step 的每个 workflow 和 step，只有最后一个元素带有末端的 `startedAt` 和 `executionCount`。末端是顶层 step 本身、子 workflow 的 step、parallel step 本身，或 loop monitor 的判定 step（与触发它的 step 位于同一 workflow、以 `_loop_judge_` 开头的 step）。当 `currentStep` 指向顶层 parallel step 的分支，且该分支在该 parallel step 本次执行中最后开始的 step 正在运行时，路径依次为 parallel step、该分支 step、分支调用的子 workflow 的 step。该分支的这个 step 完成后，或分支的子 workflow 结束后，在分支的下一次开始被记录之前，末端是带有本次执行开始值的 parallel step 本身。`executionCount` 是最新日志中同一调用位置的末端 step 开始的次数；`0` 表示当前 step 的开始尚未记录（此时 `currentStepPath` 只包含 `currentStep`），`null` 表示未知。`takt_tell_run` 接收非空 `content`，在写入前重新确认指定 slug 仍对应正在运行的 worktree clone 任务；已完成、已删除、slug 不匹配或非 clone 的 run 会被拒绝且不会写入，并返回原因。
 
 `takt_list_tasks` 在单个任务的 worktree 验证或 run 元数据读取失败时仍返回全部任务。仅有问题的条目会在已取得的基本信息旁增加已清理的 `error` 字符串，其他条目的内容保持不变。不会读取验证失败的 worktree 中的 run 信息。队列本身无法读取或 `cwd` 超出允许范围时，仍返回整个工具的错误，不返回任务数组。
 
@@ -492,7 +492,7 @@ takt list --non-interactive --format json
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。配置为 `worktree: false` 的任务会保留记录的分支和工作区中的修改。对于 `worktree` 设置为 `true` 或路径字符串且未记录 `worktree_path` 的任务，无论任务状态或分支是否已合并，都会保留记录的分支。如果该分支仍有 clone 元数据，则仍会清理对应 clone 和元数据。
 
 ```bash
 # 先确认匹配列表，再执行删除
@@ -503,7 +503,7 @@ takt list --non-interactive --action delete --status failed pr_failed --yes
 takt list --non-interactive --action delete --status failed pr_failed --format json
 ```
 
-在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
+在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆；配置为 `worktree: false` 的任务，以及 `worktree` 设置为 `true` 或路径字符串但未记录 `worktree_path` 的任务，无论状态或分支是否已合并，都会保留记录的分支。如果该分支仍有 clone 元数据，则仍会清理对应 clone。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
 
 #### 咨询运行中的任务
 
@@ -730,9 +730,9 @@ takt purge --retention-days 14
 
 所有候选均返回有效的结构化判断后，显示选中的 PR 编号及理由和排除的 PR 编号，无需确认即可执行选中的 PR workflow。判断缺失或无效、提供商错误、材料获取失败或文件列表不完整时，不启动任何 PR workflow，并以非零退出码结束。候选或选中结果为空时，处理数和合并数均为 0，退出码为 0。处理数和实际合并数的显示保持原有含义。
 
-默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+默认使用 `merge-review-fix-simple` workflow：先同步 PR 与 base 分支；无冲突时跳过完整审查并进入 push，AI 解决冲突后则由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。初次同步和重新同步均遵循此条件。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `sync → commit_and_push → caccia → wait_ci → merge_pr` 执行。初次同步和重新同步均遵循相同条件：无冲突时跳过完整审查，直接进入 push → Caccia → 返回 head 的 CI 等待；AI 解决冲突后，必须先完成审查和修复，再执行 `commit_and_push`。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 ABORT 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。Git push 本身不会启动 Caccia。PR 发布后的自动 Caccia 遵循[配置参考](./configuration.md#caccia-review-loop)中的启用条件、排除条件和执行顺序。
 
-`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功的行为不变，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。CI 首次通过时不执行恢复流程，CI timeout 时评论后以 ABORT 结束，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
 
 GitLab 支持指定 MR 编号和批量选择。Caccia 返回原因是 `github_unavailable` 的 `skipped`，然后 workflow 等待返回 head 的 CI。合并方式和 head 限制仍不受支持，使用这些参数的合并操作会失败。仅完成 CI 等待不计为合并成功。
 

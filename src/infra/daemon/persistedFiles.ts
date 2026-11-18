@@ -66,7 +66,7 @@ export class DaemonPersistedFiles {
   }
 
   async readGoal(repositoryDirectory: string, goalId: string) {
-    const content = await readPrivateFile(join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json'), MAX_PROJECTION_BYTES);
+    const content = await readPrivateFile(this.goalPath(repositoryDirectory, goalId), MAX_PROJECTION_BYTES);
     if (content === undefined) return undefined;
     const goal = GoalSchema.parse(JSON.parse(content.toString('utf8')) as unknown);
     if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
@@ -81,18 +81,28 @@ export class DaemonPersistedFiles {
     }, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
+  // GoalStore.update と同じ 2 つのロックファイル（goal.json.lock と goal-execution.lock）を同じ順で取る。
   private async updateGoal(repositoryDirectory: string, goalId: string, transform: (goal: Goal) => Goal, options: IoOptions): Promise<Goal> {
-    const path = join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
+    const path = this.goalPath(repositoryDirectory, goalId);
     const lock = new FileAsyncLock();
     return lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
-      const goal = GoalSchema.parse(await readDisplayFile(path));
-      if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
+      const goal = await this.readStoredGoal(path, goalId);
       const updated = transform(goal);
       if (updated === goal) return goal;
       const saved = GoalSchema.parse(updated);
       await writePrivateFile(path, JSON.stringify(saved), options.signal);
       return saved;
     }, options), options);
+  }
+
+  private goalPath(repositoryDirectory: string, goalId: string): string {
+    return join(repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(goalId), 'goal.json');
+  }
+
+  private async readStoredGoal(path: string, goalId: string): Promise<Goal> {
+    const goal = GoalSchema.parse(await readDisplayFile(path));
+    if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
+    return goal;
   }
 
   async readTasks(repositoryDirectory: string) {
@@ -116,8 +126,27 @@ export class DaemonPersistedFiles {
 
   async saveStandaloneInquiryAnswer(repositoryDirectory: string, questionId: string, questionBody: string,
     answer: z.infer<typeof GoalAnswerSchema>): Promise<void> {
-    const event = inboxEvent.parse({ kind: 'answer', goalId: null, questionId, questionBody, answer,
-      createdAt: new Date().toISOString() });
+    await this.saveAnswerEvent(repositoryDirectory, { kind: 'answer', goalId: null, questionId, questionBody, answer });
+  }
+
+  async saveGoalAnswer(repositoryDirectory: string, goalId: string, questionId: string,
+    answer: z.infer<typeof GoalAnswerSchema>): Promise<void> {
+    // saveManagerEvent と同じく、中止済みのゴールの回答は manager へ知らせない。
+    if ((await this.readStoredGoal(this.goalPath(repositoryDirectory, goalId), goalId)).executionStatus === 'aborted') return;
+    await this.saveAnswerEvent(repositoryDirectory, { kind: 'answer', goalId, questionId, answer });
+  }
+
+  async markGoalAnswerPublished(repositoryDirectory: string, goalId: string, questionId: string): Promise<void> {
+    await this.updateGoal(repositoryDirectory, goalId, (goal) => {
+      if (goal.questions?.find((question) => question.id === questionId)?.answerPublicationPending !== true) return goal;
+      return { ...goal, questions: goal.questions!.map((question) => question.id === questionId
+        ? { ...question, answerPublicationPending: undefined } : question) };
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
+  }
+
+  // 受信箱のファイル名と置き場所は saveManagerEvent と同じ形式にそろえる。
+  private async saveAnswerEvent(repositoryDirectory: string, input: Omit<Extract<z.input<typeof inboxEvent>, { kind: 'answer' }>, 'createdAt'>): Promise<void> {
+    const event = inboxEvent.parse({ ...input, createdAt: new Date().toISOString() });
     const name = `${event.createdAt.replaceAll(':', '-')}-${process.hrtime.bigint().toString().padStart(20, '0')}-${randomUUID()}.json`;
     await writePrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), JSON.stringify(event));
   }

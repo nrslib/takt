@@ -30,6 +30,7 @@ import {
   providerSupportsAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
 import { reportPhaseEventTools } from '../report-phase-tools.js';
+import type { ProgressNotesRequest } from '../progress-notes.js';
 import type {
   ProviderActivityCallback,
   ProviderType,
@@ -99,14 +100,15 @@ export class OptionsBuilder {
     private readonly getReportDir: () => string,
     private readonly getLanguage: () => Language | undefined,
     private readonly getWorkflowName: () => string,
-    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
-    private readonly getTask?: () => string,
-    private readonly getReviewScope?: () => TaskReviewScope,
+    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined,
+    private readonly getTask: () => string,
+    private readonly getReviewScope: () => TaskReviewScope,
     private readonly getFailureDir?: () => string,
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
     private readonly recordActivity: ProviderActivityCallback = () => {},
     private readonly getReportsRootDir?: () => string,
     private readonly getWorkflowPromptContext?: (step: WorkflowStep, assignment?: WorkflowAssignment) => WorkflowPromptContext | undefined,
+    private readonly openCodeExternalDirectories: readonly string[] = [],
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -495,6 +497,9 @@ export class OptionsBuilder {
       edit: step.edit,
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
+      ...(this.openCodeExternalDirectories.length === 0
+        ? {}
+        : { openCodeExternalDirectories: this.openCodeExternalDirectories }),
       abortSignal: this.resolveAbortSignal(),
       personaPath: step.personaPath,
       workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
@@ -552,6 +557,9 @@ export class OptionsBuilder {
       executionPhase: 2,
       cwd: baseOptions.cwd,
       projectCwd: baseOptions.projectCwd,
+      ...(baseOptions.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: baseOptions.openCodeExternalDirectories }),
       abortSignal: baseOptions.abortSignal,
       personaPath: baseOptions.personaPath,
       workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
@@ -731,6 +739,22 @@ export class OptionsBuilder {
     };
   }
 
+  /**
+   * Every step's Phase 1 within a run takes part in progress notes and compaction recovery.
+   * `reviewScope` is the scope the Phase 1 instruction was built with, so the notes identity matches it.
+   */
+  buildProgressNotesRequest(step: WorkflowStep, reviewScope: TaskReviewScope): ProgressNotesRequest {
+    const notesStep = {
+      reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
+      task: this.getTask(),
+      stepName: step.name,
+      definition: JSON.stringify(step),
+    };
+    return step.edit === false
+      ? { ...notesStep, bindsSourceRevision: true, scope: reviewScope }
+      : { ...notesStep, bindsSourceRevision: false };
+  }
+
   private resolveReportPhaseConstraints(
     step: WorkflowStep,
     runtime?: RuntimeStepResolution,
@@ -877,10 +901,10 @@ export class OptionsBuilder {
     return {
       workflowMeta: this.buildWorkflowMeta(step, runtime),
       cwd: this.getCwd(),
-      task: this.getTask?.(),
+      task: this.getTask(),
       projectCwd: this.getProjectCwd(),
       userInputs: [...state.userInputs],
-      reviewScope: this.getReviewScope?.(),
+      reviewScope: this.getReviewScope(),
       reportDir: resolveReportDirectory(this.getCwd(), this.getReportDir()),
       ...(this.getReportsRootDir === undefined ? {} : { reportsRootDir: this.getReportsRootDir() }),
       ...(resumeReportConsumerKey === undefined ? {} : { resumeReportConsumerKey }),

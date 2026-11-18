@@ -16,6 +16,7 @@ import {
 import {
   getProvider,
   type ProviderType,
+  type ProviderAgent,
   type ProviderCallOptions,
 } from '../infra/providers/index.js';
 import {
@@ -24,9 +25,11 @@ import {
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
+import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
+import { withToolActivityCall } from '../shared/tool-activity/stream.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
 import { extractPersonaName } from './persona-spec.js';
 import {
@@ -36,6 +39,7 @@ import {
 } from '../infra/providers/mcp/index.js';
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
+import { startProgressNotes } from '../infra/progress-notes/session.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
@@ -206,6 +210,9 @@ export class AgentRunner {
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
+      ...(resolution.provider !== 'opencode' || options.openCodeExternalDirectories === undefined
+        ? {}
+        : { openCodeExternalDirectories: options.openCodeExternalDirectories }),
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
@@ -219,7 +226,7 @@ export class AgentRunner {
       permissionMode: resolution.permissionMode,
       edit: options.edit,
       providerOptions: resolution.providerOptions,
-      onStream: options.onStream,
+      onStream: withToolActivityCall(options.onStream),
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
       onSkillPermissionRequest: options.onSkillPermissionRequest,
@@ -230,6 +237,94 @@ export class AgentRunner {
       failureDir: options.failureDir,
       childProcessEnv: options.childProcessEnv,
     };
+  }
+
+  private static async callAgent(
+    agent: ProviderAgent,
+    task: string,
+    options: ProviderCallOptions,
+    recorder: RunAgentOptions['progressNotesRecorder'],
+  ): Promise<AgentResponse> {
+    const recoverFromCompaction = agent.recoverFromCompaction;
+    if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
+      const observedOptions = recorder === undefined ? options : {
+        ...options,
+        onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder.observe(event);
+          options.onStream?.(event);
+        },
+      };
+      const response = await agent.call(task, observedOptions);
+      recorder?.finish(response);
+      return response;
+    }
+
+    // Only recoveries that compact again without calling any tool count toward the limit, so a long
+    // review that keeps calling tools is not cut off at a total number of compactions.
+    const maxRecoveriesWithoutProgress = 3;
+    let recovering = false;
+    let recoveriesWithoutProgress = 0;
+    let currentOptions = options;
+    while (true) {
+      let compactionDetected = false;
+      let compactionSessionId: string | undefined;
+      let calledTool = false;
+      const callOptions = {
+        ...currentOptions,
+        onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder.observe(event);
+          if (event.type === 'tool_use') {
+            calledTool = true;
+          }
+          // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
+          if (event.type === 'context_compacted') {
+            compactionDetected = true;
+            compactionSessionId = event.data.sessionId;
+          }
+          if (
+            compactionDetected
+            && event.type === 'result'
+            && event.data.success
+            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
+          ) {
+            return;
+          }
+          currentOptions.onStream?.(event);
+        },
+      };
+      const response = recovering
+        ? await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions)
+        : await agent.call(task, callOptions);
+      recorder.finish(response);
+      const responseSessionId = response.sessionId ?? currentOptions.sessionId;
+      const compactionMatchesResponse = compactionSessionId === undefined
+        || compactionSessionId === responseSessionId;
+      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
+        return response;
+      }
+
+      currentOptions = {
+        ...currentOptions,
+        sessionId: responseSessionId,
+      };
+      if (recovering) {
+        recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
+      }
+      if (recoveriesWithoutProgress === maxRecoveriesWithoutProgress) {
+        const error = 'Provider compaction recovery limit reached';
+        currentOptions.onStream?.({
+          type: 'result',
+          data: {
+            result: error,
+            sessionId: currentOptions.sessionId ?? 'unknown',
+            success: false,
+            error,
+          },
+        });
+        return { ...response, status: 'error', error };
+      }
+      recovering = true;
+    }
   }
 
   private static buildMcpPrepareContext(
@@ -333,7 +428,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await agent.call(task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -394,7 +489,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (options.personaPath) {
@@ -413,7 +508,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (personaSpec) {
@@ -437,7 +532,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await agent.call(task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -448,12 +543,9 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agentSetup = systemPrompt
-        ? { name: personaName, systemPrompt }
-        : { name: personaName };
-      const agent = setupAgent(agentSetup);
+      const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return await agent.call(task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -553,5 +645,27 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   // Provider dispatch is an attempt boundary even when the provider emits no stream events.
   options.onActivity?.();
-  return defaultRunner.run(personaSpec, task, options);
+  if (options.executionPhase !== 1 || options.progressNotes === undefined) {
+    return defaultRunner.run(personaSpec, task, options);
+  }
+  const originalInstruction = options.progressNotesInstruction ?? task;
+  const recoveryInstruction = options.progressNotesRecoveryInstruction
+    ?? composeRecoveryInstruction(originalInstruction, task);
+  const requestInstruction = options.sessionId === undefined ? recoveryInstruction : task;
+  // Storage availability must not change the step's compaction recovery eligibility: without notes,
+  // recovery resends the original instruction and the agent checks the current state.
+  // The same language as the system prompt's progress notes guidance (buildWrappedSystemPrompt).
+  const notes = await startProgressNotes(options.cwd, options.progressNotes, originalInstruction, options.language ?? 'en');
+  try {
+    return await defaultRunner.run(personaSpec, notes.instruction(requestInstruction), {
+      ...options,
+      progressNotesRecorder: {
+        observe: notes.observe,
+        finish: notes.finish,
+        recoveryInstruction: () => notes.instruction(recoveryInstruction),
+      },
+    });
+  } finally {
+    notes.flush();
+  }
 }

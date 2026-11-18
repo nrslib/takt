@@ -154,7 +154,7 @@ vi.mock('../agents/structured-caller.js', () => ({
 
 vi.mock('../features/tasks/execute/outputFns.js', () => ({
   createOutputFns: mockCreateOutputFns,
-  createPrefixedStreamHandler: vi.fn(() => vi.fn()),
+  createPrefixedStreamHandler: vi.fn(() => Object.assign(vi.fn(), { flush: vi.fn() })),
 }));
 
 vi.mock('../features/tasks/execute/sessionLogger.js', () => ({

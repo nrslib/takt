@@ -80,9 +80,9 @@ takt update codex     # 指定対象だけを更新
 
 ## manager（実験的）
 
-manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/make-goal` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/clear` を送ると会話を新しく始めます。manager の AI は新しいセッションで応答し、それより前の会話は表示しませんが、ゴールや登録案はそのまま残ります。`/make-goal` と `/clear` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
-manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の画面の発言や返事は再表示されません。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の発言、完了したツールの履歴、返事も、ターンごとにこの順で会話ログに再表示されます（Thinking とツールの合間に出た本文は除きます）。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
 Slack の受信が動いている間と `--resident` で起動した場合は daemon が自動終了しません。Slack を使わずに常駐させるには次のように起動します。
 
@@ -370,7 +370,7 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 
 ### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
 
-3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
+3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`currentStep` は run の記録上の現在 step で、通常はトップレベルの step ですが、トップレベルの parallel の step の分岐が子の workflow の step を開始するとその分岐の step になります。`currentStepPath` はトップレベルの workflow から実行中の末端の step までの workflow と step を順に返し、最後の要素だけが末端の `startedAt` と `executionCount` を持ちます。末端はトップレベルの step 自体、子の workflow の step、parallel の step 自体、または loop monitor の判定 step（判定を起こした step と同じ workflow の `_loop_judge_` で始まる step）です。`currentStep` がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並びます。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐の次の開始が記録されるまで parallel の step 自体が今回の実行の開始の値を持って末端になります。`executionCount` は最新のログで同じ呼出箇所の末端が開始された回数で、`0` は現在の step の開始がまだ記録されていないこと（このとき `currentStepPath` は `currentStep` だけを持つ）、`null` は不明であることを表します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
 
 `takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 
@@ -522,7 +522,7 @@ takt list --non-interactive --format json
 
 `--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
 
-削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。`worktree: false` のタスクは記録されたブランチと作業ツリー上の変更を保持します。また、`worktree` が `true` またはパス文字列で、`worktree_path` が記録されていないタスクは、状態やブランチのマージ状況にかかわらず記録されたブランチを保持します。そのブランチの clone メタ情報が残っていれば、clone とメタ情報は片付けます。
 
 ```bash
 # 対象一覧を確認してから削除します
@@ -535,7 +535,7 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
-インタラクティブモードの **Delete selected…** では実行中でないタスクをチェック式の一覧から複数選択できます。Space でチェックを切り替え、Enter で選択を確定すると、選択件数を示す確認が1回だけ表示されます。空選択・キャンセル・確認拒否では何も削除せずメニューへ戻ります。各タスクは個別の **Delete** と同じ処理で削除され、ブランチや merge タスクのクローンも後始末されます。1件が失敗しても残りを続行し、最後に成功件数と選択件数を `Deleted M of N tasks.` と表示します。**All Delete** と個別の **Delete** は従来どおり使用できます。
+インタラクティブモードの **Delete selected…** では実行中でないタスクをチェック式の一覧から複数選択できます。Space でチェックを切り替え、Enter で選択を確定すると、選択件数を示す確認が1回だけ表示されます。空選択・キャンセル・確認拒否では何も削除せずメニューへ戻ります。各タスクは個別の **Delete** と同じ処理で削除され、ブランチや merge タスクのクローンも後始末されます。ただし、`worktree: false` のタスクと `worktree` が `true` またはパス文字列で `worktree_path` が記録されていないタスクは、状態にかかわらず記録されたブランチを保持します。そのブランチの clone メタ情報が残っていれば、clone とメタ情報は片付けます。1件が失敗しても残りを続行し、最後に成功件数と選択件数を `Deleted M of N tasks.` と表示します。**All Delete** と個別の **Delete** は従来どおり使用できます。
 
 #### 実行中タスクへの相談
 
@@ -763,7 +763,7 @@ takt purge --retention-days 14
 
 ### takt merge
 
-`merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回のレビューは繰り返さず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてABORTで終了します。CI修正・再実行の使用済み回数は取り込み直し後も保持します。
+`merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回・再同期とも、競合のない同期ではフルレビューを呼ばず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。AIで競合を解消した場合は、毎回レビュー・修正を経てからpushします。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてABORTで終了します。CI修正・再実行の使用済み回数は取り込み直し後も保持します。
 
 対象 PR の workflow を起動します。番号指定時は選定条件を無視し、その PR だけを処理します。番号省略時は open PR の番号を作成順で全ページ取得してから各 PR の詳細を読み、条件に合う PR を処理して終了します。詳細取得までに close された PR は除外します。
 
@@ -803,13 +803,13 @@ caccia:
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体の読み取り専用レビュアーが動的ファセットで確認し、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、明示的な Caccia 効果と返された head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では、AIによる競合解消後に gather を実行し、1体の読み取り専用レビュアーが動的ファセットで確認してから、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。競合のない同期では、このフルレビューを呼ばずにpushへ進みます。`merge-review-fix` と同様に同期、必要なコンフリクト解消、明示的な Caccia 効果と返された head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
 
 PR ごとに隔離クローンを作り、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、CLI の `--concurrency` が優先します。番号指定時は1件だけを処理します。
 
 GitLab でも MR の番号指定・一括選定から実行し、Caccia の `github_unavailable` による `skipped` 後に返された head の CI を待てます。マージ方式の指定と head 一致制約には未対応なので、これらを使うマージ操作は失敗します。CI 待機だけではマージ成功になりません。
 
-マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了します。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `sync → commit_and_push → caccia → wait_ci → merge_pr` の順です。AIで競合を解消した場合は、初回・再同期とも `commit_and_push` の前にレビュー・修正を行います。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして ABORT で終了します。効果の失敗は `error` をコメントして ABORT で終了します。Git の push 自体は Caccia を起動しません。PR 公開後の自動 Caccia は[設定リファレンス](./configuration.ja.md#caccia-レビューループ)の有効化条件・除外条件・実行順序に従います。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
 
 `merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。CI 待機の timeout も未解決として ABORT し、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
 

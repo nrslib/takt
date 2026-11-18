@@ -84,6 +84,7 @@ import {
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { formatCompletionRetryDiagnostic } from '../completion-retry.js';
+import { composeRecoveryInstruction } from '../progress-notes.js';
 import { sumRetryCounts } from '../../models/response.js';
 import {
   AGENT_FAILURE_CATEGORIES,
@@ -113,6 +114,11 @@ type ParallelSubStepResult = {
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
+
+type ParallelProgressNotesRequest = {
+  readonly identityInstruction: string;
+  retryInstruction: string;
+};
 
 class LiveInterventionParallelRestart extends Error {
   constructor(
@@ -361,6 +367,8 @@ export class ParallelRunner {
   ): Promise<StepRunResult> {
     const liveIntervention = this.deps.engineOptions.liveIntervention;
     const attemptState = captureParallelAttemptState(state);
+    // Progress notes identity and the active retry request outlive rolled-back parallel attempts.
+    const progressNotesRequests = new Map<string, ParallelProgressNotesRequest>();
     const invalidatedSessions = new Map<string, string>();
     const restoreAttemptState = (): void => {
       restoreParallelAttemptState(state, attemptState);
@@ -394,6 +402,7 @@ export class ParallelRunner {
           maxSteps,
           updatePersonaSession,
           invalidatedSessions,
+          progressNotesRequests,
           runtime,
           activeStepIteration,
           executionDeadlineContext,
@@ -443,6 +452,7 @@ export class ParallelRunner {
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     invalidatedSessions: Map<string, string>,
+    progressNotesRequests: Map<string, ParallelProgressNotesRequest>,
     runtime?: RuntimeStepResolution,
     activeStepIteration?: number,
     executionDeadlineContext?: WorkflowStepExecutionDeadlineContext,
@@ -792,7 +802,19 @@ export class ParallelRunner {
             maxSteps,
           },
         };
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subExecutionRuntime);
+        const baseOptions: RunAgentOptions = {
+          ...this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subExecutionRuntime),
+          progressNotes: this.deps.optionsBuilder.buildProgressNotesRequest(executableSubStep, subInstruction.reviewScope),
+        };
+        let progressNotesRequest = progressNotesRequests.get(subStep.name);
+        if (progressNotesRequest === undefined) {
+          progressNotesRequest = { identityInstruction: phase1Instruction, retryInstruction: '' };
+          progressNotesRequests.set(subStep.name, progressNotesRequest);
+        }
+        // Each restart's Phase 1 already contains the full live delivery history.
+        const phase1RecoveryInstruction = composeRecoveryInstruction(
+          phase1Instruction, progressNotesRequest.retryInstruction,
+        );
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
           provider: subPm.provider,
@@ -847,7 +869,7 @@ export class ParallelRunner {
         const phase1Result = await runPhase1WithEmptyRecovery({
           workflowMeta: agentOptions.workflowMeta,
           language: agentOptions.language,
-          instruction: phase1Instruction,
+          instruction: phase1RecoveryInstruction,
           initialSessionId: agentOptions.sessionId,
           execute: async (attempt) => {
             const result = await executeObservedPhase1Attempt({
@@ -870,6 +892,11 @@ export class ParallelRunner {
                   attemptInstruction,
                   {
                     ...agentCallOptions,
+                    progressNotesInstruction: progressNotesRequest.identityInstruction,
+                    progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                      phase1RecoveryInstruction,
+                      attempt.reason === 'empty_continuation' ? attemptInstruction : '',
+                    ),
                     sessionId,
                     onPromptResolved,
                   },
@@ -928,6 +955,9 @@ export class ParallelRunner {
             }
           },
         });
+        if (liveDeliveryCommitter !== undefined) {
+          await liveDeliveryCommitter.settle();
+        }
         let subResponse = phase1Result.response;
         if (!promptResolvedAttempts.has(phase1Result.finalAttempt.sequence)) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
@@ -991,9 +1021,18 @@ export class ParallelRunner {
           let reviewerPhaseExecutionSequence = phase1Result.finalAttempt.sequence + 1;
           const completion = await this.deps.stepExecutor.completeReviewerResponse({
             step: executableSubStep,
-            originalInstruction: phase1Instruction,
+            originalInstruction: subInstruction.text,
+            getReviewRequirementsInstruction: () => phase1Instruction,
             initialResponse: subResponse,
             executeRetry: async (instruction, sessionId) => {
+              // Completion retry prefixes this attempt's original instruction; retain only its retry suffix across restarts.
+              const retrySuffix = instruction.slice(subInstruction.text.length);
+              progressNotesRequest.retryInstruction = composeRecoveryInstruction(
+                progressNotesRequest.retryInstruction, retrySuffix,
+              );
+              const retryRecoveryInstruction = composeRecoveryInstruction(
+                phase1Instruction, progressNotesRequest.retryInstruction,
+              );
               const observedAttempts = new Map<number, typeof phase1Result.finalAttempt>();
               const resolveObservedAttempt = (attempt: typeof phase1Result.finalAttempt) => {
                 const existing = observedAttempts.get(attempt.sequence);
@@ -1005,7 +1044,7 @@ export class ParallelRunner {
               const retry = await runPhase1WithEmptyRecovery({
                 workflowMeta: agentOptions.workflowMeta,
                 language: agentOptions.language,
-                instruction,
+                instruction: retryRecoveryInstruction,
                 initialSessionId: sessionId,
                 execute: async (attempt) => {
                   const observedAttempt = resolveObservedAttempt(attempt);
@@ -1027,7 +1066,15 @@ export class ParallelRunner {
                         executableSubStep,
                         subPm,
                         attemptInstruction,
-                        { ...agentCallOptions, sessionId: attemptSessionId, onPromptResolved },
+                        {
+                          ...agentCallOptions,
+                          progressNotesInstruction: progressNotesRequest.identityInstruction,
+                          progressNotesRecoveryInstruction: composeRecoveryInstruction(
+                            retryRecoveryInstruction, attemptInstruction,
+                          ),
+                          sessionId: attemptSessionId,
+                          onPromptResolved,
+                        },
                         false,
                       )
                     ),
@@ -1324,6 +1371,8 @@ export class ParallelRunner {
         }
       }),
     );
+
+    parallelLogger?.flush();
 
     if (restartRequested || hasPendingOutsideDelivery(liveIntervention, liveDelivery)) {
       if (liveIntervention === undefined) {
@@ -1868,6 +1917,8 @@ export class ParallelRunner {
     const options: ParallelLoggerOptions = {
       subStepNames,
       parentOnStream: this.deps.engineOptions.onStream,
+      toolDisplayMode: this.deps.engineOptions.toolDisplayMode,
+      quiet: this.deps.engineOptions.streamQuiet,
       progressInfo: {
         iteration,
         maxSteps,

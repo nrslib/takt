@@ -3,7 +3,7 @@ import type { ConversationCommand, OperationResult } from './conversationPort.js
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
-import { answerGoalQuestion } from '../../infra/goals/questions.js';
+import { answerGoalQuestionForPublication } from '../../infra/goals/answer-publication.js';
 import { saveManagerEvent } from '../../infra/goals/events.js';
 import { ensureManagerRun } from './autoRun.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -43,10 +43,8 @@ export async function answerConversationInquiry(
       }
       await standalone!.markAnswerPublished(command.questionId);
     } else {
-      const saved = await new GoalStore(target.repositoryDirectory).update(target.goalId,
-        (goal) => answerGoalQuestion(goal, command.questionId, command.answer, command.source), () => { answerSaved = true; });
-      const answer = saved.questions!.find(({ id }) => id === command.questionId)!.answer!;
-      saveManagerEvent(target.repositoryDirectory, { kind: 'answer', goalId: target.goalId, questionId: command.questionId, answer });
+      await answerGoalQuestionForPublication(target.repositoryDirectory, target.goalId, command.questionId, command.answer,
+        command.source, () => { answerSaved = true; });
       await ensureManagerRun(target.repositoryDirectory);
     }
     return { kind: 'answer_saved', answerSaved, message: getLabel('manager.conversation.answer_saved', language) };

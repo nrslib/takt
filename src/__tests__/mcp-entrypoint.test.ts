@@ -758,7 +758,7 @@ describe('MCP package entrypoint', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('advertises goal PR workflow selection and CI-independent enqueueing through listTools', async () => {
+  it('advertises goal PR workflow selection and conditional full review through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'goal-pr-tools', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -770,6 +770,11 @@ describe('MCP package entrypoint', () => {
       expect(merge.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'prNumber', 'until']);
       expect(merge.description).toMatch(/until: prepare.*merge\.prepare_workflow.*merge-prepare.*without merging/iu);
       expect(merge.description).toMatch(/until: merge.*merge\.workflow.*merge-review-fix-simple/iu);
+      expect(merge.description).toMatch(/enqueue.*while CI is still running/iu);
+      expect(merge.description).toMatch(/CodeRabbit.*CI waiting/iu);
+      expect(merge.description).toMatch(/both initial.*resynchronization.*clean base sync skips the full review/iu);
+      expect(merge.description).toMatch(/after AI conflict resolution.*review and fixes.*before push/iu);
+      expect(merge.description).toMatch(/custom workflows.*defined steps/iu);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -1191,6 +1196,9 @@ describe('MCP package entrypoint', () => {
         currentIteration: 2,
         currentStepStartedAt: '2026-09-09T00:02:00.000Z',
         currentStepExecutionCount: 1,
+        currentStepPath: [{
+          workflow: 'review-fix', step: 'implement', startedAt: '2026-09-09T00:02:00.000Z', executionCount: 1,
+        }],
         phase: 2,
         stepLogs: expect.arrayContaining([
           expect.objectContaining({ step: 'plan', persona: 'planner', status: 'done', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),

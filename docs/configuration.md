@@ -250,7 +250,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `auto_fetch` | boolean | `false` | Fetch remote before cloning to keep clones up-to-date |
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
-| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
+| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider. Auto-detected only for `github.com` and `gitlab.com` remotes; set it for any other host, including `*.ghe.com` and self-hosted instances (see [Repository identity in clones](#repository-identity-in-clones)) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `telemetry` | object | `{ routing_decisions: false }` | Local-only routing decision recording, disabled by default (opt-in). Enable with `takt telemetry enable` or `routing_decisions: true`; auto-routing decisions are then written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
 | `analytics` | object | disabled | Local-only analytics collection. `enabled` turns it on, `events_path` sets a custom events directory (default `~/.takt/analytics/events`), `retention_days` sets the retention period applied by `takt purge` (default: 30 days). TAKT does not upload analytics events. |
@@ -335,7 +335,7 @@ If the GitHub PR head differs from the clone's starting HEAD, the effect fetches
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `sync → commit_and_push → caccia → wait_ci → merge_pr`. When AI resolves conflicts, review and fixes run before `commit_and_push` on both initial synchronization and resynchronization. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends ABORT without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -471,7 +471,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` (from global/default) | Project override for Alloy/Quint guidance that expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction while retaining formal specification amount, requirement coverage, and syntax/correctness guidance. Project and global object fields resolve independently, with project values taking precedence; omitted fields fall through to the lower layer or defaults. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance applies only to development and implementation tasks. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. The manager also uses this setting without prompting: `true`/`"Y/n"` include both notations, and `false`/`"y/N"` omit them. `/verify` is also available in manager conversations in TUI and Slack. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
+| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global and auto-detection) |
 | `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
@@ -539,6 +539,18 @@ This environment variable overrides both project and global settings; `false` de
 A separate clone uses the original project configuration. Each run resolves permission once and passes it to root and child workflows; `wait` does not reload configuration.
 
 When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
+
+## Repository identity in clones
+
+A task with `worktree: true` runs in a clone without an `origin` remote, so `gh` and `glab` cannot find the repository from git remotes there. A workflow that declares [`repository_identity: true`](workflows.md#repository_identity) has TAKT read the project root's `origin` and name the repository for its agent steps, command quality gates, and system `command` inputs. Without that declaration nothing is named, so a workflow that does not operate on the repository is left alone:
+
+- GitHub: `GH_REPO=HOST/OWNER/REPO`. The host is always named, `github.com` included, because gh's default host is not necessarily `github.com`. When `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` is set, a GitHub Enterprise Server host is named only if `GH_HOST` names the same host, so that token is not aimed at a host the caller did not configure for it.
+- GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`, where the scheme is the origin's (`http` stays `http`; an ssh origin gives `https`). When `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, `OAUTH_TOKEN`, or `JOB_TOKEN` is set, `GITLAB_REPO` is added only if `GITLAB_HOST` (or `GITLAB_URI` / `GL_HOST`) names the same scheme, host, and effective port (80 for `http`, 443 for `https`; a value without a scheme is read as `https`), so that TAKT never names a host other than the one configured for the token. This compares the environment only: glab takes the protocol and the API host from its own configuration (`api_protocol`, `api_host`), not from the scheme in these variables, and TAKT cannot see that configuration.
+- The repository is always the project root's `origin`, and the host must be a plain DNS name (or a bracketed IPv6 address); anything else is ignored. If `origin` is a fork and you point `gh` at the upstream repository with `gh repo set-default`, TAKT does not read that choice (`remote.<name>.gh-resolved`) and would name the fork: set `GH_REPO` yourself, and it is passed on as is.
+
+A variable you already set is never overridden. No remote and no credential is added, and the URL's user name or token is never used. Nothing is added for a workflow without `repository_identity`, for a task that runs in the project root, when `origin` is missing or not a recognised URL, or when the provider is unknown. System `command` inputs run without `HOME`, so `gh` / `glab` there still need their own authentication.
+
+The provider is `vcs_provider` when set (project overrides global), otherwise detected from the `origin` hostname: `github.com` is GitHub and `gitlab.com` is GitLab. Any other host, such as GitHub Enterprise Cloud under `*.ghe.com`, GitHub Enterprise Server, or a self-hosted GitLab, is not detected; set `vcs_provider` for it. If the `origin` host does not serve the web or the API, such as an ssh-only host (`ssh.github.com`, `altssh.gitlab.com`) or an alias from `~/.ssh/config` (`github.com-work`), setting `vcs_provider` does not give a correct value either: set `GH_REPO` / `GITLAB_REPO` yourself, which is passed on as is (see above).
 
 ## Environment Variable Overrides
 
@@ -1481,7 +1493,7 @@ TAKT uses three provider-independent permission modes:
 
 | Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
 |------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|-----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
+| `readonly` | Tool availability, including shell access, and protection against shell writes vary by provider; see the provider columns | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
 | `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + generated `--config` allow rules (`exec`, `edit`, `Write(**)`) |
 | `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode; permission requests answered `allow_once` |
 
@@ -1493,7 +1505,7 @@ Devin runs through `devin acp` (Agent Client Protocol over stdio) rather than pr
 
 The generated `--config` replaces only Devin's user-level config. A project-level `.devin/config.json` (and `.devin/config.local.json`) in the repository has higher precedence in Devin, and its `permissions.allow` rules pre-approve tool calls before Devin sends TAKT a permission request — in `edit` mode or with no permission mode set, a repository `.devin/config.json` with `allow: ["exec", ...]` let a shell command run that TAKT would otherwise have rejected. `readonly` and `strict-readonly` are not affected, because the ACP `ask` mode exposes no write/exec tools, and TAKT's `deny` rules still win over project `allow` rules for the rules TAKT emits. Review a repository's `.devin/config.json` before running `edit`-mode Devin steps on untrusted repositories.
 
-Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
+Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. Both Pi `readonly` and `edit` enable `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
 ### Configuration
 
@@ -1808,6 +1820,10 @@ provider_options:
 legacy mode it can also be set through `provider_routing`, deprecated
 `persona_providers`, project, or global config. The environment variable
 `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
+
+#### Codex context compaction recovery
+
+When Codex records a `compacted` event in its transport or session rollout during Phase 1, TAKT waits for the current turn to finish, then resumes the same thread and re-injects the original Phase 1 instruction with context explaining that compaction occurred. Recovery turns are sequential. The cap counts consecutive recoveries without progress, not the total number of compactions: a recovery turn that makes at least one tool call (reading files, running commands, editing, and so on) resets the count, and three consecutive recoveries that are compacted again without any tool call end the provider call. Whether progress notes exist or were saved, and whether the agent wrote text before the tool call, does not affect this check. A final answer, result text, or text without a tool call does not count as progress. A failed recovery, or another compaction after that cap, is returned as a failure rather than a successful step. The progress check is a practical guard against recovery loops, not proof that the work advances: an agent that keeps calling tools without converging is not stopped by this cap. TAKT does not infer compaction from assistant text. Providers that do not emit the event or do not support recovery keep their existing behavior. This automatic recovery is separate from the workflow-level `session: compact` behavior, which remains unchanged.
 
 #### Codex fast mode (`fast_mode`)
 
@@ -2160,7 +2176,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 GitLab supports MR details, CI status acquisition, and bulk selection. When Caccia is enabled, its effect in `takt merge` and `from_pr` tasks returns `skipped` with `github_unavailable` and continues to CI on the returned head. Merged results pipelines are matched through the merge commit's second parent and the source head. Missing pipelines and pipelines for an older head do not pass CI. Selecting a merge method or constraining the head is still unsupported: `merge_pr` fails when either is supplied. Completing the CI wait does not imply a successful merge.
 
-The default `merge.workflow` is `merge-review-fix-simple`. It gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
+The default `merge.workflow` is `merge-review-fix-simple`. After AI conflict resolution, it gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. A clean sync skips this full review and proceeds to push, Caccia, and CI. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
 
 Bulk `takt merge` runs use `merge.concurrency: 2` by default. Set it to a positive safe integer to change the number of concurrent PR workflows. The `--concurrency` CLI option overrides this setting. Root `concurrency` continues to control `takt run` and `takt watch`. An explicit PR number runs only that PR.
 

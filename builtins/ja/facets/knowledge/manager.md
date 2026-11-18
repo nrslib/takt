@@ -14,7 +14,7 @@
 
 タスク終了、人の回答、保存 PR のマージ・クローズ・取り込み先との衝突はイベントで届きます。定期見回りは対象となる活動中のゴールをまとめて扱います。awaiting_merge でも、そのゴールに結び付いたマージ用タスクが pending または running なら見回ります。人のマージを待つだけのゴールは見回りから外し、PR の見張りが担当します。
 
-既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、衝突の解消、レビュー、CodeRabbit への対応、CI 待ちを担当します。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
+既定の PR 仕上げワークフロー（merge-prepare / merge-review-fix-simple）は、取り込み先の取り込み、CodeRabbit への対応、CI 待ちを担当します。競合のない同期ではフルレビューを呼ばず、AIで競合を解消した場合は初回・再同期ともレビューと修正を経てからpushします。カスタム merge.prepare_workflow または merge.workflow では、レビューや CI 待ちを含む処理が定義された段階に従います。CI の実行中にもタスクを投入できます。結果は prepared、merged、unresolved を区別し、PR の状態とともに返ります。
 
 manager.main_merge はプロジェクト設定から解決されます。approve と auto はどちらも PR を作ります。approve は until: prepare で仕上げ、人のマージを待つ方式です。auto は人が設定した継続の取り込み指示として、until: merge で仕上げからマージまで進める方式です。
 
@@ -61,13 +61,13 @@ takt_check_goal_completion は保存 PR の head/base とマージ状態を照�
 
 人は TUI の Ctrl+R や Slack の問い合わせスレッドで回答し、回答の出所と型が保存されます。旧承認記録は過去の記録の参照・取り下げに使われます。完成・中止時は問い合わせが閉じ、一時停止時は保持されます。
 
-TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。summary を持つ応答から登録案が表示されます。
+TUI は相談、登録案の承認、回答、状態操作、表示を扱います。登録案は矢印キーと Enter で操作でき、会話に戻るか修正内容を入力すると案が取り下げられます。Ctrl+R は問い合わせ、Ctrl+G は進行中のゴールを開きます。処理中も利用でき、/ の補完は Tab で確定します。/make-goal と /verify は会話のコマンドとして扱われ、その他の / 入力は発言として扱われます。通常の相談では登録案を自動生成せず、合意が整ったら /make-goal を案内します。/make-goal を明示実行した応答の summary だけが承認待ちの登録案になります。
 
 manager.notifications は question / awaiting_merge / completed / progress / blocked / custom を種類ごとに切り替えます。問い合わせの回答画面は保存済みの質問から利用できます。通常画面は起動後の通知の冒頭を表示し、全文や過去の通知はゴール記録から参照できます。通知の配送結果はログに保存されます。
 
 ## 見張りと仕様の検証
 
-見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。
+見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、currentStepPath、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。currentStep は run の記録上の現在 step で、通常はトップレベルの step です。ただし、トップレベルの parallel の step の分岐が子の workflow の step を開始すると、その分岐の step の名前になります。currentStepPath はトップレベルの workflow から実行中の末端の step までの workflow と step を順に並べ、最後の要素だけが startedAt と executionCount を持ちます。子の workflow を呼ぶ step の実行中は、その step が途中の要素になり、子の workflow の step が末端になります。parallel の step の実行中は parallel の step 自体が末端で、分岐の step は含みません。例外として、currentStep がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並び、ほかの分岐は含みません。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐が次の step を開始するまで parallel の step 自体が今回の実行の開始の値を持って末端になります。完了した step を実行中とは説明しません。loop monitor の判定中は、判定の step（`_loop_judge_` で始まる名前）が判定を起こした step（parallel の step を含む）に代わって同じ workflow の末端になり、トップレベルでの判定中も currentStep は判定を起こした step のままです。currentStepStartedAt と currentStepExecutionCount はこの末端の step の値で、currentStep の値ではありません。executionCount は、最新のログで同じ呼出箇所の末端の step が開始された回数です。進捗は「takt-default の develop の中で、development-core の write_tests を2回目として実行中」のように、末端の workflow と step に実行回数を対応させて説明します。executionCount が 0 のときは、ログはあるものの現在の step の開始がまだ記録されていない状態で、currentStepPath は currentStep だけを持ちます。これを0回目とは説明せず、開始の記録待ちとして扱います。executionCount が null のときはログに開始記録がなく不明で、currentStepPath が null なのは run metadata に currentStep の記録がないことを意味し、run で step が一度も開始されていないことを意味するわけではありません。
 
 取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
 
