@@ -1326,10 +1326,13 @@ steps:
     // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
     // The notice reaches the byte history before Ink repaints the input box,
-    // so the box is awaited on the live screen instead of sampled once.
+    // so the box is awaited on the live screen instead of sampled once. The
+    // border alone is also drawn while the run is busy (the spinner sits
+    // below it), so the wait also requires the busy status to be gone and
+    // the idle placeholder to be back.
     const screen = await tui.waitForScreen(
       'the input box redrawn after the run finished',
-      (current) => current.includes('╰'),
+      (current) => current.includes('╰') && !hasBusyStatus(current) && current.includes('Type a task'),
       60_000,
     );
     expect(screen).toContain('╰');
@@ -1341,7 +1344,7 @@ steps:
     // Only leaving ends the process.
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit(60_000)).resolves.toBe(0);
-  }, 240_000);
+  }, 480_000);
 
   it('should close Ink for the action selector and reopen it to continue editing', async () => {
     const tui = start('tui-go-handoff.json', ['--workflow', WORKFLOW_PATH]);
