@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises';
+import type { Dir, Dirent } from 'node:fs';
+import { mkdtemp, opendir, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,11 @@ import { readEntirePrivateFile } from '../infra/daemon/privateFile.js';
 vi.mock('../infra/daemon/privateFile.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/daemon/privateFile.js')>();
   return { ...actual, readEntirePrivateFile: vi.fn(actual.readEntirePrivateFile) };
+});
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, stat: vi.fn(actual.stat), opendir: vi.fn(actual.opendir) };
 });
 
 const signal = new AbortController().signal;
@@ -154,10 +160,13 @@ describe('DaemonNotifications', () => {
     if (original === undefined) throw new Error('readEntirePrivateFile must keep its implementation');
     let release!: () => void;
     const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => { entered = resolve; });
     let held = true;
     mocked.mockImplementation(async (path) => {
       if (held && path.endsWith(fileName('second'))) {
         held = false;
+        entered();
         await barrier;
       }
       return original(path);
@@ -165,6 +174,7 @@ describe('DaemonNotifications', () => {
     mocked.mockClear();
     try {
       const first = collect(notifications);
+      await barrierEntered;
       const second = collect(notifications);
       let secondSettled = false;
       void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
@@ -179,6 +189,49 @@ describe('DaemonNotifications', () => {
     } finally {
       release();
       mocked.mockImplementation(original);
+    }
+  });
+
+  it('does not publish a stamp recorded before a save that finished during the scan', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await writeFile(join(directory, fileName('second')), JSON.stringify({ id: 'second', message: 'two' }), { mode: 0o600 });
+
+    const mockedStat = vi.mocked(stat);
+    const mockedOpendir = vi.mocked(opendir);
+    const actualStat = mockedStat.getMockImplementation();
+    const actualOpendir = mockedOpendir.getMockImplementation();
+    if (actualStat === undefined || actualOpendir === undefined) throw new Error('fs mocks must keep their implementations');
+    const frozenDirectoryStat = await actualStat(directory);
+    mockedStat.mockImplementation(async (path) => (path === directory ? frozenDirectoryStat : actualStat(path)));
+
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const enumerationStarted = new Promise<void>((resolve) => { entered = resolve; });
+    let held = true;
+    mockedOpendir.mockImplementation(async (path) => {
+      const dir = await actualOpendir(path);
+      if (!held || path !== directory) return dir;
+      held = false;
+      const entries: Dirent[] = [];
+      for await (const entry of dir) entries.push(entry);
+      entered();
+      await barrier;
+      return (async function* () { yield* entries; })() as unknown as Dir;
+    });
+    try {
+      const first = collect(notifications);
+      await enumerationStarted;
+      await notifications.save({ id: 'third', message: 'three' }, signal);
+      release();
+
+      expect((await first).map((value) => value.id).sort()).toEqual(['first', 'second']);
+      expect((await collect(notifications)).map((value) => value.id).sort()).toEqual(['first', 'second', 'third']);
+    } finally {
+      release();
+      mockedStat.mockImplementation(actualStat);
+      mockedOpendir.mockImplementation(actualOpendir);
     }
   });
 
