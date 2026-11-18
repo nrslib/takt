@@ -320,7 +320,7 @@ Docker とローカルから選べる実行環境、リポジトリをまたぐ�
 
 TUI と Slack の manager の会話で `/verify` を入力すると、現在の合意から Quint と Alloy の仕様を生成し、対話モードと同じ検査器で検証します。結果は同じ会話に戻り、manager が診断や反例を解釈します。形式仕様が無効なら利用できない旨を表示します。登録前に自動では検証せず、検証だけではゴールを登録したり、登録案や保存済み仕様を書き換えたりしません。
 
-仕様はゴールの任意項目 `specifications: { gherkin?, quint?, alloy? }` にコード本文として保存し、登録案の TUI・Slack 両方に表示します。仕様のない既存ゴールも読み込めます。manager は受け入れ条件と同様に、担当タスクの指示書へ関連する仕様の全文を含め、実装・レビューの基準にします。PR の最終レビュー用タスクには保存された全仕様が自動で入ります。
+仕様はゴールの任意項目 `specifications: { gherkin?, quint?, alloy? }` にコード本文として保存し、登録案の TUI・Slack 両方に表示します。仕様のない既存ゴールも読み込めます。TAKT は PR の最終レビューを含むゴールの各タスクの run 開始時に、保存仕様を `context/task/specifications/gherkin.feature`、`quint.qnt`、`alloy.als` に記法ごとに配置し、各ステップの実行コンテキストにパスを自動で知らせます。保存されていない記法のファイルは作りません。manager は指示書に仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID など）を書きます。仕様を本文に含む既存の指示書もそのまま実行できます。
 
 仕様の全文は `takt_get_goal` の `path: specifications.gherkin`、`specifications.quint`、`specifications.alloy` で読めます。仕様は登録時に決まり、ゴールに保存されます。
 

@@ -475,6 +475,7 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/it-goal-run-specifications.test.ts',
   'src/__tests__/tool-activity-runner-exit.integration.test.ts',
   'src/__tests__/tool-activity-workflow.integration.test.ts',
   'src/__tests__/daemon-wait-command.integration.test.ts',

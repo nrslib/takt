@@ -71,6 +71,6 @@ manager.notifications は question / awaiting_merge / completed / progress / blo
 
 取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
 
-specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
+specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。保存仕様は PR の最終レビューを含むゴールの各タスクの run に TAKT がファイルで自動的に渡し、各ステップの指示にパスを知らせます。指示書には仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID など）を書きます。
 
 形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。

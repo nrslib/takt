@@ -553,6 +553,8 @@ export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent
 
 /** Options for workflow engine */
 export interface WorkflowEngineOptions extends PrMergeOptions {
+  /** Saved goal specifications staged at the run boundary; inherited by child workflows. */
+  goalSpecificationPaths?: readonly string[];
   toolDisplayMode?: ToolActivityDisplayMode;
   streamQuiet?: boolean;
   abortSignal?: AbortSignal;

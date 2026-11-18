@@ -195,6 +195,7 @@ function buildCompanionExecutionUnitKey(input: {
 }
 
 export interface StepExecutorDeps {
+  readonly goalSpecificationPaths?: readonly string[];
   readonly reportReferenceObserver?: ReportReferenceObserver;
   readonly optionsBuilder: OptionsBuilder;
   readonly getCwd: () => string;
@@ -1606,6 +1607,7 @@ export class StepExecutor {
     const reviewScope = this.deps.getReviewScope();
     const instruction = new InstructionBuilder(step, {
       task,
+      goalSpecificationPaths: this.deps.goalSpecificationPaths,
       iteration: state.iteration,
       maxSteps,
       stepIteration,

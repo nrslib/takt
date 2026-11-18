@@ -71,6 +71,6 @@ Watchers deliver process disappearance and PR state changes. Process liveness an
 
 Conflicts with the integration target arrive as pr_conflicting. Notifications follow changes in the conflict state, including recurrence after resolution. A mergeable value of UNKNOWN denotes a pending determination.
 
-specifications is an optional saved field. Each body can be retrieved by passing specifications.gherkin, specifications.quint, or specifications.alloy as path to takt_get_goal. Saved specifications are automatically supplied to the final PR review task.
+specifications is an optional saved field. Each body can be retrieved by passing specifications.gherkin, specifications.quint, or specifications.alloy as path to takt_get_goal. TAKT automatically supplies saved specifications as files to each goal task run, including final PR review, and lists their paths in each step's instructions. Do not paste complete specifications into task instructions; include identifiers for the requirements assigned to that task, such as acceptance criteria IDs.
 
 When formal specifications are enabled, a person sending /verify in the TUI or Slack conversation triggers specification generation from the current agreement, verification, and a result returned to the same conversation. Saved goals and specifications retain their pre-verification contents. Responses indicate whether verification is available according to formal specification configuration.
