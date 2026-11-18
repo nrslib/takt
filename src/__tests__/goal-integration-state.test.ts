@@ -886,6 +886,15 @@ it('rechecks the saved status before applying the reopen update', async () => {
   expect(goal).toEqual({ ...before, status: 'completed', completion: { ...before.completion!, targetSha } });
 });
 
+it('rechecks the saved integration branch before applying the reopen update', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
+  doubles.contentIncluded.mockImplementation(async () => { goal = { ...goal, integrationBranch: 'release' }; return false; });
+  const before = structuredClone(goal);
+  await expect(reopenGoal('/project', goal.id, '追加の修正', undefined))
+    .rejects.toThrow('Goal integration branch changed during the reopen check');
+  expect(goal).toEqual({ ...before, integrationBranch: 'release' });
+});
+
 it.each([
   { updatedSha: sourceSha, includedOnRetry: false },
   { updatedSha: 'c'.repeat(40), includedOnRetry: false },
@@ -1386,6 +1395,20 @@ describe('goal branch correction', () => {
     expect(goal).toEqual(before);
   });
 
+  it.each(['paused', 'aborted'] as const)('rejects a goal that becomes %s after the saved goal is read', async (executionStatus) => {
+    doubles.get.mockImplementationOnce(async () => {
+      const snapshot = structuredClone(goal);
+      goal = { ...goal, executionStatus };
+      return snapshot;
+    });
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow(executionStatus === 'paused'
+        ? 'Goal is paused. Resume it before continuing work.'
+        : 'Goal is aborted. Work cannot continue for this goal.');
+    expect(goal.integrationBranch).toBe('main');
+    expect(goal.workLog).toHaveLength(0);
+  });
+
   it('rejects the goal branch itself as the integration branch', async () => {
     const before = structuredClone(goal);
     await expect(updateGoalBranches('/project', goal.id, goal.branch, '宛先の訂正', undefined))
@@ -1407,6 +1430,20 @@ describe('goal branch correction', () => {
     doubles.contentIncluded.mockImplementation(async () => {
       goal = { ...goal, integrationBranch: 'release' };
       return true;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
+  });
+
+  it('does not return a negative result when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return false;
     });
     await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
     expect(goal.status).toBe('awaiting_merge');

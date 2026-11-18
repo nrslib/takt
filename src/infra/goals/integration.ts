@@ -117,6 +117,9 @@ function assertCompletionUnchanged(current: Goal, previous: Goal): void {
   if (current.completion?.goalSha !== previous.completion?.goalSha) {
     throw new Error('Approved goal SHA changed during the completion check. Use takt_check_goal_completion.');
   }
+  if (current.integrationBranch !== previous.integrationBranch) {
+    throw new Error('Goal integration branch changed during the completion check. Use takt_check_goal_completion.');
+  }
 }
 
 function assertCompletionAllowed(current: Goal, previous: Goal): void {
@@ -126,9 +129,6 @@ function assertCompletionAllowed(current: Goal, previous: Goal): void {
   }
   if (current.executionStatus === 'aborted') {
     throw new Error('Goal is aborted. Work cannot continue for this goal.');
-  }
-  if (current.integrationBranch !== previous.integrationBranch) {
-    throw new Error('Goal integration branch changed during the completion check. Use takt_check_goal_completion.');
   }
 }
 
@@ -276,6 +276,9 @@ export async function reopenGoal(
     if (current.completion?.goalSha !== approvedSha) {
       throw new Error('Approved goal SHA changed during the reopen check. Use takt_check_goal_completion.');
     }
+    if (current.integrationBranch !== goal.integrationBranch) {
+      throw new Error('Goal integration branch changed during the reopen check. Use takt_check_goal_completion.');
+    }
     // 保存ロックを保持したまま、ロック待機中の対象ブランチ更新も確認する。
     const currentTargetSha = current.pullRequest === undefined
       ? resolveGoalBranchShaSync(cwd, current.integrationBranch, env)
@@ -301,6 +304,8 @@ export async function updateGoalBranches(
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     if (current.status === 'completed') throw new Error('Goal is already completed. Its saved branches cannot be corrected.');
+    if (current.executionStatus === 'paused') throw new Error('Goal is paused. Resume it before continuing work.');
+    if (current.executionStatus === 'aborted') throw new Error('Goal is aborted. Work cannot continue for this goal.');
     if (integrationBranch === current.branch) throw new Error('The integration branch must differ from the goal branch.');
     const completion = current.completion === undefined ? undefined : { ...current.completion, targetBranch: integrationBranch };
     return appendGoalWorkLog({ ...current, integrationBranch, ...(completion === undefined ? {} : { completion }) }, { summary: reason });
