@@ -173,7 +173,7 @@ export async function runWithWorkerPool(
       if (error instanceof TaskClaimLockUnavailableError) {
         if (claimRetryAt === undefined) {
           warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
-          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
         }
         claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
       } else {

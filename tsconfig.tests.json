@@ -153,6 +153,7 @@
     "src/__tests__/daemon-dispatcher.integration.test.ts",
     "src/__tests__/daemon-io.test.ts",
     "src/__tests__/daemon-lifecycle.test.ts",
+    "src/__tests__/catch-lint.test.ts",
     "src/__tests__/daemon-lint.test.ts",
     "src/__tests__/daemon-lock.test.ts",
     "src/__tests__/daemon-manager-patrol.integration.test.ts",
