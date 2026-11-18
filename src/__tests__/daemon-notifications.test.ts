@@ -297,8 +297,8 @@ describe('DaemonNotifications', () => {
       const entries: Dirent[] = [];
       for await (const entry of dir) entries.push(entry);
       const ordered = [
-        ...entries.filter((entry) => entry.name === fileName('second')),
-        ...entries.filter((entry) => entry.name !== fileName('second')),
+        ...entries.filter((entry) => entry.name === fileName('first')),
+        ...entries.filter((entry) => entry.name !== fileName('first')),
       ];
       return (async function* () { yield* ordered; })() as unknown as Dir;
     });
@@ -306,10 +306,49 @@ describe('DaemonNotifications', () => {
       const first = await collect(notifications);
       const second = await collect(notifications);
 
-      expect(first.map((value) => value.id)).toEqual(['first', 'second']);
+      const expected = ['first', 'second'].sort((left, right) => fileName(left).localeCompare(fileName(right)));
+      expect(first.map((value) => value.id)).toEqual(expected);
       expect(second).toEqual(first);
     } finally {
       mockedOpendir.mockImplementation(actualOpendir);
+    }
+  });
+
+  it('yields each notification without waiting for the whole scan', async () => {
+    const writer = new DaemonNotifications(root);
+    await writer.save({ id: 'first', message: 'one' }, signal);
+    await writeFile(join(directory, fileName('second')), JSON.stringify({ id: 'second', message: 'two' }), { mode: 0o600 });
+    const notifications = new DaemonNotifications(root);
+
+    const mocked = vi.mocked(readEntirePrivateFile);
+    const original = mocked.getMockImplementation();
+    if (original === undefined) throw new Error('readEntirePrivateFile must keep its implementation');
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let held = true;
+    mocked.mockImplementation(async (path) => {
+      if (held && path.endsWith(fileName('first'))) {
+        held = false;
+        await barrier;
+      }
+      return original(path);
+    });
+    try {
+      const iterator = notifications.iterate();
+      const firstNext = iterator.next();
+      let firstSettled = false;
+      void firstNext.then(() => { firstSettled = true; }, () => { firstSettled = true; });
+      await new Promise((resolve) => { setTimeout(resolve, 100); });
+
+      expect(firstSettled).toBe(true);
+      expect((await firstNext).value?.id).toBe('second');
+      release();
+      const rest: string[] = [];
+      for await (const value of iterator) rest.push(value.id);
+      expect(rest).toEqual(['first']);
+    } finally {
+      release();
+      mocked.mockImplementation(original);
     }
   });
 

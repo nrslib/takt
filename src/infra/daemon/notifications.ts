@@ -54,25 +54,37 @@ export class DaemonNotifications {
   }
 
   async *iterate(): AsyncGenerator<Notification> {
-    for (const value of await this.refresh()) yield structuredClone(value);
+    for await (const value of this.refresh()) yield structuredClone(value);
   }
 
-  private refresh(): Promise<Notification[]> {
-    const operation = this.pending.then(async () => {
-      const values = await this.scan();
-      // 走査の列挙順と索引の挿入順の違いで、読み取るたびに並びが変わらないようにする。
-      return values.sort((left, right) => left.id.localeCompare(right.id));
-    });
-    this.pending = operation.then(() => undefined, () => undefined);
-    return operation;
+  private refresh(): AsyncGenerator<Notification> {
+    const previous = this.pending;
+    let release!: () => void;
+    this.pending = new Promise<void>((resolve) => { release = resolve; });
+    return this.serializedScan(previous, release);
   }
 
-  private async scan(): Promise<Notification[]> {
+  private async *serializedScan(previous: Promise<void>, release: () => void): AsyncGenerator<Notification> {
+    await previous;
+    try {
+      yield* this.scan();
+    } finally {
+      release();
+    }
+  }
+
+  private async *scan(): AsyncGenerator<Notification> {
     const generation = this.generation;
     await ensurePrivateDirectory(this.directory);
     const info = await stat(this.directory);
     const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
-    if (stamp === this.index.stamp && this.index.complete) return [...this.index.values.values()].map((entry) => entry.value);
+    if (stamp === this.index.stamp && this.index.complete) {
+      // 保持済みの通知も、走査と同じファイル名順で返す。
+      for (const name of [...this.index.values.keys()].sort((left, right) => left.localeCompare(right))) {
+        yield this.index.values.get(name)!.value;
+      }
+      return;
+    }
     const directoryId = JSON.stringify([info.dev, info.ino, info.birthtimeMs]);
     if (directoryId !== this.index.directoryId) {
       // ディレクトリが作り直されると、同じ名前のファイルでも中身は別物になるため、読み込み済みの通知は使い回せない。
@@ -81,30 +93,33 @@ export class DaemonNotifications {
       this.index.cachedBytes = 0;
       this.index.directoryId = directoryId;
     }
-    const names = new Set<string>();
-    const result: Notification[] = [];
-    let complete = true;
+    const names: string[] = [];
     for await (const entry of await opendir(this.directory)) {
-      if (!entry.name.endsWith('.json')) continue;
-      names.add(entry.name);
-      const path = join(this.directory, entry.name);
+      if (entry.name.endsWith('.json')) names.push(entry.name);
+    }
+    // ファイル名順に読み取ることで、列挙順や索引の挿入順に並びが左右されなくなる。
+    names.sort((left, right) => left.localeCompare(right));
+    let complete = true;
+    for (const name of names) {
+      const path = join(this.directory, name);
       const identity = await this.fileIdentityOf(path);
-      const cached = this.index.values.get(entry.name);
+      const cached = this.index.values.get(name);
       if (cached !== undefined && identity !== undefined && identity === cached.identity) {
-        result.push(cached.value);
+        yield cached.value;
         continue;
       }
       const content = await readEntirePrivateFile(path);
       if (content === undefined) throw new Error('Notification disappeared during read');
       const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
-      if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
-      result.push(value);
+      if (name !== `${key(value.id)}.json` && name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
       // 走査の開始後に保存が完了していたら、保存した値は索引へ反映済みのため、読み取り中の内容で上書きしない。
       // ファイルの同一性を確認できなかった場合も、保持せずに次の走査で読み直す。
-      if (identity === undefined || generation !== this.generation || !this.retain(entry.name, value, content.length, identity)) complete = false;
+      if (identity === undefined || generation !== this.generation || !this.retain(name, value, content.length, identity)) complete = false;
+      yield value;
     }
+    const enumerated = new Set(names);
     for (const [name, cached] of this.index.values) {
-      if (!names.has(name)) {
+      if (!enumerated.has(name)) {
         this.index.cachedBytes -= cached.bytes;
         this.index.values.delete(name);
       }
@@ -115,7 +130,6 @@ export class DaemonNotifications {
     } else {
       this.index.complete = false;
     }
-    return result;
   }
 
   /** ファイルの同一性を返す。取得できなかった場合は undefined を返す。 */
