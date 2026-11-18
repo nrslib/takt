@@ -118,17 +118,42 @@ describe('DaemonNotifications', () => {
     expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
   });
 
-  it('keeps results consistent while a save overlaps reads', async () => {
+  it('serializes scans when a read and a save overlap', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);
-    await collect(notifications);
+    await writeFile(join(directory, fileName('second')), JSON.stringify({ id: 'second', message: 'two' }), { mode: 0o600 });
 
-    const pending = [collect(notifications), collect(notifications), collect(notifications)];
-    await notifications.save({ id: 'second', message: 'two' }, signal);
-    const results = await Promise.all(pending);
+    const mocked = vi.mocked(readEntirePrivateFile);
+    const original = mocked.getMockImplementation();
+    if (original === undefined) throw new Error('readEntirePrivateFile must keep its implementation');
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let held = true;
+    mocked.mockImplementation(async (path) => {
+      if (held && path.endsWith(fileName('second'))) {
+        held = false;
+        await barrier;
+      }
+      return original(path);
+    });
+    mocked.mockClear();
+    try {
+      const first = collect(notifications);
+      const second = collect(notifications);
+      let secondSettled = false;
+      void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+      await notifications.save({ id: 'third', message: 'three' }, signal);
+      await new Promise((resolve) => { setTimeout(resolve, 100); });
 
-    for (const values of results) expect(values.map((value) => value.id)).toContain('first');
-    expect((await collect(notifications)).map((value) => value.id).sort()).toEqual(['first', 'second']);
+      expect(secondSettled).toBe(false);
+      expect(readNames().filter((name) => name === fileName('second'))).toHaveLength(1);
+      release();
+      expect((await first).map((value) => value.id)).toContain('second');
+      expect((await second).map((value) => value.id).sort()).toEqual(['first', 'second', 'third']);
+    } finally {
+      release();
+      mocked.mockImplementation(original);
+    }
   });
 
   it('keeps failing on a broken notification file', async () => {
