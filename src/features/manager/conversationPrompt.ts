@@ -1,3 +1,4 @@
+import type { ManagerRuntimeAssignment } from './runtimeAssignmentSelection.js';
 import type { TurnEvent } from '../../core/daemon/events.js';
 import { loadTemplate, renderTemplate } from '../../shared/prompts/index.js';
 import { buildManagerEventPrompt } from '../daemon/inboxEvent.js';
@@ -10,6 +11,7 @@ interface ManagerSystemPromptInput {
   repository: string;
   mainMerge: string;
   concurrency: number;
+  runtimeAssignments: readonly { repositoryDirectory: string; assignments: readonly ManagerRuntimeAssignment[] }[];
 }
 
 export function buildManagerSystemPrompt(input: ManagerSystemPromptInput): string {
@@ -28,6 +30,7 @@ export function buildManagerSystemPrompt(input: ManagerSystemPromptInput): strin
       specificationConfiguration: JSON.stringify(specificationConfiguration),
       mainMerge: JSON.stringify(input.mainMerge),
       concurrency: String(input.concurrency),
+      runtimeAssignments: JSON.stringify(input.runtimeAssignments),
     }).trim(),
   ].join('\n\n');
 }

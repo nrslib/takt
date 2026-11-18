@@ -15,3 +15,7 @@ Repository manager.main_merge: {{mainMerge}}
 Concurrency limit: {{concurrency}}
 
 プロジェクトの run / watch 全体で共有する同時実行上限です。
+
+タスクに指定できる runtime assignment（リポジトリ別）: {{runtimeAssignments}}
+
+人の指示またはゴールの制約が用途に合う場合は、対象リポジトリの候補名を takt_enqueue_goal_task の runtimeAssignment に渡します。該当する指定がなければ引数を省略します。優先度の指示を含むゴールを登録するときは、その指示を制約に保存し、後続のタスク登録でも参照します。

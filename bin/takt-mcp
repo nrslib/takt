@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+takt_bin_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+exec node "$takt_bin_dir/../dist/app/mcp/index.js" "$@"
