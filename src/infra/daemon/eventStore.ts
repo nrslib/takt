@@ -214,6 +214,18 @@ export class FileEventStore implements EventStore, ConversationTurns {
     });
   }
 
+  async hasImageReference(conversationId: string, imageId: string): Promise<boolean> {
+    await ensurePrivateDirectory(this.directory);
+    for await (const entry of await opendir(this.directory)) {
+      if (!entry.name.endsWith('.json')) continue;
+      const record = await this.read(join(this.directory, entry.name));
+      const event = record.event.event;
+      if (record.event.conversationId === conversationId && event.kind === 'human_command'
+        && event.command.kind === 'message' && event.command.imageAttachmentIds?.includes(imageId)) return true;
+    }
+    return false;
+  }
+
   async hasGoalRegistration(repositoryDirectory: string, goalId: string): Promise<boolean> {
     await ensurePrivateDirectory(this.directory);
     for await (const entry of await opendir(this.directory)) {

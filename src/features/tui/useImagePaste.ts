@@ -74,6 +74,7 @@ export interface ImagePasteSink {
 
 export interface ImagePasteInput {
   readonly sink: ImagePasteSink;
+  readonly rejectInvalidImages?: boolean;
   readonly lang: 'en' | 'ja';
   readonly insertAtCaret: (text: string) => void;
   readonly setNotice: (message: string | null) => void;
@@ -98,6 +99,7 @@ export function useImagePaste({
   setNotice,
   track,
   isStopped,
+  rejectInvalidImages = false,
 }: ImagePasteInput): ImagePasteHandlers {
   const bufferRef = useRef<ImagePasteBuffer>(createImagePasteBuffer());
 
@@ -127,29 +129,30 @@ export function useImagePaste({
         if (isStopped() || controller.signal.aborted) {
           return;
         }
+        if (rejectInvalidImages && trailing !== '') insertAtCaret(trailing);
         reportFailure(error);
       }
     })();
     track({ controller, completion });
-  }, [insertAtCaret, isStopped, reportFailure, setNotice, track]);
+  }, [insertAtCaret, isStopped, reportFailure, setNotice, track, rejectInvalidImages]);
 
   const captureClipboard = useCallback((): void => {
     savePlaceholder((abortSignal) => sink.pasteClipboardImage(abortSignal), '');
   }, [savePlaceholder, sink]);
 
   const flushPending = useCallback((): void => {
-    const read = consumeImagePasteInput(bufferRef.current, '');
+    const read = consumeImagePasteInput(bufferRef.current, '', rejectInvalidImages);
     bufferRef.current = read.buffer;
     if (read.outcome.kind === 'passthrough') {
       insertAtCaret(read.outcome.text);
     }
-  }, [insertAtCaret]);
+  }, [insertAtCaret, rejectInvalidImages]);
 
   const routeInput = useCallback((input: string, key: Key): boolean => {
     // A control or meta chord reports a letter that was never typed, so the
     // buffer is fed nothing and releases whatever it holds before the chord runs.
     const text = key.ctrl || key.meta ? '' : input;
-    const read = consumeImagePasteInput(bufferRef.current, text);
+    const read = consumeImagePasteInput(bufferRef.current, text, rejectInvalidImages);
     bufferRef.current = read.buffer;
 
     switch (read.outcome.kind) {
@@ -157,6 +160,10 @@ export function useImagePaste({
         return false;
       case 'pending':
         return true;
+      case 'error':
+        reportFailure(new Error('Invalid or oversized pasted image.'));
+        if (read.outcome.rest !== '') insertAtCaret(read.outcome.rest);
+        return read.outcome.consumed ?? true;
       case 'image': {
         const { image, rest } = read.outcome;
         savePlaceholder(() => sink.saveInlineImage(image), rest);
@@ -167,7 +174,7 @@ export function useImagePaste({
         // An event that only ended the hold still needs its own key handling.
         return read.outcome.consumed;
     }
-  }, [insertAtCaret, savePlaceholder, sink]);
+  }, [insertAtCaret, savePlaceholder, sink, rejectInvalidImages, reportFailure]);
 
   return { routeInput, flushPending, captureClipboard };
 }

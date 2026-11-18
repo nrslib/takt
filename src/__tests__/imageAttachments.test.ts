@@ -68,6 +68,28 @@ describe('createImageAttachmentStore', () => {
     expect(store.listAttachments()).toEqual([first, second]);
   });
 
+  it('continues numbering from restored attachment metadata without replacing the saved image', async () => {
+    const tmpRoot = createTempRoot();
+    const firstStore = createImageAttachmentStore({ tmpRoot, sessionId: 'restored-conversation' });
+    const originalBytes = Buffer.from('first screenshot');
+    const first = await firstStore.saveImage(originalBytes, 'image/png');
+    const metadataPath = path.join(tmpRoot, 'attachments.json');
+    fs.writeFileSync(metadataPath, JSON.stringify(firstStore.listAttachments()));
+    firstStore.seal();
+    const restored = createImageAttachmentStore({ tmpRoot, sessionId: 'restored-conversation',
+      initialAttachments: JSON.parse(fs.readFileSync(metadataPath, 'utf8')) });
+
+    const secondBytes = Buffer.from('second screenshot');
+    const second = await restored.saveImage(secondBytes, 'image/png');
+
+    expect(first.placeholder).toBe('[Image #1]');
+    expect(second.placeholder).toBe('[Image #2]');
+    expect(second.tempPath).not.toBe(first.tempPath);
+    expect(fs.readFileSync(first.tempPath)).toEqual(originalBytes);
+    expect(fs.readFileSync(second.tempPath)).toEqual(secondBytes);
+    expect(restored.listAttachments()).toEqual([first, second]);
+  });
+
   it('should start after the highest existing file name index', async () => {
     const tmpRoot = createTempRoot();
     const store = createImageAttachmentStore({

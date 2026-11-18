@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { conversationDaemon } from './conversation-daemon.js';
+import { managerImageDirectory } from '../../features/manager/imageAttachments.js';
 import { resolveCurrentManagerAssignment } from '../../features/manager/assignment.js';
 import { createTuiConversationPort } from '../../features/manager/tuiConversationPort.js';
 import { createManagerTurnExecutor } from '../../features/manager/turnExecutor.js';
@@ -32,6 +33,17 @@ export class ManagerServiceClient {
   private readonly delivery: ConversationDelivery;
   private readonly configDirectory = getGlobalConfigDir();
   readonly ready: Promise<void>;
+  private imageAssignment: ConversationAssignment | undefined;
+  async getImageDirectory(): Promise<string> {
+    await this.ready;
+    if (this.closed || this.attachmentId === undefined || this.imageAssignment === undefined) throw new Error('Conversation is disconnected');
+    return managerImageDirectory(this.imageAssignment, this.configDirectory);
+  }
+  async prepareImage(sourcePath: string) {
+    await this.ready;
+    if (this.attachmentId === undefined) throw new Error('Conversation is disconnected');
+    return this.service.prepareImage({ attachmentId: this.attachmentId, sourcePath });
+  }
   getSnapshot = (): ConversationClientSnapshot => this.view;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -89,6 +101,7 @@ export class ManagerServiceClient {
     const opened = await this.service.open({ ...resolved, agentOverrides: { provider: plan.ctx.providerType, model: plan.ctx.model } }, this.delivery);
     if (this.closed || generation !== this.readGeneration) { this.service.detach(opened.attachmentId); return; }
     this.attachmentId = opened.attachmentId;
+    this.imageAssignment = resolved.assignment;
     // A failed transfer leaves the attachment connected and can be refreshed.
     await this.read(() => Promise.resolve(opened.read)).catch(() => {});
     if (!this.closed && generation === this.readGeneration) this.update({ connection: 'connected' });

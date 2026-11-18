@@ -23,6 +23,7 @@ interface Observation {
   running?: boolean;
   approvalState?: 'reserved' | 'registered' | null;
   agent?: string;
+  images?: { id: string; path: string; digest: string }[];
   model?: string;
   summaryRequest?: boolean;
   method?: string;
@@ -185,7 +186,8 @@ export async function mountInk(buildTree) {
   // 本文と capability は記録せず、実処理の所有 PID と公開操作だけを観測する。
   writeFileSync(preload, `
 import { registerHooks } from 'node:module';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Socket } from 'node:net';
 import { ConversationStateStore } from ${JSON.stringify(built('infra/daemon/conversationStateStore.js'))};
@@ -203,7 +205,10 @@ const setup = MockProvider.prototype.setup;
 MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
+    const imageMetadata = /Image attachments: (\\[.*\\])/u.exec(prompt)?.[1];
+    const images = options.imageAttachments ?? (imageMetadata === undefined ? [] : JSON.parse(imageMetadata));
     record({ event: 'provider_start', agent: config.name, model: options.model,
+      images: images.map(({ id, path }) => ({ id, path, digest: createHash('sha256').update(readFileSync(path)).digest('hex') })),
       summaryRequest: prompt.includes('"requestProposal":true') });
     const deadline = Date.now() + 60000;
     const showActivity = ${JSON.stringify(activity)} && config.name === 'manager';

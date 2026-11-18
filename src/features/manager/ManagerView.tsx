@@ -1,3 +1,4 @@
+import { useManagerImages } from './useManagerImages.js';
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
@@ -26,7 +27,7 @@ import { resolveSlashCompletions } from '../tui/slashCompletion.js';
 import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { createEditorState, type EditorState } from '../tui/editorState.js';
+import { applyEditorKey, createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText, toSingleLineText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -49,7 +50,7 @@ const MIN_STATUS_HEADING_WIDTH = 12;
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
   cwd: string; lang: 'en' | 'ja';
-  client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close'>;
+  client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close' | 'prepareImage' | 'getImageDirectory'>;
   onExit: () => void; initialDiagnostics: readonly string[];
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
@@ -332,7 +333,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (summaryRequest) setSummarizing(true);
     resetChoice();
-    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
+    const imageAttachmentIds = images.ids(text);
+    void send({ kind: 'message', ...(imageAttachmentIds.length === 0 ? {} : { imageAttachmentIds }), text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
       ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
@@ -387,6 +389,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const conversationInput = !epicsOpen && answerTarget === null && selection.selection === null && abortTarget === null;
+  const [imageNotice, setImageNotice] = useState<string | null>(null);
+  const images = useManagerImages({ lang, client, enabled: conversationInput && !exiting.current,
+    insert: (text) => { edit(applyEditorKey(editorRef.current, { kind: 'insert', text })); slashCompletion.reset(); },
+    notice: setImageNotice,
+  });
   const summaryVisible = !epicsOpen && !registering.current && pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
@@ -491,7 +498,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }, [toolTurn]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
-    edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
+    edit: answerTarget === null ? edit : editAnswer, submit, images,
+    onExit: () => { void images.stop().then(onExit); }, contentWidth, canApprove,
     abortTurn: () => {
       const running = latest.current.state?.running;
       if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation }, () => {
@@ -534,6 +542,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
+    {imageNotice !== null && <Text color="red">{imageNotice}</Text>}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     {queueRows > 0 && <QueueView heading={queueHeading}
       lines={queuedMessages.slice(0, queueRows - 1).map((message) => sanitizeSensitiveText(message))} />}

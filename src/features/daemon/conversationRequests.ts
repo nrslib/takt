@@ -11,6 +11,8 @@ export const ConversationRequestSchema = z.discriminatedUnion('method', [
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict() }).strict(),
   z.object({ ...common, method: z.literal('submit'), params: z.object({ attachmentId: id,
     speaker: ConversationActorSchema, command: ConversationCommandSchema }).strict() }).strict(),
+  z.object({ ...common, method: z.literal('prepare_image'), params: z.object({ attachmentId: id,
+    sourcePath: z.string().min(1) }).strict() }).strict(),
   ...(['snapshot', 'detach'] as const).map((method) => z.object({ ...common, method: z.literal(method),
     params: z.object({ attachmentId: id }).strict() }).strict()),
 ]);

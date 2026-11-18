@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { attachConversationConnection } from '../features/daemon/conversationConnection.js';
+import { ManagerImageAttachments } from './../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../features/manager/daemonConversationPort.js';
 import { DaemonDispatcher } from '../features/daemon/dispatcher.js';
 import { deferred, MemoryEventStore } from './helpers/controlledDaemon.js';
@@ -67,7 +68,7 @@ async function fixture() {
     stateRequests: { handle: async () => ({ kind: 'error', code: 'forbidden', message: 'Unused state request' }) },
     resources: { close: async () => {} }, limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 }, onFailure: ({error}) => { throw error; } });
   await dispatcher.restore(0, (async function* () {})());
-  const service = createDaemonConversationInput({ ingress: dispatcher, resolveAssignment: async (assignment) => assignment });
+  const service = createDaemonConversationInput({ configDirectory: '/unused', images: new ManagerImageAttachments({ hasImageReference: async () => false }), onImageCleanupError: (error: unknown) => { throw error; }, ingress: dispatcher, resolveAssignment: async (assignment) => assignment });
   const turn: TurnStart = { turn: { conversationId: record.id, operationId: randomUUID(), generation: 1 }, state,
     event: { eventId: 'first', requestId: 'first', conversationId: record.id, operationId: '', acceptedSequence: 1, lane: 'human',
       occurredAt: new Date().toISOString(), source: 'tui', event: { kind: 'human_command', speaker: record.counterpart, command: { kind: 'message', text: 'first' } } } };

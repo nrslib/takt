@@ -7,14 +7,33 @@ import { ConversationError } from './conversationErrors.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
 import type { ConversationDelivery, ConversationInput, ConversationOpen, OutputVersion, PortOutput, SnapshotRead, SnapshotItem } from './conversationPort.js';
 import { SnapshotChanges } from './snapshotChanges.js';
+import { managerImageDirectory, type ManagerImageAttachments } from './imageAttachments.js';
 
 /** 配送先の解決は登録済みの routing 情報で行い、業務 Store を読まない。 */
 export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
+  configDirectory: string;
+  images: ManagerImageAttachments;
+  onImageCleanupError(error: unknown): void;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
-  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; activitySequence?: number }>();
+  const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; hasImages?: boolean; activitySequence?: number }>();
   const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
+  const cleanup = new Set<Promise<void>>();
+  const cleanupErrors: unknown[] = [];
+  const detach = (id: string): void => {
+    const attachment = attachments.get(id);
+    attachments.delete(id);
+    if (attachment === undefined || !attachment.hasImages) return;
+    const completion = (async () => {
+      await attachment.validation;
+      const cwd = await managerImageDirectory(attachment.input.assignment, options.configDirectory);
+      await options.images.release(cwd, attachment.input.conversationId, id);
+    })();
+    cleanup.add(completion);
+    void completion.catch((error: unknown) => { cleanupErrors.push(error); options.onImageCleanupError(error); })
+      .finally(() => cleanup.delete(completion));
+  };
   let accepting = true;
   let attachmentGeneration = 0;
   const attached = (id: string) => {
@@ -59,7 +78,7 @@ export function createDaemonConversationInput(options: {
         || attachment.activitySequence === activity.version.stateSequence) return;
       attachment.activitySequence = activity.version.stateSequence;
       void attachment.delivery.deliver(attachment.input.conversationId, activity.output, activity.version)
-        .catch(() => { attachments.delete(attachmentId); });
+        .catch(() => { detach(attachmentId); });
     } };
   };
   const input: ConversationInput = {
@@ -78,6 +97,22 @@ export function createDaemonConversationInput(options: {
         attachmentGeneration++;
       });
       return { attachmentId, read: snapshot };
+    },
+    async prepareImage(request) {
+      const attachment = attached(request.attachmentId);
+      if (!accepting || attachment.input.binding.port !== 'tui' || attachment.input.assignment.kind === 'daemon') throw new ConversationError('invalid_input');
+      attachment.hasImages = true;
+      const previous = attachment.validation;
+      let finish!: () => void;
+      attachment.validation = new Promise<void>((resolve) => { finish = resolve; });
+      await previous;
+      try {
+        if (!accepting || attachments.get(request.attachmentId) !== attachment) throw new ConversationError('unavailable_attachment');
+        const assignment = await options.resolveAssignment(attachment.input.assignment);
+        if (conversationId(assignment) !== attachment.input.conversationId) throw new ConversationError('invalid_assignment');
+        const cwd = await managerImageDirectory(assignment, options.configDirectory);
+        return await options.images.prepare(cwd, attachment.input.conversationId, request.attachmentId, request.sourcePath);
+      } finally { finish(); }
     },
     async submit(request) {
       if (!accepting) return { kind: 'error', code: 'shutting_down', message: 'Daemon is stopping' };
@@ -120,14 +155,23 @@ export function createDaemonConversationInput(options: {
             }
           } finally { snapshot.cancel(); }
         }
-        const accepted = options.ingress.accept({ eventId: randomUUID(), requestId: request.requestId, conversationId: id,
+        const accept = () => options.ingress.accept({ eventId: randomUUID(), requestId: request.requestId, conversationId: id,
           source: attachment.input.binding.port === 'tui' ? 'tui' : 'slack', occurredAt: new Date().toISOString(),
           event: command.kind === 'answer_question' ? { kind: 'inquiry_answer', command }
             : { kind: 'human_command', command, speaker: attachment.input.speaker,
               ...(attachment.input.agentOverrides === undefined ? {} : { agentOverrides: attachment.input.agentOverrides }) } });
-        // 同じ画面の入力順を保つ。保存の完了待ちは、次の入力の検証を止めない。
-        finishValidation();
-        const admission = await accepted;
+        const ids = command.kind === 'message' ? command.imageAttachmentIds ?? [] : [];
+        let admission;
+        if (ids.length > 0 && command.kind === 'message') {
+          if (attachment.input.binding.port !== 'tui' || attachment.input.assignment.kind === 'daemon') throw new ConversationError('invalid_input');
+          const cwd = await managerImageDirectory(attachment.input.assignment, options.configDirectory);
+          admission = await options.images.accept(cwd, id, request.attachmentId, command.text, ids, accept);
+        } else {
+          // 同じ画面の入力順を保つ。保存の完了待ちは、次のテキスト入力の検証を止めない。
+          const accepted = accept();
+          finishValidation();
+          admission = await accepted;
+        }
         if (admission.kind === 'accepted') return admission;
         const codes = { capacity: 'queue_full', storage: 'storage_error', stopping: 'shutting_down' } as const;
         return { kind: 'error', code: codes[admission.reason], message: `Event rejected: ${admission.reason}` };
@@ -140,7 +184,7 @@ export function createDaemonConversationInput(options: {
         request?.enqueueSnapshot?.(replayActivityAfterRead(attachmentId, attachment, captured, snapshot));
       });
     },
-    detach(attachmentId) { attachments.delete(attachmentId); },
+    detach,
   };
   return { ...input,
     get attachmentCount() { return attachments.size; },
@@ -189,6 +233,12 @@ export function createDaemonConversationInput(options: {
       }));
     },
     stopAccepting() { accepting = false; },
-    close() { accepting = false; attachments.clear(); activities.clear(); },
+    async close() {
+      accepting = false;
+      for (const id of [...attachments.keys()]) detach(id);
+      await Promise.allSettled([...cleanup]);
+      activities.clear();
+      if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'Image cleanup failed');
+    },
   };
 }
