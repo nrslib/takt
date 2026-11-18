@@ -20,6 +20,8 @@ export class DaemonNotifications {
   private readonly index: { stamp: string | undefined; directoryId: string | undefined; values: Map<string, Notification> } = { stamp: undefined, directoryId: undefined, values: new Map() };
   /** 走査同士が索引を同時に書き換えないよう、refresh() の実行を直列化するための待ち行列。 */
   private pending = Promise.resolve();
+  /** save() が書き込むたびに進む。走査の開始後に進んでいたら、その走査は stamp を記録しない。 */
+  private generation = 0;
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
 
   async save(input: z.infer<typeof notification>, signal: AbortSignal): Promise<boolean> {
@@ -39,6 +41,7 @@ export class DaemonNotifications {
         }
       }
       await writePrivateFile(path, JSON.stringify(value), signal);
+      this.generation += 1;
       this.index.stamp = undefined;
       return true;
     }, { signal, timeoutMs: 5000 });
@@ -55,6 +58,7 @@ export class DaemonNotifications {
   }
 
   private async scan(): Promise<Notification[]> {
+    const generation = this.generation;
     await ensurePrivateDirectory(this.directory);
     const info = await stat(this.directory);
     const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
@@ -77,7 +81,7 @@ export class DaemonNotifications {
       this.index.values.set(entry.name, value);
     }
     for (const name of this.index.values.keys()) if (!names.has(name)) this.index.values.delete(name);
-    this.index.stamp = stamp;
+    if (generation === this.generation) this.index.stamp = stamp;
     return [...this.index.values.values()];
   }
 }
