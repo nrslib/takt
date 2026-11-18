@@ -121,6 +121,7 @@ export const ConversationChangeSchema = z.object({
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessage: text.nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
   || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const operationResult = z.discriminatedUnion('kind', [

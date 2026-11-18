@@ -1,6 +1,7 @@
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { resolveCurrentManagerAssignment } from './assignment.js';
+import { managerImageDirectory } from './imageAttachments.js';
 import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
@@ -40,6 +41,7 @@ export class ConversationIpcClient {
   private activity: Extract<Output, { kind: 'activity' }> | undefined;
   private receiver: ConversationTransferReceiver | undefined;
   private resolved: ConversationOpen | undefined;
+  private configDirectory: string | undefined;
   private attachmentId: string | undefined;
   private closed = false;
   private connecting: Promise<void> | undefined;
@@ -75,6 +77,18 @@ export class ConversationIpcClient {
       throw failure;
     }).finally(() => { this.connecting = undefined; });
     return this.connecting;
+  }
+
+  async getImageDirectory(): Promise<string> {
+    if (this.view.connection !== 'connected' || this.resolved === undefined || this.configDirectory === undefined) throw new Error('Conversation is disconnected');
+    return managerImageDirectory(this.resolved.assignment, this.configDirectory);
+  }
+
+  async prepareImage(sourcePath: string): Promise<import('../../shared/types/image-attachments.js').ManagerImageAttachmentReference> {
+    if (this.view.connection !== 'connected' || this.attachmentId === undefined) throw new Error('Conversation is disconnected');
+    return this.request('prepare_image', { attachmentId: this.attachmentId, sourcePath }, (value) => z.object({
+      id: z.uuid(), placeholder: z.string().regex(/^\[Image #[1-9]\d*\]$/), path: z.string().min(1),
+    }).strict().parse(value));
   }
 
   async submit(command: ConversationCommand, onAccepted?: (operationId: string) => void): Promise<Submission> {
@@ -187,6 +201,7 @@ export class ConversationIpcClient {
       });
     }
     this.resolved = resolved;
+    this.configDirectory = configDirectory;
     const socket = await ensureDaemon({ retainConnection: true });
     if (this.closed) { socket.destroy(); return; }
     this.socket = socket;

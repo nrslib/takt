@@ -1,3 +1,4 @@
+import { managerImageDirectory, resolveManagerImages } from './imageAttachments.js';
 import { randomUUID } from 'node:crypto';
 import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -201,10 +202,17 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const interruptedMessage = patrol ? null : state.current.interruptedMessage;
             const question = event.kind === 'inquiry_answered'
               ? eventGoal?.goal.questions?.find(({ id }) => id === event.questionId)?.body : undefined;
-            const prompt = buildManagerTurnPrompt({ lang: language, event: promptEvent, question,
+            const imageIds = [...new Set([
+              ...(human && command.kind === 'message' ? command.imageAttachmentIds ?? [] : []),
+              ...(patrol || verify ? [] : state.current.interruptedImageAttachmentIds ?? []),
+            ])];
+            const imageAttachments = imageIds.length === 0 ? [] : await resolveManagerImages(
+              await managerImageDirectory(identity, configDirectory), input.turn.conversationId, imageIds);
+            const prompt = buildManagerTurnPrompt({ ...(imageAttachments.length === 0 ? {} : { imageAttachments }), lang: language, event: promptEvent, question,
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
               prompt,
+              ...(imageAttachments.length === 0 ? {} : { imageAttachments }),
               requestDaemon: io.request,
               operationId: input.turn.operationId,
               ...(verification === undefined ? {} : { verify: verification }),
@@ -244,7 +252,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
               session: { ...state.current.session, sessionId: output.sessionId ?? null },
-              ...(interruptedMessageDelivered ? { interruptedMessage: null } : {}),
+              ...(interruptedMessageDelivered ? { interruptedMessage: null,
+                ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) } : {}),
               ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),
             }) }) };
           } finally { await resolved.release?.(); }
@@ -269,14 +278,19 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           // 保存の応答が届かなかった場合も、保存済みの session を巻き戻さない。
           return { kind: 'interrupted', ...(verificationMessage === undefined ? {} : { message: verificationMessage }), ...(human && command.kind === 'message' && !verify
             ? { change: state.change({ interruptedMessage: interruptedMessageDelivered || state.current.interruptedMessage == null
-              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}` }) } : {}) };
+              ? command.text : `${state.current.interruptedMessage}\n\n${command.text}`,
+              ...(command.imageAttachmentIds === undefined && state.current.interruptedImageAttachmentIds === undefined ? {} : {
+                interruptedImageAttachmentIds: [...new Set([...(interruptedMessageDelivered ? [] : state.current.interruptedImageAttachmentIds ?? []),
+                  ...command.imageAttachmentIds ?? []])],
+              }) }) } : {}) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
           const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);
           if (notice !== undefined) io.progress(notice);
         }
         return { kind: 'completed', result: conversationErrorResult(error, language),
-          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null }) } : {}) };
+          ...(interruptedMessageDelivered ? { change: state.change({ interruptedMessage: null,
+            ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) }) } : {}) };
       } finally {
         if (assignment.kind !== 'daemon' && command.kind === 'message') {
           for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);

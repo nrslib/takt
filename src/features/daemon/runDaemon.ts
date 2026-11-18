@@ -21,6 +21,7 @@ import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js'
 import { installDaemonErrorLog, reportDaemonError } from '../../infra/daemon/diagnostics.js';
 import { DaemonLogger } from '../../infra/daemon/logger.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { ManagerImageAttachments } from '../manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../manager/daemonConversationPort.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts, type SlackRepositoryConfig } from './slackPorts.js';
@@ -96,8 +97,8 @@ export async function startDaemon(options: {
     const results = await Promise.allSettled([closeResource(waitGoals), closeResource(waitCommandCheck), closeResource(idleCheck),
       closeResource(epicWatcher), closeResource(patrols), closeResource(watchers), closeResource(slack), closeResource(ipc)]);
     const delivery = await Promise.allSettled([closeResource(conversations)]);
-    input.close();
-    const errors = [...results, ...delivery].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
+    const images = await Promise.allSettled([input.close()]);
+    const errors = [...results, ...delivery, ...images].flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []);
     if (errors.length > 0) throw new AggregateError(errors, 'Cannot close daemon resources');
   } };
   const dispatcher: DaemonDispatcher = new DaemonDispatcher({ store: eventStore, conversations, stateRequests: createDaemonStateRequests({ conversations, waitCommands,
@@ -114,7 +115,8 @@ export async function startDaemon(options: {
     }, 1000);
     storageRetry.unref();
   } });
-  const input = createDaemonConversationInput({ ingress: dispatcher, async resolveAssignment(selected) {
+  const input = createDaemonConversationInput({ ingress: dispatcher, configDirectory: directory,
+    images: new ManagerImageAttachments(eventStore), onImageCleanupError: reportDaemonError, async resolveAssignment(selected) {
     const assignment = await routing.resolve(selected);
     await conversations.ensure(assignment);
     return assignment;

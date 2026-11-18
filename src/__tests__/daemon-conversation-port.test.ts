@@ -1,6 +1,7 @@
 import { tellDirectorManager } from '../features/director/tellManager.js';
 import type { DaemonStateReply } from '../core/daemon/processProtocol.js';
 import { expect, it, vi } from 'vitest';
+import { ManagerImageAttachments } from '../features/manager/imageAttachments.js';
 import { createDaemonConversationInput } from '../features/manager/daemonConversationPort.js';
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import type { DaemonIngress } from '../core/daemon/ports.js';
@@ -25,7 +26,7 @@ async function fixture() {
   const loadSnapshot = vi.fn(async () => snapshot());
   const ingress: DaemonIngress = { accept: vi.fn().mockResolvedValue({ kind: 'accepted', eventId: 'event', operationId: 'queued', acceptedSequence: 2 }),
     snapshot: vi.fn(async (_id, request) => { const read = await loadSnapshot(); request?.capture?.(read); return read; }), control: vi.fn().mockResolvedValue({ kind: 'interrupted' }) };
-  const port = createDaemonConversationInput({ ingress, resolveAssignment: async (assignment) => assignment });
+  const port = createDaemonConversationInput({ configDirectory: '/config', images: new ManagerImageAttachments({ hasImageReference: async () => false }), onImageCleanupError: (error: unknown) => { throw error; }, ingress, resolveAssignment: async (assignment) => assignment });
   const opened = await port.open({ ...selected, agentOverrides: { provider: 'codex', model: 'selected-model' } }, delivery);
   const submit = (text: string, requestId: string) => port.submit({ attachmentId: opened.attachmentId, requestId, speaker: selected.speaker,
     command: { kind: 'message', text } });

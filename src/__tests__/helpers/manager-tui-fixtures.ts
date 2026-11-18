@@ -45,6 +45,10 @@ export class ManagerClientDouble {
     }
     return { kind: 'accepted', operationId };
   });
+  getImageDirectory = vi.fn<import('../../features/manager/conversationIpcClient.js').ConversationIpcClient['getImageDirectory']>()
+    .mockRejectedValue(new Error('No image directory configured'));
+  prepareImage = vi.fn<import('../../features/manager/conversationIpcClient.js').ConversationIpcClient['prepareImage']>()
+    .mockRejectedValue(new Error('No prepared image configured'));
   refresh = vi.fn(async (): Promise<void> => {});
   close = vi.fn();
   change(change: Partial<ConversationClientSnapshot>): void {

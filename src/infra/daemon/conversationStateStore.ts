@@ -27,6 +27,7 @@ const receiptChange = z.object({
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessageDigest: messageDigest.nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
   || value.interruptedMessageDigest !== undefined);
 const receipt = z.union([
@@ -100,7 +101,8 @@ export class ConversationStateStore {
         ...(record.contextKey === undefined ? {} : { contextKey: record.contextKey }),
         ...(record.agentOverrides === undefined ? {} : { agentOverrides: record.agentOverrides }) },
       revision: record.revision, pending: record.pending, approval: record.approval,
-      ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }) };
+      ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }),
+      ...(record.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: record.interruptedImageAttachmentIds }) };
   }
 
   async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
@@ -212,6 +214,7 @@ export class ConversationStateStore {
           ...(change.proposal === undefined ? {} : { revision: change.proposal.revision, pending: change.proposal.pending }),
           ...(change.approval === undefined ? {} : { approval: change.approval }),
           ...(change.interruptedMessage === undefined ? {} : { interruptedMessage: change.interruptedMessage }),
+          ...(change.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: change.interruptedImageAttachmentIds }),
         });
         if (!checked.success) return { kind: 'error', code: 'forbidden', message: 'Conversation change violates saved assignment or proposal' };
         const nextVersion = stored.metadata.version + 1;

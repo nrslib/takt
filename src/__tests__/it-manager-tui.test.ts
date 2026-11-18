@@ -1,8 +1,11 @@
 import './helpers/manager-tui-input.js';
+import './helpers/manager-tui-images.js';
 import './helpers/manager-tui-startup.js';
 import './helpers/manager-tui-selection.js';
 import { randomUUID } from 'node:crypto';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+
+vi.mock('../features/interactive/clipboardImage.js', () => ({ readClipboardImage: vi.fn() }));
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import { conversationTransferFrames } from '../features/daemon/conversationFrames.js';
 import type { ConversationState } from '../features/manager/conversationPort.js';
