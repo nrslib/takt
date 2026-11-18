@@ -44,7 +44,9 @@
 `--runtime-assignment` はインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
 選択により変わるのは defaults/targets だけで、共通 section と既存 provider/model/auto-strategy override の優先順位は維持します。
 未定義名や有効な runtime provider section がない場合は agent 起動前に停止し、指定名と候補一覧（または定義なし）を表示します。
-選択は設定やタスクレコードへ保存せず、requeue/retry/instruct で過去の指定を復元しません。
+`--runtime-assignment` の選択は設定ファイルにもタスクレコードにも書かれません。この点は変わりません。
+タスクが `runtime_assignment` を持つのは、manager が `takt_enqueue_goal_task` で指定したときだけです。
+`--runtime-assignment` を指定した起動では、その指定がタスクに保存された `runtime_assignment` より優先されます。
 未指定時は従来の directories 選択を使います。
 
 ```sh

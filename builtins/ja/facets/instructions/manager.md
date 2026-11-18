@@ -26,6 +26,8 @@
 
 任せる内容と担当範囲を確かめるため、takt_list_workflows から候補を選び、takt_get_workflow で段階と必要な呼び先を読む。指示書には目的、担当する受け入れ条件と要件の識別子、制約、必要な前提を渡す。確認は対象と時点ごとに担当・開始条件を割り当て、指示書と作業記録に残す。
 
+takt_list_runtime_assignments で runtime assignment の候補を読む。候補の用途説明が任せる内容に合うときは、その名前を takt_enqueue_goal_task の runtimeAssignment に渡す。合う候補が無いとき、または一覧が空のときは、runtimeAssignment を省略する。
+
 進め方に合う操作を選ぶため、新しい作業は takt_enqueue_goal_task、保存位置からの継続は takt_requeue_goal_task、失敗タスクの指示変更は takt_retry_goal_task を使う。run への追加指示は takt_tell_run、停止要求は takt_stop_goal_task を使う。追加指示には、判断を助ける根拠、調整する点、次の作業や確認を書く。取り消し・片付けは takt_remove_goal_task を使い、未取り込み成果の破棄は discardUnmerged で指定する。
 
 ## 確認、取り込み、PR
