@@ -1367,6 +1367,10 @@ describe('goal branch correction', () => {
   const changeSummary = { filesChanged: 1, additions: 2, deletions: 1, files: [], truncated: false, totalsTruncated: false };
   const branchChangedDuringCheck = 'Goal integration branch changed during the completion check';
 
+  beforeEach(() => {
+    doubles.tasks.mockReturnValue([]);
+  });
+
   it('corrects the integration branch of a created goal and saves the reason in the work log', async () => {
     const result = await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', 'プルリクエストの宛先が変わったため', undefined);
     expect(goal.integrationBranch).toBe('integration/takt-mcp');
@@ -1420,6 +1424,24 @@ describe('goal branch correction', () => {
     const before = structuredClone(goal);
     await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow('bad branch');
     expect(goal).toEqual(before);
+  });
+
+  it('rejects while a PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([{ name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'running' }]);
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow('A PR merge task is running for this goal');
+    expect(goal).toEqual(before);
+  });
+
+  it('corrects the branches when no PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([
+      { name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'completed' },
+      { name: 'merge-pr-1951', goalId: 'another-goal', mergeTask: true, status: 'running' },
+      { name: 'task', goalId: goal.id, status: 'running' },
+    ]);
+    await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
   });
 
   it('does not complete a goal when the integration branch changes during the completion check', async () => {

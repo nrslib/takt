@@ -307,6 +307,11 @@ export async function updateGoalBranches(
     if (current.executionStatus === 'paused') throw new Error('Goal is paused. Resume it before continuing work.');
     if (current.executionStatus === 'aborted') throw new Error('Goal is aborted. Work cannot continue for this goal.');
     if (integrationBranch === current.branch) throw new Error('The integration branch must differ from the goal branch.');
+    const mergeTaskRunning = new TaskRunner(cwd).listTaskStateItems()
+      .some((task) => task.goalId === goalId && task.mergeTask === true && task.status === 'running');
+    if (mergeTaskRunning) {
+      throw new Error('A PR merge task is running for this goal. Stop it or wait for it to finish before correcting the branches.');
+    }
     const completion = current.completion === undefined ? undefined : { ...current.completion, targetBranch: integrationBranch };
     return appendGoalWorkLog({ ...current, integrationBranch, ...(completion === undefined ? {} : { completion }) }, { summary: reason });
   });
