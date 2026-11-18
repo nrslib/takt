@@ -17,7 +17,7 @@ export class DaemonNotifications {
   private readonly directory: string;
   private readonly lock = new FileAsyncLock();
   /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
-  private readonly index: { stamp: string | undefined; values: Map<string, Notification> } = { stamp: undefined, values: new Map() };
+  private readonly index: { stamp: string | undefined; directoryId: string | undefined; values: Map<string, Notification> } = { stamp: undefined, directoryId: undefined, values: new Map() };
   /** 走査同士が索引を同時に書き換えないよう、refresh() の実行を直列化するための待ち行列。 */
   private pending = Promise.resolve();
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
@@ -59,6 +59,12 @@ export class DaemonNotifications {
     const info = await stat(this.directory);
     const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
     if (stamp === this.index.stamp) return [...this.index.values.values()];
+    const directoryId = JSON.stringify([info.dev, info.ino]);
+    if (directoryId !== this.index.directoryId) {
+      // ディレクトリが作り直されると、同じ名前のファイルでも中身は別物になるため、読み込み済みの通知は使い回せない。
+      this.index.values.clear();
+      this.index.directoryId = directoryId;
+    }
     const names = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
