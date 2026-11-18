@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { readEntirePrivateFile } from '../infra/daemon/privateFile.js';
@@ -13,7 +13,7 @@ vi.mock('../infra/daemon/privateFile.js', async (importOriginal) => {
 
 const signal = new AbortController().signal;
 const fileName = (id: string): string => `${createHash('sha256').update(id).digest('hex')}.json`;
-const readNames = (): string[] => vi.mocked(readEntirePrivateFile).mock.calls.map(([path]) => path.split('/').at(-1) ?? '');
+const readNames = (): string[] => vi.mocked(readEntirePrivateFile).mock.calls.map(([path]) => basename(path));
 
 async function collect(notifications: DaemonNotifications) {
   const values = [];
@@ -94,6 +94,30 @@ describe('DaemonNotifications', () => {
 
     expect(await notifications.save({ id: 'second', message: 'two', subject: { key: 'goal', state: 'done' } }, signal)).toBe(false);
     expect((await readdir(directory)).filter((name) => name.endsWith('.json'))).toEqual([fileName('first')]);
+  });
+
+  it('recreates the directory when it is removed after earlier reads', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await collect(notifications);
+    await rm(directory, { recursive: true, force: true });
+
+    await expect(collect(notifications)).resolves.toEqual([]);
+    expect(await notifications.save({ id: 'second', message: 'two' }, signal)).toBe(true);
+    expect((await collect(notifications)).map((value) => value.id)).toEqual(['second']);
+  });
+
+  it('keeps results consistent while a save overlaps reads', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await collect(notifications);
+
+    const pending = [collect(notifications), collect(notifications), collect(notifications)];
+    await notifications.save({ id: 'second', message: 'two' }, signal);
+    const results = await Promise.all(pending);
+
+    for (const values of results) expect(values.map((value) => value.id)).toContain('first');
+    expect((await collect(notifications)).map((value) => value.id).sort()).toEqual(['first', 'second']);
   });
 
   it('keeps failing on a broken notification file', async () => {
