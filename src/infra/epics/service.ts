@@ -209,3 +209,11 @@ export async function assertRepositoryHasNoActiveEpics(owner: EpicOwner, reposit
   const references = epics.filter((epic) => epic.status === 'active' && epic.members.some((member) => member.repositoryDirectory === repositoryDirectory));
   if (references.length > 0) throw new Error(`Repository is referenced by active Epics: ${references.map(({ id }) => id).join(', ')}. Remove the member reference, complete or abort the Epic first.`);
 }
+
+// 完了・中止したエピックも、表示のたびにメンバーのゴールを読むため、状態を問わず断る。
+export async function assertGoalHasNoEpicReferences(owner: EpicOwner, goal: EpicMember): Promise<void> {
+  const epics = await listEpics(owner);
+  const references = epics.filter((epic) => [...epic.members, ...epic.targets]
+    .some((entry) => entry.repositoryDirectory === goal.repositoryDirectory && entry.goalId === goal.goalId));
+  if (references.length > 0) throw new Error(`Goal is referenced by Epics: ${references.map(({ id }) => id).join(', ')}. A goal referenced by an Epic cannot be deleted.`);
+}

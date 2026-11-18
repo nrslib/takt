@@ -8,7 +8,7 @@ import { GoalQuestionSchema } from '../../infra/goals/schema.js';
 import { DaemonDisplayFiles, readDisplayFile } from '../../infra/daemon/displayFiles.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
-import { listWatchEntries } from './watchers/files.js';
+import { isMissing, listWatchEntries } from './watchers/files.js';
 import { DaemonRouting, projectKey } from './routing.js';
 import { projectManagerDisplayEvents } from '../manager/savedEvents.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
@@ -56,7 +56,13 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
       for (const entry of await listWatchEntries(root)) {
         if (!entry.isDirectory()) continue;
         reading = join(root, entry.name, 'goal.json');
-        const goal = await files.goal(reading);
+        let goal;
+        try { goal = await files.goal(reading); }
+        catch (error) {
+          // 列挙のあとに削除されたゴールは、読み取りの失敗ではなく無いものとして扱う。
+          if (isMissing(error)) continue;
+          throw error;
+        }
         if (goal.id !== entry.name) throw new Error('Display goal identity mismatch');
         yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
           repositoryDirectory: directory, awaitingHumanMerge: isGoalAwaitingHumanMerge(goal, tasks) } };

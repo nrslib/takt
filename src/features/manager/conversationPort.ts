@@ -16,7 +16,7 @@ export type ConversationCommand =
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack' }
-  | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
+  | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal' | 'delete_goal'; goalId: string }
   | { kind: 'abort_turn'; operationId: string; generation?: number };
 export type QuestionTarget = { goalId: string; repositoryDirectory: string } | { goalId: null; owner: InquiryOwner };
 export interface ConversationState {
