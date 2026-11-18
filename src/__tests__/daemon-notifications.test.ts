@@ -49,7 +49,7 @@ describe('DaemonNotifications', () => {
     expect(readEntirePrivateFile).not.toHaveBeenCalled();
   });
 
-  it('reads only the newly saved file after save()', async () => {
+  it('does not read any file again after save()', async () => {
     const notifications = new DaemonNotifications(root);
     await notifications.save({ id: 'first', message: 'one' }, signal);
     await collect(notifications);
@@ -59,7 +59,7 @@ describe('DaemonNotifications', () => {
     const values = await collect(notifications);
 
     expect(values.map((value) => value.id).sort()).toEqual(['first', 'second']);
-    expect(readNames()).toEqual([fileName('second')]);
+    expect(readEntirePrivateFile).not.toHaveBeenCalled();
   });
 
   it('reflects files added and removed by another writer', async () => {
@@ -105,6 +105,32 @@ describe('DaemonNotifications', () => {
     await expect(collect(notifications)).resolves.toEqual([]);
     expect(await notifications.save({ id: 'second', message: 'two' }, signal)).toBe(true);
     expect((await collect(notifications)).map((value) => value.id)).toEqual(['second']);
+  });
+
+  it('reads the new message after a saved file is removed and the same id is saved again', async () => {
+    const notifications = new DaemonNotifications(root);
+    await notifications.save({ id: 'first', message: 'one' }, signal);
+    await collect(notifications);
+    await unlink(join(directory, fileName('first')));
+
+    await notifications.save({ id: 'first', message: 'two' }, signal);
+
+    expect(await collect(notifications)).toEqual([{ id: 'first', message: 'two' }]);
+  });
+
+  it('keeps returning every notification after the retained payload reaches its limit', async () => {
+    const notifications = new DaemonNotifications(root);
+    const message = 'n'.repeat(2 * 1024 * 1024);
+    for (let i = 0; i < 9; i += 1) await notifications.save({ id: `bulk-${i}`, message }, signal);
+    const first = await collect(notifications);
+    expect(first).toHaveLength(9);
+    vi.mocked(readEntirePrivateFile).mockClear();
+
+    const second = await collect(notifications);
+
+    expect(second.map((value) => value.id).sort()).toEqual(first.map((value) => value.id).sort());
+    // The retained payload is bounded, so the files that did not fit are read again.
+    expect(vi.mocked(readEntirePrivateFile).mock.calls.length).toBeGreaterThan(0);
   });
 
   it('reads the new content when the directory is recreated and the same id is saved again', async () => {
