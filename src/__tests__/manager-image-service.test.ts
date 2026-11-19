@@ -5,10 +5,10 @@ import { ManagerImageAttachments, managerImageDirectory, resolveManagerImages } 
 
 const state = vi.hoisted(() => ({
   metadata: { images: [] as { id: string; owner: string; placeholder: string; fileName: string }[], lastIndex: 0 },
-  read: vi.fn(), save: vi.fn(), write: vi.fn(), unlink: vi.fn(), lstat: vi.fn(), ensure: vi.fn(),
+  read: vi.fn(), save: vi.fn(), write: vi.fn(), ignore: vi.fn(async () => undefined), unlink: vi.fn(), lstat: vi.fn(), ensure: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => ({ lstat: state.lstat, unlink: state.unlink }));
-vi.mock('../infra/daemon/privateFile.js', () => ({ readPrivateFile: state.read, writeNewPrivateFile: state.write }));
+vi.mock('../infra/daemon/privateFile.js', () => ({ readPrivateFile: state.read, writeNewPrivateFile: state.write, writePrivateFile: state.ignore }));
 vi.mock('../features/manager/conversationErrors.js', () => ({ ConversationError: class extends Error {
   constructor(readonly code: string) { super(code); }
 } }));
@@ -51,6 +51,7 @@ it('publishes a new image reference only after its bytes and metadata are saved'
   const saved = await new ManagerImageAttachments(references).prepare(cwd, cid, owner, join(cwd, '.takt', 'tmp', 'images', 'source', 'attachments', 'image-1.png'));
   expect(saved).toEqual({ id: expect.any(String), placeholder: '[Image #1]', path: path() });
   expect(state.write).toHaveBeenCalledExactlyOnceWith(path(), png);
+  expect(state.ignore).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid, '.gitignore'), '*\n');
   expect(state.save).toHaveBeenCalledExactlyOnceWith({ images: [{ ...stored(), id: saved.id }], lastIndex: 1 });
   expect(state.write.mock.invocationCallOrder[0]).toBeLessThan(state.save.mock.invocationCallOrder[0]!);
 });
@@ -89,6 +90,55 @@ it('retains accepted and other-owner images while unpublishing and deleting only
   expect(state.metadata).toEqual({ images: [accepted, other], lastIndex: 3 });
   expect(state.unlink).toHaveBeenCalledExactlyOnceWith(path());
   expect(state.save.mock.invocationCallOrder[0]).toBeLessThan(state.unlink.mock.invocationCallOrder[0]!);
+});
+
+it('keeps a failed deletion unavailable and retries removing its bytes after reconstruction', async () => {
+  state.metadata = { images: [stored()], lastIndex: 1 };
+  const references = { hasImageReference: vi.fn(async () => false) };
+  const failure = new Error('image removal failed');
+  state.unlink.mockRejectedValueOnce(failure);
+  const images = new ManagerImageAttachments(references);
+
+  await expect(images.release(cwd, cid, owner)).rejects.toBe(failure);
+  await expect(resolveManagerImages(cwd, cid, [imageId])).rejects.toThrow();
+  const accept = vi.fn(async () => undefined);
+  await expect(images.accept(cwd, cid, owner, '[Image #1]', [imageId], accept)).rejects.toThrow();
+  expect(accept).not.toHaveBeenCalled();
+
+  await new ManagerImageAttachments(references).release(cwd, cid, owner);
+
+  expect(state.unlink.mock.calls).toEqual([[path()], [path()]]);
+  await expect(resolveManagerImages(cwd, cid, [imageId])).rejects.toThrow();
+  expect(state.metadata.lastIndex).toBe(1);
+});
+
+it('does not delete or unpublish an image when checking its references fails', async () => {
+  state.metadata = { images: [stored()], lastIndex: 1 };
+  const failure = new Error('reference records unreadable');
+  const images = new ManagerImageAttachments({ hasImageReference: async () => { throw failure; } });
+
+  await expect(images.release(cwd, cid, owner)).rejects.toBe(failure);
+
+  expect(state.unlink).not.toHaveBeenCalled();
+  expect(state.save).not.toHaveBeenCalled();
+  expect(await resolveManagerImages(cwd, cid, [imageId])).toEqual([
+    { id: imageId, placeholder: '[Image #1]', path: path() },
+  ]);
+});
+
+it('keeps connected drafts during cleanup and removes them after their owner disconnects', async () => {
+  const other = { ...stored(), id: '33333333-3333-4333-8333-333333333333', owner: imageId,
+    placeholder: '[Image #2]', fileName: 'image-2.png' };
+  state.metadata = { images: [stored(), other], lastIndex: 2 };
+  const images = new ManagerImageAttachments({ hasImageReference: async () => false });
+
+  await images.cleanup(cwd, cid, [imageId]);
+  expect(state.metadata.images).toEqual([other]);
+  expect(state.unlink).toHaveBeenCalledExactlyOnceWith(path());
+
+  await images.cleanup(cwd, cid, []);
+  expect(state.metadata.images).toEqual([]);
+  expect(state.unlink.mock.calls).toEqual([[path()], [path('image-2.png')]]);
 });
 
 it('rejects unavailable image bytes when resolving an existing ID and returns nothing for no IDs', async () => {

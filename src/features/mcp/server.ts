@@ -80,6 +80,8 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
 import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../manager/workspaceOperations.js';
 import type { ManagerMcpConnection } from '../manager/managerMcpConnection.js';
+import { managerImageDirectory } from '../manager/imageAttachments.js';
+import { conversationId } from '../../infra/conversations/identity.js';
 
 
 export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
@@ -175,6 +177,7 @@ export function createTaktMcpServer(
         try {
           const deps = useWorkflowConfig ? {
             ...currentDeps,
+            managerImageSource: { root: await managerImageDirectory(managerIdentity, globalConfigDirectory), conversationId: conversationId(managerIdentity) },
             managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,
           } : currentDeps;
           return await action(deps, assignment);

@@ -193,6 +193,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
+                  ...(assignment.kind === 'daemon' ? {} : changed ? { imageAttachmentIds: [] }
+                    : state.current.session.imageAttachmentIds === undefined ? {} : { imageAttachmentIds: state.current.session.imageAttachmentIds }),
                   contextKey: resolved.contextKey,
                   ...(agentOverrides === undefined ? {} : { agentOverrides }) } });
               }
@@ -208,6 +210,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             ])];
             const imageAttachments = imageIds.length === 0 ? [] : await resolveManagerImages(
               await managerImageDirectory(identity, configDirectory), input.turn.conversationId, imageIds);
+            if (!patrol && assignment.kind !== 'daemon' && imageIds.length > 0 && state.current.session.imageAttachmentIds !== undefined) {
+              await state.save({ session: { ...state.current.session,
+                imageAttachmentIds: [...new Set([...state.current.session.imageAttachmentIds, ...imageIds])] } });
+            }
             const prompt = buildManagerTurnPrompt({ ...(imageAttachments.length === 0 ? {} : { imageAttachments }), lang: language, event: promptEvent, question,
               interruptedMessage: verify ? null : interruptedMessage });
             const output = await resolved.executor.execute({
@@ -228,7 +234,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 } as IdentifiedToolActivityEvent });
               },
               patrol,
-              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },
+              recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null,
+                ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) } }) },
             });
             if (verify) verificationMessage = output.message;
             interruptedMessageDelivered = interruptedMessage != null && !verify;
@@ -251,7 +258,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               pending = { revision: state.current.revision, repositoryDirectory, summary };
             }
             return { kind: 'completed', result: { kind: 'reply', message: output.message }, ...(patrol ? {} : { change: state.change({
-              session: { ...state.current.session, sessionId: output.sessionId ?? null },
+              session: { ...state.current.session, sessionId: output.sessionId ?? null,
+                ...(assignment.kind === 'daemon' || state.current.session.imageAttachmentIds === undefined && state.current.session.sessionId !== null ? {}
+                  : { imageAttachmentIds: output.sessionId === undefined ? []
+                    : [...new Set([...(state.current.session.imageAttachmentIds ?? []), ...imageIds])] }) },
               ...(interruptedMessageDelivered ? { interruptedMessage: null,
                 ...(state.current.interruptedImageAttachmentIds === undefined ? {} : { interruptedImageAttachmentIds: [] }) } : {}),
               ...(human && assignment.kind !== 'daemon' && !verify ? { proposal: { revision: state.current.revision, pending } } : {}),

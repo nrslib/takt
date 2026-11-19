@@ -117,7 +117,7 @@ const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string();
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
-  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), imageAttachmentIds: z.array(z.uuid()).optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessage: text.nullable().optional(),

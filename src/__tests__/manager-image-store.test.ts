@@ -5,6 +5,7 @@ import { ConversationImageStore, ensureImageDirectory } from '../infra/conversat
 import * as privateFiles from '../infra/daemon/privateFile.js';
 import { conversationId } from '../infra/conversations/identity.js';
 
+const locks = vi.hoisted(() => ({ exclusive: vi.fn(), acquisition: vi.fn() }));
 const io = vi.hoisted(() => ({ mkdir: vi.fn(), chmod: vi.fn(), lstat: vi.fn(), open: vi.fn(), rename: vi.fn(), unlink: vi.fn() }));
 vi.mock('node:fs', async (original) => {
   const { constants } = await original<typeof import('node:fs')>();
@@ -12,7 +13,8 @@ vi.mock('node:fs', async (original) => {
 });
 vi.mock('node:fs/promises', () => io);
 vi.mock('../infra/daemon/lock.js', () => ({ FileAsyncLock: class {
-  exclusive<T>(_path: string, action: () => Promise<T>) { return action(); }
+  exclusive = locks.exclusive;
+  exclusiveWithAcquisitionTimeout = locks.acquisition;
 } }));
 const cwd = resolve('/managed/repository');
 const cid = conversationId({ kind: 'repository', repositoryDirectory: cwd });
@@ -21,11 +23,24 @@ const image = { id, owner: '22222222-2222-4222-8222-222222222222', placeholder: 
 const directory = () => ({ isDirectory: () => true, isSymbolicLink: () => false });
 beforeEach(() => {
   vi.restoreAllMocks();
+  for (const lock of Object.values(locks)) lock.mockReset().mockImplementation((_path: string, action: () => Promise<unknown>) => action());
   for (const mock of Object.values(io)) mock.mockReset();
   io.mkdir.mockResolvedValue(undefined); io.chmod.mockResolvedValue(undefined);
   io.lstat.mockResolvedValue(directory()); io.unlink.mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each(['ordinary', 'publication'] as const)('uses the same private lock with the correct %s deadline boundary', async (kind) => {
+  const images = new ConversationImageStore(cwd, cid);
+  const action = vi.fn(async () => 42);
+  expect(await (kind === 'ordinary' ? images.exclusive(action) : images.exclusiveWithAcquisitionTimeout(action))).toBe(42);
+  const chosen = kind === 'ordinary' ? locks.exclusive : locks.acquisition;
+  const other = kind === 'ordinary' ? locks.acquisition : locks.exclusive;
+  expect(chosen).toHaveBeenCalledExactlyOnceWith(join(cwd, '.takt', 'manager-images', cid, '.lock'), action,
+    { signal: expect.any(AbortSignal), timeoutMs: 5000 });
+  expect(other).not.toHaveBeenCalled();
+  expect(io.chmod).toHaveBeenCalledWith(join(cwd, '.takt', 'manager-images', cid), 0o700);
+});
 
 it('restores the image metadata and derives only managed attachment paths', async () => {
   const metadata = { images: [image], lastIndex: 7 };
