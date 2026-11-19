@@ -150,42 +150,44 @@ describe('compaction recovery limit', () => {
   it.each<[string, (index: number) => Turn]>([
     ['runs a tool without writing a note', toolOnlyTurn],
     ['writes a note and runs a tool', workingTurn],
-  ])('stops after three recoveries even when each recovery %s', async (_kind, working) => {
+  ])('keeps recovering while each recovery %s', async (_kind, working) => {
     const { recoverFromCompaction } = provideTurns([
-      working(1), working(2), working(3), working(4),
+      working(1), working(2), working(3), working(4), working(5),
+      (options) => finalAnswer(options, 'Review complete.'),
     ]);
 
     const response = await runPhase1();
 
-    expect(response).toMatchObject({ status: 'error', error: 'Provider compaction recovery limit reached', sessionId: 'thread' });
-    expect(recoverFromCompaction).toHaveBeenCalledTimes(3);
+    expect(response).toMatchObject({ status: 'done', content: 'Review complete.', sessionId: 'thread' });
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
   });
 
   it.each<[string, 'openFails' | 'unavailable']>([
     ['the progress notes store cannot be opened', 'openFails'],
     ['saving progress notes fails', 'unavailable'],
-  ])('keeps the same recovery limit when %s', async (_kind, failure) => {
+  ])('still resets the recovery count on tool use when %s', async (_kind, failure) => {
     storeState[failure] = true;
     const { recoverFromCompaction } = provideTurns([
-      workingTurn(1), workingTurn(2), workingTurn(3), workingTurn(4),
+      workingTurn(1), workingTurn(2), workingTurn(3), workingTurn(4), workingTurn(5),
+      (options) => finalAnswer(options, 'Review complete.'),
     ]);
 
     const response = await runPhase1();
 
     expect(storeState.log).toBeUndefined();
-    expect(response).toMatchObject({ status: 'error', error: 'Provider compaction recovery limit reached', sessionId: 'thread' });
-    expect(recoverFromCompaction).toHaveBeenCalledTimes(3);
+    expect(response).toMatchObject({ status: 'done', content: 'Review complete.', sessionId: 'thread' });
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
   });
 
-  it('does not reset the recovery count after a tool call', async () => {
+  it('resets the recovery count on tool use and stops after three subsequent recoveries without tools', async () => {
     const { recoverFromCompaction } = provideTurns([
-      stalledTurn, stalledTurn, toolOnlyTurn(1), stalledTurn,
+      stalledTurn, stalledTurn, stalledTurn, toolOnlyTurn(1), stalledTurn, stalledTurn, stalledTurn,
     ]);
 
     const response = await runPhase1();
 
     expect(response).toMatchObject({ status: 'error', error: expect.any(String) });
-    expect(recoverFromCompaction).toHaveBeenCalledTimes(3);
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(6);
   });
 
   it.each<[string, Turn]>([

@@ -1729,7 +1729,7 @@ Codex の developer instructions には、TAKT が各 turn に渡す現在の担
 
 Codex が Phase 1 で `compacted` event を記録し、同じ session の turn が完了した場合、TAKT は応答が現在の担当ステップを完了したか判定します。判定には MCP ツールを持たない独立した読み取り専用の Codex session を使います。具体的な指摘を伴う REJECT もレビューの完了として扱い、元の応答を返します。担当を見失った場合は作業中の thread を resume し、元の Phase 1 指示と現在の担当・権限を再提示します。判定に失敗した場合や結果が不正な場合は、候補応答を採用せず provider call を失敗にします。
 
-復帰 turn の上限は Phase 1 の呼び出しごとに累計3回です。ツールを使っても回数はリセットしません。上限後の compaction でさらに復帰が必要なら失敗を返します。progress notes の利用や保存の成否は上限に影響しません。assistant の応答文から compaction を推測することはありません。この event を発行しない provider や復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理です。
+復帰 turn でツールを使わず再び compaction が起き、さらに復帰が必要になる状態が3回連続すると失敗を返します。復帰 turn でツールを使うと回数をリセットするため、復帰の累計回数には上限を設けません。progress notes の利用や保存の成否は回数に影響しません。assistant の応答文から compaction を推測することはありません。この event を発行しない provider や復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理です。
 
 #### Codex の fast mode (`fast_mode`)
 

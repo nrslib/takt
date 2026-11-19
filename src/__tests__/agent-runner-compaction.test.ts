@@ -205,31 +205,32 @@ describe('AgentRunner compaction recovery', () => {
     ]]);
   });
 
-  it('limits TAKT recovery calls to three even when each recovery uses a tool', async () => {
+  it('keeps recovering beyond three attempts when recoveries use tools and returns the completed review', async () => {
     const onStream = vi.fn();
     const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
       options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
       options.onStream?.({ type: 'result', data: { result: 'unresolved', sessionId: 'current-thread', success: true } });
       return makeResponse('unresolved', 'current-thread');
     });
-    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options) => {
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options): Promise<AgentResponse> => {
+      const content = recoverFromCompaction.mock.calls.length === 5 ? 'REJECT: review complete' : 'unresolved';
       options.onStream?.({ type: 'tool_use', data: { tool: 'Read', input: {}, id: 'read' } });
       options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
-      options.onStream?.({ type: 'result', data: { result: 'unresolved', sessionId: 'current-thread', success: true } });
-      return makeResponse('unresolved', 'current-thread');
+      options.onStream?.({ type: 'result', data: { result: content, sessionId: 'current-thread', success: true } });
+      return makeResponse(content, 'current-thread');
     });
     const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
-      async () => ({ decision: 'needs_recovery' }),
+      async (_instruction, response) => ({ decision: response.content === 'unresolved' ? 'needs_recovery' : 'complete' }),
     );
     getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
 
     const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
 
-    expect(result).toMatchObject({ status: 'error', failureCategory: 'provider_error' });
-    expect(recoverFromCompaction).toHaveBeenCalledTimes(3);
-    expect(assessCompactedResponse).toHaveBeenCalledTimes(4);
+    expect(result).toMatchObject({ status: 'done', content: 'REJECT: review complete' });
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
+    expect(assessCompactedResponse).toHaveBeenCalledTimes(6);
     expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
-      expect.objectContaining({ type: 'result', data: expect.objectContaining({ success: false, sessionId: 'current-thread' }) }),
+      { type: 'result', data: { result: 'REJECT: review complete', success: true, sessionId: 'current-thread' } },
     ]]);
   });
 

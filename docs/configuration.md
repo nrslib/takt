@@ -1767,7 +1767,7 @@ Codex receives a stable developer contract that gives TAKT's current turn instru
 
 When Codex records a `compacted` event during Phase 1 and the same session returns a completed turn, TAKT checks whether that response completes the assigned step. The check runs in a separate, read-only structured Codex session without MCP tools. A completed review, including a concrete REJECT finding, is returned as the original response. If the agent has lost its assignment, TAKT resumes the working thread with the original Phase 1 instruction, current assignment and permissions. A failed or invalid check fails the provider call rather than accepting the candidate.
 
-TAKT allows at most three recovery turns per Phase 1 call. Tool use does not reset this count. If another compaction requires recovery after that limit, the call fails. Progress notes remain available to the resumed step, but their availability does not change the limit. TAKT does not infer compaction from assistant text. Providers without the event or recovery capability keep their existing behavior. This automatic recovery is separate from workflow-level `session: compact`.
+The call fails after three consecutive recovery turns that use no tools, compact again, and still require recovery. Tool use during a recovery turn resets this count, so there is no limit on the total number of recovery turns. Progress notes remain available to the resumed step, but their availability does not change the count. TAKT does not infer compaction from assistant text. Providers without the event or recovery capability keep their existing behavior. This automatic recovery is separate from workflow-level `session: compact`.
 
 #### Codex fast mode (`fast_mode`)
 

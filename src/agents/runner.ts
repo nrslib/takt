@@ -47,7 +47,7 @@ import type { StreamEvent } from '../shared/types/provider.js';
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
-const MAX_COMPACTION_RECOVERIES = 3;
+const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
 
 function withCompactionUsage(response: AgentResponse, usages: readonly (ProviderUsageSnapshot | undefined)[]): AgentResponse {
   if (usages.length === 1) return response;
@@ -303,17 +303,21 @@ export class AgentRunner {
     }
 
     let recovering = false;
-    let recoveryCount = 0;
+    let recoveriesWithoutProgress = 0;
     let currentOptions = options;
     const usages: (ProviderUsageSnapshot | undefined)[] = [];
     while (true) {
       let compactionDetected = false;
       let compactionSessionId: string | undefined;
       let resultEvent: StreamEvent | undefined;
+      let calledTool = false;
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
           recorder.observe(event);
+          if (event.type === 'tool_use') {
+            calledTool = true;
+          }
           if (event.type === 'context_compacted') {
             compactionDetected = true;
             compactionSessionId = event.data.sessionId;
@@ -337,6 +341,9 @@ export class AgentRunner {
       if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
         if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
         return withCompactionUsage(response, usages);
+      }
+      if (recovering) {
+        recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
       }
 
       let needsRecovery: boolean = true;
@@ -367,7 +374,7 @@ export class AgentRunner {
         if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
         return withCompactionUsage(response, usages);
       }
-      if (recoveryCount === MAX_COMPACTION_RECOVERIES) {
+      if (recoveriesWithoutProgress === MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS) {
         const error = 'Provider compaction recovery limit reached';
         currentOptions.onStream?.({
           type: 'result',
@@ -381,7 +388,6 @@ export class AgentRunner {
         });
         return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory: 'provider_error' }, usages);
       }
-      recoveryCount += 1;
       currentOptions = { ...currentOptions, sessionId: responseSessionId };
       recovering = true;
     }
