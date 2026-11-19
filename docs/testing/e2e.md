@@ -36,7 +36,7 @@ daemon の mock E2E（`e2e/specs/daemon.e2e.ts`）は、専用入口からの起
 - `npm run test:e2e:provider:claude-headless`: `TAKT_E2E_PROVIDER=claude-headless` で headless CLI を検証。
 - `npm run test:e2e:provider:claude-sdk`: `TAKT_E2E_PROVIDER=claude-sdk` で実行。
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
-- `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
+- `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `goal-specification-file` / `worktree`）。
 - `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（未指定時の既定は `TAKT_E2E_MODEL=kimi-code-plan-global/k3`、`TAKT_OPENCODE_VERSION=v2`）。v1 CLI で実行する場合は `TAKT_OPENCODE_VERSION=v1` を指定する。
 - `TAKT_DEEPSEEK_HARNESS_LIVE=1 npm run test:deepseek-harness:live`: DeepSeek Harness の実 API を使う opt-in smoke（`DEEPSEEK_API_KEY` と対応 runtime が必要。CI では実行しない。この移行作業では実 API 呼び出しを実行しない）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
@@ -61,6 +61,30 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - `takt run` を実行する。
     - `README.md` に行が追加されることを確認する。
     - 実行後にタスクが `tasks.yaml` で `completed` ステータスになることを確認する。
+- Goal specification file（`e2e/specs/goal-specification-file.e2e.ts`）
+  - 目的: ゴールの仕様ファイルを実 provider が読み、識別子だけを渡した受け入れ条件を満たせることを確認（provider 共通 suite と Cursor suite）。GitHub は不要。
+  - LLM: 実 provider を呼び出す（API 課金あり）。
+  - 手順（ユーザー行動/コマンド）:
+    - `createLocalRepo()` と `createIsolatedEnv()` で一時環境を用意し、`GoalStore.create()` でランダム値を含む gherkin の AC-2 を保存する。
+    - 本番の `enqueueTaktGoalTask()` と同じく `worktree: true`、ゴールのブランチを `base_branch` に指定する。`prepareTaskSpecDirectory()` と `TaskRunner.addTask()` で、本文が AC-2 の達成指示だけのタスクを `tasks.yaml` に保存する。
+    - 既存の単一ステップ `simple.yaml` を使い、`takt run` を実行する。
+    - 成功終了とタスクの完了、隔離クローンの `answer.txt` の1行目とランダム値の一致を確認する。
+    - タスク本文・元の `order.md`・`tasks.yaml` に値がなく、実行時の `order.md` にも値がないこと、クローンに元のゴール記録がなく、`context/task/specifications/gherkin.feature` に保存した仕様があることを確認する。
+    - `TAKT_LOGGING_PROVIDER_EVENTS=true` で、完了タスクの `runSlug` に対応するクローン内の `.takt/runs/<runSlug>/logs/*-provider-events.jsonl` を読む。通常のセッションログや observability の shadow log ではなく、共通の provider イベントログを証拠にする。
+    - イベントの記録順で、`tool_output` の `data.output` と、成功・失敗を問わない `tool_result` の `data.content` から、AC-2 のランダム値が最初に現れるイベントを選ぶ。そのイベントより前にある同じ `data.id` の `tool_use` が仕様ファイルを対象とすることを確認する。さらに、その初出イベント以降に同じ `data.id` の `tool_result` が `isError: false` で記録されていることを別に確認し、仕様ファイルの読み取り成功を確かめる。呼び出し先の判定には `data.input` を再帰的に取り出し、シェルの区切り・引用符で分割してパス区切りと `.` / `..` を正規化する。別経路から先に値を得て後から仕様ファイルを読んだ実行、プロンプト中のパスや最終回答だけでは合格にしない。時刻での並べ替えは行わない。
+    - 補助として、全 `tool_use` の引数について `.takt/goals` またはその配下を指すパスがないことを確認する（元リポジトリの絶対パス・相対パスも対象）。ログ欠落、ツール呼び出しなし、値を含む出力・結果なし、対応する仕様ファイルの呼び出しなし、その読み取りの成功結果なしは失敗にする。
+  - provider ごとの記録範囲（ソース上の変換契約。実 provider での実行確認とは別）:
+
+    | provider | 共通ログへ変換される呼び出し・途中出力・結果 |
+    | --- | --- |
+    | `claude` / `claude-sdk` | SDK の assistant `tool_use` の名前・入力・ID と user の `tool_result`（結果・エラー有無）。`tool_output` への変換はない。`claude` は同じ SDK 実装の別名。 |
+    | `claude-headless` | CLI の stream-json の assistant `tool_use` と user `tool_result`。入力・ID・結果・エラー有無を保存。`tool_output` への変換はない。 |
+    | `codex` | SDK の command execution は `Bash` の `input.command`、MCP はツール名と arguments。command execution の出力差分を実行中・完了時に ID 付きの `tool_output`（`data.output`）として保存し、成功・失敗の `tool_result`（`data.content`・`isError`）も保存（file change / web search も呼び出しとして記録）。 |
+    | `opencode` | v1 / v2 共通の tool part からツール名・input・callID（なければ part ID）と completed / error の `tool_result`。`tool_output` への変換はない。編集・書き込み本文は要約されるが、read のパスと shell の command は保持される。 |
+    | `cursor` | CLI の stream-json の `tool_call` started / completed。ツール種別または MCP 名、args（入れ子を展開）、call ID、取得できた結果とエラー有無を `tool_use` / `tool_result` として保存。`tool_output` への変換はない。 |
+
+  - 判定範囲は provider が通知して共通ログに残したツール引数・途中出力・結果。引数に `.takt/goals` が出ない読み方でも、別の呼び出しの途中出力や失敗結果に値が先に現れれば失敗にする。`tool_output` は provider を限定せず初出判定に含める。ただし、仕様ファイルを指す一つの呼び出し内で複数のファイルを読む場合の取得元の区別や、シェル内の変数展開・プログラム内部で組み立てたパスの解決までは行わない。OS のファイルアクセス監査ではなく、記録された出力・結果への値の初出と呼び出し先、および当該読み取りの成功を検証する。記録不足を provider 別の推測やスキップで補わない。
+  - 対象だけの実行: `npm run test:e2e:provider:<provider> -- e2e/specs/goal-specification-file.e2e.ts`（`claude-headless` / `claude-sdk` / `claude` / `codex` / `opencode` / `cursor`）。先に `npm run build` を実行する。
 - Worktree/Clone isolation（`e2e/specs/worktree.e2e.ts`）
   - 目的: `worktree: true` タスクが隔離環境に実行されることを確認。
   - LLM: 条件付き（`TAKT_E2E_PROVIDER` が mock 以外の実 provider の場合に呼び出す）
