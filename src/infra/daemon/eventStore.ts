@@ -21,6 +21,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly requests = new Map<string, string>();
   private readonly sequences = new Map<number, string>();
   private readonly knownFiles = new Set<string>();
+  private readonly conversationFiles = new Map<string, Set<string>>();
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
   private readonly files: DaemonPersistedFiles;
@@ -85,6 +86,9 @@ export class FileEventStore implements EventStore, ConversationTurns {
     this.sequences.set(event.acceptedSequence, event.eventId);
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
+    const conversation = this.conversationFiles.get(event.conversationId);
+    if (conversation === undefined) this.conversationFiles.set(event.conversationId, new Set([path]));
+    else conversation.add(path);
   }
 
   readTurns(conversationId: string): ReturnType<ConversationTurns['readTurns']> {
@@ -92,10 +96,10 @@ export class FileEventStore implements EventStore, ConversationTurns {
       await this.refresh();
       const turns: Awaited<ReturnType<ConversationTurns['readTurns']>>[number][] = [];
       // Completed turns and background-turn order must survive missed live
-      // delivery. Read durable events without keeping a separate history index.
-      for await (const entry of await opendir(this.directory)) {
-        if (!entry.name.endsWith('.json')) continue;
-        const record = await this.read(join(this.directory, entry.name));
+      // delivery. Re-read this conversation's durable event files from disk,
+      // located through the per-conversation file index.
+      for (const path of this.conversationFiles.get(conversationId) ?? []) {
+        const record = await this.read(path);
         const { event } = record;
         if (event.conversationId !== conversationId) continue;
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
@@ -154,6 +158,11 @@ export class FileEventStore implements EventStore, ConversationTurns {
         this.requests.delete(requestKey(event));
         this.sequences.delete(event.acceptedSequence);
         this.knownFiles.delete(this.path(event.eventId));
+        const conversation = this.conversationFiles.get(event.conversationId);
+        if (conversation !== undefined) {
+          conversation.delete(this.path(event.eventId));
+          if (conversation.size === 0) this.conversationFiles.delete(event.conversationId);
+        }
       }
       throw error;
     }

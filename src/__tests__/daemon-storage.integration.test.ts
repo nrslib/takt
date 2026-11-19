@@ -209,6 +209,20 @@ describe('durable daemon event storage', () => {
     expect((await restarted.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(settled);
   });
 
+  it('does not re-read other conversations files when reading turns', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const own = event('own message', 1);
+    const other = { ...event('other message', 2), conversationId: 'another' };
+    await store.accept(own); await store.accept(other);
+    // Break the other conversation's stored file after it was indexed. Reading
+    // this conversation's turns must not read that file again.
+    const otherPath = join(directory, 'daemon-events', `${createHash('sha256').update(other.eventId).digest('hex')}.json`);
+    await writeFile(otherPath, 'not json');
+    const turns = await store.readTurns(own.conversationId);
+    expect(turns.map((turn) => turn.operationId)).toEqual([own.operationId]);
+  });
+
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
