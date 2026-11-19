@@ -23,6 +23,14 @@
  *   the variable still holds its earlier value. The dual also holds: a
  *   conditional overwrite with an unrelated value ends the derivation for
  *   later log calls, because the overwriting path may have been taken.
+ *   An if/else that writes a variable in both branches joins the writes:
+ *   after the statement the variable counts as derived only when both
+ *   branches' latest values are.
+ * - The caught binding itself is tracked like any other variable: it
+ *   starts out derived, and overwriting it with an unrelated value ends
+ *   that. A conditional nested anywhere inside a value — for example in a
+ *   log call's metadata object — must carry the error on every branch,
+ *   not just when the conditional is the whole value.
  * - A compound assignment (`+=` and friends) keeps the previous value as
  *   part of the result, so it preserves a derivation the previous value
  *   had. A binding introduced by destructuring a derived value (for
@@ -145,38 +153,49 @@ function collectBindingIdentifiers(node, out) {
 }
 
 /**
- * Collect the variable keys referenced by a node. Object literal keys are
- * not references, so `{ error: 'static' }` does not count as surfacing an
- * error.
- */
-function collectReferencedKeys(node, keyOf, out) {
-  if (!node || typeof node.type !== 'string') return;
-  if (node.type === 'Identifier') {
-    out.add(keyOf(node));
-    return;
-  }
-  for (const key of Object.keys(node)) {
-    if (key === 'parent') continue;
-    const value = node[key];
-    if (Array.isArray(value)) {
-      for (const child of value) {
-        if (child && typeof child.type === 'string') collectReferencedKeys(child, keyOf, out);
-      }
-    } else if (value && typeof value.type === 'string') {
-      if (node.type === 'Property' && key === 'key' && !node.computed) continue;
-      if (node.type === 'MemberExpression' && key === 'property' && !node.computed) continue;
-      collectReferencedKeys(value, keyOf, out);
-    }
-  }
-}
-
-/**
  * Walk a catch block in its own scope, recording value-producing facts,
  * log calls, and exits, each with the chain of conditional branches that
  * guards it. A guard entry is the branch node that was descended into, so
  * the two branches of one `if` are different guards. Nested functions and
  * nested catch blocks are boundaries and are not entered.
  */
+/**
+ * After an if/else, a variable written in both branches holds one of the
+ * two branches' latest values, so the join is recorded as a conditional
+ * value at the end of the statement and the branch-aware evaluation
+ * requires both sides to carry the error. A compound write keeps the
+ * value the variable had before its branch, which the wrapper node
+ * records for the evaluation.
+ */
+function joinBranchWrites(ifNode, consequentFacts, alternateFacts, guards, sink, mode) {
+  const latestByKey = (facts) => {
+    const byKey = new Map();
+    for (const fact of facts) byKey.set(fact.key, fact);
+    return byKey;
+  };
+  const consequentLatest = latestByKey(consequentFacts);
+  const alternateLatest = latestByKey(alternateFacts);
+  for (const [key, consequentFact] of consequentLatest) {
+    const alternateFact = alternateLatest.get(key);
+    if (!alternateFact) continue;
+    const branchValue = (fact) => (fact.includesSelf
+      ? { type: 'CompoundValue', value: fact.value, key: fact.key }
+      : fact.value);
+    sink.facts.push({
+      key,
+      value: {
+        type: 'ConditionalExpression',
+        consequent: branchValue(consequentFact),
+        alternate: branchValue(alternateFact),
+      },
+      position: ifNode.range?.[1] ?? 0,
+      guards,
+      mayOnly: mode.mayOnly === true,
+      includesSelf: false,
+    });
+  }
+}
+
 function collectFlow(node, guards, sink, mode = {}) {
   if (!node || typeof node.type !== 'string' || isBoundaryNode(node)) return;
   if (!mode.exitsOnly && node.type === 'VariableDeclaration') {
@@ -227,11 +246,20 @@ function collectFlow(node, guards, sink, mode = {}) {
   }
   const descend = (child, childGuards, childMode = mode) => collectFlow(child, childGuards, sink, childMode);
   switch (node.type) {
-    case 'IfStatement':
+    case 'IfStatement': {
       descend(node.test, guards);
+      const consequentStart = sink.facts.length;
       descend(node.consequent, [...guards, node.consequent]);
-      if (node.alternate) descend(node.alternate, [...guards, node.alternate]);
+      if (!node.alternate) return;
+      const consequentFacts = sink.facts.slice(consequentStart);
+      const alternateStart = sink.facts.length;
+      descend(node.alternate, [...guards, node.alternate]);
+      const alternateFacts = sink.facts.slice(alternateStart);
+      if (!mode.exitsOnly) {
+        joinBranchWrites(node, consequentFacts, alternateFacts, guards, sink, mode);
+      }
       return;
+    }
     case 'ConditionalExpression':
       descend(node.test, guards);
       descend(node.consequent, [...guards, node.consequent]);
@@ -282,10 +310,16 @@ function collectFlow(node, guards, sink, mode = {}) {
 }
 
 /**
- * Whether an expression's value derives from the seed on every path that
- * can produce it. A conditional or logical expression yields one of its
- * branches, so every branch must be derived; any other expression counts
- * when it references the seed or a currently derived variable.
+ * Whether an expression's value carries the caught error on every path
+ * that can produce it. A conditional or logical expression yields one of
+ * its branches, so every branch must carry the error, wherever the
+ * conditional sits inside the value — at the top level, inside a log
+ * call's metadata object, or inside a call argument. Any other expression
+ * carries the error when one of its value positions does: an object
+ * through a property value, a call through an argument, a member access
+ * through its object. A synthetic CompoundValue node stands for a
+ * compound assignment's result, which keeps the variable's previous
+ * value next to the assigned one.
  */
 function isDerivedValue(node, keyOf, seedKey, derivedKeys) {
   if (!node) return false;
@@ -297,9 +331,53 @@ function isDerivedValue(node, keyOf, seedKey, derivedKeys) {
     return isDerivedValue(node.left, keyOf, seedKey, derivedKeys)
       && isDerivedValue(node.right, keyOf, seedKey, derivedKeys);
   }
-  const referenced = new Set();
-  collectReferencedKeys(node, keyOf, referenced);
-  return [...referenced].some((key) => key === seedKey || derivedKeys.has(key));
+  if (node.type === 'CompoundValue') {
+    return isDerivedValue(node.value, keyOf, seedKey, derivedKeys) || derivedKeys.has(node.key);
+  }
+  if (node.type === 'Identifier') return derivedKeys.has(keyOf(node));
+  return expressionChildren(node).some(
+    (child) => isDerivedValue(child, keyOf, seedKey, derivedKeys),
+  );
+}
+
+/** The sub-expressions that feed a node's value (keys and callees aside). */
+function expressionChildren(node) {
+  switch (node.type) {
+    case 'ObjectExpression':
+      return node.properties.flatMap((property) => {
+        if (property.type === 'SpreadElement') return [property.argument];
+        return [...(property.computed ? [property.key] : []), property.value];
+      });
+    case 'ArrayExpression':
+      return node.elements.filter((element) => element !== null);
+    case 'CallExpression':
+    case 'NewExpression':
+      return [...(node.callee.type === 'MemberExpression' ? [node.callee] : []), ...node.arguments];
+    case 'MemberExpression':
+      return node.computed ? [node.object, node.property] : [node.object];
+    case 'TemplateLiteral':
+      return node.expressions;
+    case 'TaggedTemplateExpression':
+      return node.quasi.expressions;
+    case 'UnaryExpression':
+    case 'AwaitExpression':
+    case 'SpreadElement':
+      return [node.argument];
+    case 'TSAsExpression':
+    case 'TSTypeAssertion':
+    case 'TSNonNullExpression':
+      return [node.expression];
+    case 'BinaryExpression':
+      return [node.left, node.right];
+    case 'SequenceExpression':
+      return node.expressions;
+    case 'AssignmentExpression':
+      return [node.right];
+    case 'ChainExpression':
+      return [node.expression];
+    default:
+      return [];
+  }
 }
 
 function isGuardPrefix(factGuards, targetGuards) {
@@ -322,8 +400,10 @@ function guardsCompatible(factGuards, targetGuards) {
 }
 
 function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
-  const derived = new Set();
-  if (seedKey === null) return derived;
+  if (seedKey === null) return new Set();
+  // The caught binding starts out derived; a write that replaces it with
+  // an unrelated value ends that, like a write to any other variable.
+  const derived = new Set([seedKey]);
   const applicable = facts
     .filter((fact) => fact.position < beforePosition)
     .sort((left, right) => left.position - right.position);
