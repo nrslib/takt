@@ -8,12 +8,27 @@
  * inside a catch block whose arguments reference neither the caught error nor
  * a value derived from it.
  *
+ * What counts as surfacing the error:
+ * - Referencing the caught binding itself, or a variable whose value —
+ *   declared or assigned inside the catch block before the log call —
+ *   derives from the binding directly or through other derived variables
+ *   (derivations are tracked transitively, so extracting the message and
+ *   then sanitizing it still counts). A variable's name alone never counts:
+ *   a local called `errorMessage` that was built from a static string does
+ *   not surface anything.
+ * - A nested catch block is judged against its own binding. The outer catch
+ *   does not claim the inner handler's log calls, and the inner handler does
+ *   not inherit the outer binding.
+ *
  * Out of scope:
- * - Silent catch blocks (no log call) and catch blocks that rethrow:
- *   continuing without the error is a deliberate, visible choice there, while
- *   logging without the error looks diagnosed but is not.
- * - Catch blocks that return the error (or a value derived from it) to the
- *   caller: the failure is surfaced through the result instead of the log.
+ * - Silent catch blocks (no log call): continuing without the error is a
+ *   deliberate, visible choice there, while logging without the error looks
+ *   diagnosed but is not.
+ * - A log call that is a direct statement of the catch block, followed in
+ *   the same block by an unconditional return or throw that hands the error
+ *   (or a value derived from it) to the caller: on the path that logs, the
+ *   error still reaches the caller through the exit. A conditional exit
+ *   does not exempt log calls on the paths that do not take it.
  *
  * A failure whose error must not be logged at all (for example a git error
  * that can contain the source repository path or credentials) stays an
@@ -22,7 +37,6 @@
  */
 
 const LOG_METHODS = new Set(['debug', 'info', 'warn', 'error']);
-const ERROR_NAME_PATTERN = /error/i;
 
 function isLogCall(node) {
   return node.type === 'CallExpression'
@@ -40,6 +54,11 @@ function isFunctionNode(node) {
     || node.type === 'ArrowFunctionExpression';
 }
 
+/** Nested functions and nested catch blocks form their own scope. */
+function isBoundaryNode(node) {
+  return isFunctionNode(node) || node.type === 'CatchClause';
+}
+
 function eachChild(node, callback) {
   for (const key of Object.keys(node)) {
     if (key === 'parent') continue;
@@ -54,9 +73,13 @@ function eachChild(node, callback) {
   }
 }
 
-/** Collect log calls in a catch block, without entering nested functions. */
+/**
+ * Collect log calls governed by this catch block, without entering nested
+ * functions or a nested catch block (the nested handler is visited on its
+ * own, against its own binding).
+ */
 function collectLogCalls(node, out) {
-  if (isFunctionNode(node)) return;
+  if (isBoundaryNode(node)) return;
   if (isLogCall(node)) out.push(node);
   eachChild(node, (child) => collectLogCalls(child, out));
 }
@@ -87,21 +110,54 @@ function collectReferencedNames(node, out) {
 }
 
 /**
- * Names of variables declared directly in the catch block whose initializer
- * references one of the seed names (e.g. `const msg = getErrorMessage(err)`).
- * Logging or returning such a derived value surfaces the caught error.
+ * Value-producing facts inside the catch block, in its own scope only:
+ * variable declarations with an initializer and assignments to a plain
+ * identifier, each with the source position of the produced value.
  */
-function collectDerivedNames(block, seedNames) {
+function collectFlowFacts(node, out) {
+  if (!node || typeof node.type !== 'string' || isBoundaryNode(node)) return;
+  if (node.type === 'VariableDeclaration') {
+    for (const declaration of node.declarations) {
+      if (declaration.id && declaration.id.type === 'Identifier' && declaration.init) {
+        out.push({
+          name: declaration.id.name,
+          value: declaration.init,
+          position: declaration.init.range?.[0] ?? 0,
+        });
+      }
+    }
+  }
+  if (node.type === 'AssignmentExpression' && node.left.type === 'Identifier') {
+    out.push({
+      name: node.left.name,
+      value: node.right,
+      position: node.right.range?.[0] ?? 0,
+    });
+  }
+  eachChild(node, (child) => collectFlowFacts(child, out));
+}
+
+/**
+ * Names of variables whose value, produced before `beforePosition`, derives
+ * from one of the seed names, directly or through other derived variables
+ * (e.g. `const message = getErrorMessage(err)` then `const safe = sanitize(message)`,
+ * or `lastError = error.message` assigned from the binding). Logging or
+ * returning such a derived value surfaces the caught error. A value produced
+ * after the log call cannot have been logged by it, so later facts do not
+ * count for that call.
+ */
+function collectDerivedNames(facts, seedNames, beforePosition) {
   const derived = new Set();
-  const statements = block.body ?? [];
-  for (const statement of statements) {
-    if (statement.type !== 'VariableDeclaration') continue;
-    for (const declaration of statement.declarations) {
-      if (!declaration.init || declaration.id.type !== 'Identifier') continue;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const fact of facts) {
+      if (fact.position >= beforePosition || derived.has(fact.name)) continue;
       const referenced = new Set();
-      collectReferencedNames(declaration.init, referenced);
-      if ([...referenced].some((name) => seedNames.has(name))) {
-        derived.add(declaration.id.name);
+      collectReferencedNames(fact.value, referenced);
+      if ([...referenced].some((name) => seedNames.has(name) || derived.has(name))) {
+        derived.add(fact.name);
+        changed = true;
       }
     }
   }
@@ -111,25 +167,39 @@ function collectDerivedNames(block, seedNames) {
 function referencesSurfacedError(referenced, paramName, derivedNames) {
   return [...referenced].some((name) =>
     (paramName !== null && name === paramName)
-    || derivedNames.has(name)
-    || ERROR_NAME_PATTERN.test(name));
+    || derivedNames.has(name));
 }
 
-/** True when a return in the catch block hands the error to the caller. */
-function returnsSurfacedError(node, paramName, derivedNames) {
-  if (isFunctionNode(node)) return false;
-  if (node.type === 'ReturnStatement' && node.argument) {
-    const referenced = new Set();
-    collectReferencedNames(node.argument, referenced);
-    if (referencesSurfacedError(referenced, paramName, derivedNames)) return true;
-  }
-  let surfaced = false;
-  eachChild(node, (child) => {
-    if (!surfaced && returnsSurfacedError(child, paramName, derivedNames)) {
-      surfaced = true;
-    }
+/** A return or throw whose value carries the caught error to the caller. */
+function isPropagatingExit(statement, paramName, derivedNames) {
+  if (statement.type !== 'ReturnStatement' && statement.type !== 'ThrowStatement') return false;
+  if (!statement.argument) return false;
+  const referenced = new Set();
+  collectReferencedNames(statement.argument, referenced);
+  return referencesSurfacedError(referenced, paramName, derivedNames);
+}
+
+/**
+ * A log call is exempt when it is a direct statement of the catch block and
+ * an unconditional propagating exit follows it in the same block: executing
+ * the log call on that straight-line path necessarily reaches the exit, so
+ * the error reaches the caller there. Log calls nested in a conditional or
+ * loop are never exempt, and a conditional exit exempts nothing.
+ */
+function isExemptLogCall(block, logCall, paramName, seedNames, facts) {
+  const statements = block.body ?? [];
+  const index = statements.findIndex(
+    (statement) => statement.type === 'ExpressionStatement' && statement.expression === logCall,
+  );
+  if (index === -1) return false;
+  return statements.slice(index + 1).some((statement) => {
+    const derivedNames = collectDerivedNames(
+      facts,
+      seedNames,
+      statement.range?.[0] ?? Number.POSITIVE_INFINITY,
+    );
+    return isPropagatingExit(statement, paramName, derivedNames);
   });
-  return surfaced;
 }
 
 const catchLogIncludesError = {
@@ -152,18 +222,22 @@ const catchLogIncludesError = {
 
         const paramName = node.param && node.param.type === 'Identifier' ? node.param.name : null;
         const seedNames = new Set(paramName ? [paramName] : []);
-        const derivedNames = collectDerivedNames(node.body, seedNames);
-
-        if (returnsSurfacedError(node.body, paramName, derivedNames)) return;
+        const facts = [];
+        collectFlowFacts(node.body, facts);
 
         for (const logCall of logCalls) {
+          const derivedNames = collectDerivedNames(
+            facts,
+            seedNames,
+            logCall.range?.[0] ?? Number.POSITIVE_INFINITY,
+          );
           const referenced = new Set();
           for (const argument of logCall.arguments) {
             collectReferencedNames(argument, referenced);
           }
-          if (!referencesSurfacedError(referenced, paramName, derivedNames)) {
-            context.report({ node: logCall, messageId: 'missingError' });
-          }
+          if (referencesSurfacedError(referenced, paramName, derivedNames)) continue;
+          if (isExemptLogCall(node.body, logCall, paramName, seedNames, facts)) continue;
+          context.report({ node: logCall, messageId: 'missingError' });
         }
       },
     };

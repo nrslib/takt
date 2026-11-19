@@ -21,6 +21,13 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch { log.debug('cleanup failed', { tempRef }); }",
     "try { run(); } catch (err) { log.error('failed', { error: 'static text' }); }",
     "try { run(); } catch (err) { log.error('failed'); return { success: false }; }",
+    "try { run(); } catch { const errorMessage = 'extraction failed'; log.error('failed after creation', { error: errorMessage, url }); }",
+    "try { run(); } catch (err) { const errorMessage = 'static'; log.error(errorMessage); }",
+    "try { run(); } catch (err) { if (debug) return err; log.error('lost'); }",
+    "try { run(); } catch (err) { if (recoverable) return err; log.error('failed'); return false; }",
+    "try { run(); } catch (err) { if (debug) throw err; log.error('lost'); }",
+    "try { run(); } catch (err) { if (debug) { log.error('lost'); return err; } }",
+    "try { run(); } catch (err) { log.error('failed'); const message = getErrorMessage(err); }",
   ])('rejects a catch log call that drops the caught error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
@@ -32,15 +39,26 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { log.error('failed', { error: err }); }",
     "try { run(); } catch (err) { const errorMessage = getErrorMessage(err); log.error('failed', { error: errorMessage }); }",
     "try { run(); } catch (err) { const message = getErrorMessage(err); log.error('failed', { error: message }); }",
-    "try { run(); } catch { const errorMessage = 'extraction failed'; log.error('failed after creation', { error: errorMessage, url }); }",
+    "try { run(); } catch (err) { const message = String(err); const safe = sanitizeSensitiveText(message); log.warn('failed', { message: safe }); }",
     "try { run(); } catch (err) { if (isAbort(err)) { throw err; } log.info('continuing', { error: getErrorMessage(err) }); }",
     "try { run(); } catch (err) { throw err; }",
     "try { run(); } catch { /* best-effort cleanup */ }",
     "try { run(); } catch (err) { return { success: false, error: getErrorMessage(err) }; }",
     "try { run(); } catch (err) { const errorMessage = getErrorMessage(err); log.error('failed', { outcome: 'failed' }); return { success: false, message: `Failed: ${errorMessage}` }; }",
+    "try { run(); } catch (err) { log.warn('failed'); throw err; }",
+    "try { run(); } catch (err) { try { cleanup(); } catch (cleanupErr) { log.debug(cleanupErr); } }",
+    "try { run(); } catch (err) { lastError = err instanceof Error ? err.message : String(err); log.info('retrying', { error: lastError }); }",
   ])('accepts code that surfaces or deliberately handles the error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
     expect(messages.filter((message) => message.severity === 2)).toEqual([]);
+  });
+
+  it('reports only the outer log call when a nested catch handles its own error', () => {
+    const messages = lint(
+      "try { run(); } catch (err) { log.error('outer lost'); try { cleanup(); } catch (cleanupErr) { log.debug(cleanupErr); } }",
+    );
+    expect(messages.some((message) => message.fatal)).toBe(false);
+    expect(messages.filter((message) => message.severity === 2).length).toBe(1);
   });
 });
