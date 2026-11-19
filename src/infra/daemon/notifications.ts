@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { opendir } from 'node:fs/promises';
+import { opendir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { FileAsyncLock } from './lock.js';
@@ -10,18 +10,28 @@ const notification = z.object({ id: z.string().min(1).max(128), message: z.strin
   subject: z.object({ key: z.string().min(1), state: z.string().min(1) }).strict().optional() }).strict();
 export type DirectorNotification = Pick<z.infer<typeof notification>, 'id' | 'message'>;
 export type DirectorNotificationSubject = NonNullable<z.infer<typeof notification>['subject']>;
+type Notification = z.infer<typeof notification>;
 const key = (value: string): string => createHash('sha256').update(value).digest('hex');
+/** 索引に保持する通知の合計サイズの上限。超えた分は保持せず、走査のたびに読み直す。 */
+const MAX_CACHED_NOTIFICATION_BYTES = 16 * 1024 * 1024;
 
 export class DaemonNotifications {
   private readonly directory: string;
   private readonly lock = new FileAsyncLock();
+  /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
+  private readonly index: { stamp: string | undefined; directoryId: string | undefined; values: Map<string, { value: Notification; bytes: number; identity: string }>; cachedBytes: number; complete: boolean } = { stamp: undefined, directoryId: undefined, values: new Map(), cachedBytes: 0, complete: false };
+  /** 走査同士が索引を同時に書き換えないよう、refresh() の実行を直列化するための待ち行列。 */
+  private pending = Promise.resolve();
+  /** save() が書き込むたびに進む。走査の開始後に進んでいたら、その走査は stamp を記録しない。 */
+  private generation = 0;
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
 
   async save(input: z.infer<typeof notification>, signal: AbortSignal): Promise<boolean> {
     const value = notification.parse(input);
     return this.lock.exclusive(join(this.directory, '.lock'), async () => {
       signal.throwIfAborted();
-      const path = join(this.directory, `${key(value.id)}.json`);
+      const name = `${key(value.id)}.json`;
+      const path = join(this.directory, name);
       const prior = await readEntirePrivateFile(path)
         ?? (z.uuid().safeParse(value.id).success ? await readEntirePrivateFile(join(this.directory, `${value.id}.json`)) : undefined);
       if (prior !== undefined) {
@@ -29,16 +39,26 @@ export class DaemonNotifications {
         return false;
       }
       if (value.subject !== undefined) {
-        for await (const saved of this.iterate()) {
+        for await (const saved of this.storedNotifications()) {
           if (saved.subject?.key === value.subject.key && saved.subject.state === value.subject.state) return false;
         }
       }
-      await writePrivateFile(path, JSON.stringify(value), signal);
+      const serialized = JSON.stringify(value);
+      await writePrivateFile(path, serialized, signal);
+      this.generation += 1;
+      this.index.stamp = undefined;
+      const identity = await this.fileIdentityOf(path);
+      if (identity !== undefined) this.retain(name, value, Buffer.byteLength(serialized), identity);
       return true;
     }, { signal, timeoutMs: 5000 });
   }
 
-  async *iterate() {
+  async *iterate(): AsyncGenerator<Notification> {
+    for await (const value of this.refresh()) yield structuredClone(value);
+  }
+
+  /** 索引と待ち行列を使わず、保存済みの通知をディレクトリから直接読み取る。save() の重複確認専用。 */
+  private async *storedNotifications(): AsyncGenerator<Notification> {
     await ensurePrivateDirectory(this.directory);
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
@@ -48,5 +68,103 @@ export class DaemonNotifications {
       if (entry.name !== `${key(value.id)}.json` && entry.name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
       yield value;
     }
+  }
+
+  private refresh(): AsyncGenerator<Notification> {
+    const previous = this.pending;
+    let release!: () => void;
+    this.pending = new Promise<void>((resolve) => { release = resolve; });
+    return this.serializedScan(previous, release);
+  }
+
+  private async *serializedScan(previous: Promise<void>, release: () => void): AsyncGenerator<Notification> {
+    await previous;
+    try {
+      yield* this.scan();
+    } finally {
+      release();
+    }
+  }
+
+  private async *scan(): AsyncGenerator<Notification> {
+    const generation = this.generation;
+    await ensurePrivateDirectory(this.directory);
+    const info = await stat(this.directory);
+    const stamp = JSON.stringify([info.dev, info.ino, info.mtimeMs]);
+    if (stamp === this.index.stamp && this.index.complete) {
+      // 保持済みの通知も、走査と同じファイル名順で返す。
+      // 返す途中で保存が索引を書き換えても壊れないよう、値そのものを先に確定させる。
+      const entries = [...this.index.values.entries()].sort(([left], [right]) => left.localeCompare(right));
+      for (const [, entry] of entries) yield entry.value;
+      return;
+    }
+    const directoryId = JSON.stringify([info.dev, info.ino, info.birthtimeMs]);
+    if (directoryId !== this.index.directoryId) {
+      // ディレクトリが作り直されると、同じ名前のファイルでも中身は別物になるため、読み込み済みの通知は使い回せない。
+      // inode が再利用されても作り直しを検出できるよう、識別子には作成時刻も含める。
+      this.index.values.clear();
+      this.index.cachedBytes = 0;
+      this.index.directoryId = directoryId;
+    }
+    const names: string[] = [];
+    for await (const entry of await opendir(this.directory)) {
+      if (entry.name.endsWith('.json')) names.push(entry.name);
+    }
+    // ファイル名順に読み取ることで、列挙順や索引の挿入順に並びが左右されなくなる。
+    names.sort((left, right) => left.localeCompare(right));
+    let complete = true;
+    for (const name of names) {
+      const path = join(this.directory, name);
+      const identity = await this.fileIdentityOf(path);
+      const cached = this.index.values.get(name);
+      if (cached !== undefined && identity !== undefined && identity === cached.identity) {
+        yield cached.value;
+        continue;
+      }
+      const content = await readEntirePrivateFile(path);
+      if (content === undefined) throw new Error('Notification disappeared during read');
+      const value = notification.parse(JSON.parse(content.toString('utf8')) as unknown);
+      if (name !== `${key(value.id)}.json` && name !== `${z.uuid().parse(value.id)}.json`) throw new Error('Notification identity mismatch');
+      // 走査の開始後に保存が完了していたら、保存した値は索引へ反映済みのため、読み取り中の内容で上書きしない。
+      // ファイルの同一性を確認できなかった場合も、保持せずに次の走査で読み直す。
+      if (identity === undefined || generation !== this.generation || !this.retain(name, value, content.length, identity)) complete = false;
+      yield value;
+    }
+    const enumerated = new Set(names);
+    for (const [name, cached] of this.index.values) {
+      if (!enumerated.has(name)) {
+        this.index.cachedBytes -= cached.bytes;
+        this.index.values.delete(name);
+      }
+    }
+    if (generation === this.generation) {
+      this.index.stamp = stamp;
+      this.index.complete = complete;
+    } else {
+      this.index.complete = false;
+    }
+  }
+
+  /** ファイルの同一性を返す。取得できなかった場合は undefined を返す。 */
+  private async fileIdentityOf(path: string): Promise<string | undefined> {
+    try {
+      const info = await stat(path);
+      return JSON.stringify([info.dev, info.ino, info.mtimeMs, info.ctimeMs, info.size]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** 保持済みの合計サイズが上限を超える場合は保持せず、保持できたら true を返す。 */
+  private retain(name: string, value: Notification, bytes: number, identity: string): boolean {
+    const existing = this.index.values.get(name);
+    if (existing !== undefined) {
+      this.index.cachedBytes -= existing.bytes;
+      this.index.values.delete(name);
+    }
+    if (this.index.cachedBytes + bytes > MAX_CACHED_NOTIFICATION_BYTES) return false;
+    this.index.values.set(name, { value, bytes, identity });
+    this.index.cachedBytes += bytes;
+    return true;
   }
 }
