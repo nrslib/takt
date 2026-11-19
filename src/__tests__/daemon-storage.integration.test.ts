@@ -209,18 +209,54 @@ describe('durable daemon event storage', () => {
     expect((await restarted.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(settled);
   });
 
-  it('does not re-read other conversations files when reading turns', async () => {
+  it('readTurns does not read event files of other conversations', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
     const own = event('own message', 1);
     const other = { ...event('other message', 2), conversationId: 'another' };
     await store.accept(own); await store.accept(other);
-    // Break the other conversation's stored file after it was indexed. Reading
-    // this conversation's turns must not read that file again.
-    const otherPath = join(directory, 'daemon-events', `${createHash('sha256').update(other.eventId).digest('hex')}.json`);
-    await writeFile(otherPath, 'not json');
+    // Damage the other conversation's stored event after both events have
+    // been indexed. Reading one conversation's turns must not depend on the
+    // files of other conversations.
+    const otherFile = join(directory, 'daemon-events', `${createHash('sha256').update(other.eventId).digest('hex')}.json`);
+    await writeFile(otherFile, 'not json');
     const turns = await store.readTurns(own.conversationId);
-    expect(turns.map((turn) => turn.operationId)).toEqual([own.operationId]);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['own message']);
+  });
+
+  it('readTurns survives an indexed event file disappearing after a rollback in another instance', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await writer.accept(kept); await writer.accept(vanished);
+    // A second instance indexes both events.
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(2);
+    // The rollback in accept() unlinks the file after releasing the lock, so
+    // an event file another instance has already indexed can disappear.
+    const vanishedFile = join(directory, 'daemon-events', `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`);
+    await rm(vanishedFile);
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
+  });
+
+  it('readTurns survives a new event reusing a vanished event sequence and request', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await writer.accept(kept); await writer.accept(vanished);
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(2);
+    const vanishedFile = join(directory, 'daemon-events', `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`);
+    await rm(vanishedFile);
+    // After the rollback a restarted instance re-accepts the same request
+    // under a new event id, reusing the vanished event's sequence.
+    const reaccepted = { ...event('reaccepted message', 2), eventId: 'reaccepted', requestId: vanished.requestId, operationId: 'operation-reaccepted' };
+    await new FileEventStore(directory).accept(reaccepted);
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message', 'reaccepted message']);
   });
 
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
