@@ -20,7 +20,17 @@
  *   from a static string does not surface anything.
  * - A value assigned only inside a conditional branch counts only for log
  *   calls that the same branch guarantees: on a path that skips the branch,
- *   the variable still holds its earlier value.
+ *   the variable still holds its earlier value. The dual also holds: a
+ *   conditional overwrite with an unrelated value ends the derivation for
+ *   later log calls, because the overwriting path may have been taken.
+ * - A compound assignment (`+=` and friends) keeps the previous value as
+ *   part of the result, so it preserves a derivation the previous value
+ *   had. A binding introduced by destructuring a derived value (for
+ *   example `const { message } = err`) is itself derived. A conditional
+ *   or logical expression counts as derived only when every branch that
+ *   can produce its value is derived. An assignment in a loop's update
+ *   expression runs after the body, so it never establishes the value a
+ *   log call inside the body sees.
  * - A nested catch block is judged against its own binding. The outer catch
  *   does not claim the inner handler's log calls, and the inner handler does
  *   not inherit the outer binding.
@@ -34,7 +44,10 @@
  *   (or a value derived from it) to the caller, with no intervening exit
  *   that drops the error: on every path that logs, the error still reaches
  *   the caller. A conditional exit that returns or throws something else
- *   breaks the exemption for the paths that take it.
+ *   breaks the exemption for the paths that take it, and so does an exit
+ *   inside a nested catch handler between the log call and that exit: the
+ *   nested handler runs on its own failure path and can leave the function
+ *   without the outer error.
  *
  * A failure whose error must not be logged at all (for example a git error
  * that can contain the source repository path or credentials) stays an
@@ -102,6 +115,36 @@ function buildVariableMap(sourceCode) {
 }
 
 /**
+ * Identifiers bound by a declaration or assignment pattern, in binding
+ * positions only (object keys are not bindings).
+ */
+function collectBindingIdentifiers(node, out) {
+  if (!node) return;
+  switch (node.type) {
+    case 'Identifier':
+      out.push(node);
+      return;
+    case 'ObjectPattern':
+      for (const property of node.properties) {
+        if (property.type === 'RestElement') collectBindingIdentifiers(property.argument, out);
+        else collectBindingIdentifiers(property.value, out);
+      }
+      return;
+    case 'ArrayPattern':
+      for (const element of node.elements) collectBindingIdentifiers(element, out);
+      return;
+    case 'RestElement':
+      collectBindingIdentifiers(node.argument, out);
+      return;
+    case 'AssignmentPattern':
+      collectBindingIdentifiers(node.left, out);
+      return;
+    default:
+      return;
+  }
+}
+
+/**
  * Collect the variable keys referenced by a node. Object literal keys are
  * not references, so `{ error: 'static' }` does not count as surfacing an
  * error.
@@ -134,33 +177,55 @@ function collectReferencedKeys(node, keyOf, out) {
  * the two branches of one `if` are different guards. Nested functions and
  * nested catch blocks are boundaries and are not entered.
  */
-function collectFlow(node, guards, sink) {
+function collectFlow(node, guards, sink, mode = {}) {
   if (!node || typeof node.type !== 'string' || isBoundaryNode(node)) return;
-  if (node.type === 'VariableDeclaration') {
+  if (!mode.exitsOnly && node.type === 'VariableDeclaration') {
     for (const declaration of node.declarations) {
-      if (declaration.id && declaration.id.type === 'Identifier' && declaration.init) {
+      if (!declaration.init) continue;
+      const bound = [];
+      collectBindingIdentifiers(declaration.id, bound);
+      for (const identifier of bound) {
         sink.facts.push({
-          key: sink.keyOf(declaration.id),
+          key: sink.keyOf(identifier),
           value: declaration.init,
           position: declaration.init.range?.[0] ?? 0,
           guards,
+          mayOnly: mode.mayOnly === true,
+          includesSelf: false,
         });
       }
     }
   }
-  if (node.type === 'AssignmentExpression' && node.left.type === 'Identifier') {
-    sink.facts.push({
-      key: sink.keyOf(node.left),
-      value: node.right,
-      position: node.right.range?.[0] ?? 0,
-      guards,
-    });
+  if (!mode.exitsOnly && node.type === 'AssignmentExpression') {
+    if (node.left.type === 'Identifier') {
+      sink.facts.push({
+        key: sink.keyOf(node.left),
+        value: node.right,
+        position: node.right.range?.[0] ?? 0,
+        guards,
+        mayOnly: mode.mayOnly === true,
+        includesSelf: node.operator !== '=',
+      });
+    } else if (node.operator === '=') {
+      const bound = [];
+      collectBindingIdentifiers(node.left, bound);
+      for (const identifier of bound) {
+        sink.facts.push({
+          key: sink.keyOf(identifier),
+          value: node.right,
+          position: node.right.range?.[0] ?? 0,
+          guards,
+          mayOnly: mode.mayOnly === true,
+          includesSelf: false,
+        });
+      }
+    }
   }
-  if (isLogCall(node)) sink.logCalls.push({ node, guards });
+  if (!mode.exitsOnly && isLogCall(node)) sink.logCalls.push({ node, guards });
   if (node.type === 'ReturnStatement' || node.type === 'ThrowStatement') {
     sink.exits.push({ node, guards });
   }
-  const descend = (child, childGuards) => collectFlow(child, childGuards, sink);
+  const descend = (child, childGuards, childMode = mode) => collectFlow(child, childGuards, sink, childMode);
   switch (node.type) {
     case 'IfStatement':
       descend(node.test, guards);
@@ -179,7 +244,7 @@ function collectFlow(node, guards, sink) {
     case 'ForStatement':
       if (node.init) descend(node.init, guards);
       if (node.test) descend(node.test, guards);
-      if (node.update) descend(node.update, guards);
+      if (node.update) descend(node.update, guards, { ...mode, mayOnly: true });
       descend(node.body, [...guards, node.body]);
       return;
     case 'ForInStatement':
@@ -197,7 +262,12 @@ function collectFlow(node, guards, sink) {
       return;
     case 'TryStatement':
       descend(node.block, [...guards, node.block]);
-      // The handler is a nested CatchClause (a boundary, judged on its own).
+      // The nested handler is judged on its own when its CatchClause is
+      // visited, but its exits can leave this function without the error
+      // caught here, so the outer exemption check needs them as exits.
+      if (node.handler) {
+        collectFlow(node.handler.body, [...guards, node.handler], sink, { ...mode, exitsOnly: true });
+      }
       if (node.finalizer) descend(node.finalizer, guards);
       return;
     case 'SwitchStatement':
@@ -211,6 +281,27 @@ function collectFlow(node, guards, sink) {
   }
 }
 
+/**
+ * Whether an expression's value derives from the seed on every path that
+ * can produce it. A conditional or logical expression yields one of its
+ * branches, so every branch must be derived; any other expression counts
+ * when it references the seed or a currently derived variable.
+ */
+function isDerivedValue(node, keyOf, seedKey, derivedKeys) {
+  if (!node) return false;
+  if (node.type === 'ConditionalExpression') {
+    return isDerivedValue(node.consequent, keyOf, seedKey, derivedKeys)
+      && isDerivedValue(node.alternate, keyOf, seedKey, derivedKeys);
+  }
+  if (node.type === 'LogicalExpression') {
+    return isDerivedValue(node.left, keyOf, seedKey, derivedKeys)
+      && isDerivedValue(node.right, keyOf, seedKey, derivedKeys);
+  }
+  const referenced = new Set();
+  collectReferencedKeys(node, keyOf, referenced);
+  return [...referenced].some((key) => key === seedKey || derivedKeys.has(key));
+}
+
 function isGuardPrefix(factGuards, targetGuards) {
   return factGuards.length <= targetGuards.length
     && factGuards.every((guard, index) => guard === targetGuards[index]);
@@ -218,24 +309,37 @@ function isGuardPrefix(factGuards, targetGuards) {
 
 /**
  * Keys of variables whose value, at `beforePosition` on the paths described
- * by `guards`, derives from the seed key. Facts are applied in source order:
- * a write whose value references the seed or a currently derived variable
- * makes its target derived, and any other write to a variable ends that
- * variable's derivation, because the logged value is the latest one. Facts
- * guarded by a branch that does not guard the target do not apply, and a
- * value produced after the target cannot have reached it.
+ * by `guards`, derives from the seed key. Facts are applied in source order.
+ * A write guarded by a branch that cannot reach the target does not apply,
+ * and a value produced after the target cannot have reached it.
  */
+function guardsCompatible(factGuards, targetGuards) {
+  const shared = Math.min(factGuards.length, targetGuards.length);
+  for (let index = 0; index < shared; index++) {
+    if (factGuards[index] !== targetGuards[index]) return false;
+  }
+  return true;
+}
+
 function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
   const derived = new Set();
   if (seedKey === null) return derived;
   const applicable = facts
-    .filter((fact) => fact.position < beforePosition && isGuardPrefix(fact.guards, guards))
+    .filter((fact) => fact.position < beforePosition)
     .sort((left, right) => left.position - right.position);
   for (const fact of applicable) {
-    const referenced = new Set();
-    collectReferencedKeys(fact.value, keyOf, referenced);
-    if ([...referenced].some((key) => key === seedKey || derived.has(key))) {
-      derived.add(fact.key);
+    // A write on every path to the target (its guards are a prefix of the
+    // target's) decides the value there. A write that only may have run —
+    // inside a branch the target is not in, or in a loop update — cannot
+    // establish a derivation, but an unrelated value there still ends one,
+    // because the target may be reached through that write.
+    const must = fact.mayOnly !== true && isGuardPrefix(fact.guards, guards);
+    const may = !must && guardsCompatible(fact.guards, guards);
+    if (!must && !may) continue;
+    const valueDerived = isDerivedValue(fact.value, keyOf, seedKey, derived)
+      || (fact.includesSelf && derived.has(fact.key));
+    if (valueDerived) {
+      if (must) derived.add(fact.key);
     } else {
       derived.delete(fact.key);
     }
@@ -243,16 +347,10 @@ function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
   return derived;
 }
 
-function referencesSurfacedError(referenced, seedKey, derivedKeys) {
-  return [...referenced].some((key) => key === seedKey || derivedKeys.has(key));
-}
-
 /** A return or throw whose value carries the caught error to the caller. */
 function isPropagatingExit(exitNode, keyOf, seedKey, derivedKeys) {
   if (!exitNode.argument) return false;
-  const referenced = new Set();
-  collectReferencedKeys(exitNode.argument, keyOf, referenced);
-  return referencesSurfacedError(referenced, seedKey, derivedKeys);
+  return isDerivedValue(exitNode.argument, keyOf, seedKey, derivedKeys);
 }
 
 /**
@@ -320,11 +418,10 @@ const catchLogIncludesError = {
             logCall.node.range?.[0] ?? Number.POSITIVE_INFINITY,
             logCall.guards,
           );
-          const referenced = new Set();
-          for (const argument of logCall.node.arguments) {
-            collectReferencedKeys(argument, keyOf, referenced);
-          }
-          if (referencesSurfacedError(referenced, seedKey, derivedKeys)) continue;
+          const surfaces = logCall.node.arguments.some(
+            (argument) => isDerivedValue(argument, keyOf, seedKey, derivedKeys),
+          );
+          if (surfaces) continue;
           if (isExemptLogCall(node.body, logCall, flow, seedKey)) continue;
           context.report({ node: logCall.node, messageId: 'missingError' });
         }

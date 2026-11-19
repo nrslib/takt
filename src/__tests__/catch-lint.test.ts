@@ -33,6 +33,10 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { let detail = 'static'; if (debug) detail = String(err); log.error(detail); }",
     "try { run(); } catch (err) { log.error('failed'); if (recoverable) return false; throw err; }",
     "try { run(); } catch (err) { let detail = 'static'; { const detail = String(err); } log.error(detail); }",
+    "try { run(); } catch (err) { let message = String(err); if (retry) message = 'retrying'; log.error(message); }",
+    "try { run(); } catch (err) { let detail = 'static'; for (let i = 0; i < 1; detail = String(err)) { log.error(detail); break; } }",
+    "try { run(); } catch (err) { log.error('failed'); try { cleanup(); } catch (inner) { return false; } throw err; }",
+    "try { run(); } catch (err) { const detail = debug ? String(err) : 'static'; log.error(detail); }",
   ])('rejects a catch log call that drops the caught error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
@@ -58,6 +62,11 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { let detail = 'static'; if (debug) { detail = String(err); log.error(detail); } }",
     "try { run(); } catch (err) { log.error('failed'); if (must) throw err; return getErrorMessage(err); }",
     "try { run(); } catch (err) { { const detail = String(err); log.error(detail); } }",
+    "try { run(); } catch (err) { let message = String(err); if (retry) message = getErrorMessage(err); log.error(message); }",
+    "try { run(); } catch (err) { let message = String(err); message += ' (retrying)'; log.error(message); }",
+    "try { run(); } catch (err) { if (err instanceof Error) { const { message } = err; log.error(message); } }",
+    "try { run(); } catch (err) { log.error('failed'); try { cleanup(); } catch (inner) { throw err; } throw err; }",
+    "try { run(); } catch (err) { const detail = debug ? String(err) : err.message; log.error(detail); }",
   ])('accepts code that surfaces or deliberately handles the error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
