@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { resolveHeavyItTargets } from './heavy-it-guard.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 
 const serialIntegrationGroups = Object.freeze([
@@ -58,6 +59,8 @@ export async function runSerialIntegrationGroups(passthroughArgs, runCommand = r
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const code = await runSerialIntegrationGroups(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  await resolveHeavyItTargets(['run', ...args]);
+  const code = await runSerialIntegrationGroups(args);
   process.exit(code);
 }

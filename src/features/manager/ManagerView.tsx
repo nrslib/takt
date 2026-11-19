@@ -49,11 +49,15 @@ const MIN_STATUS_HEADING_WIDTH = 12;
 /** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
 const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
-export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
+const DEFAULT_MANAGER_REFRESH_INTERVAL_MS = 500;
+
+export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment, refreshIntervalMs = DEFAULT_MANAGER_REFRESH_INTERVAL_MS }: {
   assignment: ManagerExecutionContext['assignment'];
   cwd: string; lang: 'en' | 'ja';
   client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close'>;
   onExit: () => void; initialDiagnostics: readonly string[];
+  /** 接続中の定期 refresh の間隔（ミリ秒）。設定 manager.refresh_interval_ms と環境変数 TAKT_MANAGER_REFRESH_INTERVAL_MS で変更できる。操作直後の refresh は待たずに即時に行う。 */
+  refreshIntervalMs?: number;
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
@@ -333,7 +337,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
         void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
-    }, 500);
+    }, refreshIntervalMs);
     return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
   const register = async (revision: number): Promise<void> => {

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import type { JsonTestResults } from 'vitest/reporters';
 import {
   auditedIntegrationBoundaryTestFiles,
   fileSystemIntegrationTestFiles,
@@ -34,6 +35,7 @@ import lightIntegrationConfig, { resolveLightItMaxWorkers } from '../../vitest.c
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
+import defaultConfig from '../../vitest.config.js';
 import { selectNpmTestRuns } from '../../scripts/run-npm-test.mjs';
 import {
   RELEASE_GATE_SCRIPTS,
@@ -180,10 +182,19 @@ function hasIntegrationFileName(filePath: string): boolean {
     || fileName.endsWith('.performance.test.ts');
 }
 
-function executeReleaseScript(failingCommand: string | undefined): {
+const localHeavyItEnv = {
+  GITHUB_ACTIONS: '',
+  GITHUB_EVENT_NAME: '',
+  TAKT_ALLOW_FULL_HEAVY_IT: '',
+};
+const fullReleaseEnv = { ...localHeavyItEnv, TAKT_ALLOW_FULL_HEAVY_IT: '1' };
+const staleReleaseLog = 'stale log entry\n';
+
+function executeReleaseScript(failingCommand: string | undefined, heavyItEnv: NodeJS.ProcessEnv): {
   commands: string[];
   status: number | null;
   stdout: string;
+  stderr: string;
   log: string;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'takt-release-verification-'));
@@ -205,7 +216,7 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
 }
   `);
   mkdirSync(dirname(releaseLogPath), { recursive: true });
-  writeFileSync(releaseLogPath, 'stale log entry\\n');
+  writeFileSync(releaseLogPath, staleReleaseLog);
 
   try {
     const result = spawnSync(process.execPath, [join(repositoryRoot, 'scripts/run-release-check.mjs')], {
@@ -213,16 +224,106 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
       cwd: tempRoot,
       env: {
         ...process.env,
+        ...heavyItEnv,
         npm_execpath: npmStubPath,
         TAKT_FAIL_COMMAND: failingCommand === undefined ? '' : failingCommand,
         TAKT_RELEASE_LOG: logPath,
       },
+      timeout: 10_000,
     });
-    const commands = readFileSync(logPath, 'utf8').trim().split('\n');
+    if (result.error !== undefined) {
+      throw result.error;
+    }
+    const commands = existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n') : [];
     const log = readFileSync(releaseLogPath, 'utf8');
-    return { commands, status: result.status, stdout: result.stdout, log };
+    return { commands, status: result.status, stdout: result.stdout, stderr: result.stderr, log };
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function executeHeavyItFixture(
+  entrypoint: string,
+  args: string[],
+  heavyItEnv: NodeJS.ProcessEnv,
+  configuredSearch?: 'root' | 'dir',
+) {
+  const root = mkdtempSync(join(tmpdir(), 'takt-heavy-it-guard-'));
+  try {
+    const cwd = join(root, 'caller');
+    const testDir = join(root, 'src/__tests__');
+    const callerTestDir = join(cwd, 'src/__tests__');
+    mkdirSync(testDir, { recursive: true });
+    mkdirSync(callerTestDir, { recursive: true });
+    mkdirSync(join(root, 'scripts'));
+    writeFileSync(join(root, 'scripts/test-notification-silence.cjs'), '');
+    writeFileSync(join(testDir, 'test-setup.ts'), '');
+    writeFileSync(join(testDir, 'it-heavy-guard-target.test.ts'), 'test("requested", () => expect(1).toBe(1));');
+    writeFileSync(join(testDir, 'it-collision-it-heavy-guard-target.test.ts'), 'test("outside selection", () => expect(1).toBe(1));');
+    writeFileSync(join(callerTestDir, 'it-heavy-guard-target.test.ts'), 'test("caller directory", () => expect(1).toBe(1));');
+
+    let locationArgs = ['--root', root];
+    if (configuredSearch !== undefined) {
+      const configPath = join(root, 'vitest.config.ts');
+      const configRoot = configuredSearch === 'root' ? root : join(root, 'scripts');
+      const dir = configuredSearch === 'dir' ? '..' : undefined;
+      const guardPath = fileURLToPath(new URL('../../scripts/vitest-heavy-it-guard.ts', import.meta.url));
+      writeFileSync(configPath, `
+import { heavyItGuard } from ${JSON.stringify(guardPath)};
+export default {
+  plugins: [heavyItGuard],
+  root: ${JSON.stringify(configRoot)},
+  test: ${JSON.stringify({ dir, include: ['src/__tests__/it-*.test.ts'] })},
+};
+      `);
+      locationArgs = ['--config', configPath];
+    }
+
+    const npmStub = join(root, 'npm-cli.js');
+    const preparationLog = join(root, 'npm-args.json');
+    const reportPath = join(root, 'vitest-report.json');
+    writeFileSync(npmStub, `
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.TAKT_PREPARATION_LOG, JSON.stringify(process.argv.slice(2)));
+    `);
+
+    const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(
+      ([key]) => key.toLowerCase() !== 'npm_config_ignore_scripts',
+    ));
+    const result = spawnSync(process.execPath, [
+      join(process.cwd(), entrypoint), ...args, ...locationArgs, '--globals',
+      '--reporter=json', '--outputFile.json', reportPath,
+    ], {
+      encoding: 'utf8',
+      cwd,
+      env: {
+        ...inheritedEnv,
+        ...localHeavyItEnv,
+        ...heavyItEnv,
+        npm_execpath: npmStub,
+        TAKT_PREPARATION_LOG: preparationLog,
+      },
+      timeout: 10_000,
+    });
+    if (result.error !== undefined) {
+      throw result.error;
+    }
+    const report = result.status === 0
+      ? JSON.parse(readFileSync(reportPath, 'utf8')) as JsonTestResults
+      : undefined;
+    const passedTestTitles = report?.testResults
+      .flatMap(({ assertionResults }) => assertionResults)
+      .filter(({ status }) => status === 'passed')
+      .map(({ title }) => title)
+      .sort();
+    return {
+      status: result.status,
+      stderr: result.stderr,
+      passedTestTitles,
+      preparation: existsSync(preparationLog) ? readFileSync(preparationLog, 'utf8') : '',
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -273,7 +374,7 @@ describe('release verification wiring', () => {
   });
 
   it('should execute the complete release path when every gate succeeds', () => {
-    const result = executeReleaseScript(undefined);
+    const result = executeReleaseScript(undefined, fullReleaseEnv);
 
     expect(result.commands).toEqual([
       'run sync:nix-deps',
@@ -294,6 +395,103 @@ describe('release verification wiring', () => {
     expect(result.log).not.toContain('stale log entry');
   });
 
+  it('should refuse a full release check before starting dependency sync or opening its log', () => {
+    const result = executeReleaseScript(undefined, { ...localHeavyItEnv, CI: 'true' });
+
+    expect(result.status).toBe(1);
+    expect(result.commands).toEqual([]);
+    expect(result.log).toBe(staleReleaseLog);
+    expect(result.stderr).toContain('TAKT_ALLOW_FULL_HEAVY_IT=1');
+  });
+
+  it.each([
+    { filter: [], env: { CI: 'true' } },
+    { filter: [], env: { GITHUB_EVENT_NAME: 'pull_request' } },
+    { filter: [], env: { TAKT_ALLOW_FULL_HEAVY_IT: 'true' } },
+    { filter: ['--shard=1/6'], env: { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push' } },
+    { filter: ['-t', 'it-heavy-guard-target.test.ts'], env: {} },
+    { filter: ['--reporter', 'it-heavy-guard-target.test.ts'], env: {} },
+    { filter: ['src/__tests__'], env: {} },
+    { filter: ['it-*.test.ts'], env: {} },
+  ])('should refuse unscoped Heavy IT before SDK preparation ($filter)', ({ filter, env }) => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', filter, env);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('npm test -- src/__tests__/<file>.test.ts');
+    expect(result.preparation).toBe('');
+  });
+
+  it('should refuse unscoped execution of a directly loaded Heavy IT config', () => {
+    const result = executeHeavyItFixture('node_modules/vitest/vitest.mjs', [
+      'run', '--config', join(process.cwd(), 'vitest.config.it.heavy.parallel.ts'),
+    ], {});
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('TAKT_ALLOW_FULL_HEAVY_IT=1');
+  });
+
+  it.each([
+    'it-heavy-guard-target.test.ts',
+    'src/__tests__/it-heavy-guard-target.test.ts',
+  ])('should prepare and run only the explicitly selected Heavy IT file (%s)', (filter) => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
+      filter,
+    ], {});
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.preparation).toBe(JSON.stringify(['run', 'test:deepseek-harness:types']));
+    expect(result.passedTestTitles).toEqual(['requested']);
+  });
+
+  it.each(['root', 'dir'] as const)('should use the scan directory from Vitest config (%s)', (setting) => {
+    const result = executeHeavyItFixture('node_modules/vitest/vitest.mjs', [
+      'run', 'src/__tests__/it-collision-it-heavy-guard-target.test.ts',
+    ], {}, setting);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.passedTestTitles).toEqual(['outside selection']);
+  });
+
+  it('should skip Heavy IT setup when npm disables lifecycle scripts via the uppercase variable', () => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
+      'src/__tests__/it-heavy-guard-target.test.ts',
+    ], { NPM_CONFIG_IGNORE_SCRIPTS: 'true' });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.passedTestTitles).toEqual(['requested']);
+    expect(result.preparation).toBe('');
+  });
+
+  it.skipIf(process.platform === 'win32')('should prefer lowercase npm config when both spellings exist', () => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
+      'src/__tests__/it-heavy-guard-target.test.ts',
+    ], { npm_config_ignore_scripts: 'true', NPM_CONFIG_IGNORE_SCRIPTS: 'false' });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.passedTestTitles).toEqual(['requested']);
+    expect(result.preparation).toBe('');
+  });
+
+  it.skipIf(process.platform === 'win32')('should prepare Heavy IT when the npm CLI re-enables lifecycle scripts', () => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [
+      'src/__tests__/it-heavy-guard-target.test.ts',
+    ], { npm_config_ignore_scripts: '', NPM_CONFIG_IGNORE_SCRIPTS: 'true' });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.passedTestTitles).toEqual(['requested']);
+    expect(result.preparation).toBe(JSON.stringify(['run', 'test:deepseek-harness:types']));
+  });
+
+  it('should allow an unscoped Heavy IT run in GitHub Actions pull-request CI', () => {
+    const result = executeHeavyItFixture('scripts/run-heavy-it-parallel.mjs', [], {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_EVENT_NAME: 'pull_request',
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.passedTestTitles).toEqual(['outside selection', 'requested']);
+  });
+
   it('should fail when the release log rejects the final result write', async () => {
     const logStream = new Writable({
       write(chunk, _encoding, callback) {
@@ -305,10 +503,15 @@ describe('release verification wiring', () => {
     });
     const runCommand = vi.fn().mockResolvedValue({ code: 0, signal: null, output: '' });
 
-    const code = await runReleaseCheck(runCommand, async () => logStream);
+    vi.stubEnv('TAKT_ALLOW_FULL_HEAVY_IT', '1');
+    try {
+      const code = await runReleaseCheck(runCommand, async () => logStream);
 
-    expect(runCommand).toHaveBeenCalledTimes(RELEASE_GATE_SCRIPTS.length);
-    expect(code).toBe(1);
+      expect(runCommand).toHaveBeenCalledTimes(RELEASE_GATE_SCRIPTS.length);
+      expect(code).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([
@@ -341,7 +544,7 @@ describe('release verification wiring', () => {
     failingCommand,
     expectedCommands,
   }) => {
-    const result = executeReleaseScript(failingCommand);
+    const result = executeReleaseScript(failingCommand, fullReleaseEnv);
 
     expect(result.commands).toEqual(expectedCommands);
     expect(result.status).toBe(23);
@@ -406,6 +609,7 @@ describe('release verification wiring', () => {
       ...parallelIntegrationTestFiles,
       ...serialFiles,
     ]);
+    expect(defaultConfig.test?.exclude).toEqual(unitConfig.test?.exclude);
   });
 
   it.each([

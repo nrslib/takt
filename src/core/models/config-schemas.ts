@@ -181,6 +181,8 @@ const ProjectConfigObjectBaseSchema = z.object({
       custom: z.boolean().optional(),
     }).strict().optional(),
     patrol_interval: z.number().int().positive().optional(),
+    // Node.js timers clamp delays above 2^31 - 1 to 1ms, so larger values are rejected.
+    refresh_interval_ms: z.number().int().positive().max(2_147_483_647).optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
