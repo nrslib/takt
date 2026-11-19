@@ -149,7 +149,28 @@ describe('AgentRunner compaction recovery', () => {
     ]]);
   });
 
-  it('recovers a role-lost review and keeps assessment output out of the result stream', async () => {
+  it.each([
+    {
+      name: 'all cache fields missing',
+      initialCache: {}, assessmentCache: {}, recoveryCache: {}, expectedCache: {},
+    },
+    {
+      name: 'one cache field missing from an attempt',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 3 },
+      assessmentCache: { cachedInputTokens: 1, cacheReadInputTokens: 0 },
+      recoveryCache: { cachedInputTokens: 2, cacheCreationInputTokens: 4, cacheReadInputTokens: 1 },
+      expectedCache: { cachedInputTokens: 3, cacheReadInputTokens: 4 },
+    },
+    {
+      name: 'all cache fields known including zero',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 0 },
+      assessmentCache: { cachedInputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 1 },
+      recoveryCache: { cachedInputTokens: 0, cacheCreationInputTokens: 1, cacheReadInputTokens: 4 },
+      expectedCache: { cachedInputTokens: 0, cacheCreationInputTokens: 3, cacheReadInputTokens: 5 },
+    },
+  ])('recovers a role-lost review with $name and keeps assessment output out of the result stream', async ({
+    initialCache, assessmentCache, recoveryCache, expectedCache,
+  }) => {
     const onStream = vi.fn();
     const recorder = { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'Review the remaining change' };
     const lost = 'I cannot implement this fix because I only have read access.';
@@ -157,23 +178,23 @@ describe('AgentRunner compaction recovery', () => {
     const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
       options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
       options.onStream?.({ type: 'result', data: { result: lost, sessionId: 'current-thread', success: true } });
-      return { ...makeResponse(lost, 'current-thread'), providerUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, usageMissing: false } };
+      return { ...makeResponse(lost, 'current-thread'), providerUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, usageMissing: false, ...initialCache } };
     });
     const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options) => {
       options.onStream?.({ type: 'result', data: { result: reviewed, sessionId: 'current-thread', success: true } });
-      return { ...makeResponse(reviewed, 'current-thread'), providerUsage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, usageMissing: false } };
+      return { ...makeResponse(reviewed, 'current-thread'), providerUsage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, usageMissing: false, ...recoveryCache } };
     });
     const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(async (_instruction, response) => ({
       decision: response.content === lost ? 'needs_recovery' : 'complete',
-      usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5, usageMissing: false },
+      usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5, usageMissing: false, ...assessmentCache },
     }));
     getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
 
     const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream, progressNotesRecorder: recorder }));
 
-    expect(result).toMatchObject({
-      status: 'done', content: reviewed, sessionId: 'current-thread',
-      providerUsage: { inputTokens: 21, outputTokens: 6, totalTokens: 27, usageMissing: false },
+    expect(result).toMatchObject({ status: 'done', content: reviewed, sessionId: 'current-thread' });
+    expect(result.providerUsage).toEqual({
+      inputTokens: 21, outputTokens: 6, totalTokens: 27, usageMissing: false, ...expectedCache,
     });
     expect(recoverFromCompaction).toHaveBeenCalledOnce();
     expect(recoverFromCompaction.mock.calls[0]![0]).toBe('Review the remaining change');

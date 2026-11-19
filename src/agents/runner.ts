@@ -62,8 +62,15 @@ function withCompactionUsage(response: AgentResponse, usages: readonly (Provider
     const reason = known.find((usage) => usage.usageMissing)?.reason ?? USAGE_MISSING_REASONS.NOT_AVAILABLE;
     return { ...response, providerUsage: { usageMissing: true, reason } };
   }
-  const sum = (field: keyof Omit<ProviderUsageSnapshot, 'usageMissing' | 'reason'>): number =>
+  const sum = (field: 'inputTokens' | 'outputTokens' | 'totalTokens'): number =>
     known.reduce((total, usage) => total + (usage[field] ?? 0), 0);
+  const sumOptional = (field: 'cachedInputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'): number | undefined =>
+    known.every((usage) => Number.isFinite(usage[field]))
+      ? known.reduce((total, usage) => total + usage[field]!, 0)
+      : undefined;
+  const cachedInputTokens = sumOptional('cachedInputTokens');
+  const cacheCreationInputTokens = sumOptional('cacheCreationInputTokens');
+  const cacheReadInputTokens = sumOptional('cacheReadInputTokens');
   return {
     ...response,
     providerUsage: {
@@ -71,9 +78,9 @@ function withCompactionUsage(response: AgentResponse, usages: readonly (Provider
       inputTokens: sum('inputTokens'),
       outputTokens: sum('outputTokens'),
       totalTokens: sum('totalTokens'),
-      cachedInputTokens: sum('cachedInputTokens'),
-      cacheCreationInputTokens: sum('cacheCreationInputTokens'),
-      cacheReadInputTokens: sum('cacheReadInputTokens'),
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens }),
+      ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
     },
   };
 }
