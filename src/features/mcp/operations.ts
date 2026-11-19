@@ -40,6 +40,7 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  managerImageSource?: { root: string; conversationId: string };
   managerWorkflows?: readonly ManagerWorkflow[];
   turnOperationId?: string;
   readOnly?: boolean;

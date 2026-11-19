@@ -135,6 +135,9 @@ it.each([
   ']1337;File=inline=1;size=4:iVBORw==\\末尾',
   ']1337;File=inline=1:AAAA',
   '> ]1337;File=inline=1:AAAA',
+  '`]1337;File=inline=1:AAAA`',
+  '~~~\n]1337;File=inline=1:AAAA\n~~~',
+  '~~~\n]1337;File=inline=1:AAAA',
   '```\n]1337;File=inline=1:AAAA\n```',
   '```\n]1337;File=inline=1:AAAA',
 ])('keeps OSC-like literal text unchanged without preparing images: %j', async (text) => {

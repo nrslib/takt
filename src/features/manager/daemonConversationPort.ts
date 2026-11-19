@@ -189,6 +189,9 @@ export function createDaemonConversationInput(options: {
   return { ...input,
     get attachmentCount() { return attachments.size; },
     get attachmentGeneration() { return attachmentGeneration; },
+    connectedImageOwners(id: string): string[] {
+      return [...attachments].filter(([, attachment]) => attachment.input.conversationId === id).map(([owner]) => owner);
+    },
     connectedPorts(id: string): string[] {
       return [...new Set([...attachments.values()].filter(({ input }) => input.conversationId === id).map(({ input }) => input.binding.port))];
     },

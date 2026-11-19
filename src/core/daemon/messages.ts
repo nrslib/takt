@@ -12,6 +12,7 @@ export interface TurnIdentity {
 }
 
 export interface ConversationSession {
+  imageAttachmentIds?: string[];
   provider: string;
   model: string | null;
   sessionId: string | null;

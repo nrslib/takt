@@ -1,5 +1,5 @@
 import { lstat, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod/v4';
 import { ConversationIdSchema } from './schema.js';
 import { FileAsyncLock } from '../daemon/lock.js';
@@ -7,7 +7,12 @@ import { readEntirePrivateFile, ensurePrivateDirectory, writePrivateFile } from 
 
 const image = z.object({ id: z.uuid(), owner: z.uuid(), placeholder: z.string().regex(/^\[Image #[1-9]\d*\]$/),
   fileName: z.string().regex(/^image-[1-9]\d*\.(png|jpg|gif|webp)$/) }).strict();
-const metadata = z.object({ images: z.array(image), lastIndex: z.number().int().nonnegative() }).strict().superRefine((value, ctx) => {
+const absolutePath = z.string().refine(isAbsolute);
+const workflow = z.object({ id: z.uuid(), repositoryDirectory: absolutePath, taskDirectory: absolutePath,
+  imageIds: z.array(z.uuid()), copies: z.array(z.object({ root: absolutePath, taskDirectory: absolutePath }).strict()) }).strict();
+const metadata = z.object({ images: z.array(image), lastIndex: z.number().int().nonnegative(),
+  deleting: z.array(image).optional(), workflows: z.array(workflow).optional(),
+}).strict().superRefine((value, ctx) => {
   for (const field of ['id', 'placeholder', 'fileName'] as const) {
     if (new Set(value.images.map((item) => item[field])).size !== value.images.length) ctx.addIssue({ code: 'custom', message: `Duplicate image ${field}` });
   }
@@ -41,6 +46,10 @@ export class ConversationImageStore {
   async exclusive<T>(action: () => Promise<T>): Promise<T> {
     await ensureImageDirectory(this.cwd, ['.takt', 'manager-images', this.conversationId]);
     return this.lock.exclusive(join(this.directory, '.lock'), action, { signal: new AbortController().signal, timeoutMs: 5000 });
+  }
+  async exclusiveWithAcquisitionTimeout<T>(action: () => Promise<T>): Promise<T> {
+    await ensureImageDirectory(this.cwd, ['.takt', 'manager-images', this.conversationId]);
+    return this.lock.exclusiveWithAcquisitionTimeout(join(this.directory, '.lock'), action, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
   async read(): Promise<ConversationImageMetadata> {
     let directory = resolve(this.cwd);
