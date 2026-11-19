@@ -48,6 +48,16 @@
  *   handler throws is judged with the handler's own writes in scope. A
  *   `break` or `continue` whose target lies outside the catch block is
  *   an exit that does not hand the error to the caller.
+ * - An array rest binding takes every element from its own position
+ *   onward, so it carries the error when any remaining element does. A
+ *   branch join evaluates each branch's latest write against the state
+ *   at that write, not at the branch's end: a value copied before its
+ *   source was overwritten keeps the derivation it had when copied.
+ *   A write inside a try block may reach that block's handler, because
+ *   the handler runs after the part of the block that executed. A write
+ *   later in a loop body reaches a log call earlier in the body on the
+ *   next iteration, so it can end a derivation there, though it cannot
+ *   establish one the first iteration would not have had.
  * - A compound assignment (`+=` and friends) keeps the previous value as
  *   part of the result, so it preserves a derivation the previous value
  *   had. A binding introduced by destructuring a derived value (for
@@ -199,7 +209,11 @@ function collectBindingSources(pattern, source, out) {
         if (!element) return;
         let elementSource = source;
         if (source && source.type === 'ArrayExpression') {
-          elementSource = source.elements[index] ?? null;
+          // A rest binding receives every remaining element, not only
+          // the one at its own position.
+          elementSource = element.type === 'RestElement'
+            ? { type: 'ArrayExpression', elements: source.elements.slice(index) }
+            : source.elements[index] ?? null;
         }
         collectBindingSources(element, elementSource, out);
       });
@@ -242,9 +256,10 @@ function isInternalJump(node, targets) {
  * run unconditionally within their branch (their guard chain is exactly
  * the branch itself): a write nested in a further conditional inside the
  * branch does not decide the branch's end state. The recorded value is a
- * BranchJoin, which the evaluation resolves against each branch's own
- * end state, so a variable derived from a branch-local alias still
- * counts. A compound write keeps the value the variable had before its
+ * BranchJoin, which the evaluation resolves against the state at
+ * each branch's own latest write, so a variable derived from a
+ * branch-local alias still counts, and a value copied before its
+ * source was overwritten keeps the derivation it had when copied. A compound write keeps the value the variable had before its
  * branch (the CompoundValue wrapper); a logical assignment keeps it only
  * on the path that skips the right-hand side (a conditional between the
  * right-hand side and a SelfValue).
@@ -280,7 +295,7 @@ function joinBranchWrites(ifNode, consequentFacts, alternateFacts, guards, sink,
     const branch = (fact, branchNode) => ({
       value: branchValue(fact),
       guards: [...guards, branchNode],
-      end: branchNode.range?.[1] ?? 0,
+      at: fact.position,
     });
     sink.facts.push({
       key,
@@ -299,6 +314,12 @@ function joinBranchWrites(ifNode, consequentFacts, alternateFacts, guards, sink,
 
 function collectFlow(node, guards, sink, mode = {}) {
   if (!node || typeof node.type !== 'string' || isBoundaryNode(node)) return;
+  if ((node.type === 'ForStatement' || node.type === 'ForInStatement' || node.type === 'ForOfStatement'
+    || node.type === 'WhileStatement' || node.type === 'DoWhileStatement') && node.body) {
+    // Loop bodies are recorded so the evaluation can tell that a write
+    // later in the body reaches an earlier log call on the next pass.
+    (sink.facts.loopBodies ??= []).push(node.body);
+  }
   if (node.type === 'VariableDeclaration') {
     for (const declaration of node.declarations) {
       if (!declaration.init) continue;
@@ -452,7 +473,7 @@ function isDerivedValue(node, keyOf, seedKey, derivedKeys, facts) {
   if (node.type === 'SelfValue') return derivedKeys.has(node.key);
   if (node.type === 'BranchJoin') {
     return node.branches.every((branch) => {
-      const branchKeys = collectDerivedKeys(facts, keyOf, seedKey, branch.end, branch.guards);
+      const branchKeys = collectDerivedKeys(facts, keyOf, seedKey, branch.at, branch.guards);
       return isDerivedValue(branch.value, keyOf, seedKey, branchKeys, facts);
     });
   }
@@ -520,30 +541,76 @@ function guardsCompatible(factGuards, targetGuards) {
     if (factGuards[index] === targetGuards[index]) continue;
     // Two guard entries exclude each other only when they are branches
     // of the same construct (an if and its else, two cases of one
-    // switch, a try block and its handler): those paths cannot both
-    // run. Branches of unrelated constructs can both run, so a write
-    // under one may still have happened on the way to the other.
+    // switch): those paths cannot both run. Branches of unrelated
+    // constructs can both run, so a write under one may still have
+    // happened on the way to the other. A try block and its handler
+    // are not alternatives either: the handler runs after the part of
+    // the block that executed, so a write in the block may have
+    // happened on the way into the handler.
     const factParent = factGuards[index].parent;
-    if (factParent && factParent === targetGuards[index].parent) return false;
+    if (factParent && factParent === targetGuards[index].parent) {
+      if (factParent.type === 'TryStatement'
+        && factGuards[index] === factParent.block
+        && targetGuards[index] === factParent.handler) continue;
+      return false;
+    }
   }
   return true;
 }
 
+const derivedKeysCache = new WeakMap();
+
 function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
   if (seedKey === null) return new Set();
+  // Resolving a branch join re-enters this function for each branch, and
+  // sequential joins would otherwise replay every earlier join for each
+  // later one. The result depends only on the facts, the position, and
+  // the guard chain, so memoize it per facts array.
+  let cache = derivedKeysCache.get(facts);
+  if (!cache) {
+    cache = new Map();
+    derivedKeysCache.set(facts, cache);
+  }
+  const cacheKey = `${beforePosition}#${guards.map((guard) => `${guard.type}@${guard.range?.[0]}:${guard.range?.[1]}`).join('|')}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return new Set(cached);
+  const derived = computeDerivedKeys(facts, keyOf, seedKey, beforePosition, guards);
+  cache.set(cacheKey, new Set(derived));
+  return derived;
+}
+
+function computeDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
   // The caught binding starts out derived; a write that replaces it with
   // an unrelated value ends that, like a write to any other variable.
   const derived = new Set([seedKey]);
-  const applicable = facts
-    .filter((fact) => fact.position < beforePosition)
-    .sort((left, right) => left.position - right.position);
-  for (const fact of applicable) {
+  // A write later in the same loop body reaches a log call earlier in
+  // the body on the next iteration. Such a write applies as a possible
+  // (never deciding) fact, ordered as if it ran at the body's start:
+  // the previous iteration's writes precede this iteration's.
+  const loopBodies = (facts.loopBodies ?? []).filter((body) => {
+    const range = body.range ?? [];
+    return (range[0] ?? 0) <= beforePosition && beforePosition <= (range[1] ?? 0);
+  });
+  const innermostLoop = loopBodies.sort((left, right) => (right.range?.[0] ?? 0) - (left.range?.[0] ?? 0))[0];
+  const applicable = [];
+  for (const fact of facts) {
+    if (fact.position < beforePosition) {
+      applicable.push({ fact, effective: fact.position, backEdge: false });
+    } else if (innermostLoop && guardsCompatible(fact.guards, guards)) {
+      const range = innermostLoop.range ?? [];
+      if ((range[0] ?? 0) <= fact.position && fact.position <= (range[1] ?? 0)) {
+        applicable.push({ fact, effective: range[0] ?? 0, backEdge: true });
+      }
+    }
+  }
+  applicable.sort((left, right) => left.effective - right.effective);
+  for (const { fact, backEdge } of applicable) {
     // A write on every path to the target (its guards are a prefix of the
     // target's) decides the value there. A write that only may have run —
     // inside a branch the target is not in, or in a loop update — cannot
     // establish a derivation, but an unrelated value there still ends one,
     // because the target may be reached through that write.
-    const must = fact.mayOnly !== true && isGuardPrefix(fact.guards, guards);
+    const must = !backEdge && fact.mayOnly !== true && isGuardPrefix(fact.guards, guards);
     const may = !must && guardsCompatible(fact.guards, guards);
     if (!must && !may) continue;
     const valueDerived = fact.shortCircuits

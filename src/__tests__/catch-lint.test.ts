@@ -49,6 +49,8 @@ describe('catch log includes error rule', () => {
     "while (retrying) { try { run(); } catch (err) { log.error('failed'); if (retry) continue; throw err; } }",
     "try { run(); } catch (err) { let m = 'static'; if (a) { if (b) m = String(err); } else { m = String(err); } log.error(m); }",
     "try { run(); } catch (err) { log.error({ error: 'static' } satisfies { error: unknown }); }",
+    "try { run(); } catch (err) { let message = String(err); log.error('failed'); try { message = 'static'; cleanup(); } catch { return message; } throw err; }",
+    "try { run(); } catch (err) { let message = String(err); for (let i = 0; i < 2; i++) { log.error(message); message = 'static'; } }",
   ])('rejects a catch log call that drops the caught error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
@@ -88,6 +90,8 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { log.error('failed'); while (retry) { break; } throw err; }",
     "try { run(); } catch (err) { let msg = ''; if (flag) { const detail = String(err); msg = detail; } else { msg = String(err); } log.error(msg); }",
     "try { run(); } catch (err) { log.error({ error: err } satisfies { error: unknown }); }",
+    "try { run(); } catch (err) { let source = String(err); let message; if (flag) { message = source; source = 'cleared'; } else { message = String(err); } log.error(message, { source }); }",
+    "try { run(); } catch (err) { const [prefix, ...details] = ['failed', 'context', String(err)]; log.error(prefix, details); }",
   ])('accepts code that surfaces or deliberately handles the error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
