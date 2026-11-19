@@ -31,6 +31,23 @@
  *   that. A conditional nested anywhere inside a value — for example in a
  *   log call's metadata object — must carry the error on every branch,
  *   not just when the conditional is the whole value.
+ * - Guard chains exclude each other only where they take different
+ *   branches of the same construct. A write inside one `if` still applies
+ *   to a log call inside a later, unrelated `if`, because the first
+ *   branch may have run before the second was reached.
+ * - A logical assignment (`&&=`, `||=`, `??=`) replaces the value on the
+ *   path that takes the right-hand side, so it keeps a derivation only
+ *   when both the previous value and the right-hand side are derived.
+ *   Destructuring takes each binding's value from its own position: a
+ *   binding fed by a different element or property of a literal does not
+ *   inherit that literal's other parts.
+ * - A nested catch handler's log calls are judged against the handler's
+ *   own binding, but its writes still count for the outer block: a write
+ *   that replaces an outer variable inside the handler can end that
+ *   variable's derivation for later outer log calls, and a value the
+ *   handler throws is judged with the handler's own writes in scope. A
+ *   `break` or `continue` whose target lies outside the catch block is
+ *   an exit that does not hand the error to the caller.
  * - A compound assignment (`+=` and friends) keeps the previous value as
  *   part of the result, so it preserves a derivation the previous value
  *   had. A binding introduced by destructuring a derived value (for
@@ -82,6 +99,7 @@ function isFunctionNode(node) {
 }
 
 /** Nested functions and nested catch blocks form their own scope. */
+
 function isBoundaryNode(node) {
   return isFunctionNode(node) || node.type === 'CatchClause';
 }
@@ -123,33 +141,92 @@ function buildVariableMap(sourceCode) {
 }
 
 /**
- * Identifiers bound by a declaration or assignment pattern, in binding
- * positions only (object keys are not bindings).
+ * The bindings a declaration or assignment pattern introduces, each with
+ * the expression that feeds it. A binding fed from a literal takes its
+ * own element or property of that literal, not the whole literal; any
+ * other source feeds every binding from the whole expression (a property
+ * of a derived value is itself derived). A default value applies when
+ * the extracted value is undefined, so a binding with a default is fed
+ * by either the source or the default. A binding for an element or
+ * property a literal does not have is fed by nothing (null).
  */
-function collectBindingIdentifiers(node, out) {
-  if (!node) return;
-  switch (node.type) {
+function collectBindingSources(pattern, source, out) {
+  if (!pattern) return;
+  switch (pattern.type) {
     case 'Identifier':
-      out.push(node);
-      return;
-    case 'ObjectPattern':
-      for (const property of node.properties) {
-        if (property.type === 'RestElement') collectBindingIdentifiers(property.argument, out);
-        else collectBindingIdentifiers(property.value, out);
-      }
-      return;
-    case 'ArrayPattern':
-      for (const element of node.elements) collectBindingIdentifiers(element, out);
+      out.push({ identifier: pattern, value: source });
       return;
     case 'RestElement':
-      collectBindingIdentifiers(node.argument, out);
+      collectBindingSources(pattern.argument, source, out);
       return;
-    case 'AssignmentPattern':
-      collectBindingIdentifiers(node.left, out);
+    case 'AssignmentPattern': {
+      const value = source === null || source === undefined
+        ? pattern.right
+        : source.type === 'Literal'
+          ? source
+          : { type: 'ConditionalExpression', consequent: source, alternate: pattern.right };
+      collectBindingSources(pattern.left, value, out);
       return;
+    }
+    case 'ObjectPattern': {
+      for (const property of pattern.properties) {
+        if (property.type === 'RestElement') {
+          collectBindingSources(property.argument, source, out);
+          continue;
+        }
+        let propertySource = source;
+        if (source && source.type === 'ObjectExpression') {
+          const keyName = property.key && property.key.type === 'Identifier' && !property.computed
+            ? property.key.name
+            : property.key && property.key.type === 'Literal'
+              ? String(property.key.value)
+              : null;
+          const match = keyName === null
+            ? undefined
+            : source.properties.find((candidate) => candidate.type !== 'SpreadElement'
+              && !candidate.computed
+              && ((candidate.key.type === 'Identifier' && candidate.key.name === keyName)
+                || (candidate.key.type === 'Literal' && String(candidate.key.value) === keyName)));
+          const hasSpread = source.properties.some((candidate) => candidate.type === 'SpreadElement');
+          propertySource = match ? match.value : hasSpread || keyName === null ? source : null;
+        }
+        collectBindingSources(property.value, propertySource, out);
+      }
+      return;
+    }
+    case 'ArrayPattern': {
+      pattern.elements.forEach((element, index) => {
+        if (!element) return;
+        let elementSource = source;
+        if (source && source.type === 'ArrayExpression') {
+          elementSource = source.elements[index] ?? null;
+        }
+        collectBindingSources(element, elementSource, out);
+      });
+      return;
+    }
     default:
       return;
   }
+}
+
+/**
+ * Whether a break or continue lands on a loop, switch, or label inside
+ * the block being walked. A jump whose target lies outside the block
+ * leaves the block without handing the caught error to the caller, so
+ * the caller records it as an exit.
+ */
+function isInternalJump(node, targets) {
+  const label = node.label?.name;
+  if (label !== undefined && label !== null) {
+    return targets.some((target) => target.type === 'LabeledStatement' && target.label?.name === label);
+  }
+  if (node.type === 'BreakStatement') return targets.length > 0;
+  return targets.some((target) => target.type === 'ForStatement'
+    || target.type === 'ForInStatement'
+    || target.type === 'ForOfStatement'
+    || target.type === 'WhileStatement'
+    || target.type === 'DoWhileStatement');
 }
 
 /**
@@ -161,81 +238,109 @@ function collectBindingIdentifiers(node, out) {
  */
 /**
  * After an if/else, a variable written in both branches holds one of the
- * two branches' latest values, so the join is recorded as a conditional
- * value at the end of the statement and the branch-aware evaluation
- * requires both sides to carry the error. A compound write keeps the
- * value the variable had before its branch, which the wrapper node
- * records for the evaluation.
+ * two branches' latest values. The join is recorded only for writes that
+ * run unconditionally within their branch (their guard chain is exactly
+ * the branch itself): a write nested in a further conditional inside the
+ * branch does not decide the branch's end state. The recorded value is a
+ * BranchJoin, which the evaluation resolves against each branch's own
+ * end state, so a variable derived from a branch-local alias still
+ * counts. A compound write keeps the value the variable had before its
+ * branch (the CompoundValue wrapper); a logical assignment keeps it only
+ * on the path that skips the right-hand side (a conditional between the
+ * right-hand side and a SelfValue).
  */
 function joinBranchWrites(ifNode, consequentFacts, alternateFacts, guards, sink, mode) {
-  const latestByKey = (facts) => {
+  const latestByKey = (facts, branchNode) => {
+    const expected = [...guards, branchNode];
     const byKey = new Map();
-    for (const fact of facts) byKey.set(fact.key, fact);
+    for (const fact of facts) {
+      const unconditional = fact.guards.length === expected.length
+        && fact.guards.every((guard, index) => guard === expected[index]);
+      if (unconditional) byKey.set(fact.key, fact);
+    }
     return byKey;
   };
-  const consequentLatest = latestByKey(consequentFacts);
-  const alternateLatest = latestByKey(alternateFacts);
+  const consequentLatest = latestByKey(consequentFacts, ifNode.consequent);
+  const alternateLatest = latestByKey(alternateFacts, ifNode.alternate);
   for (const [key, consequentFact] of consequentLatest) {
     const alternateFact = alternateLatest.get(key);
     if (!alternateFact) continue;
-    const branchValue = (fact) => (fact.includesSelf
-      ? { type: 'CompoundValue', value: fact.value, key: fact.key }
-      : fact.value);
+    const branchValue = (fact) => {
+      if (fact.shortCircuits) {
+        return {
+          type: 'ConditionalExpression',
+          consequent: fact.value,
+          alternate: { type: 'SelfValue', key: fact.key },
+        };
+      }
+      return fact.includesSelf
+        ? { type: 'CompoundValue', value: fact.value, key: fact.key }
+        : fact.value;
+    };
+    const branch = (fact, branchNode) => ({
+      value: branchValue(fact),
+      guards: [...guards, branchNode],
+      end: branchNode.range?.[1] ?? 0,
+    });
     sink.facts.push({
       key,
       value: {
-        type: 'ConditionalExpression',
-        consequent: branchValue(consequentFact),
-        alternate: branchValue(alternateFact),
+        type: 'BranchJoin',
+        branches: [branch(consequentFact, ifNode.consequent), branch(alternateFact, ifNode.alternate)],
       },
       position: ifNode.range?.[1] ?? 0,
       guards,
       mayOnly: mode.mayOnly === true,
       includesSelf: false,
+      shortCircuits: false,
     });
   }
 }
 
 function collectFlow(node, guards, sink, mode = {}) {
   if (!node || typeof node.type !== 'string' || isBoundaryNode(node)) return;
-  if (!mode.exitsOnly && node.type === 'VariableDeclaration') {
+  if (node.type === 'VariableDeclaration') {
     for (const declaration of node.declarations) {
       if (!declaration.init) continue;
       const bound = [];
-      collectBindingIdentifiers(declaration.id, bound);
-      for (const identifier of bound) {
+      collectBindingSources(declaration.id, declaration.init, bound);
+      for (const binding of bound) {
         sink.facts.push({
-          key: sink.keyOf(identifier),
-          value: declaration.init,
+          key: sink.keyOf(binding.identifier),
+          value: binding.value,
           position: declaration.init.range?.[0] ?? 0,
           guards,
           mayOnly: mode.mayOnly === true,
           includesSelf: false,
+          shortCircuits: false,
         });
       }
     }
   }
-  if (!mode.exitsOnly && node.type === 'AssignmentExpression') {
+  if (node.type === 'AssignmentExpression') {
     if (node.left.type === 'Identifier') {
+      const shortCircuits = node.operator === '&&=' || node.operator === '||=' || node.operator === '??=';
       sink.facts.push({
         key: sink.keyOf(node.left),
         value: node.right,
         position: node.right.range?.[0] ?? 0,
         guards,
         mayOnly: mode.mayOnly === true,
-        includesSelf: node.operator !== '=',
+        includesSelf: node.operator !== '=' && !shortCircuits,
+        shortCircuits,
       });
     } else if (node.operator === '=') {
       const bound = [];
-      collectBindingIdentifiers(node.left, bound);
-      for (const identifier of bound) {
+      collectBindingSources(node.left, node.right, bound);
+      for (const binding of bound) {
         sink.facts.push({
-          key: sink.keyOf(identifier),
-          value: node.right,
+          key: sink.keyOf(binding.identifier),
+          value: binding.value,
           position: node.right.range?.[0] ?? 0,
           guards,
           mayOnly: mode.mayOnly === true,
           includesSelf: false,
+          shortCircuits: false,
         });
       }
     }
@@ -243,6 +348,10 @@ function collectFlow(node, guards, sink, mode = {}) {
   if (!mode.exitsOnly && isLogCall(node)) sink.logCalls.push({ node, guards });
   if (node.type === 'ReturnStatement' || node.type === 'ThrowStatement') {
     sink.exits.push({ node, guards });
+  }
+  if (node.type === 'BreakStatement' || node.type === 'ContinueStatement') {
+    if (!isInternalJump(node, mode.targets ?? [])) sink.exits.push({ node, guards });
+    return;
   }
   const descend = (child, childGuards, childMode = mode) => collectFlow(child, childGuards, sink, childMode);
   switch (node.type) {
@@ -255,9 +364,7 @@ function collectFlow(node, guards, sink, mode = {}) {
       const alternateStart = sink.facts.length;
       descend(node.alternate, [...guards, node.alternate]);
       const alternateFacts = sink.facts.slice(alternateStart);
-      if (!mode.exitsOnly) {
-        joinBranchWrites(node, consequentFacts, alternateFacts, guards, sink, mode);
-      }
+      joinBranchWrites(node, consequentFacts, alternateFacts, guards, sink, mode);
       return;
     }
     case 'ConditionalExpression':
@@ -273,26 +380,32 @@ function collectFlow(node, guards, sink, mode = {}) {
       if (node.init) descend(node.init, guards);
       if (node.test) descend(node.test, guards);
       if (node.update) descend(node.update, guards, { ...mode, mayOnly: true });
-      descend(node.body, [...guards, node.body]);
+      descend(node.body, [...guards, node.body], { ...mode, targets: [...(mode.targets ?? []), node] });
       return;
     case 'ForInStatement':
     case 'ForOfStatement':
       descend(node.right, guards);
-      descend(node.body, [...guards, node.body]);
+      descend(node.body, [...guards, node.body], { ...mode, targets: [...(mode.targets ?? []), node] });
       return;
     case 'WhileStatement':
       descend(node.test, guards);
-      descend(node.body, [...guards, node.body]);
+      descend(node.body, [...guards, node.body], { ...mode, targets: [...(mode.targets ?? []), node] });
       return;
     case 'DoWhileStatement':
-      descend(node.body, guards);
+      descend(node.body, guards, { ...mode, targets: [...(mode.targets ?? []), node] });
       descend(node.test, guards);
+      return;
+    case 'LabeledStatement':
+      descend(node.body, guards, { ...mode, targets: [...(mode.targets ?? []), node] });
       return;
     case 'TryStatement':
       descend(node.block, [...guards, node.block]);
       // The nested handler is judged on its own when its CatchClause is
       // visited, but its exits can leave this function without the error
-      // caught here, so the outer exemption check needs them as exits.
+      // caught here, and its writes can replace what an outer variable
+      // holds, so the outer analysis collects both its exits and its
+      // facts. Its log calls are not collected: they belong to the
+      // handler's own binding.
       if (node.handler) {
         collectFlow(node.handler.body, [...guards, node.handler], sink, { ...mode, exitsOnly: true });
       }
@@ -301,7 +414,9 @@ function collectFlow(node, guards, sink, mode = {}) {
     case 'SwitchStatement':
       descend(node.discriminant, guards);
       for (const switchCase of node.cases) {
-        for (const statement of switchCase.consequent) descend(statement, [...guards, switchCase]);
+        for (const statement of switchCase.consequent) {
+          descend(statement, [...guards, switchCase], { ...mode, targets: [...(mode.targets ?? []), node] });
+        }
       }
       return;
     default:
@@ -321,22 +436,29 @@ function collectFlow(node, guards, sink, mode = {}) {
  * compound assignment's result, which keeps the variable's previous
  * value next to the assigned one.
  */
-function isDerivedValue(node, keyOf, seedKey, derivedKeys) {
+function isDerivedValue(node, keyOf, seedKey, derivedKeys, facts) {
   if (!node) return false;
   if (node.type === 'ConditionalExpression') {
-    return isDerivedValue(node.consequent, keyOf, seedKey, derivedKeys)
-      && isDerivedValue(node.alternate, keyOf, seedKey, derivedKeys);
+    return isDerivedValue(node.consequent, keyOf, seedKey, derivedKeys, facts)
+      && isDerivedValue(node.alternate, keyOf, seedKey, derivedKeys, facts);
   }
   if (node.type === 'LogicalExpression') {
-    return isDerivedValue(node.left, keyOf, seedKey, derivedKeys)
-      && isDerivedValue(node.right, keyOf, seedKey, derivedKeys);
+    return isDerivedValue(node.left, keyOf, seedKey, derivedKeys, facts)
+      && isDerivedValue(node.right, keyOf, seedKey, derivedKeys, facts);
   }
   if (node.type === 'CompoundValue') {
-    return isDerivedValue(node.value, keyOf, seedKey, derivedKeys) || derivedKeys.has(node.key);
+    return isDerivedValue(node.value, keyOf, seedKey, derivedKeys, facts) || derivedKeys.has(node.key);
+  }
+  if (node.type === 'SelfValue') return derivedKeys.has(node.key);
+  if (node.type === 'BranchJoin') {
+    return node.branches.every((branch) => {
+      const branchKeys = collectDerivedKeys(facts, keyOf, seedKey, branch.end, branch.guards);
+      return isDerivedValue(branch.value, keyOf, seedKey, branchKeys, facts);
+    });
   }
   if (node.type === 'Identifier') return derivedKeys.has(keyOf(node));
   return expressionChildren(node).some(
-    (child) => isDerivedValue(child, keyOf, seedKey, derivedKeys),
+    (child) => isDerivedValue(child, keyOf, seedKey, derivedKeys, facts),
   );
 }
 
@@ -366,6 +488,7 @@ function expressionChildren(node) {
     case 'TSAsExpression':
     case 'TSTypeAssertion':
     case 'TSNonNullExpression':
+    case 'TSSatisfiesExpression':
       return [node.expression];
     case 'BinaryExpression':
       return [node.left, node.right];
@@ -394,7 +517,14 @@ function isGuardPrefix(factGuards, targetGuards) {
 function guardsCompatible(factGuards, targetGuards) {
   const shared = Math.min(factGuards.length, targetGuards.length);
   for (let index = 0; index < shared; index++) {
-    if (factGuards[index] !== targetGuards[index]) return false;
+    if (factGuards[index] === targetGuards[index]) continue;
+    // Two guard entries exclude each other only when they are branches
+    // of the same construct (an if and its else, two cases of one
+    // switch, a try block and its handler): those paths cannot both
+    // run. Branches of unrelated constructs can both run, so a write
+    // under one may still have happened on the way to the other.
+    const factParent = factGuards[index].parent;
+    if (factParent && factParent === targetGuards[index].parent) return false;
   }
   return true;
 }
@@ -416,8 +546,10 @@ function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
     const must = fact.mayOnly !== true && isGuardPrefix(fact.guards, guards);
     const may = !must && guardsCompatible(fact.guards, guards);
     if (!must && !may) continue;
-    const valueDerived = isDerivedValue(fact.value, keyOf, seedKey, derived)
-      || (fact.includesSelf && derived.has(fact.key));
+    const valueDerived = fact.shortCircuits
+      ? derived.has(fact.key) && isDerivedValue(fact.value, keyOf, seedKey, derived, facts)
+      : isDerivedValue(fact.value, keyOf, seedKey, derived, facts)
+        || (fact.includesSelf && derived.has(fact.key));
     if (valueDerived) {
       if (must) derived.add(fact.key);
     } else {
@@ -428,9 +560,9 @@ function collectDerivedKeys(facts, keyOf, seedKey, beforePosition, guards) {
 }
 
 /** A return or throw whose value carries the caught error to the caller. */
-function isPropagatingExit(exitNode, keyOf, seedKey, derivedKeys) {
+function isPropagatingExit(exitNode, keyOf, seedKey, derivedKeys, facts) {
   if (!exitNode.argument) return false;
-  return isDerivedValue(exitNode.argument, keyOf, seedKey, derivedKeys);
+  return isDerivedValue(exitNode.argument, keyOf, seedKey, derivedKeys, facts);
 }
 
 /**
@@ -451,14 +583,14 @@ function isExemptLogCall(block, logCall, flow, seedKey) {
     const statement = statements[next];
     if (statement.type !== 'ReturnStatement' && statement.type !== 'ThrowStatement') continue;
     const derivedAtExit = collectDerivedKeys(flow.facts, flow.keyOf, seedKey, statement.range?.[0] ?? 0, []);
-    if (!isPropagatingExit(statement, flow.keyOf, seedKey, derivedAtExit)) return false;
+    if (!isPropagatingExit(statement, flow.keyOf, seedKey, derivedAtExit, flow.facts)) return false;
     const logPosition = logCall.node.range?.[0] ?? 0;
     const exitPosition = statement.range?.[0] ?? Number.POSITIVE_INFINITY;
     for (const exit of flow.exits) {
       const position = exit.node.range?.[0] ?? 0;
       if (position <= logPosition || position >= exitPosition) continue;
       const derivedAtNested = collectDerivedKeys(flow.facts, flow.keyOf, seedKey, position, exit.guards);
-      if (!isPropagatingExit(exit.node, flow.keyOf, seedKey, derivedAtNested)) return false;
+      if (!isPropagatingExit(exit.node, flow.keyOf, seedKey, derivedAtNested, flow.facts)) return false;
     }
     return true;
   }
@@ -499,7 +631,7 @@ const catchLogIncludesError = {
             logCall.guards,
           );
           const surfaces = logCall.node.arguments.some(
-            (argument) => isDerivedValue(argument, keyOf, seedKey, derivedKeys),
+            (argument) => isDerivedValue(argument, keyOf, seedKey, derivedKeys, flow.facts),
           );
           if (surfaces) continue;
           if (isExemptLogCall(node.body, logCall, flow, seedKey)) continue;

@@ -40,6 +40,15 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { err = 'static'; log.error(err); }",
     "try { run(); } catch (err) { log.error('failed', { error: verbose ? err : 'redacted' }); }",
     "try { run(); } catch (err) { let msg = ''; if (flag) { msg = String(err); } else { msg = 'static'; } log.error(msg); }",
+    "try { run(); } catch (err) { let message = String(err); if (retry) message = 'retrying'; if (debug) log.error(message); }",
+    "try { run(); } catch (err) { let message = String(err); message &&= 'failed'; log.error(message); }",
+    "try { run(); } catch (err) { let message = ''; message ||= String(err); log.error(message); }",
+    "try { run(); } catch (err) { let detail; [detail] = ['static', err]; log.error(detail); }",
+    "try { run(); } catch (err) { const { a } = { a: 'static', b: err }; log.error(a); }",
+    "try { run(); } catch (err) { let m = String(err); try { cleanup(); } catch { m = 'static'; } log.error(m); }",
+    "while (retrying) { try { run(); } catch (err) { log.error('failed'); if (retry) continue; throw err; } }",
+    "try { run(); } catch (err) { let m = 'static'; if (a) { if (b) m = String(err); } else { m = String(err); } log.error(m); }",
+    "try { run(); } catch (err) { log.error({ error: 'static' } satisfies { error: unknown }); }",
   ])('rejects a catch log call that drops the caught error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
@@ -73,6 +82,12 @@ describe('catch log includes error rule', () => {
     "try { run(); } catch (err) { const m = String(err); err = 'static'; log.error(m); }",
     "try { run(); } catch (err) { log.error('failed', { error: verbose ? getErrorMessage(err) : err.message }); }",
     "try { run(); } catch (err) { let msg = ''; if (flag) { msg = String(err); } else { msg = err.message; } log.error(msg); }",
+    "try { run(); } catch (err) { let message = String(err); message &&= err.message; log.error(message); }",
+    "try { run(); } catch (err) { let detail; [detail] = [String(err)]; log.error(detail); }",
+    "try { run(); } catch (err) { log.error('failed'); try { cleanup(); } catch (inner) { const detail = String(err); throw detail; } throw err; }",
+    "try { run(); } catch (err) { log.error('failed'); while (retry) { break; } throw err; }",
+    "try { run(); } catch (err) { let msg = ''; if (flag) { const detail = String(err); msg = detail; } else { msg = String(err); } log.error(msg); }",
+    "try { run(); } catch (err) { log.error({ error: err } satisfies { error: unknown }); }",
   ])('accepts code that surfaces or deliberately handles the error: %s', (code) => {
     const messages = lint(code);
     expect(messages.some((message) => message.fatal)).toBe(false);
