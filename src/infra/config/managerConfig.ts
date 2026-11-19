@@ -16,6 +16,7 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
   permission: ManagerPermission;
   autoRun: boolean; preserveGoalWorktree: boolean; mainMerge: 'auto' | 'approve';
   workflows?: ManagerWorkflowsConfig;
+  refreshIntervalMs: number;
   notifications: Record<ManagerNotificationKind, boolean>;
 } {
   const project = loadProjectConfig(cwd).manager;
@@ -28,6 +29,7 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
     preserveGoalWorktree: project?.preserveGoalWorktree ?? global?.preserveGoalWorktree ?? false,
     workflows: project?.workflows ?? global?.workflows,
     mainMerge: project?.mainMerge ?? 'approve',
+    refreshIntervalMs: project?.refreshIntervalMs ?? global?.refreshIntervalMs ?? 500,
     notifications: {
       question: project?.notifications?.question ?? global?.notifications?.question ?? true,
       awaiting_merge: project?.notifications?.awaiting_merge ?? global?.notifications?.awaiting_merge ?? true,

@@ -515,6 +515,7 @@
     "src/__tests__/manager-output-schema.test.ts",
     "src/__tests__/manager-permission-display.test.ts",
     "src/__tests__/manager-project-owner.test.ts",
+    "src/__tests__/manager-refresh-interval.test.ts",
     "src/__tests__/manager-selection.test.ts",
     "src/__tests__/manager-slack-conversation.integration.test.ts",
     "src/__tests__/manager-slack-port.test.ts",
