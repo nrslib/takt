@@ -247,19 +247,19 @@ export async function tellTaktRun(
   }
 }
 
-export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+export function isPathAllowedByMcpRoot(target: string, allowedProjectRoot: string | undefined): boolean {
   if (allowedProjectRoot === undefined) {
-    return;
+    return true;
   }
 
-  const root = fs.realpathSync(allowedProjectRoot);
-  const target = fs.realpathSync(cwd);
-  const relative = path.relative(root, target);
-  if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-    return;
-  }
+  const relative = path.relative(fs.realpathSync(allowedProjectRoot), fs.realpathSync(target));
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
 
-  throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
+export function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+  if (!isPathAllowedByMcpRoot(cwd, allowedProjectRoot)) {
+    throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
+  }
 }
 
 function issueFailureResult(failure: IssueEnqueueFailure): CallToolResult {

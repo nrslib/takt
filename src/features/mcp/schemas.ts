@@ -6,6 +6,7 @@ import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
 } from '../tasks/taskContextValidation.js';
+import { ConversationIdSchema } from '../../infra/conversations/schema.js';
 
 const MCP_TASK_MAX_LENGTH = 128 * 1024;
 const MCP_WORKFLOW_MAX_LENGTH = 128;
@@ -146,6 +147,33 @@ export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
 });
 export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
+const goalRegistrationProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal registration proposal.'),
+}).strict();
+export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposalIdentityInputSchema;
+const goalRegistrationRevisionSchema = z.number().int().safe().positive()
+  .describe('Revision of the pending goal registration proposal returned by takt_list_goal_registration_proposals.');
+const goalRegistrationOwnerSchema = {
+  conversationId: ConversationIdSchema.describe('conversationId of the proposal returned by takt_list_goal_registration_proposals. The request is refused unless it identifies the conversation that owns the pending proposal.'),
+};
+export const getGoalRegistrationProposalInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  ...goalRegistrationOwnerSchema,
+  path: z.string().max(128).regex(/^summary\.(objective|startBranch|integrationBranch|(outOfScope|acceptanceCriteria|constraints)(\.\d+)?|specifications\.(gherkin|quint|alloy))$/).optional()
+    .describe('Proposal field path from the fields list of takt_list_goal_registration_proposals, for example summary.objective or summary.acceptanceCriteria.0. Array indices refer to saved order.'),
+  limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
+});
+export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+  ...goalRegistrationOwnerSchema,
+});
+export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+  ...goalRegistrationOwnerSchema,
+});
+export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
+export type GetGoalRegistrationProposalInput = z.infer<typeof getGoalRegistrationProposalInputSchema>;
+export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
+export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();

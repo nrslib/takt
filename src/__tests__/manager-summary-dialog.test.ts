@@ -5,7 +5,7 @@ import { ManagerSummaryDialog } from '../features/manager/ManagerSummaryDialog.j
 import type { Submission } from '../features/manager/conversationPort.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
-import { mount, showProposal, waitFor, typeAndSubmit, ESC, ENTER, UP, DOWN } from './helpers/manager-tui-fixtures.js';
+import { managerConversationId, mount, showProposal, waitFor, typeAndSubmit, ESC, ENTER, UP, DOWN } from './helpers/manager-tui-fixtures.js';
 
 describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) => {
   it.each([false, true])('shows the question, registration choices and dismissal explanation with approve=%s', (approve) => {
@@ -65,7 +65,7 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     context.app.stdin.write(ENTER);
     try {
       await waitFor(() => {
-        expect(context.client.commands()).toEqual([{ kind, revision: 4 }]);
+        expect(context.client.commands()).toEqual([{ kind, revision: 4, conversationId: managerConversationId }]);
         expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', lang));
         expect(context.app.lastFrame()).toContain(lang === 'ja' ? '処理中' : 'Working');
       });
@@ -100,7 +100,7 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     context.app.stdin.write(ENTER);
     try {
       await waitFor(() => {
-        expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]);
+        expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]);
         expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', lang));
       });
     } finally {
@@ -112,7 +112,7 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     });
     context.app.stdin.write(ENTER);
     await waitFor(() => expect(context.client.commands()).toEqual([
-      { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
+      { kind: 'approve_summary', revision: 4, conversationId: managerConversationId }, { kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId },
     ]));
   });
 
@@ -126,7 +126,7 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     }
     context.app.stdin.write(UP);
     context.app.stdin.write(ENTER);
-    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
     if (failure === 'result') {
       const operationId = await context.client.operation();
       await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', lang)));
@@ -139,7 +139,7 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     });
     context.app.stdin.write(ENTER);
     await waitFor(() => expect(context.client.commands()).toEqual([
-      { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
+      { kind: 'approve_summary', revision: 4, conversationId: managerConversationId }, { kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId },
     ]));
   });
 
@@ -148,6 +148,6 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     await showProposal(context);
     if (input === DOWN + ENTER) context.app.stdin.write(DOWN);
     context.app.stdin.write(input === DOWN + ENTER ? ENTER : input);
-    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]));
+    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]));
   });
 });

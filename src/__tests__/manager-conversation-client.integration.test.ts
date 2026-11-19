@@ -445,7 +445,7 @@ it('retains the received start and completion times once after compact display a
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView();
   vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(32); app.stdout.emit('resize');
@@ -487,7 +487,7 @@ it.each([5, 6])('fits a %s line draft and expanded results while resizing the sa
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView(); const submit = vi.spyOn(client, 'submit');
   const lines = Array.from({ length: lineCount }, (_, index) => `下書き${index + 1}を保持`);
@@ -974,7 +974,7 @@ it.each([32, 40])('reserves wrapped control hints and the draft before filling t
   }));
   await client.connect(); await complete();
   const pending = client.getSnapshot().state!.pending!;
-  await client.submit({ kind: 'dismiss_summary', revision: pending.revision }); await fixture.settled();
+  await client.submit({ kind: 'dismiss_summary', revision: pending.revision, conversationId: client.getSnapshot().state!.conversationId }); await fixture.settled();
   await waitFor(() => expect(client.getSnapshot().state?.pending).toBeNull());
   const app = await snapshotView();
   try {
@@ -1770,7 +1770,7 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     expect.soft(app.lastFrame()!.replace(/\s/gu, '')).toContain(getLabel('manager.summaryInputHint', 'en').replace(/\s/gu, ''));
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
-    await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
+    await waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id }, undefined));
     expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
     const record = conversationRecord(repository);
     await waitFor(async () => expect((await new ConversationStateStore(directory).read(record.id))?.record?.approval)
@@ -1818,7 +1818,7 @@ it('does not send approval before the initial transfer ends and enables it on th
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledOnce());
-    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
   } finally { released.release(); app.unmount(); }
 });
@@ -1876,7 +1876,7 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
     app.stdin.write('\x1b[A');
     app.stdin.write('\r');
     await waitFor(() => expect(submissions).toHaveBeenCalledOnce());
-    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4, conversationId: conversationRecord(repository).id });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
   } finally { released.release(); await refreshing?.catch(() => {}); app.unmount(); }
 });
@@ -1963,14 +1963,14 @@ it.each([
     expect(transfer.indexOf('response')).toBeLessThan(transfer.indexOf('transfer_start'));
     expect(transfer.indexOf('transfer_start')).toBeLessThan(transfer.indexOf('transfer_end'));
     expect(transfer).not.toContain('cancel');
-    expect(submissions.mock.calls.map(([command]) => command)).toEqual([{ kind, revision: 4 }]);
+    expect(submissions.mock.calls.map(([command]) => command)).toEqual([{ kind, revision: 4, conversationId: selected.conversationId }]);
     expect((await fixture.store.read(selected.conversationId))?.record?.approval).toBeNull();
     expect(registration).not.toHaveBeenCalled();
     expect((await new GoalStore(repository).list()).goals).toEqual([]);
     if (kind === 'approve_summary') { app.stdin.write('\x1b[A'); app.stdin.write('\r'); }
     else app.stdin.write('\x1b[27u');
     await waitFor(() => expect(submissions).toHaveBeenCalledTimes(2));
-    expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5 });
+    expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5, conversationId: selected.conversationId });
     expect(await submissions.mock.results[1]!.value).toMatchObject({ kind: 'accepted' });
     await waitFor(async () => expect((await fixture.store.read(selected.conversationId))?.record).toMatchObject({ pending: null, running: null }));
     if (kind === 'approve_summary') {
