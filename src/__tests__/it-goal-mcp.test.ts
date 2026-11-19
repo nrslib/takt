@@ -2416,6 +2416,56 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
+  it('corrects the saved integration branch and completes the goal once its content is included in the corrected branch', async () => {
+    vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await complete(client)).isError).toBeUndefined();
+      const store = new GoalStore(cwd);
+      expect(await store.get(goalId)).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'main', completion: { goalSha: sha, targetBranch: 'main' } });
+      const main = git(cwd, ['rev-parse', 'main']);
+      git(cwd, ['update-ref', 'refs/heads/release', sha]);
+      const check = () => client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      expect(JSON.parse(firstTextContent((await check()).content))).toMatchObject({ included: false });
+
+      const reason = 'プルリクエストの宛先が release に変わったため';
+      const corrected = await client.callTool({ name: 'takt_update_goal_branches', arguments: { cwd, goalId, integrationBranch: 'release', reason } });
+
+      expect(corrected.isError, firstTextContent(corrected.content)).toBeUndefined();
+      const saved = await store.get(goalId);
+      expect(saved).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'release', completion: { goalSha: sha, targetBranch: 'release', summary } });
+      expect(saved.completion?.targetSha).toBeUndefined();
+      expect(saved.workLog.at(-1)?.summary).toBe(reason);
+      expect(JSON.parse(firstTextContent(corrected.content))).toMatchObject({ goal: { integrationBranch: 'release' }, workLogEntryId: saved.workLog.at(-1)!.id });
+
+      const completed = await check();
+      expect(completed.isError, firstTextContent(completed.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(completed.content))).toMatchObject({ included: true, goal: { status: 'completed' } });
+      expect(await store.get(goalId)).toMatchObject({ status: 'completed', completion: { targetBranch: 'release', targetSha: sha } });
+      expect(git(cwd, ['rev-parse', 'main'])).toBe(main);
+    });
+  });
+
+  it.each(['completed', 'paused', 'aborted', 'goal branch', 'invalid branch', 'missing reason', 'unknown field', 'outside repository'] as const)(
+    'rejects goal branch correction for %s without changing the goal', async (condition) => {
+      await saveWaitingGoal();
+      const store = new GoalStore(cwd);
+      if (condition === 'completed') await store.update(goalId, (goal) => ({ ...goal, status: 'completed', completion: { ...goal.completion!, targetSha: sha } }));
+      if (condition === 'paused' || condition === 'aborted') await store.update(goalId, (goal) => ({ ...goal, executionStatus: condition }));
+      const before = await store.get(goalId);
+      const overrides = condition === 'goal branch' ? { integrationBranch: branch }
+        : condition === 'invalid branch' ? { integrationBranch: 'bad branch' }
+        : condition === 'missing reason' ? { reason: undefined }
+          : condition === 'unknown field' ? { targetBranch: 'release' }
+            : condition === 'outside repository' ? { cwd: tmpdir() } : {};
+      await withServer(cwd, 'manager', async (client) => {
+        const result = await client.callTool({ name: 'takt_update_goal_branches',
+          arguments: { cwd, goalId, integrationBranch: 'release', reason: '宛先の訂正', ...overrides } });
+        expect(result.isError).toBe(true);
+      });
+      expect(await store.get(goalId)).toEqual(before);
+    },
+  );
+
   it('publishes completion and reopen tool guidance for resubmission and included evidence correction', async () => {
     await withServer(cwd, 'manager', async (client) => {
       const tools = (await client.listTools()).tools;

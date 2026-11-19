@@ -4,7 +4,7 @@ import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '.
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import {
   askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
-  mergeGoalTaskInputSchema, mergeGoalPrInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
+  mergeGoalTaskInputSchema, mergeGoalPrInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, updateGoalBranchesInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
 } from './schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
@@ -16,6 +16,7 @@ const inputSchemas = {
   withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
   requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema, remove: removeGoalTaskInputSchema,
   reopen: reopenGoalInputSchema, tell: tellGoalRunInputSchema,
+  update_branches: updateGoalBranchesInputSchema,
   stop: stopGoalTaskInputSchema,
   merge_pr: mergeGoalPrInputSchema,
 };
@@ -34,7 +35,7 @@ export async function goalWrite(
     if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
-    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr'].includes(tool)) {
+    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr', 'update_branches'].includes(tool)) {
       throw new Error('Goal is paused. Resume it before continuing work.');
     }
     const options = resolveManagerNotificationOptions(input.cwd);

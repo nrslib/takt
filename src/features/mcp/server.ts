@@ -22,6 +22,7 @@ import {
   completeGoalInputSchema,
   mergeGoalPrInputSchema,
   reopenGoalInputSchema,
+  updateGoalBranchesInputSchema,
   abortGoalInputSchema,
   goalDiffInputSchema,
   goalHistoryInputSchema,
@@ -67,7 +68,7 @@ import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
-import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
+import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal, updateTaktGoalBranches } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
 import { workspaceResult } from './workspaceResponse.js';
@@ -105,7 +106,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_remove_goal_task',
   'takt_stop_goal_task', 'takt_wait_command',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
-  'takt_reopen_goal',
+  'takt_reopen_goal', 'takt_update_goal_branches',
   'takt_merge_goal_pr',
   'takt_tell_run',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
@@ -362,6 +363,10 @@ export function createTaktMcpServer(
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target. To correct evidence for an included SHA while awaiting_merge, call takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal reopen failed', (deps) => reopenTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
+    server.registerTool('takt_update_goal_branches', {
+      title: 'Correct a goal integration branch', description: 'Correct the saved integration branch of a goal whose pull request destination changed after registration, with a required reason saved in its work log. Updates the goal record and, when completion evidence is saved, the completion target branch, so inclusion is checked against the corrected branch. Does not change the base of an existing goal PR; change it on the hosting service as well. Rejects completed, paused and aborted goals and the goal branch itself as the destination. Afterwards use takt_check_goal_completion to complete the goal when its content is already included in the corrected branch. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
+      inputSchema: updateGoalBranchesInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal branch correction failed', (deps) => updateTaktGoalBranches(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_check_goal_completion', {
       title: 'Check goal PR completion', description: 'Complete an awaiting-merge goal when its saved PR is merged from the goal branch into the saved integration branch, even after squash merging or additional PR commits. A matching saved PR that is closed without merging prevents completion even if the content is included. A created goal retaining completion evidence and its merged PR can also complete; other created goals are rejected. Awaiting-merge goals use the existing content comparison when the matching PR is open, no PR is saved, GitHub is unavailable, or PR identity or branches do not match. Paused and aborted goals cannot complete. Use this after a PR merge task completion event reports a merge, or when patrol discovers an external human merge; no corrective integration task is needed. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: goalWriteInputSchema,
