@@ -422,20 +422,20 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[2],
     {
       title: 'List TAKT goals',
-      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors. Responses fit 64 KiB, with explicit truncation. Use offset for healthy goals and errorOffset for errors, both defaulting to 0. Optional limit (1-50, default 50) bounds each collection. Optional state selects open, finished (completed or aborted) or all goals (default all); invalid records are always reported as errors. Pass nextOffset as offset and errorPage.nextOffset as errorOffset for continuation, or use takt_get_goal for one healthy goal.',
+      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors. Responses fit 64 KiB, with explicit truncation. Use offset for healthy goals and errorOffset for errors, both defaulting to 0. Optional limit (1-50, default 50) bounds each collection. Optional state selects open, finished (completed or aborted) or all goals (default all); invalid records are always reported as errors. Pass nextOffset as offset and errorPage.nextOffset as errorOffset for continuation, or use takt_get_goal for one healthy goal. pullRequest may include state (open, merged or closed) when GitHub confirms the saved pull request; state is omitted when it cannot be confirmed.',
       inputSchema: listGoalsInputSchema,
     },
-    (input) => operation(input.cwd, 'Goal list failed', (deps) => listTaktGoals(projectInput(input, deps), deps)),
+    (input, extra) => operation(input.cwd, 'Goal list failed', (deps) => listTaktGoals(projectInput(input, deps), deps, turnSignal(extra.signal))),
   );
 
   server.registerTool(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[3],
     {
       title: 'Get a TAKT goal',
-      description: 'Read goal state, completion, pending questions and recent work. Select saved fields with path, optionally recordId, offset/limit or textOffset/maxBytes to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read goal state, completion, pending questions and recent work. Select saved fields with path, optionally recordId, offset/limit or textOffset/maxBytes to retrieve omitted content. pullRequest may include state (open, merged or closed) when GitHub confirms the saved pull request; state is omitted when it cannot be confirmed. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: getGoalInputSchema,
     },
-    (input) => operation(input.cwd, 'Goal read failed', (deps) => getTaktGoal(projectInput(input, deps), deps)),
+    (input, extra) => operation(input.cwd, 'Goal read failed', (deps) => getTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
   );
 
   server.registerTool(

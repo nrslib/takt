@@ -8,7 +8,10 @@ import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
 import { loadRunSessionPage } from '../interactive/runSessionReader.js';
 import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
-import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
+import { goalSummary, goalValuePage, selectGoalValue, type GoalPullRequestState } from './goalResponse.js';
+import { readGoalPullRequestStatus as defaultReadGoalPullRequestStatus } from '../../infra/goals/pull-request-status.js';
+import type { PrMergeStatus } from '../../infra/github/pr-status.js';
+import type { Goal } from '../../infra/goals/schema.js';
 import type { ManagerWorkflow } from '../manager/workflowSelection.js';
 import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
@@ -39,6 +42,7 @@ import type {
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
+type ReadGoalPullRequestStatus = typeof defaultReadGoalPullRequestStatus;
 
 export interface McpOperationDependencies {
   managerWorkflows?: readonly ManagerWorkflow[];
@@ -46,6 +50,7 @@ export interface McpOperationDependencies {
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;
+  readGoalPullRequestStatus?: ReadGoalPullRequestStatus;
   allowedProjectRoot?: string;
   /** Only the interactive read-only server emits internal conversation metadata. */
   includeReferenceMarkers?: boolean;
@@ -55,17 +60,43 @@ export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
 }
 
-export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {
+const PULL_REQUEST_STATES: Record<PrMergeStatus['state'], GoalPullRequestState> = {
+  OPEN: 'open', MERGED: 'merged', CLOSED: 'closed',
+};
+
+type GoalPullRequestTarget = Pick<Goal, 'pullRequest' | 'branch' | 'integrationBranch'>;
+
+async function goalPullRequestState(cwd: string, target: GoalPullRequestTarget, deps: McpOperationDependencies, signal: AbortSignal | undefined): Promise<GoalPullRequestState | undefined> {
+  if (target.pullRequest === undefined) return undefined;
+  const status = await (deps.readGoalPullRequestStatus ?? defaultReadGoalPullRequestStatus)(cwd, target, signal);
+  return status?.status === 'available' ? PULL_REQUEST_STATES[status.pullRequest.state] : undefined;
+}
+
+async function goalResponse(cwd: string, goal: Goal, deps: McpOperationDependencies, signal: AbortSignal | undefined) {
+  return goalSummary(goal, await goalPullRequestState(cwd, goal, deps, signal));
+}
+
+export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     let totalCount = 0;
     const offset = input.offset ?? 0;
     const limit = input.limit ?? 50;
-    const { goals, errors } = await new GoalStore(input.cwd).list((goal) => {
+    const { goals: pageEntries, errors } = await new GoalStore(input.cwd).list((goal) => {
       if (input.state !== undefined && input.state !== 'all' && isGoalFinished(goal) !== (input.state === 'finished')) return undefined;
       const index = totalCount++;
-      return index >= offset && index < offset + limit ? goalSummary(goal) : undefined;
+      if (index < offset || index >= offset + limit) return undefined;
+      return {
+        summary: goalSummary(goal),
+        target: { pullRequest: goal.pullRequest, branch: goal.branch, integrationBranch: goal.integrationBranch },
+      };
     });
+    const goals = await Promise.all(pageEntries.map(async (entry) => {
+      const state = await goalPullRequestState(input.cwd, entry.target, deps, signal);
+      return state === undefined || entry.target.pullRequest === undefined
+        ? entry.summary
+        : { ...entry.summary, pullRequest: { ...entry.target.pullRequest, state } };
+    }));
     const errorOffset = input.errorOffset ?? 0;
     const selectedErrors = errors.slice(errorOffset, errorOffset + limit)
       .map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) }));
@@ -89,7 +120,7 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
   }
 }
 
-export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
+export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const goal = await new GoalStore(input.cwd).get(input.goalId);
@@ -98,7 +129,7 @@ export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDepende
       if (Array.isArray(value)) return pagedResult('items', value.slice(input.offset ?? 0, (input.offset ?? 0) + (input.limit ?? 50)), value.length, input.offset ?? 0, undefined, { goalId: goal.id, path: input.path });
       return jsonResult({ goalId: goal.id, path: input.path, ...goalValuePage(value, input) });
     }
-    return jsonResult({ goal: goalSummary(goal) });
+    return jsonResult({ goal: await goalResponse(input.cwd, goal, deps, signal) });
   } catch (error) {
     return errorResult('Goal read failed', error);
   }
