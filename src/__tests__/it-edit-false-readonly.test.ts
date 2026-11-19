@@ -232,13 +232,25 @@ describe('edit=false Phase 1 permission wiring', () => {
 
     const guidance = loadTemplate('progress_notes', 'en');
     const notesLocation = /progress-notes\/[0-9a-f]{64}\.log/;
-    const inputs = turns.map((turn) => ({ judge: Object.hasOwn(turn.schemaProperties, 'content'), input: String(turn.input) }));
-    const judgeInputs = inputs.filter(({ judge }) => judge).map(({ input }) => input);
-    const stepInputs = inputs.filter(({ judge }) => !judge).map(({ input }) => input);
+    const inputs = turns.map((turn) => {
+      expect(turn.input).toEqual(expect.any(String));
+      const envelope: unknown = JSON.parse(turn.input as string);
+      expect(envelope).toEqual({
+        taktCurrentInstructions: expect.any(String),
+        userInstruction: expect.any(String),
+      });
+      return {
+        judge: Object.hasOwn(turn.schemaProperties, 'content'),
+        ...(envelope as { taktCurrentInstructions: string; userInstruction: string }),
+      };
+    });
+    const judgeInputs = inputs.filter(({ judge }) => judge);
+    const stepInputs = inputs.filter(({ judge }) => !judge);
     expect(judgeInputs).toHaveLength(1);
-    expect(judgeInputs[0]).toContain(guidance);
-    expect(judgeInputs[0]).not.toMatch(notesLocation);
-    expect(stepInputs.some((input) => notesLocation.test(input))).toBe(true);
+    expect(judgeInputs[0]?.taktCurrentInstructions).toContain(guidance);
+    expect(judgeInputs[0]?.taktCurrentInstructions).not.toMatch(notesLocation);
+    expect(judgeInputs[0]?.userInstruction).not.toMatch(notesLocation);
+    expect(stepInputs.some(({ userInstruction }) => notesLocation.test(userInstruction))).toBe(true);
   });
 
   it.each([
