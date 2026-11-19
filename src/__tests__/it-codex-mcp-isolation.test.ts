@@ -144,6 +144,32 @@ describe('Codex CLI effective MCP configuration without API calls', () => {
     expect(result.secretInArtifacts).toBe(false);
   }, 30_000);
 
+  it.each([undefined, 'review'] as const)('disables every ambient MCP server for a strict read-only judge (profile=%s)', async (configProfile) => {
+    const userConfig = '[mcp_servers.global_docs]\ncommand="node"\n';
+    writeFileSync(join(cwd, 'config.toml'), userConfig);
+    if (configProfile !== undefined) {
+      writeFileSync(join(cwd, 'review.config.toml'), '[mcp_servers.profile_docs]\ncommand="node"\n');
+    }
+    const options = { cwd, childProcessEnv: env, configProfile, internalAgentIsolation: 'strict-readonly' as const };
+    const session = buildCodexSessionConfig(options);
+    const executablePath = resolveCodexSdkCli(undefined).executablePath;
+    const before = JSON.parse(await runCodexMcpList({
+      executablePath, cwd, env: session.env, configProfile, configOverrides: [],
+    })) as { name: string; enabled: boolean }[];
+    expect(before.some(({ enabled }) => enabled)).toBe(true);
+    if (configProfile !== undefined) {
+      expect(before).toContainEqual(expect.objectContaining({ name: 'profile_docs', enabled: true }));
+    }
+
+    const isolated = await prepareCodexMcpIsolation(options, session.config, session.env);
+    const after = JSON.parse(await runCodexMcpList({
+      executablePath: isolated.codexPathOverride, cwd, env: isolated.env,
+      configProfile, configOverrides: isolated.configOverrides,
+    })) as { name: string; enabled: boolean }[];
+    expect(after.filter(({ enabled }) => enabled)).toEqual([]);
+    expect(readFileSync(join(cwd, 'config.toml'), 'utf8')).toBe(userConfig);
+  }, 30_000);
+
   it.each([false, true])('does not treat an excluded ambient name as a retained MCP-only collision (all excluded=%s)', async (allExcluded) => {
     writeFileSync(join(cwd, 'config.toml'), '[mcp_servers.datadog]\ncommand="node"\n');
     const server = interpolateMcpEnv({ type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Token ${env:X}' } }, { X: 'synthetic' });

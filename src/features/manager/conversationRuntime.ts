@@ -11,6 +11,7 @@ import { createManagerTurnExecutor, type ManagerTurnInput } from './turnExecutor
 import type { ProviderType } from '../../infra/providers/types.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
+import { CODEX_SESSION_CONTRACT } from '../../shared/codex-session-contract.js';
 
 export interface PreparedConversationRuntime {
   provider: ProviderType;
@@ -44,6 +45,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
         mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,
         language: plan.ctx.lang,
         aiReviewPermissions: plan.ctx.aiReviewPermissions,
+        ...(plan.ctx.providerType === 'codex' ? { sessionContract: CODEX_SESSION_CONTRACT } : {}),
       })).digest('hex');
       const id = conversationId(identity);
       const existing = entries.get(id);
