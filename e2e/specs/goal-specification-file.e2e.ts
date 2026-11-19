@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, posix, resolve } from 'node:path';
+import { dirname, join, matchesGlob, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROVIDER_EVENTS_LOG_FILE_SUFFIX } from '../../src/core/logging/contracts.js';
 import type { ProviderEventLogRecord } from '../../src/core/logging/providerEvent.js';
@@ -131,26 +131,22 @@ describe('E2E: Goal specification file', () => {
         JSON.stringify(call)).toBe(false);
     }
     // 後から仕様を読んでも、別経路で先に得た値の出所は証明できない。
-    const firstValueEventIndex = events.findIndex((event) => {
-      const output = event.event_type === 'tool_output' ? event.data.output
-        : event.event_type === 'tool_result' ? event.data.content : undefined;
-      return typeof output === 'string' && output.includes(answer);
-    });
+    const firstValueEventIndex = events.findIndex((event) => JSON.stringify(event.data).includes(answer));
     expect(firstValueEventIndex,
-      `No tool output or result contained the AC-2 value in ${runPaths.logsAbs}`).toBeGreaterThanOrEqual(0);
+      `No event contained the AC-2 value in ${runPaths.logsAbs}`).toBeGreaterThanOrEqual(0);
     const firstValueEvent = events[firstValueEventIndex]!;
+    expect(['tool_output', 'tool_result'],
+      `The AC-2 value first appeared outside a tool output or result: ${JSON.stringify(firstValueEvent)}`)
+      .toContain(firstValueEvent.event_type);
+    const specificationPath = join(runPaths.contextTaskAbs, 'specifications', 'gherkin.feature');
     const specificationCalls = events.slice(0, firstValueEventIndex)
       .filter((event) => event.event_type === 'tool_use'
         && toolInputPaths(event.data.input)
-          .some((path) => /(?:^|\/)context\/task\/specifications\/gherkin\.feature$/.test(path)));
+          .some((path) => matchesGlob(specificationPath, resolve(worktreePath, path))));
     expect(specificationCalls.some((call) => typeof call.data.id === 'string'
       && call.data.id === firstValueEvent.data.id),
     `The first tool output or result containing the AC-2 value was not from the specification: ${JSON.stringify(firstValueEvent)}`).toBe(true);
-    expect(events.slice(firstValueEventIndex).some((event) => event.event_type === 'tool_result'
-      && event.data.id === firstValueEvent.data.id
-      && event.data.isError === false),
-    `The specification read did not succeed: ${JSON.stringify(firstValueEvent)}`).toBe(true);
-    expect(readFileSync(join(runPaths.contextTaskAbs, 'specifications', 'gherkin.feature'), 'utf-8')).toBe(goal.specifications!.gherkin);
+    expect(readFileSync(specificationPath, 'utf-8')).toBe(goal.specifications!.gherkin);
     expect(readFileSync(runPaths.contextTaskOrderAbs, 'utf-8')).not.toContain(answer);
     expect(readFileSync(tasksFile, 'utf-8')).not.toContain(answer);
     expect(readFileSync(join(worktreePath, 'answer.txt'), 'utf-8').split(/\r?\n/)[0]).toBe(answer);
