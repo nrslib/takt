@@ -1394,7 +1394,7 @@ describe('agent-usecases', () => {
     );
   });
 
-  it('decomposeTask は mcpServers を runAgent に伝搬する', async () => {
+  it('decomposeTask は MCP と外部ディレクトリの許可を runAgent に伝搬する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
         { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
@@ -1403,17 +1403,19 @@ describe('agent-usecases', () => {
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp' },
     };
+    const openCodeExternalDirectories = ['/repo/.takt/runs/review/context'];
 
     await decomposeTask('instruction', 2, {
       cwd: '/repo',
       persona: 'team-leader',
       mcpServers,
+      openCodeExternalDirectories,
     });
 
     expect(runAgent).toHaveBeenCalledWith(
       'team-leader',
       expect.any(String),
-      expect.objectContaining({ mcpServers }),
+      expect.objectContaining({ mcpServers, openCodeExternalDirectories }),
     );
   });
 
@@ -1680,7 +1682,7 @@ describe('agent-usecases', () => {
     );
   });
 
-  it('requestMoreParts は mcpServers を runAgent に伝搬する', async () => {
+  it('requestMoreParts は MCP と外部ディレクトリの許可を runAgent に伝搬する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: true,
       reasoning: 'enough',
@@ -1690,6 +1692,7 @@ describe('agent-usecases', () => {
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp' },
     };
+    const openCodeExternalDirectories = ['/repo/.takt/runs/review/context'];
 
     await requestMoreParts(
       'instruction',
@@ -1700,13 +1703,14 @@ describe('agent-usecases', () => {
         persona: 'team-leader',
         cancellablePartIds: [],
         mcpServers,
+        openCodeExternalDirectories,
       },
     );
 
     expect(runAgent).toHaveBeenCalledWith(
       'team-leader',
       expect.any(String),
-      expect.objectContaining({ mcpServers }),
+      expect.objectContaining({ mcpServers, openCodeExternalDirectories }),
     );
   });
 

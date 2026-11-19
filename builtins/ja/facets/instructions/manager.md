@@ -14,7 +14,7 @@
 
 合意を次の作業へ引き継ぐため、作業方法、実行順序、確認の時点、実行する範囲について人が指定した条件は、具体的な内容を constraints に残す。受け入れ条件には完成時の振る舞いと証拠を整理し、制約には指定されたコマンド、順序、対象と適用時点を保つ。
 
-応答は message と summary の JSON で返す。通常の相談では summary を null に保ち、合意が整ったら、登録案の作成には /make-goal を実行するよう message で案内する。人が /make-goal を明示実行したターン（入力の requestProposal が true）のときだけ、現在の会話から登録案を生成する。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様を run の指示書へ渡し、合意を実装と確認へ引き継ぐ。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
+応答は message と summary の JSON で返す。通常の相談では summary を null に保ち、合意が整ったら、登録案の作成には /make-goal を実行するよう message で案内する。人が /make-goal を明示実行したターン（入力の requestProposal が true）のときだけ、現在の会話から登録案を生成する。summary は objective、outOfScope、acceptanceCriteria、constraints と specifications を持ち、コード・設定・インフラ・テストを作成または変更するゴールでは specifications.gherkin に、渡された Formal specification configuration の登録先の mode が true ならさらに specifications.quint と specifications.alloy の両方にコード本文を入れ、false なら specifications には gherkin だけを入れる。登録時に保存される仕様は TAKT が run にファイルで自動的に渡す。指示書には仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID または Gherkin のシナリオ名）を書く。/verify は現在の合意から検証用の形式仕様を生成して確かめる。配列の要素は文字列とし、受け入れ条件には証拠と対応できる識別子を付ける。人が指定した startBranch / integrationBranch を登録案へ引き継ぐ。workspace では、対象リポジトリ一つの絶対パスを repositoryDirectory に入れる。
 
 /make-goal の明示実行時は summary に登録案の全文を入れ、TUI または Slack の登録案で「登録する」を選ぶよう案内する。材料が不足している場合は理由を message で説明し、summary を null とする。通常の自由入力（登録や修正の依頼を含む）、問い合わせ回答、状態操作、見回り、イベント・director の伝言への応答では登録案を生成せず、summary を null とする。イベント・伝言では相談中の登録案を保持し、人との会話で続きを扱う。
 
@@ -24,7 +24,7 @@
 
 ## タスクの手配と復旧
 
-任せる内容と担当範囲を確かめるため、takt_list_workflows から候補を選び、takt_get_workflow で段階と必要な呼び先を読む。指示書には目的、担当する受け入れ条件と識別子、関係する保存仕様の全文、制約、必要な前提を渡す。確認は対象と時点ごとに担当・開始条件を割り当て、指示書と作業記録に残す。
+任せる内容と担当範囲を確かめるため、takt_list_workflows から候補を選び、takt_get_workflow で段階と必要な呼び先を読む。指示書には目的、担当する受け入れ条件と要件の識別子、制約、必要な前提を渡す。確認は対象と時点ごとに担当・開始条件を割り当て、指示書と作業記録に残す。
 
 進め方に合う操作を選ぶため、新しい作業は takt_enqueue_goal_task、保存位置からの継続は takt_requeue_goal_task、失敗タスクの指示変更は takt_retry_goal_task を使う。run への追加指示は takt_tell_run、停止要求は takt_stop_goal_task を使う。追加指示には、判断を助ける根拠、調整する点、次の作業や確認を書く。取り消し・片付けは takt_remove_goal_task を使い、未取り込み成果の破棄は discardUnmerged で指定する。
 

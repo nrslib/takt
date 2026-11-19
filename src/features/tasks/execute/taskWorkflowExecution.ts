@@ -203,6 +203,7 @@ export async function executeTaskWorkflow(
   const maxSteps = maxStepsOverride ?? workflowConfig.maxSteps;
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,
+    goalId: options.goalId,
     workflowResourceRoot,
     workflowSystemCommandsPolicy,
     language: config.language,

@@ -296,6 +296,8 @@ export interface WorkflowExecutionOptions extends PrMergeOptions {
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   taskSpec?: ResolvedTaskSpec;
+  /** Goal whose saved specifications are staged into this run. */
+  goalId?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Overrides SIGINT ownership independently of the task signal. */
