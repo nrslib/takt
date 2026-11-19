@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, ENTER, ESC, approveSummary } from './manager-tui-fixtures.js';
+import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, managerConversationId, ENTER, ESC, approveSummary } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
 it.each(['/help', '/make-goal extra', '説明 /make-goal', '> /make-goal', '`/make-goal`', '~~~\n/make-goal\n~~~', '```\n/make-goal\n```', '```\n/make-goal', '````\n```\n/make-goal\n```\n````', '/go', '  /go  ', '/go extra', '/answer ID', '/pause ID', '/resume ID', '/abort ID', '/goal', '> /go', '説明 /go', '\x60\x60\x60\n/go\n\x60\x60\x60'])(
@@ -126,6 +126,6 @@ it('does not queue a summary instruction rejected by queue capacity or approve a
   approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
     { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true },
-    { kind: 'approve_summary', revision: 5 },
+    { kind: 'approve_summary', revision: 5, conversationId: managerConversationId },
   ]));
 });

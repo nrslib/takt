@@ -264,7 +264,7 @@ it('accepts Slack and TUI commands and reads and interrupts while another save i
   const opened = await input.open(selected, { deliver: async () => ({ kind: 'delivered' }) });
   await emit(message('next', '1700000000.000003'));
   expect(await input.submit({ attachmentId: opened.attachmentId, requestId: 'approve', speaker: selected.speaker,
-    command: { kind: 'approve_summary', revision: 4 } })).toMatchObject({ kind: 'accepted' });
+    command: { kind: 'approve_summary', revision: 4, conversationId: id } })).toMatchObject({ kind: 'accepted' });
   expect((await input.snapshot(opened.attachmentId)).operationId).toBe(operationId);
   await input.submit({ attachmentId: opened.attachmentId, requestId: 'stop', speaker: selected.speaker,
     command: { kind: 'abort_turn', operationId, generation: 5 } });
@@ -315,7 +315,7 @@ it('keeps approval revision and conversation identity through a Slack button', a
   await emit({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, channel: { id: 'C1' }, user: { id: 'U1' },
     container: { type: 'message', channel_id: 'C1', message_ts: 'proposal' }, message: { ts: 'proposal', thread_ts: 'origin' },
     actions: [{ type: 'button', action_id: 'takt_goal_approve', value: JSON.stringify({ conversationId: id, revision: 4 }) }] } });
-  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, requirePending: true } });
+  expect(events[0]!.event).toMatchObject({ kind: 'human_command', command: { kind: 'approve_summary', revision: 4, conversationId: id, requirePending: true } });
   expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: 'origin' }));
 });
 it('reports failed persistence without claiming business acceptance or retrying', async () => {

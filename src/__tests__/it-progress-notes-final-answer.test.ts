@@ -34,15 +34,21 @@ vi.mock('@openai/codex-sdk', () => {
     return {
       id,
       runStreamed: async (input: unknown) => {
-        const prompt = String(input);
-        inputs.push(prompt);
+        expect(input).toEqual(expect.any(String));
+        const envelope: unknown = JSON.parse(input as string);
+        expect(envelope).toEqual({
+          taktCurrentInstructions: expect.any(String),
+          userInstruction: expect.any(String),
+        });
+        const { userInstruction } = envelope as { userInstruction: string };
+        inputs.push(userInstruction);
         const turn = inputs.length;
         return {
           events: (async function* () {
             yield { type: 'thread.started', thread_id: id };
             yield { type: 'item.completed', item: { id: `note-${turn}`, type: 'agent_message', text: `Progress note ${turn}: checked the row. Remaining: answer.` } };
             yield { type: 'item.completed', item: { id: `tool-${turn}`, type: 'command_execution', command: 'cat row', aggregated_output: 'row', exit_code: 0, status: 'completed' } };
-            yield { type: 'item.completed', item: { id: `answer-${turn}`, type: 'agent_message', text: finalAnswerFor(prompt) } };
+            yield { type: 'item.completed', item: { id: `answer-${turn}`, type: 'agent_message', text: finalAnswerFor(userInstruction) } };
             yield { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } };
           })(),
         };

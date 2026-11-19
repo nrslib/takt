@@ -138,7 +138,8 @@ export async function prepareCodexMcpIsolation(
   ];
   const json = await runCodexMcpList({
     executablePath: codexPathOverride, cwd: options.cwd, env: codexEnvironment,
-    configOverrides: sessionOverrides, abortSignal: options.abortSignal,
+    configOverrides: sessionOverrides, configProfile: options.configProfile,
+    abortSignal: options.abortSignal,
   });
   const ownServers = options.preparedMcp?.config?.mcp_servers ?? {};
   // CLI paths split on dots without parsing quoted keys. Serialize unusual names as one table,

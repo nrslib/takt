@@ -22,6 +22,7 @@ import {
   completeGoalInputSchema,
   mergeGoalPrInputSchema,
   reopenGoalInputSchema,
+  updateGoalBranchesInputSchema,
   abortGoalInputSchema,
   goalDiffInputSchema,
   goalHistoryInputSchema,
@@ -30,6 +31,10 @@ import {
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
   answerGoalQuestionInputSchema,
+  listGoalRegistrationProposalsInputSchema,
+  getGoalRegistrationProposalInputSchema,
+  approveGoalRegistrationInputSchema,
+  rejectGoalRegistrationInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -62,12 +67,13 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { answerTaktGoalQuestion, askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { approveTaktGoalRegistration, getTaktGoalRegistrationProposal, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
-import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
+import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal, updateTaktGoalBranches } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
 import { workspaceResult } from './workspaceResponse.js';
@@ -96,6 +102,8 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_get_run',
   'takt_list_goals',
   'takt_get_goal',
+  'takt_list_goal_registration_proposals',
+  'takt_get_goal_registration_proposal',
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
@@ -107,7 +115,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_remove_goal_task',
   'takt_stop_goal_task', 'takt_wait_command',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
-  'takt_reopen_goal',
+  'takt_reopen_goal', 'takt_update_goal_branches',
   'takt_merge_goal_pr',
   'takt_tell_run',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
@@ -270,7 +278,7 @@ export function createTaktMcpServer(
     }, (input) => workspaceOperation(async () => renameManagerWorkspace(await currentAssignment(), input.name, globalConfigDirectory)));
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
-    title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
+    title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true, state: true }),
   }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, 'workflow'));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',
@@ -365,6 +373,10 @@ export function createTaktMcpServer(
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target. To correct evidence for an included SHA while awaiting_merge, call takt_complete_goal with the same expectedSha and corrected summary only if that SHA is still the current goal branch tip. If the goal branch tip has advanced, review the new tip again and resubmit takt_complete_goal with the new expectedSha, summary, and humanChecks. Without evidence corrections, use takt_check_goal_completion. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal reopen failed', (deps) => reopenTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
+    server.registerTool('takt_update_goal_branches', {
+      title: 'Correct a goal integration branch', description: 'Correct the saved integration branch of a goal whose pull request destination changed after registration, with a required reason saved in its work log. Updates the goal record and, when completion evidence is saved, the completion target branch, so inclusion is checked against the corrected branch. Does not change the base of an existing goal PR; change it on the hosting service as well. Rejects completed, paused and aborted goals and the goal branch itself as the destination. Afterwards use takt_check_goal_completion to complete the goal when its content is already included in the corrected branch. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
+      inputSchema: updateGoalBranchesInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal branch correction failed', (deps) => updateTaktGoalBranches(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_check_goal_completion', {
       title: 'Check goal PR completion', description: 'Complete an awaiting-merge goal when its saved PR is merged from the goal branch into the saved integration branch, even after squash merging or additional PR commits. A matching saved PR that is closed without merging prevents completion even if the content is included. A created goal retaining completion evidence and its merged PR can also complete; other created goals are rejected. Awaiting-merge goals use the existing content comparison when the matching PR is open, no PR is saved, GitHub is unavailable, or PR identity or branches do not match. Paused and aborted goals cannot complete. Use this after a PR merge task completion event reports a merge, or when patrol discovers an external human merge; no corrective integration task is needed. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: goalWriteInputSchema,
@@ -419,26 +431,44 @@ export function createTaktMcpServer(
       },
       (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
+    server.registerTool(
+      'takt_approve_goal_registration',
+      {
+        title: 'Approve a goal registration',
+        description: 'Approve the pending goal registration proposal selected by revision and conversationId, with the same handling as choosing to register in the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Registers the goal and returns it. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals and their text with takt_get_goal_registration_proposal.',
+        inputSchema: approveGoalRegistrationInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal registration approval failed', (deps) => approveTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
+    );
+    server.registerTool(
+      'takt_reject_goal_registration',
+      {
+        title: 'Reject a goal registration',
+        description: 'Dismiss the pending goal registration proposal selected by revision and conversationId without registering the goal, with the same handling as dismissing the TUI registration dialog. conversationId is required and must be the owning conversation returned by takt_list_goal_registration_proposals. Returns the dismissed revision. A changed proposal or a conversationId that does not own the proposal returns an error. Read pending proposals with takt_list_goal_registration_proposals and their text with takt_get_goal_registration_proposal.',
+        inputSchema: rejectGoalRegistrationInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
+    );
   }
 
   server.registerTool(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[2],
     {
       title: 'List TAKT goals',
-      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors. Responses fit 64 KiB, with explicit truncation. Use offset for healthy goals and errorOffset for errors, both defaulting to 0. Optional limit (1-50, default 50) bounds each collection. Pass nextOffset as offset and errorPage.nextOffset as errorOffset for continuation, or use takt_get_goal for one healthy goal.',
+      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors. Responses fit 64 KiB, with explicit truncation. Use offset for healthy goals and errorOffset for errors, both defaulting to 0. Optional limit (1-50, default 50) bounds each collection. Optional state selects open, finished (completed or aborted) or all goals (default all); invalid records are always reported as errors. Pass nextOffset as offset and errorPage.nextOffset as errorOffset for continuation, or use takt_get_goal for one healthy goal. pullRequest may include state (open, merged or closed) when GitHub confirms the saved pull request; state is omitted when it cannot be confirmed.',
       inputSchema: listGoalsInputSchema,
     },
-    (input) => operation(input.cwd, 'Goal list failed', (deps) => listTaktGoals(projectInput(input, deps), deps)),
+    (input, extra) => operation(input.cwd, 'Goal list failed', (deps) => listTaktGoals(projectInput(input, deps), deps, turnSignal(extra.signal))),
   );
 
   server.registerTool(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[3],
     {
       title: 'Get a TAKT goal',
-      description: 'Read goal state, completion, pending questions and recent work. Select saved fields with path, optionally recordId, offset/limit or textOffset/maxBytes to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read goal state, completion, pending questions and recent work. Select saved fields with path, optionally recordId, offset/limit or textOffset/maxBytes to retrieve omitted content. pullRequest may include state (open, merged or closed) when GitHub confirms the saved pull request; state is omitted when it cannot be confirmed. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: getGoalInputSchema,
     },
-    (input) => operation(input.cwd, 'Goal read failed', (deps) => getTaktGoal(projectInput(input, deps), deps)),
+    (input, extra) => operation(input.cwd, 'Goal read failed', (deps) => getTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
   );
 
   server.registerTool(
@@ -460,10 +490,30 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[1],
     {
       title: 'Get TAKT run details',
-      description: 'Read run metadata and body-free step/report lists with offset/limit. Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 task text; pass task.nextOffset as offset to continue. Use view log and optional stepIndex (default last) for a log tail, or view report and report filename for one report. Use view instructions with offset/limit (1-50) to list saved instructions, then instructionId and offset/maxBytes for their forward UTF-8 text. Text uses offset/maxBytes; log offset counts backwards from the end. Follow nextOffset to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read run metadata and body-free step/report lists with offset/limit. currentStep is the current step recorded for the run: the top-level step, or the branch step once a branch of a top-level parallel step starts a step of its child workflow. currentStepPath lists the running position as { workflow, step } entries from the top-level workflow down to the leaf step (the top-level step itself, a step inside child workflows, a parallel step itself, or a _loop_judge_ step in the workflow of the step that triggered it), and only its last entry carries startedAt and executionCount. When currentStep names a top-level parallel branch, the path goes through the parallel step and that branch while the latest step started in that branch in the current run of the parallel step runs. Once that step has completed or the child workflow of the branch has ended, the leaf is the parallel step itself, with the start of its current run, until the branch logs its next start. currentStepStartedAt and currentStepExecutionCount are the same values and belong to that leaf, not to currentStep. executionCount counts starts of the leaf from the same call site in the latest log; 0 means its start is not logged yet and the path holds only currentStep, and null means unknown. Task text is omitted by default. Use view task with offset/maxBytes for forward UTF-8 task text; pass task.nextOffset as offset to continue. Use view log and optional stepIndex (default last) for a log tail, or view report and report filename for one report. Use view instructions with offset/limit (1-50) to list saved instructions, then instructionId and offset/maxBytes for their forward UTF-8 text. Text uses offset/maxBytes; log offset counts backwards from the end. Follow nextOffset to retrieve omitted content. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: getRunInputSchema,
     },
     (input) => operation(input.cwd, 'Run read failed', (deps) => getTaktRun(projectInput(input, deps), deps)),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[4],
+    {
+      title: 'List goal registration proposals',
+      description: 'List the goal registration proposal currently pending registration approval in the manager conversation of this project, the same state as the TUI registration dialog. Returns at most one proposal summary with its revision, conversationId, repositoryDirectory and fields (path, totalBytes and, for lists, totalCount), or an empty list when nothing is pending. Proposal text is not included; read it with takt_get_goal_registration_proposal before approving. Responses fit 64 KiB, with explicit truncation.',
+      inputSchema: listGoalRegistrationProposalsInputSchema,
+    },
+    (input) => operation(input.cwd, 'Goal registration proposal list failed', (deps) => listTaktGoalRegistrationProposals(projectInput(input, deps), deps), false),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[5],
+    {
+      title: 'Get a goal registration proposal',
+      description: 'Read the pending goal registration proposal owned by conversationId, as returned by takt_list_goal_registration_proposals. Select path from its fields list, for example summary.objective or summary.acceptanceCriteria.0, and use textOffset/maxBytes for forward UTF-8 text or offset/limit (1-50) for lists. Follow nextOffset for continuation. Without path, returns the whole proposal. Every response includes revision; approve with the revision you read. A conversationId that does not own the proposal returns an error. Responses fit 64 KiB, with explicit truncation.',
+      inputSchema: getGoalRegistrationProposalInputSchema,
+    },
+    (input) => operation(input.cwd, 'Goal registration proposal read failed', (deps) => getTaktGoalRegistrationProposal(projectInput(input, deps), deps), false),
   );
 
   if (options.toolSet === undefined || options.toolSet === 'all') {

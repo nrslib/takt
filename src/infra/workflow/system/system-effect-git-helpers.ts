@@ -67,7 +67,7 @@ export function fastForwardPrBranch(cwd: string, branch: string): void {
 }
 
 export function mergeBaseBranch(cwd: string, branch: string): void {
-  runGit(cwd, ['merge', buildRemoteTrackingRef(branch)]);
+  runGit(cwd, ['merge', '--ff', '--no-edit', buildRemoteTrackingRef(branch)]);
 }
 
 export function isMergeInProgressError(error: unknown): boolean {

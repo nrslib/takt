@@ -104,6 +104,8 @@ Section maps are optional. Facets can be referenced directly by bare name (e.g.,
 
 `instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
 
+For `policy` and `knowledge`, facets with identical content after `$param` substitution and `include` / `extends` expansion are included only once: the first occurrence is kept, preserving order. This applies regardless of reference names, paths, or whether the content comes from a file or an inline definition. References to the same real path are both retained when their source layers resolve `include` / `extends` differently and produce different content. Repeated `instruction` entries and repeated `{{include:...}}` directives within a facet are preserved.
+
 ### Workflow-wide rules (`all_steps.rules`)
 
 Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
@@ -1057,6 +1059,17 @@ steps:
 ```
 
 Presets resolve exactly like `provider_options.extends` (project → global → builtins, with repertoire package scoping). The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). An unresolved name fails fast. `system` and `workflow_call` steps reject `capabilities`.
+
+
+### `repository_identity`
+
+`repository_identity: true` names the project's repository for `gh` and `glab` in a task that runs in a clone (`worktree: true`), which has no `origin` remote for them to read. TAKT passes `GH_REPO` or `GITLAB_REPO` to this workflow's agent steps, command quality gates, and system `command` inputs; no remote and no credential is added.
+
+```yaml
+repository_identity: true
+```
+
+It is off by default, so a workflow that does not operate on the repository gets nothing. Each workflow decides for itself: a called workflow neither inherits the caller's declaration nor loses its own. Nothing is named for a task that runs in the project root, and a variable you set yourself is never overridden. The variables, the host rules, and the GitHub / GitLab detection are in [Repository identity in clones](configuration.md#repository-identity-in-clones).
 
 
 ### `workflow_config.runtime`

@@ -1837,6 +1837,11 @@ describe('prompt eval probe lifecycle', () => {
 
     const { stdout } = await runSmokeScript(script, [], process.env, {
       timeoutMs: OWNED_ENTRYPOINT_TIMEOUT_MS,
+    }).catch((error: unknown) => {
+      if (error instanceof Error && 'stderr' in error && typeof error.stderr === 'string') {
+        throw new Error(`${error.message}\n${error.stderr}`, { cause: error });
+      }
+      throw error;
     });
     const result = parseProbeResult(stdout) as { workspace: string; temporaryRoot: string };
     if (existsSync(result.workspace)) {

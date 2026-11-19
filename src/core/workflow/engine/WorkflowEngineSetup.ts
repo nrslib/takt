@@ -361,6 +361,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   );
 
   const stepExecutor = new StepExecutor({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     reportReferenceObserver: {
       resolved: (step, currentStep, reports) => {
         params.emitEvent('report:resolved', {
@@ -543,6 +544,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   });
 
   const arpeggioRunner = new ArpeggioRunner({
+    goalSpecificationPaths: params.options.goalSpecificationPaths,
     optionsBuilder,
     stepExecutor,
     liveIntervention: params.options.liveIntervention,
@@ -594,6 +596,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     abortSignal: params.options.abortSignal,
     task: params.task,
     projectCwd: params.projectCwd,
+    childProcessEnv: params.options.childProcessEnv,
     getCwd: params.getCwd,
     getContextDirectory: () => params.getRunPaths().contextAbs,
     createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(

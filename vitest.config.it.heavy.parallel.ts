@@ -1,5 +1,6 @@
 import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
+import { heavyItGuard } from './scripts/vitest-heavy-it-guard.js';
 import {
   commonSrcTestConfig,
   heavyParallelItTestExcludes,
@@ -12,6 +13,7 @@ export function resolveHeavyItMaxWorkers(cpuCount: number, isCi: boolean): numbe
 }
 
 export default defineConfig({
+  plugins: [heavyItGuard],
   test: {
     ...commonSrcTestConfig,
     ...parallelSrcRunnerConfig,

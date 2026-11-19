@@ -26,7 +26,7 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { appendGoalWorkLog } from '../infra/goals/workLog.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { ManagerClientDouble, cwd as summaryRepository, ENTER, UP } from './helpers/manager-tui-fixtures.js';
+import { ManagerClientDouble, cwd as summaryRepository, managerConversationId, ENTER, UP } from './helpers/manager-tui-fixtures.js';
 import { conversationRecord, writeLegacyConversation } from './helpers/conversation-fixtures.js';
 import { harness, input } from './helpers/controlledDaemon.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
@@ -174,6 +174,35 @@ describe('manager summary transcript and terminal height', () => {
       context.stdin.write('\x14');
       await waitFor(async () => expect(await context.viewport()).toContain(getLabel('manager.epics.listTitle', lang)));
       expect(context.client.submit).not.toHaveBeenCalled();
+    } finally { context.dispose(); }
+  });
+
+  it('erases the earlier log from the terminal on /clear, shows the notice and later messages, and keeps the log away after resizing', async () => {
+    const context = mountTerminal('en', null);
+    const notice = getLabel('manager.conversation.cleared', 'en');
+    try {
+      const earlier = randomUUID();
+      context.client.output({ kind: 'user_message', operationId: earlier, message: 'earlier question' });
+      context.client.output({ kind: 'result', operationId: earlier, result: { kind: 'reply', message: 'earlier reply' } });
+      await waitFor(async () => expect(await context.text()).toContain('earlier reply'));
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      context.stdin.write('\x1b[200~/clear\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('/clear'));
+      context.stdin.write(ENTER);
+      await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: '/clear' }]));
+      const operationId = await context.client.operation();
+      context.client.output({ kind: 'result', operationId, result: { kind: 'notice', message: notice } });
+      await waitFor(async () => expect(await context.text()).toContain(notice));
+      expect(await context.text()).not.toContain('earlier');
+      context.client.output({ kind: 'user_message', operationId: randomUUID(), message: 'later question' });
+      await waitFor(async () => expect(await context.text()).toContain('later question'));
+      for (const columns of [60, 80]) {
+        context.resize(24, columns);
+        const text = await context.text();
+        expect(text).toContain(notice);
+        expect(text).toContain('later question');
+        expect(text).not.toContain('earlier');
+      }
     } finally { context.dispose(); }
   });
 
@@ -493,7 +522,7 @@ describe('manager summary transcript and terminal height', () => {
       }
       expect(text.indexOf(previous.objective)).toBeLessThan(text.indexOf(next.objective));
       context.stdin.write(UP); context.stdin.write(ENTER);
-      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5, conversationId: managerConversationId }));
     } finally { context.dispose(); }
   });
 

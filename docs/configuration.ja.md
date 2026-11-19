@@ -250,7 +250,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `auto_fetch` | boolean | `false` | クローン作成前にリモートを fetch してクローンを最新に保つ |
 | `base_branch` | string | - | クローン作成のベースブランチ（デフォルトはリモートのデフォルトブランチ） |
 | `workflow_categories_file` | string | - | カテゴリファイルのパス（[Workflow カテゴリ](#workflow-カテゴリ) 参照。デフォルトのユーザー上書きは `workflow-categories.yaml`） |
-| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（git リモート URL から自動検出） |
+| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー。自動検出するのは `github.com` と `gitlab.com` のリモートだけです。`*.ghe.com` やセルフホストを含むそれ以外のホストでは設定してください（[clone でのリポジトリの指定](#clone-でのリポジトリの指定)） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。`assistant` は assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）をルーティングし、OpenCode の report retry 失敗後の Report phase fallback provider としても使われます。project の `takt_providers.assistant` は global の `takt_providers.assistant` を上書きします。どちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `telemetry` | object | `{ routing_decisions: false }` | local-only の routing decision 記録。デフォルト無効（opt-in）です。`takt telemetry enable` または `routing_decisions: true` で有効化すると、auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。 |
 | `analytics` | object | 無効 | local-only の analytics 収集。`enabled` で有効化し、`events_path` でイベントディレクトリを変更（デフォルト `~/.takt/analytics/events`）、`retention_days` で `takt purge` が適用する保持期間を設定します（デフォルト: 30日）。TAKT は analytics イベントをアップロードしません。 |
@@ -419,7 +419,7 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`、comments `true`（global 設定またはデフォルト由来） | 要件を Alloy／Quint の両方の記法でも表現するガイダンスを追加するプロジェクト上書きです。object 形式では `mode`、`comments`、`model_check_timeout_seconds` を独立して指定でき、未指定フィールドは global またはデフォルトへフォールバックします。`comments: false` は自然言語の意味コメント指示だけを外し、形式仕様の量・要件網羅・構文と正確性の指示は維持します。`"Y/n"`／`"y/N"` への回答はセッション内だけで保持し、会話の再開時には改めて解決します。ACP と非 TTY では質問せず設定の既定回答を採用します。Gherkin のガイダンスは開発・実装タスクにだけ適用されます。廃止済みの `assistant.gherkin` は警告後に無視され、変換・永続化・ファイル更新は行いません。 manager もこの設定を使い、質問せず `true`／`"Y/n"` では両記法を含め、`false`／`"y/N"` では含めません。TUI・Slack の manager の会話でも `/verify` を使えます。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
+| `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバル設定と自動検出を上書き） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。project の `takt_providers.assistant` は global assistant provider/model を上書きし、assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）と、OpenCode の report retry 失敗後の Report phase fallback に使われます。project と global の assistant がどちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `workflow_mcp_servers` | object | - | MCP サーバートランスポートポリシー（グローバルを上書き） |
 | `workflow_arpeggio` | object | - | Arpeggio カスタムコードポリシー（グローバルを上書き） |
@@ -487,6 +487,18 @@ workflow_system_commands:
 別cloneでの実行にも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
 
 pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
+
+## clone でのリポジトリの指定
+
+`worktree: true` のタスクは `origin` リモートのない clone で動くため、そこでは `gh` や `glab` が git リモートからリポジトリを特定できません。[`repository_identity: true`](workflows.ja.md#repository_identity) を宣言した workflow では、TAKT がプロジェクトルートの `origin` を読み、その workflow のエージェントのステップ、コマンドの品質ゲート、system の `command` 入力にリポジトリを渡します。宣言がなければ何も渡さないので、リポジトリを操作しない workflow はそのままです。
+
+- GitHub: `GH_REPO=HOST/OWNER/REPO`。gh の既定のホストが `github.com` とは限らないため、`github.com` でもホストを必ず付けます。`GH_ENTERPRISE_TOKEN` または `GITHUB_ENTERPRISE_TOKEN` が設定されているときは、`GH_HOST` が同じホストを指す場合に限って GitHub Enterprise Server のホストを付けます。呼び出し側がそのトークンのために設定していないホストへ、トークンを向けないためです。
+- GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`。スキームは origin のものです（`http` は `http` のまま、ssh の origin は `https`）。`GITLAB_TOKEN`、`GITLAB_ACCESS_TOKEN`、`OAUTH_TOKEN`、`JOB_TOKEN` のいずれかが設定されているときは、`GITLAB_HOST`（または `GITLAB_URI` / `GL_HOST`）が同じスキーム、ホスト、実効ポート（`http` は 80、`https` は 443。スキームのない値は `https` とみなします）を指す場合に限って付けます。トークンを設定したホストとは別のホストを TAKT が指定しないようにするためです。比較するのは環境変数だけで、glab はプロトコルと API のホストを、これらの変数のスキームではなく自身の設定（`api_protocol`、`api_host`）から決めます。TAKT はその設定を見られません。
+- リポジトリは常にプロジェクトルートの `origin` で、ホストは通常の DNS 名（または角括弧付きの IPv6 アドレス）でなければなりません。それ以外は無視します。`origin` が fork で、`gh repo set-default` で upstream を選んでいる場合、TAKT はその選択（`remote.<name>.gh-resolved`）を読まず、fork を指定してしまいます。その場合は `GH_REPO` を自分で設定してください。設定した値はそのまま渡されます。
+
+利用者がすでに設定している変数は上書きしません。リモートや認証情報は追加せず、URL に含まれるユーザー名やトークンも使いません。`repository_identity` のない workflow、プロジェクトルートで動くタスク、`origin` がないか URL として認識できない場合、プロバイダーが分からない場合は何も追加しません。system の `command` 入力は `HOME` なしで動くため、そこでの `gh` / `glab` には別途認証が必要です。
+
+プロバイダーは `vcs_provider` が設定されていればそれ（プロジェクトがグローバルを上書き）を使い、なければ `origin` のホスト名から検出します。`github.com` は GitHub、`gitlab.com` は GitLab です。`*.ghe.com` の GitHub Enterprise Cloud、GitHub Enterprise Server、セルフホストの GitLab など、それ以外のホストは検出しないので、`vcs_provider` を設定してください。`origin` のホストが ssh 専用のホスト（`ssh.github.com`、`altssh.gitlab.com` など）や `~/.ssh/config` の別名（`github.com-work` など）で、Web や API を提供していない場合は、`vcs_provider` を設定しても正しい値になりません。`GH_REPO` / `GITLAB_REPO` を自分で設定してください。設定した値はそのまま渡されます（上記のとおり）。
 
 ## 環境変数上書き
 
@@ -1713,7 +1725,11 @@ runtime profile または capability preset で設定できます。legacy モ�
 
 #### Codex の context compaction からの復帰
 
-Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行し、provider call ごとに3回までです。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+Codex の developer instructions には、TAKT が各 turn に渡す現在の担当指示を優先する固定の契約を設定します。担当、persona、フェーズなどの現在の指示は turn の `taktCurrentInstructions` に、作業依頼は `userInstruction` に分けて渡します。現在の担当指示は過去の担当や progress notes より優先されます。利用者の既存の `developer_instructions` 設定はこの契約で上書きしますが、設定ファイルは変更しません。契約の変更前に作られた workflow session は新しい session key では再開せず、現在の指示から開始します。報告フェーズでは保存済みの作業結果を新しい依頼に含めます。
+
+Codex が Phase 1 で `compacted` event を記録し、同じ session の turn が完了した場合、TAKT は応答が現在の担当ステップを完了したか判定します。判定には MCP ツールを持たない独立した読み取り専用の Codex session を使います。具体的な指摘を伴う REJECT もレビューの完了として扱い、元の応答を返します。担当を見失った場合は作業中の thread を resume し、元の Phase 1 指示と現在の担当・権限を再提示します。判定に失敗した場合や結果が不正な場合は、候補応答を採用せず provider call を失敗にします。
+
+復帰 turn でツールを使わず再び compaction が起き、さらに復帰が必要になる状態が3回連続すると失敗を返します。復帰 turn でツールを使うと回数をリセットするため、復帰の累計回数には上限を設けません。progress notes の利用や保存の成否は回数に影響しません。assistant の応答文から compaction を推測することはありません。この event を発行しない provider や復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理です。
 
 #### Codex の fast mode (`fast_mode`)
 

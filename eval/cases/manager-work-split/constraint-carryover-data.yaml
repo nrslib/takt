@@ -110,6 +110,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 65
@@ -149,6 +150,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: 売上 CSV の読み込みと入力検証の土台を用意する
@@ -172,6 +174,7 @@ ja:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 65
@@ -369,6 +372,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 46
@@ -408,6 +412,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         task:
           content: Provide sales CSV loading and input validation
@@ -431,6 +436,7 @@ en:
         currentIteration: null
         currentStepStartedAt: null
         currentStepExecutionCount: null
+        currentStepPath: null
         phase: null
         taskOmission:
           totalBytes: 46

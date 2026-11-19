@@ -1,4 +1,6 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
 import type {
   InternalAgentIsolation,
@@ -34,6 +36,8 @@ export interface ProviderCallOptions {
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   executionPhase?: 1 | 2 | 3;
+  /** Current TAKT assignment for a Phase 1 compaction handoff. */
+  compactionAssignment?: string;
   /** Expose only the built-in Read tool for a strict read-only call. */
   allowReadonlyFileRead?: boolean;
   /** Exact files that the /verify interpretation call may read. */
@@ -94,8 +98,19 @@ export interface ProviderCompactSessionOptions {
 
 export interface ProviderAgent {
   call(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
-  /** Resume the same provider session once after a Phase 1 context_compacted event. */
+  /** Resume the same provider session after a Phase 1 context_compacted event. */
   recoverFromCompaction?(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
+  /** Codex-only semantic check for a completed Phase 1 response after compaction. */
+  assessCompactedResponse?(
+    instruction: string,
+    response: AgentResponse,
+    options: ProviderCallOptions,
+  ): Promise<{
+    decision: 'complete' | 'needs_recovery' | 'error';
+    error?: string;
+    failureCategory?: AgentFailureCategory;
+    usage?: ProviderUsageSnapshot;
+  }>;
 }
 
 export interface Provider {

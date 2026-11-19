@@ -51,7 +51,7 @@ export const ApprovalSchema = z.object({
 export const RunningOperationSchema = z.object({
   operationId: z.uuid(),
   directorConversationId: directorConversationId.optional(),
-  kind: z.enum(['message', 'approve_summary', 'dismiss_summary', 'answer_question', 'pause_goal', 'resume_goal', 'abort_goal']),
+  kind: z.enum(['message', 'approve_summary', 'dismiss_summary', 'answer_question', 'pause_goal', 'resume_goal', 'abort_goal', 'delete_goal']),
   owner: z.object({
     pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     identity: z.object({ startTime: nonempty }).strict(),

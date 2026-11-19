@@ -216,6 +216,10 @@ export class TaskRunner {
     return this.deletion.deleteTaskWithCleanup(name, kind, cleanup);
   }
 
+  deleteFinishedGoalTasks(goalId: string): void {
+    this.deletion.deleteFinishedGoalTasks(goalId);
+  }
+
   exceedTask(taskName: string, options: ExceedTaskOptions): void {
     this.exceed.exceedTask(taskName, options);
   }

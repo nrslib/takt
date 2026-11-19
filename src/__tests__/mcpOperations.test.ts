@@ -73,6 +73,7 @@ describe('MCP task goal integration', () => {
     vi.spyOn(goalGit, 'resolveGoalBranchSha').mockResolvedValue(goalSha);
     vi.spyOn(goalGit, 'isGoalCommitIncluded').mockResolvedValue(true);
     vi.spyOn(goalGit, 'runGoalGit').mockResolvedValue({ output: Buffer.alloc(0), code: 0, truncated: false });
+    vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
@@ -82,9 +83,49 @@ describe('MCP task goal integration', () => {
     expect(output.tasks[0]).toMatchObject({ status: 'completed', goalIntegration: 'integrated' });
     expect(output.tasks[0]).not.toHaveProperty('goalIntegrationReason');
     expect(goalDoubles.get).toHaveBeenCalledWith(goalId);
-    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, undefined);
-    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, undefined, {});
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined, {});
     expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('builds the Git environment once for completed tasks across multiple goals', async () => {
+    const otherGoalId = '650e8400-e29b-41d4-a716-446655440001';
+    const environment = { GIT_LITERAL_PATHSPECS: '1' };
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue(environment);
+    goalDoubles.get.mockImplementation(async (id: string) => ({ ...goalRecord(), id, branch: `branch-${id}` }));
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([
+      task({ name: 'task-1' }),
+      task({ name: 'task-2' }),
+      task({ name: 'task-3', goalId: otherGoalId }),
+    ]);
+    const output = await list();
+    expect(output.tasks.map((entry) => entry.goalIntegration)).toEqual(['integrated', 'integrated', 'integrated']);
+    expect(buildEnvironment).toHaveBeenCalledTimes(1);
+    expect(buildEnvironment).toHaveBeenCalledWith(cwd, undefined);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, `branch-${goalId}`, undefined, environment);
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined, environment);
+  });
+
+  it('builds the Git environment again on the next list call', async () => {
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
+    await list();
+    await list();
+    expect(buildEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not build the Git environment when no task needs a Git check', async () => {
+    const buildEnvironment = vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockResolvedValue({});
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ goalId: undefined })]);
+    const output = await list();
+    expect(output.tasks[0]).not.toHaveProperty('goalIntegration');
+    expect(buildEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('reports unknown when Git environment preparation fails', async () => {
+    vi.spyOn(goalGit, 'buildGoalGitEnvironment').mockRejectedValue(new Error('filter config unavailable'));
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown' });
+    expect(output.tasks[0]!.goalIntegrationReason).toContain('filter config unavailable');
   });
 
   it('returns not_integrated for an existing completion commit outside the goal history', async () => {
@@ -107,10 +148,10 @@ describe('MCP task goal integration', () => {
 
     const result = await listTaktTasks({ cwd }, {}, controller.signal);
 
-    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, controller.signal);
-    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, controller.signal);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, controller.signal, {});
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, controller.signal, {});
     expect(goalGit.runGoalGit).toHaveBeenCalledWith(
-      cwd, ['cat-file', '-e', '--', `${completionSha}^{commit}`], 0, controller.signal, [0, 1, 128],
+      cwd, ['cat-file', '-e', '--', `${completionSha}^{commit}`], 0, controller.signal, [0, 1, 128], {},
     );
     expect(result.isError).toBe(true);
     expect(firstTextContent(result.content)).toContain(abortReason.message);
@@ -364,6 +405,53 @@ describe('MCP goal operations', () => {
       expect(page.errorPage).toMatchObject({ totalCount: count, returnedCount: 0, omittedCount: count, offset: errorOffset, nextOffset: null, truncated: true });
     }
   });
+  describe('state filter', () => {
+    const completion = {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Integrated', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    };
+    const goals: Goal[] = [
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000001' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000002', status: 'completed', completion },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000003', executionStatus: 'paused' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000004', executionStatus: 'aborted' },
+      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000005', status: 'awaiting_merge', completion },
+    ];
+    const ids = (indices: number[]) => indices.map((index) => goals[index]!.id);
+    async function listIds(input: Omit<Parameters<typeof listTaktGoals>[0], 'cwd'>) {
+      const output = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', ...input }, {})).content)) as {
+        goals: { id: string }[]; totalCount: number; nextOffset: number | null;
+      };
+      return { ids: output.goals.map(({ id }) => id), totalCount: output.totalCount, nextOffset: output.nextOffset };
+    }
+    beforeEach(() => goalDoubles.list.mockResolvedValue({ goals, errors: [] }));
+
+    it.each([
+      { state: undefined, expected: [0, 1, 2, 3, 4] },
+      { state: 'all' as const, expected: [0, 1, 2, 3, 4] },
+      { state: 'open' as const, expected: [0, 2, 4] },
+      { state: 'finished' as const, expected: [1, 3] },
+    ])('lists $state goals', async ({ state, expected }) => {
+      expect(await listIds(state === undefined ? {} : { state })).toEqual({ ids: ids(expected), totalCount: expected.length, nextOffset: null });
+    });
+
+    it('pages and counts the filtered goals', async () => {
+      expect(await listIds({ state: 'open', limit: 2 })).toEqual({ ids: ids([0, 2]), totalCount: 3, nextOffset: 2 });
+      expect(await listIds({ state: 'open', limit: 2, offset: 2 })).toEqual({ ids: ids([4]), totalCount: 3, nextOffset: null });
+      expect(await listIds({ state: 'finished', offset: 1 })).toEqual({ ids: ids([3]), totalCount: 2, nextOffset: null });
+    });
+
+    it('keeps individual record errors regardless of the filter', async () => {
+      goalDoubles.list.mockResolvedValue({ goals, errors: invalidGoalErrors(1) });
+      const output = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', state: 'finished' }, {})).content));
+      expect(output.errors).toEqual([{ goalId: invalidGoalErrors(1)[0]!.goalId, error: expect.any(String) }]);
+    });
+
+    it('rejects an unknown state', () => {
+      expect(listGoalsInputSchema.safeParse({ cwd: '/repo', state: 'done' }).success).toBe(false);
+    });
+  });
   it('keeps healthy goal and individual error offsets independent', async () => {
     const goals = [goalRecord(), { ...goalRecord(), id: '750e8400-e29b-41d4-a716-446655440000' }];
     const errors = invalidGoalErrors(2);
@@ -442,6 +530,67 @@ describe('MCP goal operations', () => {
     const next = JSON.parse(firstTextContent((await getTaktGoal({ cwd: '/repo', goalId, path: 'objective', textOffset: 12, maxBytes: 12 }, {})).content));
     expect(next.offset).toBe(12);
     expect(next.content).toBe('本語日本');
+  });
+});
+
+describe('MCP goal pull request state', () => {
+  const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
+  const prGoal = (index = 0): Goal => ({ ...goalRecord(), id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, pullRequest });
+  const available = (state: 'OPEN' | 'MERGED' | 'CLOSED') => ({ status: 'available' as const, pullRequest: {
+    ...pullRequest, headRefName: goalRecord().branch, baseRefName: 'main', baseRefOid: 'b'.repeat(40), mergeCommit: null, state } });
+  const readGoalPullRequestStatus = vi.fn<NonNullable<McpOperationDependencies['readGoalPullRequestStatus']>>();
+  const deps: McpOperationDependencies = { readGoalPullRequestStatus };
+
+  async function read(goal: Goal, signal?: AbortSignal) {
+    goalDoubles.list.mockResolvedValue({ goals: [goal], errors: [] });
+    goalDoubles.get.mockResolvedValue(goal);
+    const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo' }, deps, signal)).content));
+    const detail = JSON.parse(firstTextContent((await getTaktGoal({ cwd: '/repo', goalId: goal.id }, deps, signal)).content));
+    return [listed.goals[0], detail.goal];
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it.each([['OPEN', 'open'], ['MERGED', 'merged'], ['CLOSED', 'closed']] as const)(
+    'adds state %s as %s when GitHub confirms the saved pull request', async (state, expected) => {
+      readGoalPullRequestStatus.mockResolvedValue(available(state));
+      const signal = new AbortController().signal;
+      for (const goal of await read(prGoal(), signal)) expect(goal.pullRequest).toEqual({ ...pullRequest, state: expected });
+      expect(readGoalPullRequestStatus).toHaveBeenCalledTimes(2);
+      expect(readGoalPullRequestStatus).toHaveBeenCalledWith('/repo', prGoal(), signal);
+    });
+
+  it.each(['unavailable', 'mismatch'] as const)('omits state when the pull request status is %s', async (status) => {
+    readGoalPullRequestStatus.mockResolvedValue({ status });
+    for (const goal of await read(prGoal())) expect(goal.pullRequest).toEqual(pullRequest);
+  });
+
+  it('does not read pull request status for a goal without a pull request', async () => {
+    for (const goal of await read(goalRecord())) expect(goal).not.toHaveProperty('pullRequest');
+    expect(readGoalPullRequestStatus).not.toHaveBeenCalled();
+  });
+
+  it('reads pull request status only for goals in the requested page', async () => {
+    const goals = [0, 1, 2, 3].map((index) => ({ ...prGoal(index),
+      pullRequest: { number: 2000 + index, url: `https://github.com/example/project/pull/${2000 + index}` } }));
+    goalDoubles.list.mockResolvedValue({ goals, errors: [] });
+    readGoalPullRequestStatus.mockResolvedValue(available('OPEN'));
+    const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo', offset: 1, limit: 2 }, deps)).content));
+    expect(listed.goals.map((goal: { id: string }) => goal.id)).toEqual([goals[1]!.id, goals[2]!.id]);
+    expect(readGoalPullRequestStatus.mock.calls.map(([, goal]) => goal.pullRequest?.number)).toEqual([2001, 2002]);
+  });
+
+  it('passes only the pull request reference and branch fields to the status read when listing', async () => {
+    goalDoubles.list.mockResolvedValue({ goals: [prGoal()], errors: [] });
+    readGoalPullRequestStatus.mockResolvedValue(available('OPEN'));
+    const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo' }, deps)).content));
+    expect(listed.goals[0].pullRequest).toEqual({ ...pullRequest, state: 'open' });
+    expect(readGoalPullRequestStatus).toHaveBeenCalledTimes(1);
+    expect(readGoalPullRequestStatus.mock.calls[0]![1]).toEqual({
+      pullRequest, branch: goalRecord().branch, integrationBranch: goalRecord().integrationBranch,
+    });
   });
 });
 

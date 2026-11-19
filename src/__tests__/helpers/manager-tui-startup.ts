@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, approveSummary, promptFrame } from './manager-tui-fixtures.js';
+import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, managerConversationId, approveSummary, promptFrame } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
 it.each(['ja', 'en'] as const)('shows the status line and assignment without sending a provider request in %s', async (lang) => {
@@ -81,7 +81,7 @@ it.each(['ja', 'en'] as const)('wraps guidance only between whole key items at w
 
 const completionRows = (frame: string): string[] => frame.split('\n').filter((row) => /^(?:❯| ) \/\S+/u.test(row));
 
-it.each(['ja', 'en'] as const)('offers /make-goal and /verify with their descriptions below the input at width 80 in %s', async (lang) => {
+it.each(['ja', 'en'] as const)('offers /make-goal, /verify and /clear with their descriptions below the input at width 80 in %s', async (lang) => {
   const context = mount(lang);
   Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: 80 });
   context.app.stdout.emit('resize');
@@ -92,13 +92,15 @@ it.each(['ja', 'en'] as const)('offers /make-goal and /verify with their descrip
     expect(candidates).toEqual([
       `❯ /make-goal  ${getLabel('manager.makeGoalDescription', lang)}`,
       `  /verify  ${getLabel('interactive.commands.verify', lang)}`,
+      `  /clear  ${getLabel('manager.clearDescription', lang)}`,
     ]);
     const rows = frame.split('\n');
     const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
     const candidate = rows.indexOf(candidates[0]!);
     expect(candidate).toBe(promptEnd + 1);
     expect(rows[candidate + 1]).toBe(candidates[1]);
-    expect(rows[candidate + 2]).toContain('Enter');
+    expect(rows[candidate + 2]).toBe(candidates[2]);
+    expect(rows[candidate + 3]).toContain('Enter');
     for (const row of promptFrame(context).split('\n')) expect(stringWidth(row)).toBeLessThanOrEqual(80);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
@@ -127,11 +129,11 @@ it.each(['/xyz', 'こんにちは', '説明 /ma', '> /ma', '`/ma`', '~~~\n/ma\n~
   expect(context.client.submit).not.toHaveBeenCalled();
 });
 
-it('hides both /make-goal and /verify with Escape and restores /make-goal after narrowing the same draft', async () => {
+it('hides /make-goal, /verify and /clear with Escape and restores /make-goal after narrowing the same draft', async () => {
   const context = mount();
   context.app.stdin.write('/');
   await waitFor(() => expect(completionRows(context.app.lastFrame()!).map((row) => row.match(/\/\S+/u)?.[0]))
-    .toEqual(['/make-goal', '/verify']));
+    .toEqual(['/make-goal', '/verify', '/clear']));
   context.app.stdin.write('\x1b[27u');
   await waitFor(() => expect(completionRows(context.app.lastFrame()!)).toEqual([]));
   context.app.stdin.write('m');
@@ -151,7 +153,7 @@ it.each(['reading', 'incomplete'] as const)('never approves a displayed proposal
   context.client.change({ readStatus: 'complete' });
   await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.' + readStatus, 'en')));
   approveSummary(context);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
 });
 
 it('keeps the same screen and proposal while disconnected, then enables approval only after the new complete read', async () => {
@@ -170,7 +172,7 @@ it('keeps the same screen and proposal while disconnected, then enables approval
     expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
   });
   approveSummary(context);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
 });
 
 it('displays the interruption state and preserves the conversation identity while accepting a new message', async () => {

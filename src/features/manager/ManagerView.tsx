@@ -2,7 +2,7 @@ import { useManagerImages } from './useManagerImages.js';
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
-import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
+import { useManagerAbortConfirmation, type ManagerGoalConfirmationTarget } from './useManagerAbortConfirmation.js';
 import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
 import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
@@ -15,11 +15,12 @@ import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
 import { ManagerEpicDialog, formatManagerEpicDetail } from './ManagerEpicDialog.js';
 import { layoutQuestionBody } from './questionBodyLayout.js';
 import { useManagerEpics } from './useManagerEpics.js';
-import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
+import { isGoalSelectionCandidate, useManagerSelection, type GoalOperation, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
 import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
@@ -44,14 +45,20 @@ import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
 import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
-  { command: '/verify', labelKey: 'interactive.commands.verify' }];
+  { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
+/** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
+const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
-export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
+const DEFAULT_MANAGER_REFRESH_INTERVAL_MS = 500;
+
+export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment, refreshIntervalMs = DEFAULT_MANAGER_REFRESH_INTERVAL_MS }: {
   assignment: ManagerExecutionContext['assignment'];
   cwd: string; lang: 'en' | 'ja';
   client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close' | 'prepareImage' | 'getImageDirectory'>;
   onExit: () => void; initialDiagnostics: readonly string[];
+  /** 接続中の定期 refresh の間隔（ミリ秒）。設定 manager.refresh_interval_ms と環境変数 TAKT_MANAGER_REFRESH_INTERVAL_MS で変更できる。操作直後の refresh は待たずに即時に行う。 */
+  refreshIntervalMs?: number;
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
@@ -63,6 +70,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
+  const [transcriptGeneration, setTranscriptGeneration] = useState(0);
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
@@ -71,6 +79,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
+  const clearOperation = useRef<string | null>(null);
   const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
@@ -87,8 +96,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const lastError = useRef<string | null>(null);
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
   const savingAnswer = useRef<{ operationId: string | null } | null>(null);
-  const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
-  const { stdout } = useStdout();
+  const goalOperations = useRef(new Map<string, { kind: GoalOperation; goal: ManagerGoalConfirmationTarget['goal'] }>());
+  const { stdout, write } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
   const [rows, setRows] = useState(() => stdout.rows);
   const toolColumns = useRef(columns);
@@ -172,7 +181,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
     dismissSummary: async (revision) => {
-      if (await send({ kind: 'dismiss_summary', revision }) === null) {
+      const conversationId = client.getSnapshot().state?.conversationId;
+      if (conversationId === undefined) return;
+      if (await send({ kind: 'dismiss_summary', revision, conversationId }) === null) {
         setPending(client.getSnapshot().state?.pending ?? null);
       }
     } });
@@ -228,9 +239,18 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
   /** 結果を会話ログへ一度だけ積む。ライブの配送とスナップショットからの復元で同じ表示にする。 */
-  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
+  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerGoalConfirmationTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
+    // 保存済みの結果がライブより先に届いても消すように、表示の入口で判定する。
+    if (clearOperation.current === operationId && result.kind === 'notice' && mounted.current) {
+      // Static は書き出した行を端末に残し、何件目まで書いたかも覚えている。配列を空にするだけでは
+      // 前の会話が画面に残り、続く通知も書かれないため、端末を消してから Static を作り直す。
+      // 消去は新しい Static が書き出す前に済ませる必要があるので、描画後の Effect ではなくここで行う。
+      if (stdout.isTTY) write(CLEAR_TERMINAL);
+      setEntries([]);
+      setTranscriptGeneration((generation) => generation + 1);
+    }
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
@@ -249,7 +269,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     appendResult(result, operationId, goalOperation?.goal);
     goalOperations.current.delete(operationId);
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
-      ? { goal: goalOperation.goal, retry: true } : null);
+      ? { goal: goalOperation.goal, retry: true, kind: 'abort' } : null);
     if (summaryOperation.current === operationId) {
       if (result.kind === 'reply' && latest.current.state?.pending == null) append(getLabel('manager.goSummaryUnavailable', lang));
       summaryOperation.current = null;
@@ -318,16 +338,17 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
         void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
-    }, 500);
+    }, refreshIntervalMs);
     return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
   const register = async (revision: number): Promise<void> => {
     const current = client.getSnapshot();
     if (current.connection !== 'connected' || current.readStatus !== 'complete'
       || registering.current || current.state?.pending?.revision !== revision) return;
+    const conversationId = current.state.conversationId;
     registering.current = true;
     resetChoice();
-    if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
+    if (await send({ kind: 'approve_summary', revision, conversationId }) === null) registering.current = false;
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
@@ -338,14 +359,20 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
       })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
-  const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerAbortTarget['goal'], confirmed = false, retry = false): Promise<void> => {
+  const changeGoal = async (kind: GoalOperation, target: ManagerGoalConfirmationTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
-    if (current === undefined) { append(getLabel('manager.selectionChanged', lang)); return; }
-    if (kind === 'abort' && !confirmed) { setAbortTarget({ goal: current, retry: false }); return; }
-    await send({ kind: kind === 'pause' ? 'pause_goal' : kind === 'resume' ? 'resume_goal' : 'abort_goal', goalId: current.id }, (id) => {
+    if (current === undefined) {
+      append(getLabel('manager.selectionChanged', lang));
+      // 確認の途中で対象が消えたら、確認を閉じないと通常の入力に戻れない。
+      if (confirmed) { setAbortTarget(null); resetChoice(); }
+      return;
+    }
+    if ((kind === 'abort' || kind === 'delete') && !confirmed) { setAbortTarget({ goal: current, retry: false, kind }); return; }
+    await send({ kind: `${kind}_goal`, goalId: current.id }, (id) => {
       goalOperations.current.set(id, { kind, goal: current });
       setAbortTarget(null);
     });
@@ -507,7 +534,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       });
     },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
-    abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
+    confirmGoalOperation: (target) => changeGoal(target.kind, target.goal, true, target.retry), saveAnswer, register, openMenu,
     epicsOpen, openEpics,
     handleEpicInput: (key) => epics.handleInput(key, Math.max(0, epicDetailLines.length - epicPageRows), epicPageRows),
     slashCompletion,
@@ -517,7 +544,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
         : moveToolActivityView(current,
           toolActivityViewPage(toolDisplay, toolGroups, current, toolPageColumns, Math.max(0, toolHeight - 1), toolLabels), direction));
     },
-    onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
+    onInputUnavailable: (confirming) => append(getLabel(confirming === 'delete'
+      ? 'manager.inputUnavailableDuringDelete' : 'manager.inputUnavailableDuringAbort', lang)),
   });
   const baseLabel = activityLabel ?? (state?.queuedMessageCount
     ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) })
@@ -530,7 +558,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const statusLabel = elapsed === undefined ? displayedActivity
     : displayedActivity === '' ? elapsed : `${displayedActivity} ${elapsed}`;
   return <Box flexDirection="column">
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+    <TranscriptView key={transcriptGeneration} entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
     {epicsOpen ? epicNoticeLines.length > 0 && <Text wrap="truncate-end">{epicNoticeLines.join('\n')}</Text>
       : noticeMessages.map((text) => <Text key={text}>{text}</Text>)}
@@ -539,7 +567,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       lang={lang} workspace={currentAssignment.kind === 'workspace'} />}
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
-    {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
+    {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     {imageNotice !== null && <Text color="red">{imageNotice}</Text>}

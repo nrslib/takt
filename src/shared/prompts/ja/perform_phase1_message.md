@@ -2,7 +2,7 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: phaseContext, workingDirectory, hasGitRules, gitRules, editRule,
+  vars: phaseContext, workingDirectory, goalSpecificationNotice, hasGitRules, gitRules, editRule,
         hasFallbackNotice, fallbackNotice,
         hasReport, reportInfo, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
@@ -16,6 +16,8 @@
 
 ## 実行コンテキスト
 - 作業ディレクトリ: {{workingDirectory}}
+{{#if goalSpecificationNotice}}{{goalSpecificationNotice}}
+{{/if}}
 {{#if hasFallbackNotice}}
 
 {{fallbackNotice}}

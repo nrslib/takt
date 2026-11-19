@@ -20,7 +20,7 @@ function fixture() {
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
     selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
-    selectTarget: vi.fn(), abortGoal: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
+    selectTarget: vi.fn(), confirmGoalOperation: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },
     epicsOpen: false, openEpics: vi.fn(), handleEpicInput: vi.fn(),
   };
@@ -61,13 +61,23 @@ it('accepts and edits an inquiry answer while a model turn is active', () => {
 });
 it('confirms a goal abort during a model turn and routes Escape only to turn interruption', () => {
   const f = fixture();
-  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'created', executionStatus: 'active' }, retry: false };
+  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'created', executionStatus: 'active' }, retry: false, kind: 'abort' };
   const input = f.bind();
   input('', { ...key, return: true });
   expect(f.options.abortConfirmation.handleInput).toHaveBeenCalledExactlyOnceWith(f.options.abortConfirmation.abortTarget,
-    expect.objectContaining({ return: true }), f.options.abortGoal);
+    expect.objectContaining({ return: true }), f.options.confirmGoalOperation);
   input('', { ...key, escape: true });
   expect(f.options.abortTurn).toHaveBeenCalledOnce();
+});
+it.each(['abort', 'delete'] as const)('reports which %s confirmation blocks typed and pasted text', (kind) => {
+  const f = fixture();
+  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'completed', executionStatus: 'active' }, retry: false, kind };
+  const input = f.bind();
+  input('x', key);
+  const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
+  paste('pasted');
+  expect(vi.mocked(f.options.onInputUnavailable).mock.calls).toEqual([[kind], [kind]]);
+  expect(f.options.edit).not.toHaveBeenCalled();
 });
 it('submits a new human message and opens read menus during a model turn', () => {
   const f = fixture(); const input = f.bind();

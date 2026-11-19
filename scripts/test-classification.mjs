@@ -252,6 +252,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/conversationSession.test.ts',
   'src/__tests__/copilot-client.test.ts',
   'src/__tests__/cursor-mcp-settings.test.ts',
+  'src/__tests__/daemon-notifications.test.ts',
   'src/__tests__/deepseek-harness-credential-binding.test.ts',
   'src/__tests__/deepseek-harness-credential-patch.test.ts',
   'src/__tests__/deepseek-harness-credential-settings.test.ts',
@@ -291,6 +292,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/lstatIfExists.test.ts',
   'src/__tests__/managed-provider-retry-preflight.test.ts',
   'src/__tests__/managed-sdk-version-alignment.test.ts',
+  'src/__tests__/manager-refresh-interval.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',
   'src/__tests__/monitorJsonMetricExporter.test.ts',
@@ -386,6 +388,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/compaction-recovery-progress.test.ts',
   'src/__tests__/daemon-conversation-delivery.integration.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
@@ -407,6 +410,8 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/epic-storage.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
+  'src/__tests__/facet-content-deduplication.test.ts',
+  'src/__tests__/facet-deduplication.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/interactive-resume-records.integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
@@ -475,6 +480,8 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/it-goal-run-specifications.test.ts',
+  'src/__tests__/it-pr-merge-goal-specifications.test.ts',
   'src/__tests__/tool-activity-runner-exit.integration.test.ts',
   'src/__tests__/tool-activity-workflow.integration.test.ts',
   'src/__tests__/daemon-wait-command.integration.test.ts',

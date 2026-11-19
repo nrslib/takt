@@ -54,6 +54,7 @@ export interface DecomposeTaskOptions {
   permissionMode?: PermissionMode;
   edit?: RunAgentOptions['edit'];
   projectCwd?: string;
+  openCodeExternalDirectories?: RunAgentOptions['openCodeExternalDirectories'];
   onStream?: StreamCallback;
   onActivity?: RunAgentOptions['onActivity'];
   workflowMeta?: RunAgentOptions['workflowMeta'];
@@ -132,6 +133,7 @@ export async function requestDecompositionRawResponse(
       persona: options.persona,
       cwd: options.cwd,
       projectCwd: options.projectCwd,
+      openCodeExternalDirectories: options.openCodeExternalDirectories,
       personaPath: options.personaPath,
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
@@ -250,6 +252,7 @@ export async function requestMorePartsRawResponse(
       persona: options.persona,
       cwd: options.cwd,
       projectCwd: options.projectCwd,
+      openCodeExternalDirectories: options.openCodeExternalDirectories,
       personaPath: options.personaPath,
       workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,

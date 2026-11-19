@@ -529,7 +529,7 @@ describe('system workflow PR sync integration', () => {
   it('cleans up retained PR sync sessions when engine.run completes after a conflict', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -549,7 +549,7 @@ describe('system workflow PR sync integration', () => {
   it('cleans up retained PR sync sessions when runSingleIteration reaches completion', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -576,7 +576,7 @@ describe('system workflow PR sync integration', () => {
   it('cleans up retained PR sync sessions when a workflow_call child completes', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';
@@ -624,7 +624,7 @@ describe('system workflow PR sync integration', () => {
   it('cleans up retained PR sync sessions when runSingleIteration throws after a conflict', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr[0] === 'merge' && argsArr[1] === 'refs/remotes/origin/improve') {
+      if (argsArr[0] === 'merge' && argsArr[1] === '--ff') {
         throw createCommandError('merge conflict', 'CONFLICT (content): Merge conflict in src/file.ts');
       }
       return '';

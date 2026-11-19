@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const {
   mockCallCodex,
+  mockCallCodexCustom,
   mockCallClaude,
   mockCallClaudeHeadless,
   mockCallClaudeTerminal,
@@ -10,6 +11,7 @@ const {
   mockResolveCodexCliPath,
 } = vi.hoisted(() => ({
   mockCallCodex: vi.fn(),
+  mockCallCodexCustom: vi.fn(),
   mockCallClaude: vi.fn(),
   mockCallClaudeHeadless: vi.fn(),
   mockCallClaudeTerminal: vi.fn(),
@@ -20,7 +22,7 @@ const {
 
 vi.mock('../infra/codex/index.js', () => ({
   callCodex: mockCallCodex,
-  callCodexCustom: vi.fn(),
+  callCodexCustom: mockCallCodexCustom,
 }));
 
 vi.mock('../infra/claude/client.js', () => ({
@@ -77,7 +79,7 @@ const cases: readonly EffortAdapterCase[] = [
   {
     name: 'Codex',
     provider: () => new CodexProvider(),
-    client: mockCallCodex,
+    client: mockCallCodexCustom,
     optionName: 'reasoningEffort',
     configuredOptions: { codex: { reasoningEffort: 'low' } },
   },
@@ -128,7 +130,7 @@ describe('interactive effort adapter mapping', () => {
 
   it.each([
     { name: 'Claude SDK', provider: () => new ClaudeProvider(), resolver: resolveClaudeCliPath, client: mockCallClaude, option: 'pathToClaudeCodeExecutable' },
-    { name: 'Codex', provider: () => new CodexProvider(), resolver: resolveCodexCliPath, client: mockCallCodex, option: 'codexPathOverride' },
+    { name: 'Codex', provider: () => new CodexProvider(), resolver: resolveCodexCliPath, client: mockCallCodexCustom, option: 'codexPathOverride' },
   ])('preserves an explicitly configured CLI path through the $name adapter', async ({ provider, resolver, client, option }) => {
     vi.mocked(resolver).mockReturnValue('/explicit/provider-cli');
     await provider().setup({ name: 'interactive' }).call('prompt', { cwd: '/repo' });

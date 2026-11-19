@@ -9,6 +9,7 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
+import { resolveTaskRepositoryIdentityEnv } from '../../../infra/git/repository-env.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
@@ -79,6 +80,7 @@ import {
   reportWorkflowFailure,
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { stageGoalSpecificationsForExecution } from './goalSpecificationContext.js';
 import { persistDeliveredLiveInstructions } from './liveInterventionPersistence.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
@@ -278,6 +280,7 @@ async function executeWorkflowInternal(
   const artifactResumeSource = resumeLineage.artifactResumeSource;
   const publishedResumeSource = resumeLineage.publishedResumeSource;
   let bootstrap: WorkflowExecutionBootstrap;
+  let goalSpecificationPaths: string[];
   let executionBundle: ReturnType<typeof loadWorkflowExecutionBundle>;
   let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
@@ -303,6 +306,7 @@ async function executeWorkflowInternal(
       await registerManagerImageRun(options.taskSpec.sourceTaskDir, activeRun.runPaths);
       stageTaskSpecForExecution(options.taskSpec, activeRun.runPaths);
     }
+    goalSpecificationPaths = stageGoalSpecificationsForExecution(options.projectCwd, options.goalId, activeRun.runPaths);
     bootstrap = await createWorkflowExecutionBootstrap(
       bundledWorkflowConfig,
       task,
@@ -442,10 +446,10 @@ async function executeWorkflowInternal(
         internalController: executionControl,
         getEngine: () => engine,
       });
-      const childProcessEnv = resolveNestedChildProcessEnv(
-        bootstrap.observability,
-        buildChildProcessEnv(),
-      );
+      const ambientEnv = buildChildProcessEnv();
+      const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, ambientEnv);
+      // Resolved for the run; each workflow's `repository_identity` decides whether it is passed on.
+      const repositoryIdentityEnv = resolveTaskRepositoryIdentityEnv(cwd, options.projectCwd, ambientEnv);
       const gitSafety = prExecution.prExecutionContext
         ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
         : {};
@@ -474,6 +478,7 @@ async function executeWorkflowInternal(
         onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
         ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
         projectCwd: options.projectCwd,
+        goalSpecificationPaths,
         ...(liveIntervention === undefined ? {} : {
           liveIntervention,
           onLiveInterventionWarning: (count: number) => {
@@ -484,6 +489,7 @@ async function executeWorkflowInternal(
         observabilityRunId: bootstrap.runSlug,
         sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
         childProcessEnv,
+        repositoryIdentityEnv,
         language: options.language,
         provider: bootstrap.currentProvider,
         providerSource: bootstrap.currentProviderSource,

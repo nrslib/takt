@@ -28,6 +28,7 @@ const CTRL_C = '\x03';
 const ENTER = '\r';
 const ARROW_DOWN = '\x1b[B';
 const ARROW_UP = '\x1b[A';
+const BACKSPACE = '\x7f';
 // CSI-u reports the kitty keyboard protocol turns on.
 const SHIFT_ENTER = '\x1b[13;2u';
 const OPTION_ENTER = '\x1b[13;3u';
@@ -346,6 +347,24 @@ describe('E2E: Ink TUI', () => {
       `the rows of "${prompt}"`,
       (screen) => screen.includes(prompt) && screen.includes('❯ '),
     );
+  }
+
+  /**
+   * Resolve once the Ink conversation prompt owns the keyboard.
+   *
+   * Ink draws the prompt, hint included, before its input hook turns raw mode
+   * on. Text sent as soon as the hint appears can still be echoed by the
+   * terminal, and an echo wider than the screen wraps past the box and stays
+   * after Ink redraws. One probe key cannot wrap, and the terminal holds it
+   * until raw mode is on, so a probe drawn as the whole draft says Ink is
+   * reading keys.
+   */
+  async function waitForConversationInput(tui: TaktPtySession): Promise<void> {
+    await tui.waitForOutput(TUI_HINT);
+    tui.write('x');
+    await tui.waitForScreen('the probe key drawn as the draft', (screen) => hasCurrentPromptLine(screen, '❯ x'));
+    tui.write(BACKSPACE);
+    await tui.waitForScreen('the empty prompt after the probe key', (screen) => screen.includes(PLACEHOLDER));
   }
 
   /** Accept the highlighted row of a select list. */
@@ -1325,7 +1344,16 @@ steps:
 
     // The run is over and the conversation resumes with the operation notice.
     await tui.waitForOutput(RUN_FINISHED_NOTICE, 60_000);
-    const screen = (await tui.visibleScreen()).join('\n');
+    // The notice reaches the byte history before Ink repaints the input box,
+    // so the box is awaited on the live screen instead of sampled once. The
+    // border alone is also drawn while the run is busy (the spinner sits
+    // below it), so the wait also requires the busy status to be gone and
+    // the idle placeholder to be back.
+    const screen = await tui.waitForScreen(
+      'the input box redrawn after the run finished',
+      (current) => current.includes('╰') && !hasBusyStatus(current) && current.includes('Type a task'),
+      60_000,
+    );
     expect(screen).toContain('╰');
     // The earlier turn stays in the scrollback exactly once.
     const transcript = (await tui.visibleTranscript()).join('\n');
@@ -1335,7 +1363,7 @@ steps:
     // Only leaving ends the process.
     await submitLine(tui, '/cancel');
     await expect(tui.waitForExit(60_000)).resolves.toBe(0);
-  }, 240_000);
+  }, 480_000);
 
   it('should close Ink for the action selector and reopen it to continue editing', async () => {
     const tui = start('tui-go-handoff.json', ['--workflow', WORKFLOW_PATH]);
@@ -1812,7 +1840,7 @@ steps:
     const tui = start('tui-conversation.json', ['--workflow', WORKFLOW_PATH]);
 
     await chooseHighlighted(tui, MODE_PROMPT);
-    await tui.waitForOutput(TUI_HINT);
+    await waitForConversationInput(tui);
 
     // Far wider than the PTY, so it can only be shown by wrapping it.
     tui.write(`${'wide '.repeat(120)}TAIL`);

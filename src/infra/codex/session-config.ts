@@ -79,6 +79,7 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
   const codexConfig: CodexOptions['config'] = {
     ...(codexSkillConfig ?? {}),
     ...permissions.config,
+    ...(options.systemPrompt === undefined ? {} : { developer_instructions: options.systemPrompt }),
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),

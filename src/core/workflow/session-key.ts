@@ -11,6 +11,7 @@
 
 import type { WorkflowStep } from '../models/types.js';
 import { resolveProviderAlias, type ProviderType } from '../../shared/types/provider.js';
+import { CODEX_SESSION_CONTRACT } from '../../shared/codex-session-contract.js';
 
 export interface ResolvedSessionTarget {
   provider?: ProviderType;
@@ -48,7 +49,7 @@ function normalizeMcpServerIdentity(rawIdentity: string): string {
  * Examples:
  *   - persona="coder", provider=undefined  → `["coder"]`
  *   - persona="coder", provider="claude", model="sonnet" → `["coder","claude-sdk","sonnet"]`
- *   - persona="coder", provider="codex", model="gpt-5" → `["coder","codex","gpt-5"]`
+ *   - persona="coder", provider="codex", model="gpt-5" → `["coder","codex","gpt-5",{"codexSessionContract":"takt-current-turn-v1"}]`
  *   - persona=undefined, name="plan"       → `["plan"]`
  */
 export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSessionTarget): string {
@@ -72,5 +73,6 @@ export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSes
   if (mcpIdentity !== undefined && mcpIdentity.length > 0) {
     components.push(mcpIdentity);
   }
+  if (provider === 'codex') components.push({ codexSessionContract: CODEX_SESSION_CONTRACT });
   return JSON.stringify(components);
 }

@@ -2,6 +2,7 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { requireFullHeavyItPermission } from './heavy-it-guard.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 import { runTeedCommand } from './teed-command.mjs';
 
@@ -94,6 +95,8 @@ async function runNpmCommand(npmArgs, logStream) {
 }
 
 export async function runReleaseCheck(runCommand = runNpmCommand, openLog = openReleaseLog) {
+  requireFullHeavyItPermission();
+
   let logStream;
   try {
     logStream = await openLog();

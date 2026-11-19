@@ -18,10 +18,13 @@ import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssign
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import type { Goal } from '../../infra/goals/schema.js';
 import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
+import { deleteFinishedGoal } from '../../infra/goals/deletion.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { ensureManagerRun } from './autoRun.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
@@ -32,6 +35,9 @@ import { resolveFormalSpecConfigurationWithoutPrompt } from '../interactive/task
 import { reconcileLostRun } from '../daemonTurn/reconcileLostRun.js';
 import { isGoalPatrolCandidate } from '../../infra/goals/activity.js';
 import { readWatchTasks, type WatchTask } from '../daemon/watchers/state.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('manager-conversation-service');
 
 function nextRevision(revision: number): number {
   if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
@@ -64,6 +70,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : '' };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
+      const clear = human && command.kind === 'message' && command.text.trim() === CLEAR_COMMAND;
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
@@ -71,6 +78,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
+          && command.conversationId !== input.turn.conversationId) throw new ConversationError('invalid_assignment');
         if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
           if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
           return { kind: 'completed', result: { kind: 'notice', message: '' } };
@@ -80,9 +89,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         reference = candidate;
         if (patrol) {
           if (event.workspaceId !== undefined && (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId)) throw new ConversationError('invalid_assignment');
-          const reads = await Promise.allSettled(event.goalIds.map((id) => {
+          const reads = await Promise.allSettled(event.goalIds.map(async (id) => {
             if (event.repositoryDirectory === undefined) throw new ConversationError('invalid_assignment');
-            return new GoalStore(event.repositoryDirectory).get(id);
+            return new GoalStore(event.repositoryDirectory).find(id);
           }));
           // 仕上げタスクを確認できない場合は、従来どおり人のマージ待ちとして扱う。
           let tasks: readonly WatchTask[] = [];
@@ -92,7 +101,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             // 読取失敗は見回り対象の選定側が知らせるため、ターン内では通知しない。
           }
           io.signal.throwIfAborted();
-          const goals = reads.flatMap((read) => read.status === 'fulfilled' ? [read.value] : []);
+          // 見回りを受け付けた後に人が消したゴールは、読めないゴールとしても扱わずに外す。
+          const goals = reads.flatMap((read) => read.status === 'fulfilled' && read.value !== undefined ? [read.value] : []);
           const unreadableGoalIds = event.goalIds.filter((_id, index) => reads[index]!.status === 'rejected');
           const patrolEvent = { ...event,
             goalIds: goals.filter((goal) => isGoalPatrolCandidate(goal, tasks)).map((goal) => goal.id),
@@ -111,8 +121,22 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           reconcileLostRun(event.observation, io.signal);
           return { kind: 'completed', result: { kind: 'notice', message: '' } };
         }
-        const eventGoal = reference?.goalId !== undefined && reference.goalId !== null
-          ? { repositoryDirectory: reference.repositoryDirectory, goal: await new GoalStore(reference.repositoryDirectory).get(reference.goalId) } : undefined;
+        if (event.kind === 'wait_command_completed' && event.goalId !== undefined
+          && new GoalStore(event.repositoryDirectory).find(event.goalId) === undefined) {
+          // 消したゴールの待ちは cancelled で止まる。その完了を AI のターンに渡さない。
+          log.info('Discarded a wait command completion for a deleted goal', { goalId: event.goalId });
+          return { kind: 'completed', result: { kind: 'notice', message: '' } };
+        }
+        let eventGoal: { repositoryDirectory: string; goal: Goal } | undefined;
+        if (reference?.goalId !== undefined && reference.goalId !== null) {
+          const goal = new GoalStore(reference.repositoryDirectory).find(reference.goalId);
+          if (goal === undefined) {
+            // 削除前に受け付けたイベントが、人が消したゴールを指して後から届く。
+            log.info('Discarded an event for a deleted goal', { kind: event.kind, goalId: reference.goalId });
+            return { kind: 'completed', result: { kind: 'notice', message: '' } };
+          }
+          eventGoal = { repositoryDirectory: reference.repositoryDirectory, goal };
+        }
         if (eventGoal?.goal.executionStatus === 'paused' && (event.kind === 'task_completed' || event.kind === 'task_failed')) {
           return { kind: 'deferred' };
         }
@@ -123,6 +147,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
+        if (clear) {
+          return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
+            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+        }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
           const verificationRepository = priorPending?.repositoryDirectory
@@ -188,8 +216,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           try {
             if (!patrol) {
               const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey;
-              // fingerprint のない旧状態は保存済みセッションを引き継ぎ、次回から変更を検出する。
+                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey
+                || resolved.provider === 'codex' && state.current.session.contextKey === undefined && state.current.session.sessionId !== null;
+              // Codex の旧状態は固定 developer 契約を持たないため、fingerprint がなければ再開しない。
               if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
@@ -277,6 +306,12 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             if (status === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(command.goalId);
             if (status === 'active') await ensureManagerRun(repository);
             result = { kind: 'notice', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };
+            break;
+          }
+          case 'delete_goal': {
+            await deleteFinishedGoal(await findAssignedGoalRepository(command.goalId, assignment), command.goalId, configDirectory,
+              assignment.kind === 'workspace' ? assignment.workspaceId : undefined);
+            result = { kind: 'notice', message: getLabel('manager.goalDeleted', language, { goalId: command.goalId }) };
             break;
           }
           default: throw new ConversationError('invalid_input');

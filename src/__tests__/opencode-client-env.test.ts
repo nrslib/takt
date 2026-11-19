@@ -11,8 +11,9 @@ import {
   createTestSpan,
 } from './helpers/opencode-client-test-helpers.js';
 
-const { createOpencodeMock } = vi.hoisted(() => ({
+const { createOpencodeMock, startOpenCodeServerMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
+  startOpenCodeServerMock: vi.fn(),
 }));
 
 vi.mock('node:net', () => ({
@@ -37,55 +38,55 @@ vi.mock('@opencode-ai/sdk/v2', () => ({
 }));
 
 vi.mock('../infra/opencode/server-process.js', () => ({
-  startOpenCodeServer: createOpenCodeServerStartMock(createOpencodeMock),
+  startOpenCodeServer: startOpenCodeServerMock,
 }));
 
 describe('OpenCodeClient child process env', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    startOpenCodeServerMock.mockImplementation(createOpenCodeServerStartMock(createOpencodeMock));
     const { resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();
   });
 
-  it('should apply childProcessEnv only while starting the shared server and restore ambient env', async () => {
+  it('should pass childProcessEnv to server startup without changing the parent environment', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
     const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
-    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const childProcessEnv = {
+      TAKT_OBSERVABILITY: '{"enabled":true}',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+    };
+    const startup = deferred<Awaited<ReturnType<typeof createOpencodeMock>>>();
     const { sessionCreate, promptAsync, subscribe } = makeOpenCodeClientMock('env-session', ['done']);
-    createOpencodeMock.mockImplementation(async () => {
-      envSnapshots.push({
-        TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
-        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    createOpencodeMock.mockReturnValue(startup.promise);
+
+    try {
+      const client = new OpenCodeClient();
+      const callPromise = client.call('coder', 'task', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        childProcessEnv,
       });
-      return {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(startOpenCodeServerMock).toHaveBeenCalledWith(expect.objectContaining({ childProcessEnv }));
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+
+      startup.resolve({
         client: {
           instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+          session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
         server: { close: vi.fn() },
-      };
-    });
-
-    try {
-      const client = new OpenCodeClient();
-      await client.call('coder', 'task', {
-        cwd: '/tmp',
-        model: 'opencode/big-pickle',
-        childProcessEnv: {
-          TAKT_OBSERVABILITY: '{"enabled":true}',
-          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
-        },
       });
-
-      expect(envSnapshots).toEqual([{
-        TAKT_OBSERVABILITY: '{"enabled":true}',
-        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
-      }]);
+      await expect(callPromise).resolves.toMatchObject({ status: 'done' });
       expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
       expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
     } finally {
@@ -137,6 +138,7 @@ describe('OpenCodeClient child process env', () => {
         TAKT_OBSERVABILITY: '{"enabled":false}',
         OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
       }]);
+      expect(startOpenCodeServerMock.mock.calls[0]?.[0]).not.toHaveProperty('childProcessEnv');
       expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
       expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
     } finally {
@@ -153,11 +155,20 @@ describe('OpenCodeClient child process env', () => {
     }
   });
 
-  it('should not leak childProcessEnv into concurrent startup without childProcessEnv', async () => {
+  it('should pass separate snapshots to concurrent server startups without changing the parent environment', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
     process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
-    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+    const firstChildProcessEnv = {
+      TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
+    };
+    const secondChildProcessEnv = {
+      TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
+    };
     const firstStartup = deferred<Awaited<ReturnType<typeof createOpencodeMock>>>();
     const { sessionCreate: firstSessionCreate, promptAsync: firstPromptAsync, subscribe: firstSubscribe } =
       makeOpenCodeClientMock('env-leak-first-session', ['done-1']);
@@ -165,12 +176,8 @@ describe('OpenCodeClient child process env', () => {
       makeOpenCodeClientMock('env-leak-second-session', ['done-2']);
 
     createOpencodeMock
-      .mockImplementationOnce(() => {
-        envSnapshots.push({ TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY });
-        return firstStartup.promise;
-      })
+      .mockImplementationOnce(() => firstStartup.promise)
       .mockImplementationOnce(async () => {
-        envSnapshots.push({ TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY });
         return {
           client: {
             instance: { dispose: vi.fn() },
@@ -187,18 +194,28 @@ describe('OpenCodeClient child process env', () => {
       const firstCall = client.call('coder', 'task 1', {
         cwd: '/tmp',
         model: 'opencode/model-a',
-        childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        childProcessEnv: firstChildProcessEnv,
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       const secondCall = client.call('coder', 'task 2', {
         cwd: '/tmp',
         model: 'opencode/model-b',
+        childProcessEnv: secondChildProcessEnv,
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
-      expect(envSnapshots).toEqual([{ TAKT_OBSERVABILITY: '{"enabled":true}' }]);
+      expect(startOpenCodeServerMock).toHaveBeenCalledTimes(2);
+      expect(startOpenCodeServerMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ childProcessEnv: firstChildProcessEnv }),
+      );
+      expect(startOpenCodeServerMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ childProcessEnv: secondChildProcessEnv }),
+      );
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
 
       firstStartup.resolve({
         client: {
@@ -212,80 +229,37 @@ describe('OpenCodeClient child process env', () => {
 
       await expect(firstCall).resolves.toMatchObject({ status: 'done' });
       await expect(secondCall).resolves.toMatchObject({ status: 'done' });
-      expect(envSnapshots).toEqual([
-        { TAKT_OBSERVABILITY: '{"enabled":true}' },
-        { TAKT_OBSERVABILITY: '{"enabled":false}' },
-      ]);
-    } finally {
-      if (previousTaktObservability === undefined) {
-        delete process.env.TAKT_OBSERVABILITY;
-      } else {
-        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
-      }
-    }
-  });
-
-  it('should keep childProcessEnv until shared server startup promise settles and then restore ambient env', async () => {
-    const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
-    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
-    const { sessionCreate, promptAsync, subscribe } = makeOpenCodeClientMock('pending-env-session', ['done']);
-    let resolveStartup: (value: {
-      client: {
-        instance: { dispose: ReturnType<typeof vi.fn> };
-        session: { create: typeof sessionCreate; promptAsync: typeof promptAsync; abort: ReturnType<typeof successfulSessionAbort> };
-        event: { subscribe: typeof subscribe };
-        permission: { reply: ReturnType<typeof vi.fn> };
-      };
-      server: { close: ReturnType<typeof vi.fn> };
-    }) => void;
-
-    createOpencodeMock.mockImplementation(() => new Promise((resolve) => {
-      resolveStartup = resolve;
-    }));
-
-    try {
-      const client = new OpenCodeClient();
-      const callPromise = client.call('coder', 'task', {
-        cwd: '/tmp',
-        model: 'opencode/big-pickle',
-        childProcessEnv: {
-          TAKT_OBSERVABILITY: '{"enabled":true}',
-        },
-      });
-
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
-      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
-
-      resolveStartup!({
-        client: {
-          instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
-          event: { subscribe },
-          permission: { reply: vi.fn() },
-        },
-        server: { close: vi.fn() },
-      });
-
-      await expect(callPromise).resolves.toMatchObject({ status: 'done' });
       expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
     } finally {
       if (previousTaktObservability === undefined) {
         delete process.env.TAKT_OBSERVABILITY;
       } else {
         process.env.TAKT_OBSERVABILITY = previousTaktObservability;
       }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
     }
   });
 
-  it('should restore env and allow later startup when OpenCode startup rejects', async () => {
+  it('should keep the parent environment unchanged after startup failure and pass the next snapshot', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
     const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
     const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const firstChildProcessEnv = {
+      TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
+    };
+    const secondChildProcessEnv = {
+      TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
+    };
     const { sessionCreate, promptAsync, subscribe } = makeOpenCodeClientMock('after-reject-session', ['done']);
     createOpencodeMock
       .mockImplementationOnce(async () => {
@@ -316,34 +290,40 @@ describe('OpenCodeClient child process env', () => {
       await expect(client.call('coder', 'task 1', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
-        childProcessEnv: {
-          TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
-          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
-        },
+        childProcessEnv: firstChildProcessEnv,
       })).resolves.toMatchObject({
         status: 'error',
         content: 'startup failed',
       });
+      expect(startOpenCodeServerMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ childProcessEnv: firstChildProcessEnv }),
+      );
+      expect(envSnapshots).toEqual([{
+        TAKT_OBSERVABILITY: '{"enabled":false}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
+      }]);
       expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
       expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
 
       await expect(client.call('coder', 'task 2', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
-        childProcessEnv: {
-          TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
-          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
-        },
+        childProcessEnv: secondChildProcessEnv,
       })).resolves.toMatchObject({ status: 'done' });
 
+      expect(startOpenCodeServerMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ childProcessEnv: secondChildProcessEnv }),
+      );
       expect(envSnapshots).toEqual([
         {
-          TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
-          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
+          TAKT_OBSERVABILITY: '{"enabled":false}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
         },
         {
-          TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
-          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
+          TAKT_OBSERVABILITY: '{"enabled":false}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
         },
       ]);
       expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');

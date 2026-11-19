@@ -553,6 +553,8 @@ export type AutoRoutingEstimatorSource = 'injected' | 'engine-default' | 'absent
 
 /** Options for workflow engine */
 export interface WorkflowEngineOptions extends PrMergeOptions {
+  /** Saved goal specifications staged at the run boundary; inherited by child workflows. */
+  goalSpecificationPaths?: readonly string[];
   toolDisplayMode?: ToolActivityDisplayMode;
   streamQuiet?: boolean;
   abortSignal?: AbortSignal;
@@ -606,6 +608,11 @@ export interface WorkflowEngineOptions extends PrMergeOptions {
   reportContentSanitizer?: (content: string) => string;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: Readonly<Record<string, string>>;
+  /**
+   * Repository identity for `gh` / `glab`, resolved once for the run. It reaches child processes
+   * only for a workflow that sets `repository_identity: true`, this engine's own config deciding.
+   */
+  repositoryIdentityEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;
