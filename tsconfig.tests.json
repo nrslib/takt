@@ -251,6 +251,8 @@
     "src/__tests__/exec-workflowTemplate.test.ts",
     "src/__tests__/executable-path.test.ts",
     "src/__tests__/execution-locations.test.ts",
+    "src/__tests__/facet-content-deduplication.test.ts",
+    "src/__tests__/facet-deduplication.test.ts",
     "src/__tests__/facet-includes-integration.test.ts",
     "src/__tests__/facet-resolution.test.ts",
     "src/__tests__/failure-dir-chain.integration.test.ts",

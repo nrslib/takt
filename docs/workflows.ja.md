@@ -104,6 +104,8 @@ section map は任意です。facet は bare name で直接参照できます（
 
 `instruction` は従来の scalar 形式に加えて空でない順序付き配列を受け付けます。各要素には facet のキー・パスまたはインライン文字列を指定でき、記述順に解決したうえで `\n\n---\n\n` で結合します。これにより要素ごとの境界を保持できます。callable workflow では`instruction` の `facet_ref` / `facet_ref[]` parameter を配列要素の `{ $param: name }` で参照できます。`facet_ref[]` の値はその位置へ平坦化され、前後の順序は変わりません。scalar 形式の挙動は変わりません。
 
+`policy` と `knowledge` は、`$param` 展開後、さらに `include` / `extends` を展開した後の内容が同じファセットについて、最初の指定だけを残し、出現順を保ちます。参照名やパス、ファイル・インライン定義の違いにかかわらず、展開後の内容が同じなら1回だけ組み込みます。同じ実パスを参照していても、参照元の層によって `include` / `extends` の解決結果が異なる場合は両方を保持します。`instruction` の繰り返しと、ファセット内部の `{{include:...}}` の繰り返しは保持します。
+
 ### ワークフロー横断ルール（`all_steps.rules`）
 
 すべての agent step に適用するルールは `all_steps.rules` に宣言します。各要素はルール参照文字列、または `ref` と任意の `position: before_instruction` を持つ object です。`position` を省略すると自動実行ルールの後に配置され、`before_instruction` は step の `Instructions` セクション直前に配置されます。

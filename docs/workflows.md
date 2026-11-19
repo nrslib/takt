@@ -104,6 +104,8 @@ Section maps are optional. Facets can be referenced directly by bare name (e.g.,
 
 `instruction` accepts either one scalar value or a non-empty ordered array. Each array item may be a facet key/path or inline text; items are resolved in place and joined with `\n\n---\n\n`, preserving an explicit boundary between elements. In a callable workflow, an array item may also be `{ $param: name }` for an `instruction` `facet_ref` or `facet_ref[]` parameter. A `facet_ref[]` value is spliced at that position without changing the surrounding order. The scalar form keeps its existing behavior.
 
+For `policy` and `knowledge`, facets with identical content after `$param` substitution and `include` / `extends` expansion are included only once: the first occurrence is kept, preserving order. This applies regardless of reference names, paths, or whether the content comes from a file or an inline definition. References to the same real path are both retained when their source layers resolve `include` / `extends` differently and produce different content. Repeated `instruction` entries and repeated `{{include:...}}` directives within a facet are preserved.
+
 ### Workflow-wide rules (`all_steps.rules`)
 
 Declare rules that apply to every agent step in the workflow under `all_steps.rules`. Each entry is either a rule reference or an object with `ref` and the optional `position: before_instruction`. An omitted position places the rule after the automatic execution rules; `before_instruction` places it immediately before the step's `Instructions` section.
