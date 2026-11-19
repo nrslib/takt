@@ -1,10 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { delimiter, dirname, join, relative, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify } from 'yaml';
 import { createTaktMcpServer } from '../features/mcp/server.js';
@@ -36,6 +36,109 @@ import { ConversationStateStore } from '../infra/daemon/conversationStateStore.j
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution, stageTaskSpecForExecution, restageTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+
+type SandboxResult = Pick<SpawnSyncReturns<string>, 'status' | 'signal' | 'error' | 'stdout' | 'stderr'>;
+const sandboxProbeOutput = 'takt-sandbox-probe-ok';
+const unavailableSandbox: SandboxResult = {
+  status: 71, signal: null, stdout: '', stderr: 'sandbox-exec: sandbox_apply: Operation not permitted\n',
+};
+
+function sandboxUnavailableReason(result: SandboxResult): string | undefined {
+  // Observed when Codex's Seatbelt sandbox is started inside another Seatbelt sandbox.
+  // Unknown failures, including Linux failures, remain errors until their cause is established.
+  if (result.error === undefined && result.signal === null && result.status === 71 && result.stdout === ''
+    && result.stderr.trim() === unavailableSandbox.stderr.trim()) {
+    return result.stderr.trim();
+  }
+  return undefined;
+}
+
+function expectSandboxImageRead(
+  probe: SandboxResult | undefined, image: SandboxResult | undefined, expected: string, context: string,
+): string | undefined {
+  const reason = probe === undefined ? undefined : sandboxUnavailableReason(probe);
+  if (reason !== undefined) {
+    expect(image, `${context}: image sandbox must not run after a denied probe`).toBeUndefined();
+    return `${reason}; status=${probe!.status}, signal=${probe!.signal}, stderr=${JSON.stringify(probe!.stderr)}`;
+  }
+  expectSandboxOutput(probe, sandboxProbeOutput, `${context}: sandbox probe`);
+  expectSandboxOutput(image, expected, `${context}: sandbox image read`);
+  return undefined;
+}
+
+function expectSandboxOutput(result: SandboxResult | undefined, expected: string, context: string): void {
+  if (result === undefined) throw new Error(`Sandbox did not run: ${context}`);
+  const diagnostic = `${context}: ${JSON.stringify({
+    status: result.status, signal: result.signal, error: result.error?.message,
+    stdout: result.stdout, stderr: result.stderr,
+  })}`;
+  expect(result.error, diagnostic).toBeUndefined();
+  expect(result.signal, diagnostic).toBeNull();
+  expect(result.status, diagnostic).toBe(0);
+  expect(result.stdout.trim(), diagnostic).toBe(expected);
+}
+
+describe('sandbox subprocess diagnostics', () => {
+  const expected = createHash('sha256').update('selected screenshot').digest('hex');
+  const result = (overrides: Partial<SandboxResult>): SandboxResult => ({
+    status: 0, signal: null, stdout: `${expected}\n`, stderr: '', ...overrides,
+  });
+
+  it('accepts a successful process only when its output matches the expected digest', () => {
+    expect(() => expectSandboxOutput(result({}), expected, 'image read')).not.toThrow();
+  });
+
+  it.each(['', ' \n', 'different digest'])(
+    'reports exit status and stderr when a successful process returns invalid output %j', (stdout) => {
+      const failed = result({ stdout, stderr: 'output diagnostic' });
+      expect(() => expectSandboxOutput(failed, expected, 'image read'))
+        .toThrow(/image read.*"status":0.*"stderr":"output diagnostic"/u);
+    });
+
+  it('rejects a nonzero exit even when stdout contains the expected digest', () => {
+    expect(() => expectSandboxOutput(result({ status: 3, stderr: 'image read denied' }), expected, 'clone image'))
+      .toThrow(/clone image.*"status":3.*"stderr":"image read denied"/u);
+  });
+
+  it('reports a process signal instead of accepting its partial output', () => {
+    expect(() => expectSandboxOutput(result({ status: null, signal: 'SIGTERM', stderr: 'interrupted' }), expected, 'image read'))
+      .toThrow(/"status":null.*"signal":"SIGTERM".*"stderr":"interrupted"/u);
+  });
+
+  it('reports a launch error instead of accepting an unstarted process', () => {
+    expect(() => expectSandboxOutput(result({ status: null, error: new Error('spawn ENOENT'), stdout: '', stderr: '' }), expected, 'image read'))
+      .toThrow(/"status":null.*"error":"spawn ENOENT".*"stderr":""/u);
+  });
+
+  it('recognizes the observed sandbox initialization denial and preserves its reason', () => {
+    expect(sandboxUnavailableReason(unavailableSandbox)).toBe(unavailableSandbox.stderr.trim());
+    expect(expectSandboxImageRead(unavailableSandbox, undefined, expected, 'image read'))
+      .toContain(unavailableSandbox.stderr.trim());
+  });
+
+  it.each([
+    { status: 0, stdout: '' },
+    { status: 1, stdout: '', stderr: 'EPERM: image read denied' },
+    { status: 71, stdout: '', stderr: 'unknown sandbox failure' },
+    { status: 71, stdout: sandboxProbeOutput, stderr: unavailableSandbox.stderr },
+    { status: null, signal: 'SIGTERM' as const, stdout: '', stderr: unavailableSandbox.stderr },
+    { status: 71, error: new Error('spawn failed'), stdout: '', stderr: unavailableSandbox.stderr },
+  ])('does not classify an unknown or partial probe failure as an unavailable sandbox: %j', (overrides) => {
+    const probe = result(overrides);
+    expect(sandboxUnavailableReason(probe)).toBeUndefined();
+    expect(() => expectSandboxImageRead(probe, undefined, expected, 'image read')).toThrow();
+  });
+
+  it('requires the image digest after a successful independent sandbox probe', () => {
+    expect(expectSandboxImageRead(result({ stdout: sandboxProbeOutput }), result({}), expected, 'image read')).toBeUndefined();
+  });
+
+  it('does not treat an image read failure after a successful probe as sandbox unavailability', () => {
+    const probe = result({ stdout: sandboxProbeOutput });
+    expect(() => expectSandboxImageRead(probe, unavailableSandbox, expected, 'image read'))
+      .toThrow(/sandbox image read.*"status":71.*sandbox_apply/u);
+  });
+});
 
 describe('clone 準備中に停止したゴールのタスクを manager MCP から再試行する', () => {
   let root: string;
@@ -127,8 +230,8 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     return saved;
   }
 
-  function observeWorkflowReads(sandbox: boolean) {
-    const reads: { cwd: string; order: string; imagePath?: string; bytes?: Buffer; sandboxDigest?: string; options: ProviderCallOptions }[] = [];
+  function observeWorkflowReads(sandbox: boolean, probeOverride?: SandboxResult) {
+    const reads: { cwd: string; order: string; imagePath?: string; bytes?: Buffer; sandboxProbe?: SandboxResult; sandboxResult?: SandboxResult; options: ProviderCallOptions }[] = [];
     const setup = MockProvider.prototype.setup;
     vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
       const agent = setup.call(this, config);
@@ -140,7 +243,8 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
         const imageRef = /Inspect image: `([^`]+)`/u.exec(order)?.[1];
         const imagePath = imageRef === undefined ? undefined : resolve(options.cwd, imageRef);
         const bytes = imagePath === undefined ? undefined : readFileSync(imagePath);
-        let sandboxDigest: string | undefined;
+        let sandboxProbe: SandboxResult | undefined;
+        let sandboxResult: SandboxResult | undefined;
         if (sandbox && imagePath !== undefined) {
           const home = join(root, 'sandbox-home');
           mkdirSync(home, { recursive: true });
@@ -149,13 +253,21 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
             try { fs.writeFileSync('sandbox-write-must-fail', 'x'); process.exit(2); }
             catch (error) { if (!['EPERM', 'EACCES', 'EROFS'].includes(error.code)) throw error; }
             process.stdout.write(crypto.createHash('sha256').update(data).digest('hex'));`;
-          sandboxDigest = execFileSync(resolveCodexSdkCli(undefined).executablePath,
-            ['sandbox', '-c', 'sandbox_mode="read-only"', '--', process.execPath, '-e', script, imagePath], {
-              cwd: options.cwd, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home },
-              encoding: 'utf8', stdio: 'pipe', timeout: 15000,
-            }).trim();
+          const runtime = resolveCodexSdkCli(undefined);
+          const args = ['sandbox', '-c', 'sandbox_mode="read-only"', '--', process.execPath, '-e'];
+          const processOptions = {
+            cwd: options.cwd,
+            env: { PATH: [...runtime.pathDirs, process.env.PATH ?? ''].join(delimiter), HOME: home, CODEX_HOME: home },
+            encoding: 'utf8' as const, stdio: 'pipe' as const, timeout: 15000,
+          };
+          sandboxProbe = probeOverride ?? spawnSync(runtime.executablePath,
+            [...args, `process.stdout.write(${JSON.stringify(sandboxProbeOutput)})`], processOptions);
+          if (sandboxProbe.error === undefined && sandboxProbe.signal === null && sandboxProbe.status === 0
+            && sandboxProbe.stdout.trim() === sandboxProbeOutput) {
+            sandboxResult = spawnSync(runtime.executablePath, [...args, script, imagePath], processOptions);
+          }
         }
-        reads.push({ cwd: options.cwd, order, imagePath, bytes, sandboxDigest, options });
+        reads.push({ cwd: options.cwd, order, imagePath, bytes, sandboxProbe, sandboxResult, options });
         return agent.call(prompt, options);
       } };
     });
@@ -173,14 +285,16 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     return new TaskStore(cwd).read().tasks.find((saved) => saved.name === task.name)!;
   }
 
-  it('reads only the selected manager image from a private clone copy in a read-only sandbox through retry and requeue', async () => {
+  it.each(['real sandbox', 'unavailable sandbox'] as const)(
+    'reads only the selected manager image from a private clone copy in a read-only sandbox through retry and requeue (%s)', async (mode) => {
     const f = await prepareManagerImage();
     execFileSync('git', ['check-ignore', '--', relative(cwd, f.image.path)], { cwd, stdio: 'pipe' });
     const anotherSource = await createSessionImageAttachmentStore(cwd).saveImage(Buffer.concat([png, Buffer.from('other')]), 'image/png');
     const another = await f.images.prepare(cwd, f.id, f.owner, anotherSource.tempPath);
     const task = `# Inspect screen\n\nInspect image: \`${f.image.path}\``;
     const saved = await enqueueImageTask(task, 'Inspect selected screen');
-    const reads = observeWorkflowReads(true);
+    const reads = observeWorkflowReads(true, mode === 'unavailable sandbox' ? unavailableSandbox : undefined);
+    const warn = vi.spyOn(console, 'warn');
     let clone: string | undefined;
 
     for (const action of ['initial', 'retry', 'requeue'] as const) {
@@ -196,7 +310,16 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
       const read = reads.at(-1);
       expect(reads).toHaveLength(action === 'initial' ? 1 : action === 'retry' ? 2 : 3);
       expect(read?.bytes).toEqual(png);
-      expect(read?.sandboxDigest).toBe(createHash('sha256').update(png).digest('hex'));
+      const reason = expectSandboxImageRead(read?.sandboxProbe, read?.sandboxResult,
+        createHash('sha256').update(png).digest('hex'),
+        `${process.platform} ${action}: cwd=${read?.cwd}, image=${read?.imagePath}`);
+      if (reason !== undefined) {
+        console.warn(`[takt] sandbox unavailable; clone image read verified (${action}): ${reason}`);
+      }
+      if (mode === 'unavailable sandbox') {
+        expect(reason).toContain(unavailableSandbox.stderr.trim());
+        expect(warn).toHaveBeenLastCalledWith(expect.stringContaining(reason!));
+      }
       expect(read?.options.imageAttachments).toBeUndefined();
       expect(read?.cwd).toBe(finished.worktree_path);
       if (clone !== undefined) expect(finished.worktree_path).toBe(clone);
@@ -386,7 +509,7 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     'does not distribute manager images to a separate workflow when the reference is %s', async (kind) => {
       const { image } = await prepareManagerImage();
       const task = kind === 'filename suffix' ? `Inspect backup \`${image.path}.bak\``
-        : kind === 'placeholder only' ? 'Discuss [Image #1] without selecting a saved path' : 'Check README spelling';
+        : kind === 'placeholder only' ? 'Discuss [Image #1] and image-1.png.bak' : 'Check README spelling';
       const saved = await enqueueImageTask(task, `Image available at ${image.path}`);
       const reads = observeWorkflowReads(false);
       const finished = await executeEnqueuedTask();
