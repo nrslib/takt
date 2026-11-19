@@ -16,14 +16,14 @@ import { realpath } from 'node:fs/promises';
 import { goalWrite } from './goalWrite.js';
 import { goalWriteSummary } from './goalResponse.js';
 import { pagedResult } from './response.js';
-import { withManagerImageTask } from '../tasks/managerImageAttachments.js';
+import { readManagerImageTask, withManagerImageTask } from '../tasks/managerImageAttachments.js';
 import type { SaveEnqueuedTaskFile } from '../../infra/task/enqueueService.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
   let enqueued = false;
   try {
     return await goalWrite(input, deps, signal, async () => {
-      const execute = async (taskContent: string, saveTaskFile: SaveEnqueuedTaskFile) => {
+      const execute = async (taskContent: string, saveTaskFile: SaveEnqueuedTaskFile, selectedImagePaths: readonly string[]) => {
         const store = new GoalStore(input.cwd);
         const goal = await store.get(input.goalId);
         const runner = new TaskRunner(input.cwd);
@@ -33,7 +33,10 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
           if (input.workKey !== undefined) return task.goalWorkKey === input.workKey;
           if (task.goalPurpose !== input.purpose || task.workflow !== input.workflow) return false;
           const saved = allTasks.find((item) => item.name === task.name);
-          return saved !== undefined && resolveTaskOrderContent(input.cwd, saved.taskDir, saved.content) === taskContent.trim();
+          if (saved === undefined || resolveTaskOrderContent(input.cwd, saved.taskDir, saved.content) !== taskContent.trim()) return false;
+          const savedImages = saved.taskDir === undefined ? undefined : readManagerImageTask(join(input.cwd, saved.taskDir));
+          const savedPaths = new Set(savedImages?.images.map((image) => image.path) ?? []);
+          return savedPaths.size === selectedImagePaths.length && selectedImagePaths.every((path) => savedPaths.has(path));
         });
         if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };
         if (goal.status !== 'created') throw new Error('Goal cannot accept work');
@@ -56,7 +59,7 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
         return created;
       };
       const saveTaskFile = deps.saveTaskFile ?? saveEnqueuedTaskFile;
-      return deps.managerImageSource === undefined ? execute(input.task, saveTaskFile)
+      return deps.managerImageSource === undefined ? execute(input.task, saveTaskFile, [])
         : withManagerImageTask({ imageRoot: deps.managerImageSource.root, conversationId: deps.managerImageSource.conversationId,
           repositoryDirectory: input.cwd, task: input.task, saveTaskFile }, execute);
     }, 'Goal task enqueue failed', 'enqueue');

@@ -31,10 +31,10 @@ export function readManagerImageTask(taskDirectory: string): z.infer<typeof imag
 
 export async function withManagerImageTask<T>(input: {
   imageRoot: string; conversationId: string; repositoryDirectory: string; task: string; saveTaskFile: SaveEnqueuedTaskFile;
-}, action: (task: string, saveTaskFile: SaveEnqueuedTaskFile) => Promise<T>): Promise<T> {
+}, action: (task: string, saveTaskFile: SaveEnqueuedTaskFile, selectedImagePaths: readonly string[]) => Promise<T>): Promise<T> {
   const store = new ConversationImageStore(input.imageRoot, input.conversationId);
   const paths = selectWorkflowImagePaths(input.task, join(store.directory, 'attachments'));
-  if (paths.length === 0) return action(input.task, input.saveTaskFile);
+  if (paths.length === 0) return action(input.task, input.saveTaskFile, paths);
   const task = normalizeWorkflowImagePaths(input.task, paths.map((path) => ({ path, fileName: basename(path) })));
   const publicationScope: EnqueuedTaskPublicationScope = (publish) => store.exclusiveWithAcquisitionTimeout(async () => {
     const metadata = await store.read();
@@ -74,7 +74,7 @@ export async function withManagerImageTask<T>(input: {
   });
   const save: SaveEnqueuedTaskFile = (cwd, content, options, prepare, signal) =>
     input.saveTaskFile(cwd, content, options, prepare, signal, publicationScope);
-  return action(task, save);
+  return action(task, save, paths);
 }
 
 export async function registerManagerImageRun(sourceTaskDir: string, paths: RunPaths): Promise<void> {

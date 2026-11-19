@@ -18,7 +18,8 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
-import { ManagerImageAttachments } from '../features/manager/imageAttachments.js';
+import { ManagerImageAttachments, managerImageDirectory } from '../features/manager/imageAttachments.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
@@ -223,6 +224,60 @@ describe('clone 準備中に停止したゴールのタスクを manager MCP か
     expect(existsSync(f.image.path)).toBe(false);
     expect(existsSync(canonical)).toBe(false);
     for (const read of reads) expect(existsSync(read.imagePath!)).toBe(false);
+  });
+
+  it('distinguishes same-named images from repository and workspace stores while reusing identical selections', async () => {
+    const first = await prepareManagerImage();
+    const purpose = 'Inspect selected screen';
+    const firstTask = `Inspect image: \`${first.image.path}\``;
+    const savedFirst = await enqueueImageTask(firstTask, purpose);
+    const firstMetadata = await new ConversationImageStore(cwd, first.id).read();
+    expect((await enqueueImageTask(firstTask, purpose)).name).toBe(savedFirst.name);
+    expect(new TaskStore(cwd).read().tasks).toHaveLength(1);
+    expect((await new GoalStore(cwd).get(goalId)).workLog).toHaveLength(1);
+    expect(await new ConversationImageStore(cwd, first.id).read()).toEqual(firstMetadata);
+
+    const workspace = await createWorkspace({ globalConfigDirectory: getGlobalConfigDir(), name: 'Image inspection', repositoryDirectories: [cwd] });
+    const assignment = { kind: 'workspace' as const, workspaceId: workspace.id };
+    const workspaceRoot = await managerImageDirectory(assignment, getGlobalConfigDir());
+    const workspaceId = conversationId(assignment);
+    const temporary = createSessionImageAttachmentStore(workspaceRoot);
+    const secondBytes = Buffer.concat([png, Buffer.from('workspace screenshot')]);
+    let secondImage;
+    try {
+      const source = await temporary.saveImage(secondBytes, 'image/png');
+      secondImage = await first.images.prepare(workspaceRoot, workspaceId, randomUUID(), source.tempPath);
+    } finally { temporary.cleanup(); }
+    expect(first.image.path.endsWith('/image-1.png')).toBe(true);
+    expect(secondImage.path.endsWith('/image-1.png')).toBe(true);
+    expect(secondImage.path).not.toBe(first.image.path);
+    await client.close(); await server.close();
+    server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd, managerAssignment: assignment });
+    client = new Client({ name: 'workspace-image-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b); await client.connect(a);
+
+    const secondTask = `Inspect image: \`${secondImage.path}\``;
+    const savedSecond = await enqueueImageTask(secondTask, purpose);
+    expect(savedSecond.name).not.toBe(savedFirst.name);
+    expect(readFileSync(join(cwd, savedFirst.taskDir!, 'order.md'), 'utf8'))
+      .toBe(readFileSync(join(cwd, savedSecond.taskDir!, 'order.md'), 'utf8'));
+    expect(readFileSync(join(cwd, savedFirst.taskDir!, 'attachments', 'image-1.png'))).toEqual(png);
+    expect(readFileSync(join(cwd, savedSecond.taskDir!, 'attachments', 'image-1.png'))).toEqual(secondBytes);
+    const workspaceMetadata = await new ConversationImageStore(workspaceRoot, workspaceId).read();
+    const directories = readdirSync(join(cwd, '.takt', 'tasks'));
+    expect((await enqueueImageTask(secondTask, purpose)).name).toBe(savedSecond.name);
+    expect(new TaskStore(cwd).read().tasks).toHaveLength(2);
+    expect((await new GoalStore(cwd).get(goalId)).workLog).toHaveLength(2);
+    expect(readdirSync(join(cwd, '.takt', 'tasks'))).toEqual(directories);
+    expect(await new ConversationImageStore(workspaceRoot, workspaceId).read()).toEqual(workspaceMetadata);
+    expect(await new ConversationImageStore(cwd, first.id).read()).toEqual(firstMetadata);
+
+    const reads = observeWorkflowReads(false);
+    await executeEnqueuedTask();
+    await executeEnqueuedTask();
+    expect(reads.map((read) => read.bytes)).toEqual([png, secondBytes]);
+    for (const read of reads) expect(relative(read.cwd, read.imagePath!)).toMatch(/^\.takt[/\\]runs[/\\]/u);
   });
 
   it('retains a completed task image and deletes only its run copies while a provider session still owns the original', async () => {

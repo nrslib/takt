@@ -149,7 +149,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
         if (clear) {
           return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
-            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+            change: state.change({ session: { ...state.current.session, sessionId: null,
+              ...(assignment.kind === 'daemon' ? {} : { imageAttachmentIds: [] }) }, interruptedMessage: null,
+              ...(assignment.kind === 'daemon' ? {} : { interruptedImageAttachmentIds: [] }) }) };
         }
         let verification: ManagerTurnInput['verify'];
         if (verify) {

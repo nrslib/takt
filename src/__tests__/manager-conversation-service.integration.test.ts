@@ -144,6 +144,99 @@ it('retains an image for a resumed provider session and releases it when that se
   await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
 });
 
+it.each([
+  { clear: false, newImage: false },
+  { clear: true, newImage: false },
+  { clear: true, newImage: true },
+])('handles interrupted images on the next turn (clear: $clear, new image: $newImage)', async ({ clear, newImage }) => {
+  const entered = deferred<void>();
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', content: '',
+    timestamp: new Date(), sessionId: 'next-session', structuredOutput: { message: 'done', summary: null } });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    entered.resolve();
+    await new Promise<void>((resolve) => options.abortSignal!.addEventListener('abort', () => resolve(), { once: true }));
+    options.abortSignal!.throwIfAborted();
+    throw new Error('Expected interruption');
+  });
+  const executor = createManagerTurnExecutor(repository, { ctx: { providerType: 'mock', lang: 'en', model: undefined,
+    provider: makeProvider({ supportsNativeImageInput: true, setup: () => ({ call }) }) }, strategy: { systemPrompt: 'manager' } });
+  resolveRuntime.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const source = await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    const admission = await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Interrupted inspection ' + image.placeholder, imageAttachmentIds: [image.id],
+      } });
+    if (admission.kind !== 'accepted') throw new Error('Expected acceptance');
+    await entered.promise;
+    const running = port.outputs.find((output) => output.kind === 'running' && output.state.running?.operationId === admission.operationId);
+    if (running?.kind !== 'running' || running.state.running?.generation === undefined) throw new Error('Missing running turn');
+    await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'abort_turn', operationId: admission.operationId,
+        generation: running.state.running.generation } });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.interruptedImageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    const nextSource = newImage ? await temporary.saveImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), 'image/png') : undefined;
+    const nextImage = nextSource === undefined ? undefined
+      : await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: nextSource.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text: 'Next request' + (nextImage === undefined ? '' : ' ' + nextImage.placeholder),
+        ...(nextImage === undefined ? {} : { imageAttachmentIds: [nextImage.id] }) } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect(call).toHaveBeenCalledTimes(2);
+    const [prompt, options] = call.mock.calls[1]!;
+    const expectedImages = nextImage === undefined ? clear ? [] : [image] : [nextImage];
+    expect(options.imageAttachments ?? []).toEqual(expectedImages);
+    const metadata = prompt.split('\n\n').find((part) => part.startsWith('Image attachments: '));
+    expect(metadata === undefined ? [] : JSON.parse(metadata.slice('Image attachments: '.length))).toEqual(expectedImages);
+    expect(prompt.includes('Interrupted inspection')).toBe(!clear);
+  } finally { temporary.cleanup(); }
+});
+
+it.each([false, true])('releases old session images after a text-only turn only when cleared (clear: %s)', async (clear) => {
+  const state = (await fixture.store.read(id))!.state;
+  expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {
+    operationId: randomUUID(), expectedVersion: state.version,
+    session: { ...state.session, sessionId: null, imageAttachmentIds: [] },
+  }, new AbortController().signal)).toMatchObject({ kind: 'state_saved' });
+  const temporary = createSessionImageAttachmentStore(repository);
+  try {
+    const port = await open();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const source = await temporary.saveImage(png, 'image/png');
+    const image = await fixture.input.prepareImage({ attachmentId: port.attachmentId, sourcePath: source.tempPath });
+    expect(await fixture.input.submit({ attachmentId: port.attachmentId, requestId: randomUUID(),
+      speaker: { namespace: 'local', id: 'operator' }, command: {
+        kind: 'message', text: 'Inspect ' + image.placeholder, imageAttachmentIds: [image.id],
+      } })).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual([image.id]);
+    if (clear) {
+      expect(await port.submit('/clear')).toMatchObject({ kind: 'accepted' });
+      await fixture.settled();
+    }
+    expect(await port.submit('Next request without images')).toMatchObject({ kind: 'accepted' });
+    await fixture.settled();
+    const next = execute.mock.calls.at(-1)![0];
+    expect(next.imageAttachments).toBeUndefined();
+    expect(next.sessionId).toBe(clear ? undefined : 'persisted-session');
+    expect((await fixture.store.read(id))!.state.session.imageAttachmentIds).toEqual(clear ? [] : [image.id]);
+    const images = new ManagerImageAttachments(fixture.events);
+    await images.release(repository, id, port.attachmentId);
+    if (clear) {
+      await expect(readFile(image.path)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(resolveManagerImages(repository, id, [image.id])).rejects.toThrow();
+    } else expect(await readFile(image.path)).toEqual(png);
+  } finally { temporary.cleanup(); }
+});
+
 it('retains newly delivered images when a continuing provider session fails before returning its response', async () => {
   const signal = new AbortController().signal;
   expect(await fixture.store.save({ conversationId: id, operationId: randomUUID(), generation: 1 }, {

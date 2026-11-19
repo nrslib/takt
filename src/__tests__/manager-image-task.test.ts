@@ -61,7 +61,8 @@ it('normalizes a selected task, reserves its ownership before publication and ke
     });
   });
   const result = await withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
-    task: `Inspect \`${source}\``, saveTaskFile: save }, async (task, publish) => {
+    task: `Inspect \`${source}\``, saveTaskFile: save }, async (task, publish, selectedImagePaths) => {
+    expect(selectedImagePaths).toEqual([source]);
     expect(io.metadata.workflows).toBeUndefined();
     return publish(root, task);
   });
@@ -96,7 +97,7 @@ it('leaves an unselected task unchanged without reserving or copying images', as
   const save = vi.fn(); const action = vi.fn(async (content: string) => content);
   expect(await withManagerImageTask({ imageRoot: root, conversationId: cid, repositoryDirectory: root,
     task: 'Read README', saveTaskFile: save }, action)).toBe('Read README');
-  expect(action).toHaveBeenCalledWith('Read README', save);
+  expect(action).toHaveBeenCalledWith('Read README', save, []);
   expect(io.reserve).not.toHaveBeenCalled(); expect(io.copy).not.toHaveBeenCalled();
 });
 

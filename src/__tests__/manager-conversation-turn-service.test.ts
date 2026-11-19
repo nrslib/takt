@@ -413,19 +413,22 @@ it('returns a system notice after dismissing a registration proposal without inv
   expect(f.execute).not.toHaveBeenCalled();
 });
 
-it('clears only the session ID and interrupted message on /clear without invoking AI', async () => {
+it('clears the session and interrupted input references on /clear without invoking AI', async () => {
   const f = fixture();
   f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
     summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
-  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' } };
+  const imageId = randomUUID();
+  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' }, imageAttachmentIds: [imageId] };
   f.input.state.interruptedMessage = 'undelivered request';
+  f.input.state.interruptedImageAttachmentIds = [imageId];
   f.input.event.event = humanMessage(' /clear ');
 
   const outcome = await f.service.execute(f.input, f.io);
 
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
   expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
-    session: { ...f.input.state.session, sessionId: null }, interruptedMessage: null });
+    session: { ...f.input.state.session, sessionId: null, imageAttachmentIds: [] }, interruptedMessage: null,
+    interruptedImageAttachmentIds: [] });
   expect(f.request).not.toHaveBeenCalled();
   expect(f.resolve).not.toHaveBeenCalled();
   expect(f.execute).not.toHaveBeenCalled();
