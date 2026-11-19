@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect } from 'vitest';
 import {
   getPersonaSessionsPath,
   getWorktreeSessionPath,
+  loadPersonaSessions,
   loadWorktreeSessions,
   resolvePersonaSessionId,
   updatePersonaSession,
   updateWorktreeSession,
 } from '../infra/config/project/sessionStore.js';
+import { CODEX_SESSION_CONTRACT } from '../shared/codex-session-contract.js';
 
 describe('resolvePersonaSessionId', () => {
   it('scoped keyが存在する場合はscoped keyを優先する', () => {
@@ -64,6 +66,24 @@ describe('updatePersonaSession', () => {
     };
     expect(data.personaSessions.interactive).toBe('session-1');
     expect(data.personaSessions['interactive:claude-sdk']).toBe('session-1');
+  });
+
+  it('rejects old Codex persona sessions and keeps sessions saved under the current developer contract', () => {
+    const testDir = join(tmpdir(), `takt-session-store-${randomUUID()}`);
+    createdDirs.push(testDir);
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(getPersonaSessionsPath(testDir), JSON.stringify({
+      provider: 'codex', personaSessions: { interactive: 'old-session' }, updatedAt: new Date().toISOString(),
+    }));
+
+    expect(loadPersonaSessions(testDir, 'codex')).toEqual({});
+    updatePersonaSession(testDir, 'interactive', 'new-session', 'codex');
+    const saved = JSON.parse(readFileSync(getPersonaSessionsPath(testDir), 'utf-8')) as {
+      codexSessionContract?: string; personaSessions: Record<string, string>;
+    };
+    expect(saved.codexSessionContract).toBe(CODEX_SESSION_CONTRACT);
+    expect(saved.personaSessions.interactive).toBe('new-session');
+    expect(loadPersonaSessions(testDir, 'codex').interactive).toBe('new-session');
   });
 
   it('sessionIdがundefinedの場合はlegacy/scoped keyを同時に削除する', () => {

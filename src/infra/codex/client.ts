@@ -344,12 +344,9 @@ export class CodexClient {
   ): Promise<AgentResponse> {
     let threadId = options.sessionId;
 
-    const fullPrompt = options.systemPrompt
-      ? `${options.systemPrompt}\n\n${prompt}`
-      : prompt;
     let input: Input;
     try {
-      input = buildCodexInput(fullPrompt, options.imageAttachments);
+      input = buildCodexInput(prompt, options.imageAttachments);
     } catch (error) {
       const failure = createProviderErrorFailure(getErrorMessage(error));
       const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
@@ -388,7 +385,7 @@ export class CodexClient {
     let mcpExclusions: string[] = [];
     let rolloutObservation: Awaited<ReturnType<typeof createCodexRolloutObservation>>;
     try {
-      isolation = options.mcpOnlySideEffects
+      isolation = options.mcpOnlySideEffects || options.internalAgentIsolation === 'strict-readonly'
         ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
         : undefined;
       if (isolation === undefined) {

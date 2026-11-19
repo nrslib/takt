@@ -112,6 +112,23 @@ it('persists the session and applies the human response to the current proposal'
   expect((await fixture.store.read(id))!.state.session.contextKey).toBe('test');
 });
 
+it('does not resume a legacy Codex manager session without a contract fingerprint', async () => {
+  await fixture.close();
+  const path = join(getGlobalConfigDir(), 'conversations', `${id}.json`);
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  await writeFile(path, JSON.stringify({ ...record, provider: 'codex' }));
+  fixture = await conversationDaemon(getGlobalConfigDir(), { resolve: resolveRuntime, async close() {} });
+  resolveRuntime.mockResolvedValue({ provider: 'codex', model: null, language: 'en', contextKey: 'current-codex-contract', executor: { execute } });
+  const port = await open();
+
+  await port.submit('continue the goal');
+  await fixture.settled();
+
+  expect(execute.mock.calls[0]![0].sessionId).toBeUndefined();
+  expect(execute.mock.calls[0]![0].recovery?.context).toBeDefined();
+  expect((await fixture.store.read(id))!.state.session.contextKey).toBe('current-codex-contract');
+});
+
 it.each(['result', 'delivery'] as const)('preserves the acquired change without repeating the provider after a history %s failure', async (failure) => {
   const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     options.onStream!({ type: 'tool_use', data: { id: 'tool', tool: 'Read', input: { file_path: 'a.ts' } } });
@@ -226,6 +243,7 @@ it.each([false, true])('compares the saved system prompt fingerprint on the firs
     await next.submit('request after restart');
     await fixture.settled();
     expect(call.mock.calls[1]![1].sessionId).toBe(changed ? undefined : 'session-1');
+    if (changed) expect(call.mock.calls[1]![0]).toContain('Business context (not approval):');
     const restored = (await fixture.store.read(id))!.state.session;
     expect(restored.sessionId).toBe('session-2');
     if (changed) expect(restored.contextKey).not.toBe(saved.contextKey);

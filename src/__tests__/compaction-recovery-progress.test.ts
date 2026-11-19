@@ -93,8 +93,6 @@ const stalledTurn: Turn = (options) => {
   return finalAnswer(options, 'What should I review?');
 };
 
-const completedTurn: Turn = (options) => finalAnswer(options, 'Review complete: no findings.');
-
 function provideTurns(turns: readonly Turn[]): {
   readonly call: ReturnType<typeof vi.fn<ProviderAgent['call']>>;
   readonly recoverFromCompaction: ReturnType<typeof vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>>;
@@ -131,7 +129,7 @@ function runPhase1(): Promise<AgentResponse> {
   return runAgent(undefined, 'Review the retry boundary.', options);
 }
 
-describe('compaction recovery limit based on tool activity', () => {
+describe('compaction recovery limit', () => {
   beforeEach(() => {
     getProviderMock.mockReset();
     storeState.log = undefined;
@@ -152,34 +150,36 @@ describe('compaction recovery limit based on tool activity', () => {
   it.each<[string, (index: number) => Turn]>([
     ['runs a tool without writing a note', toolOnlyTurn],
     ['writes a note and runs a tool', workingTurn],
-  ])('keeps recovering past three compactions while each recovery %s, then returns the final answer', async (_kind, working) => {
+  ])('keeps recovering while each recovery %s', async (_kind, working) => {
     const { recoverFromCompaction } = provideTurns([
-      working(1), working(2), working(3), working(4), working(5), completedTurn,
+      working(1), working(2), working(3), working(4), working(5),
+      (options) => finalAnswer(options, 'Review complete.'),
     ]);
 
     const response = await runPhase1();
 
-    expect(response).toMatchObject({ status: 'done', content: 'Review complete: no findings.', sessionId: 'thread' });
+    expect(response).toMatchObject({ status: 'done', content: 'Review complete.', sessionId: 'thread' });
     expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
   });
 
   it.each<[string, 'openFails' | 'unavailable']>([
     ['the progress notes store cannot be opened', 'openFails'],
     ['saving progress notes fails', 'unavailable'],
-  ])('keeps recovering past three compactions while each recovery runs a tool when %s', async (_kind, failure) => {
+  ])('still resets the recovery count on tool use when %s', async (_kind, failure) => {
     storeState[failure] = true;
     const { recoverFromCompaction } = provideTurns([
-      workingTurn(1), workingTurn(2), workingTurn(3), workingTurn(4), workingTurn(5), completedTurn,
+      workingTurn(1), workingTurn(2), workingTurn(3), workingTurn(4), workingTurn(5),
+      (options) => finalAnswer(options, 'Review complete.'),
     ]);
 
     const response = await runPhase1();
 
     expect(storeState.log).toBeUndefined();
-    expect(response).toMatchObject({ status: 'done', content: 'Review complete: no findings.', sessionId: 'thread' });
+    expect(response).toMatchObject({ status: 'done', content: 'Review complete.', sessionId: 'thread' });
     expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
   });
 
-  it('counts recoveries without a tool call again from zero after a recovery that runs a tool', async () => {
+  it('resets the recovery count on tool use and stops after three subsequent recoveries without tools', async () => {
     const { recoverFromCompaction } = provideTurns([
       stalledTurn, stalledTurn, stalledTurn, toolOnlyTurn(1), stalledTurn, stalledTurn, stalledTurn,
     ]);

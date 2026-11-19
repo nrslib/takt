@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonConversationRuntime, prepareDirectorTurn } from '../features/director/conversationRuntime.js';
 import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
 import * as directorMcp from '../features/director/mcp.js';
+import { createHash } from 'node:crypto';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
   managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn() }));
@@ -31,6 +32,20 @@ it('prepares an isolated readonly turn and passes its connection to the executor
   expect(doubles.dispose).not.toHaveBeenCalled();
   await prepared.dispose();
   expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
+it('changes the Codex director context key from the prior developer contract', async () => {
+  const plan = { cwd: '/config', systemPrompt: 'director', ctx: { provider: { preflight: doubles.preflight },
+    providerType: 'codex', lang: 'en' } };
+  doubles.plan.mockReturnValue(plan);
+  const oldContextKey = createHash('sha256').update(JSON.stringify({
+    provider: 'codex', model: undefined, options: undefined, prompt: 'director',
+  })).digest('hex');
+
+  const prepared = await prepareDirectorTurn('/config', notices, signal(), {});
+
+  expect(prepared.contextKey).not.toBe(oldContextKey);
+  await prepared.dispose();
 });
 
 it.each(['preflight', 'executor'] as const)('disposes the connection after %s preparation failure', async (boundary) => {

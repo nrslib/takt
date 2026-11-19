@@ -123,6 +123,139 @@ describe('AgentRunner compaction recovery', () => {
     ]]);
   });
 
+  it.each([
+    'APPROVE: the assigned review is complete.',
+    'REJECT: the assigned review found a concrete defect in src/example.ts.',
+  ])('preserves a completed review response after compaction: %s', async (content) => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: content, sessionId: 'current-thread', success: true } });
+      return makeResponse(content, 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'complete' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'done', content, sessionId: 'current-thread' });
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(assessCompactedResponse).toHaveBeenCalledOnce();
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: content, sessionId: 'current-thread', success: true } },
+    ]]);
+  });
+
+  it.each([
+    {
+      name: 'all cache fields missing',
+      initialCache: {}, assessmentCache: {}, recoveryCache: {}, expectedCache: {},
+    },
+    {
+      name: 'one cache field missing from an attempt',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 3 },
+      assessmentCache: { cachedInputTokens: 1, cacheReadInputTokens: 0 },
+      recoveryCache: { cachedInputTokens: 2, cacheCreationInputTokens: 4, cacheReadInputTokens: 1 },
+      expectedCache: { cachedInputTokens: 3, cacheReadInputTokens: 4 },
+    },
+    {
+      name: 'all cache fields known including zero',
+      initialCache: { cachedInputTokens: 0, cacheCreationInputTokens: 2, cacheReadInputTokens: 0 },
+      assessmentCache: { cachedInputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 1 },
+      recoveryCache: { cachedInputTokens: 0, cacheCreationInputTokens: 1, cacheReadInputTokens: 4 },
+      expectedCache: { cachedInputTokens: 0, cacheCreationInputTokens: 3, cacheReadInputTokens: 5 },
+    },
+  ])('recovers a role-lost review with $name and keeps assessment output out of the result stream', async ({
+    initialCache, assessmentCache, recoveryCache, expectedCache,
+  }) => {
+    const onStream = vi.fn();
+    const recorder = { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'Review the remaining change' };
+    const lost = 'I cannot implement this fix because I only have read access.';
+    const reviewed = 'REJECT: src/example.ts has an unchecked failure path.';
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: lost, sessionId: 'current-thread', success: true } });
+      return { ...makeResponse(lost, 'current-thread'), providerUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, usageMissing: false, ...initialCache } };
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options) => {
+      options.onStream?.({ type: 'result', data: { result: reviewed, sessionId: 'current-thread', success: true } });
+      return { ...makeResponse(reviewed, 'current-thread'), providerUsage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, usageMissing: false, ...recoveryCache } };
+    });
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(async (_instruction, response) => ({
+      decision: response.content === lost ? 'needs_recovery' : 'complete',
+      usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5, usageMissing: false, ...assessmentCache },
+    }));
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream, progressNotesRecorder: recorder }));
+
+    expect(result).toMatchObject({ status: 'done', content: reviewed, sessionId: 'current-thread' });
+    expect(result.providerUsage).toEqual({
+      inputTokens: 21, outputTokens: 6, totalTokens: 27, usageMissing: false, ...expectedCache,
+    });
+    expect(recoverFromCompaction).toHaveBeenCalledOnce();
+    expect(recoverFromCompaction.mock.calls[0]![0]).toBe('Review the remaining change');
+    expect(assessCompactedResponse).toHaveBeenCalledOnce();
+    expect(recorder.finish).toHaveBeenCalledTimes(2);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: reviewed, sessionId: 'current-thread', success: true } },
+    ]]);
+  });
+
+  it('keeps recovering beyond three attempts when recoveries use tools and returns the completed review', async () => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: 'unresolved', sessionId: 'current-thread', success: true } });
+      return makeResponse('unresolved', 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>(async (_instruction, options): Promise<AgentResponse> => {
+      const content = recoverFromCompaction.mock.calls.length === 5 ? 'REJECT: review complete' : 'unresolved';
+      options.onStream?.({ type: 'tool_use', data: { tool: 'Read', input: {}, id: 'read' } });
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: content, sessionId: 'current-thread', success: true } });
+      return makeResponse(content, 'current-thread');
+    });
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async (_instruction, response) => ({ decision: response.content === 'unresolved' ? 'needs_recovery' : 'complete' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'done', content: 'REJECT: review complete' });
+    expect(recoverFromCompaction).toHaveBeenCalledTimes(5);
+    expect(assessCompactedResponse).toHaveBeenCalledTimes(6);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      { type: 'result', data: { result: 'REJECT: review complete', success: true, sessionId: 'current-thread' } },
+    ]]);
+  });
+
+  it('reports assessment failure instead of accepting or replaying the candidate', async () => {
+    const onStream = vi.fn();
+    const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
+      options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
+      options.onStream?.({ type: 'result', data: { result: 'candidate', sessionId: 'current-thread', success: true } });
+      return makeResponse('candidate', 'current-thread');
+    });
+    const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
+    const assessCompactedResponse = vi.fn<NonNullable<ProviderAgent['assessCompactedResponse']>>(
+      async () => ({ decision: 'error', error: 'assessment unavailable', failureCategory: 'provider_error' }),
+    );
+    getProviderMock.mockReturnValue(makeProvider({ call, recoverFromCompaction, assessCompactedResponse }));
+
+    const result = await new AgentRunner().run('coding-reviewer', 'Review the current change', makeRunOptions({ onStream }));
+
+    expect(result).toMatchObject({ status: 'error', error: 'assessment unavailable', sessionId: 'current-thread' });
+    expect(recoverFromCompaction).not.toHaveBeenCalled();
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
+      expect.objectContaining({ type: 'result', data: expect.objectContaining({ success: false, error: 'assessment unavailable' }) }),
+    ]]);
+  });
+
   it('keeps the original response when the provider has no recovery capability', async () => {
     const onStream = vi.fn();
     const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {

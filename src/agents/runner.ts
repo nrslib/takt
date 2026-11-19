@@ -24,6 +24,8 @@ import {
   providerSupportsStrictMcpConfig,
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -40,10 +42,48 @@ import {
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
 import { startProgressNotes } from '../infra/progress-notes/session.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
+const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
+
+function withCompactionUsage(response: AgentResponse, usages: readonly (ProviderUsageSnapshot | undefined)[]): AgentResponse {
+  if (usages.length === 1) return response;
+  const known = usages.filter((usage): usage is ProviderUsageSnapshot => usage !== undefined);
+  if (known.length === 0) return response;
+  const complete = known.length === usages.length && known.every((usage) =>
+    !usage.usageMissing
+    && Number.isFinite(usage.inputTokens)
+    && Number.isFinite(usage.outputTokens)
+    && Number.isFinite(usage.totalTokens));
+  if (!complete) {
+    const reason = known.find((usage) => usage.usageMissing)?.reason ?? USAGE_MISSING_REASONS.NOT_AVAILABLE;
+    return { ...response, providerUsage: { usageMissing: true, reason } };
+  }
+  const sum = (field: 'inputTokens' | 'outputTokens' | 'totalTokens'): number =>
+    known.reduce((total, usage) => total + (usage[field] ?? 0), 0);
+  const sumOptional = (field: 'cachedInputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'): number | undefined =>
+    known.every((usage) => Number.isFinite(usage[field]))
+      ? known.reduce((total, usage) => total + usage[field]!, 0)
+      : undefined;
+  const cachedInputTokens = sumOptional('cachedInputTokens');
+  const cacheCreationInputTokens = sumOptional('cacheCreationInputTokens');
+  const cacheReadInputTokens = sumOptional('cacheReadInputTokens');
+  return {
+    ...response,
+    providerUsage: {
+      usageMissing: false,
+      inputTokens: sum('inputTokens'),
+      outputTokens: sum('outputTokens'),
+      totalTokens: sum('totalTokens'),
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens }),
+      ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
+    },
+  };
+}
 type RunnerHandoffOptions = RunAgentOptions;
 type AgentExecutionResolution = {
   readonly provider: ProviderType;
@@ -217,6 +257,9 @@ export class AgentRunner {
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
       executionPhase: options.executionPhase,
+      ...(options.workflowMeta?.context === undefined ? {} : {
+        compactionAssignment: options.workflowMeta.context.assignment.stepName,
+      }),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -259,15 +302,14 @@ export class AgentRunner {
       return response;
     }
 
-    // Only recoveries that compact again without calling any tool count toward the limit, so a long
-    // review that keeps calling tools is not cut off at a total number of compactions.
-    const maxRecoveriesWithoutProgress = 3;
     let recovering = false;
     let recoveriesWithoutProgress = 0;
     let currentOptions = options;
+    const usages: (ProviderUsageSnapshot | undefined)[] = [];
     while (true) {
       let compactionDetected = false;
       let compactionSessionId: string | undefined;
+      let resultEvent: StreamEvent | undefined;
       let calledTool = false;
       const callOptions = {
         ...currentOptions,
@@ -276,53 +318,77 @@ export class AgentRunner {
           if (event.type === 'tool_use') {
             calledTool = true;
           }
-          // The adapter owns completion eligibility; context_compacted does not guarantee an automatic trigger.
           if (event.type === 'context_compacted') {
             compactionDetected = true;
             compactionSessionId = event.data.sessionId;
           }
-          if (
-            compactionDetected
-            && event.type === 'result'
-            && event.data.success
-            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
-          ) {
+          if (event.type === 'result') {
+            resultEvent = event;
             return;
           }
           currentOptions.onStream?.(event);
         },
       };
+      const instruction = recovering ? recorder.recoveryInstruction() : task;
       const response = recovering
-        ? await recoverFromCompaction.call(agent, recorder.recoveryInstruction(), callOptions)
-        : await agent.call(task, callOptions);
+        ? await recoverFromCompaction.call(agent, instruction, callOptions)
+        : await agent.call(instruction, callOptions);
       recorder.finish(response);
+      usages.push(response.providerUsage);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
-      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
-        return response;
+      if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
       }
-
-      currentOptions = {
-        ...currentOptions,
-        sessionId: responseSessionId,
-      };
       if (recovering) {
         recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
       }
-      if (recoveriesWithoutProgress === maxRecoveriesWithoutProgress) {
+
+      let needsRecovery: boolean = true;
+      if (agent.assessCompactedResponse !== undefined && responseSessionId !== undefined) {
+        let assessment: Awaited<ReturnType<NonNullable<ProviderAgent['assessCompactedResponse']>>>;
+        try {
+          assessment = await agent.assessCompactedResponse(instruction, response, callOptions);
+        } catch (cause) {
+          assessment = {
+            decision: 'error',
+            error: getErrorMessage(cause),
+            failureCategory: currentOptions.abortSignal?.aborted ? 'external_abort' : 'provider_error',
+          };
+        }
+        usages.push(assessment.usage);
+        if (assessment.decision === 'error') {
+          const error = assessment.error ?? 'Compaction completion assessment failed';
+          const failureCategory = assessment.failureCategory ?? 'provider_error';
+          currentOptions.onStream?.({
+            type: 'result',
+            data: { result: error, sessionId: responseSessionId ?? 'unknown', success: false, error, failureCategory },
+          });
+          return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory }, usages);
+        }
+        needsRecovery = assessment.decision === 'needs_recovery';
+      }
+      if (!needsRecovery) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
+      }
+      if (recoveriesWithoutProgress === MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS) {
         const error = 'Provider compaction recovery limit reached';
         currentOptions.onStream?.({
           type: 'result',
           data: {
             result: error,
-            sessionId: currentOptions.sessionId ?? 'unknown',
+            sessionId: responseSessionId ?? 'unknown',
             success: false,
             error,
+            failureCategory: 'provider_error',
           },
         });
-        return { ...response, status: 'error', error };
+        return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory: 'provider_error' }, usages);
       }
+      currentOptions = { ...currentOptions, sessionId: responseSessionId };
       recovering = true;
     }
   }

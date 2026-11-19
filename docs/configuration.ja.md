@@ -1725,7 +1725,11 @@ runtime profile または capability preset で設定できます。legacy モ�
 
 #### Codex の context compaction からの復帰
 
-Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行します。上限は compaction の総回数ではなく、進捗のない復帰が連続した回数に対して適用されます。復帰 turn の中でファイル読み込み・コマンド実行・編集などのツール呼び出しが1回でもあれば進捗ありとして連続回数をリセットし、ツールを呼び出さないまま再び compaction した復帰が3回続くと provider call を終了します。progress notes の有無や保存の成否、ツール呼び出し前に応答文を書いたかどうかは、この判定に影響しません。最終回答、result の文章、ツール呼び出しを伴わない応答文は進捗に数えません。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。この進捗判定は復帰の繰り返しを止めるための実用的な目安であり、作業が実際に前進していることを証明するものではありません。収束しないままツール呼び出しを繰り返す agent はこの上限では止まりません。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+Codex の developer instructions には、TAKT が各 turn に渡す現在の担当指示を優先する固定の契約を設定します。担当、persona、フェーズなどの現在の指示は turn の `taktCurrentInstructions` に、作業依頼は `userInstruction` に分けて渡します。現在の担当指示は過去の担当や progress notes より優先されます。利用者の既存の `developer_instructions` 設定はこの契約で上書きしますが、設定ファイルは変更しません。契約の変更前に作られた workflow session は新しい session key では再開せず、現在の指示から開始します。報告フェーズでは保存済みの作業結果を新しい依頼に含めます。
+
+Codex が Phase 1 で `compacted` event を記録し、同じ session の turn が完了した場合、TAKT は応答が現在の担当ステップを完了したか判定します。判定には MCP ツールを持たない独立した読み取り専用の Codex session を使います。具体的な指摘を伴う REJECT もレビューの完了として扱い、元の応答を返します。担当を見失った場合は作業中の thread を resume し、元の Phase 1 指示と現在の担当・権限を再提示します。判定に失敗した場合や結果が不正な場合は、候補応答を採用せず provider call を失敗にします。
+
+復帰 turn でツールを使わず再び compaction が起き、さらに復帰が必要になる状態が3回連続すると失敗を返します。復帰 turn でツールを使うと回数をリセットするため、復帰の累計回数には上限を設けません。progress notes の利用や保存の成否は回数に影響しません。assistant の応答文から compaction を推測することはありません。この event を発行しない provider や復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理です。
 
 #### Codex の fast mode (`fast_mode`)
 

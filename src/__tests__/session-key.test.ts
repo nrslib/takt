@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { buildSessionKey } from '../core/workflow/session-key.js';
+import { CODEX_SESSION_CONTRACT } from '../shared/codex-session-contract.js';
 import { getAllParallelSubSteps, type WorkflowStep, type NormalAgentWorkflowStep } from '../core/models/types.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 
@@ -28,6 +29,14 @@ describe('buildSessionKey', () => {
     expect(buildSessionKey(step)).toBe(JSON.stringify(['worker-1', 'claude-sdk']));
   });
 
+  it('starts a new Codex session for the current-turn developer contract while keeping an explicit shared key', () => {
+    const reviewer = createStep({ sessionKey: 'shared', persona: 'reviewer', provider: 'codex' });
+    const implementer = createStep({ sessionKey: 'shared', persona: 'implementer', provider: 'codex' });
+    const key = buildSessionKey(reviewer);
+    expect(key).toBe(buildSessionKey(implementer));
+    expect(key).not.toBe(JSON.stringify(['shared', 'codex']));
+  });
+
   it('should use name as base key when persona is not set', () => {
     const step = createStep({ persona: undefined, name: 'plan' });
     expect(buildSessionKey(step)).toBe(JSON.stringify(['plan']));
@@ -40,7 +49,7 @@ describe('buildSessionKey', () => {
 
   it('should use name with provider when persona is not set', () => {
     const step = createStep({ persona: undefined, name: 'review', provider: 'codex' });
-    expect(buildSessionKey(step)).toBe(JSON.stringify(['review', 'codex']));
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['review', 'codex', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
   });
 
   it('should produce different keys for same persona with different providers', () => {
@@ -48,7 +57,7 @@ describe('buildSessionKey', () => {
     const codexStep = createStep({ persona: 'coder', provider: 'codex', name: 'codex-eye' });
     expect(buildSessionKey(claudeStep)).not.toBe(buildSessionKey(codexStep));
     expect(buildSessionKey(claudeStep)).toBe(JSON.stringify(['coder', 'claude-sdk']));
-    expect(buildSessionKey(codexStep)).toBe(JSON.stringify(['coder', 'codex']));
+    expect(buildSessionKey(codexStep)).toBe(JSON.stringify(['coder', 'codex', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
   });
 
   it('should separate claude-sdk from claude-headless in session key', () => {
@@ -77,7 +86,7 @@ describe('buildSessionKey', () => {
 
   it('should prefer runtime provider override over step provider', () => {
     const step = createStep({ persona: 'coder', provider: 'opencode' });
-    expect(buildSessionKey(step, { provider: 'codex' })).toBe(JSON.stringify(['coder', 'codex']));
+    expect(buildSessionKey(step, { provider: 'codex' })).toBe(JSON.stringify(['coder', 'codex', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
   });
 
   it('should separate sessions resolved to different models of the same provider', () => {
@@ -92,7 +101,7 @@ describe('buildSessionKey', () => {
   it('should include the step model when no runtime model override is provided', () => {
     const step = createStep({ persona: 'coder', provider: 'codex', model: 'gpt-5' });
 
-    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'codex', 'gpt-5']));
+    expect(buildSessionKey(step)).toBe(JSON.stringify(['coder', 'codex', 'gpt-5', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
   });
 
   it('should not reuse the authored model when runtime resolution explicitly clears it', () => {
@@ -115,8 +124,8 @@ describe('buildSessionKey', () => {
     const firstKey = buildSessionKey(firstStep, { provider, model: 'v1' });
     const secondKey = buildSessionKey(secondStep, { provider, model: 'mock:codex:v1' });
 
-    expect(firstKey).toBe(JSON.stringify(['worker:codex:mock', provider, 'v1']));
-    expect(secondKey).toBe(JSON.stringify(['worker', provider, 'mock:codex:v1']));
+    expect(firstKey).toBe(JSON.stringify(['worker:codex:mock', provider, 'v1', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
+    expect(secondKey).toBe(JSON.stringify(['worker', provider, 'mock:codex:v1', { codexSessionContract: CODEX_SESSION_CONTRACT }]));
     expect(firstKey).not.toBe(secondKey);
   });
 

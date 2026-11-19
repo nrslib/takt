@@ -215,8 +215,9 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           try {
             if (!patrol) {
               const changed = state.current.session.provider !== resolved.provider || state.current.session.model !== resolved.model
-                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey;
-              // fingerprint のない旧状態は保存済みセッションを引き継ぎ、次回から変更を検出する。
+                || state.current.session.contextKey !== undefined && state.current.session.contextKey !== resolved.contextKey
+                || resolved.provider === 'codex' && state.current.session.contextKey === undefined && state.current.session.sessionId !== null;
+              // Codex の旧状態は固定 developer 契約を持たないため、fingerprint がなければ再開しない。
               if (changed || state.current.session.contextKey === undefined || !isDeepStrictEqual(state.current.session.agentOverrides, agentOverrides)) {
                 await state.save({ session: { provider: resolved.provider, model: resolved.model,
                   sessionId: changed ? null : state.current.session.sessionId,
