@@ -323,7 +323,7 @@ export function cloneAndIsolate(
   } catch (err) {
     const stderr = getExecErrorStderr(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
-      // eslint-disable-next-line takt/catch-log-includes-error -- The git error can contain the source repository path or credentials, so it is deliberately not logged
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
@@ -540,7 +540,7 @@ export async function cloneAndIsolateAbortable(
 
     const stderr = getErrorMessage(err);
     if (!destinationHadContent && isShallowReferenceError(stderr)) {
-      // eslint-disable-next-line takt/catch-log-includes-error -- The git error can contain the source repository path or credentials, so it is deliberately not logged
+      // The git error can contain the source repository path or credentials, so it is deliberately not logged
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
