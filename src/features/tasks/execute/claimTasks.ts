@@ -13,8 +13,8 @@ export class TaskClaimLockUnavailableError extends Error {
 export function claimTasksWithGoalCompletions(
   taskRunner: TaskRunner, count: number, cwd: string, signal: AbortSignal,
   goalTasksOnly = false,
-): { tasks: TaskInfo[] } {
-  if (count <= 0 || signal.aborted) return { tasks: [] };
+): { tasks: TaskInfo[]; setupFailedTaskNames: string[] } {
+  if (count <= 0 || signal.aborted) return { tasks: [], setupFailedTaskNames: [] };
   const taskStates = taskRunner.listTaskStateItems();
   const hasPending = taskStates.some((task) => task.status === 'pending'
     && (!goalTasksOnly || task.goalId !== undefined));
@@ -30,13 +30,15 @@ export function claimTasksWithGoalCompletions(
     }
     throw error;
   }
+  const setupFailedTaskNames: string[] = [];
   for (const task of taskRunner.listTaskStateItems()) {
     if (pending.has(task.name) && task.status === 'failed' && task.goalId !== undefined
       && task.completion !== undefined && task.runSlug !== undefined) {
+      setupFailedTaskNames.push(task.name);
       saveManagerEvent(cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name, runSlug: task.runSlug, result: task.completion });
     }
   }
-  return { tasks };
+  return { tasks, setupFailedTaskNames };
 }
 
 export function failInterruptedTasksWithGoalEvents(taskRunner: TaskRunner, cwd: string): number {
