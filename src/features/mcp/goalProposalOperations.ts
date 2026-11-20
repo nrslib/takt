@@ -13,21 +13,21 @@ import { assertCwdAllowedByMcpRoot, errorResult, isPathAllowedByMcpRoot, jsonRes
 import { goalValuePage, selectGoalValue } from './goalResponse.js';
 import { pagedResult } from './response.js';
 import type {
-  ApproveGoalRegistrationInput,
-  CreateGoalRegistrationProposalInput,
-  GetGoalRegistrationProposalInput,
-  ListGoalRegistrationProposalsInput,
-  RejectGoalRegistrationInput,
+  ApproveGoalProposalInput,
+  CreateGoalProposalInput,
+  GetGoalProposalInput,
+  ListGoalProposalsInput,
+  RejectGoalProposalInput,
 } from './schemas.js';
 
-const REGISTRATION_RESULT_WAIT_MS = 120_000;
+const PROPOSAL_RESULT_WAIT_MS = 120_000;
 
-interface RegistrationOwner {
+interface ProposalOwner {
   readonly identity: ManagerAssignmentIdentity;
   readonly conversationId: string;
 }
 
-async function resolveRegistrationOwner(cwd: string): Promise<RegistrationOwner> {
+async function resolveProposalOwner(cwd: string): Promise<ProposalOwner> {
   const repositoryDirectory = await resolveGitRepositoryDirectory(cwd);
   const assignment = await resolveCurrentManagerAssignment(
     { kind: 'repository', repositoryDirectory }, getGlobalConfigDir());
@@ -37,27 +37,27 @@ async function resolveRegistrationOwner(cwd: string): Promise<RegistrationOwner>
   return { identity, conversationId: conversationId(assignment) };
 }
 
-export async function listTaktGoalRegistrationProposals(
-  input: ListGoalRegistrationProposalsInput, deps: McpOperationDependencies,
+export async function listTaktGoalProposals(
+  input: ListGoalProposalsInput, deps: McpOperationDependencies,
 ): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const owner = await resolveRegistrationOwner(input.cwd);
+    const owner = await resolveProposalOwner(input.cwd);
     const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
     return jsonResult({
       proposals: pending === null ? [] : [{ ...proposalIdentity(owner, pending), fields: proposalFields(pending.summary) }],
-      retrieval: 'Read proposal text with takt_get_goal_registration_proposal, conversationId and a fields path, using textOffset/maxBytes for strings and offset/limit for lists.',
+      retrieval: 'Read proposal text with takt_get_goal_proposal, conversationId and a fields path, using textOffset/maxBytes for strings and offset/limit for lists.',
     });
-  } catch (error) { return errorResult('Goal registration proposal list failed', error); }
+  } catch (error) { return errorResult('Goal proposal list failed', error); }
 }
 
-export async function getTaktGoalRegistrationProposal(
-  input: GetGoalRegistrationProposalInput, deps: McpOperationDependencies,
+export async function getTaktGoalProposal(
+  input: GetGoalProposalInput, deps: McpOperationDependencies,
 ): Promise<CallToolResult> {
   try {
-    const owner = await resolveOwnedRegistration(input, deps);
+    const owner = await resolveOwnedProposal(input, deps);
     const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
-    if (pending === null) throw new Error(`No goal registration proposal is pending for ${input.cwd}`);
+    if (pending === null) throw new Error(`No goal proposal is pending for ${input.cwd}`);
     const identity = proposalIdentity(owner, pending);
     if (input.path === undefined) return jsonResult({ proposal: { ...identity, summary: pending.summary } });
     const value = selectGoalValue(pending, input.path);
@@ -66,10 +66,10 @@ export async function getTaktGoalRegistrationProposal(
       return pagedResult('items', value.slice(offset, offset + (input.limit ?? 50)), value.length, offset, undefined, { ...identity, path: input.path });
     }
     return jsonResult({ ...identity, path: input.path, ...goalValuePage(value, input) });
-  } catch (error) { return errorResult('Goal registration proposal read failed', error); }
+  } catch (error) { return errorResult('Goal proposal read failed', error); }
 }
 
-function proposalIdentity(owner: RegistrationOwner, pending: PendingSummary) {
+function proposalIdentity(owner: ProposalOwner, pending: PendingSummary) {
   return { revision: pending.revision, conversationId: owner.conversationId, repositoryDirectory: pending.repositoryDirectory };
 }
 
@@ -94,27 +94,27 @@ function proposalFields(summary: ManagerGoalSummary) {
 }
 
 // ワークスペースの会話は許可ルート外のリポジトリを含みうるため、cwd とは別に登録先を検証する。
-async function readAllowedPendingProposal(owner: RegistrationOwner, allowedProjectRoot: string | undefined) {
+async function readAllowedPendingProposal(owner: ProposalOwner, allowedProjectRoot: string | undefined) {
   const store = new ConversationStateStore(await resolveDaemonConfigDirectory(getGlobalConfigDir()));
   const pending = (await store.read(owner.conversationId))?.record.pending ?? null;
   if (pending !== null && !isPathAllowedByMcpRoot(pending.repositoryDirectory, allowedProjectRoot)) {
-    throw new Error(`The pending registration proposal targets a repository outside the allowed project root: ${pending.repositoryDirectory}`);
+    throw new Error(`The pending goal proposal targets a repository outside the allowed project root: ${pending.repositoryDirectory}`);
   }
   return pending;
 }
 
-async function resolveOwnedRegistration(
+async function resolveOwnedProposal(
   input: { cwd: string; conversationId: string }, deps: McpOperationDependencies,
-): Promise<RegistrationOwner> {
+): Promise<ProposalOwner> {
   assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-  const owner = await resolveRegistrationOwner(input.cwd);
+  const owner = await resolveProposalOwner(input.cwd);
   if (owner.conversationId !== input.conversationId) {
-    throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
+    throw new Error(`The conversationId ${input.conversationId} does not own the pending goal proposal of ${input.cwd}`);
   }
   return owner;
 }
 
-async function submitRegistrationCommand(
+async function submitProposalCommand(
   command: Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' | 'propose_summary' }>,
   identity: ManagerAssignmentIdentity, signal: AbortSignal,
 ): Promise<OperationResult> {
@@ -135,8 +135,8 @@ async function submitRegistrationCommand(
         const onAbort = (): void => { stopWaiting(); reject(signal.reason); };
         const timer = setTimeout(() => {
           stopWaiting();
-          reject(new Error(`The ${command.kind} command was accepted but its result was not observed within ${REGISTRATION_RESULT_WAIT_MS} ms`));
-        }, REGISTRATION_RESULT_WAIT_MS);
+          reject(new Error(`The ${command.kind} command was accepted but its result was not observed within ${PROPOSAL_RESULT_WAIT_MS} ms`));
+        }, PROPOSAL_RESULT_WAIT_MS);
         const stopWaiting = (): void => {
           clearTimeout(timer);
           signal.removeEventListener('abort', onAbort);
@@ -150,61 +150,61 @@ async function submitRegistrationCommand(
   } finally { client.close(); }
 }
 
-async function submitOwnedRegistrationCommand(
-  input: ApproveGoalRegistrationInput | RejectGoalRegistrationInput, deps: McpOperationDependencies,
+async function submitOwnedProposalCommand(
+  input: ApproveGoalProposalInput | RejectGoalProposalInput, deps: McpOperationDependencies,
   signal: AbortSignal,
-  buildCommand: (owner: RegistrationOwner) => Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
+  buildCommand: (owner: ProposalOwner) => Extract<ConversationCommand, { kind: 'approve_summary' | 'dismiss_summary' }>,
 ): Promise<OperationResult> {
-  const owner = await resolveOwnedRegistration(input, deps);
+  const owner = await resolveOwnedProposal(input, deps);
   if (deps.allowedProjectRoot !== undefined) {
     // revision ごとに保留中の案は一つなので、検査した案と daemon が扱う案を revision で結び付ける。
     const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
     if (pending?.revision !== input.revision) return { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' };
   }
-  return submitRegistrationCommand(buildCommand(owner), owner.identity, signal);
+  return submitProposalCommand(buildCommand(owner), owner.identity, signal);
 }
 
-export async function approveTaktGoalRegistration(
-  input: ApproveGoalRegistrationInput, deps: McpOperationDependencies, signal: AbortSignal,
+export async function approveTaktGoalProposal(
+  input: ApproveGoalProposalInput, deps: McpOperationDependencies, signal: AbortSignal,
 ): Promise<CallToolResult> {
   try {
-    const result = await submitOwnedRegistrationCommand(input, deps, signal,
+    const result = await submitOwnedProposalCommand(input, deps, signal,
       (owner) => ({ kind: 'approve_summary', revision: input.revision, conversationId: owner.conversationId, requirePending: true }));
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
     if (result.kind !== 'goal_registered') throw new Error(`Unexpected goal registration result: ${result.kind}`);
     return jsonResult({ revision: input.revision, goal: result.goal });
-  } catch (error) { return errorResult('Goal registration approval failed', error); }
+  } catch (error) { return errorResult('Goal proposal approval failed', error); }
 }
 
-export async function rejectTaktGoalRegistration(
-  input: RejectGoalRegistrationInput, deps: McpOperationDependencies, signal: AbortSignal,
+export async function rejectTaktGoalProposal(
+  input: RejectGoalProposalInput, deps: McpOperationDependencies, signal: AbortSignal,
 ): Promise<CallToolResult> {
   try {
-    const result = await submitOwnedRegistrationCommand(input, deps, signal,
+    const result = await submitOwnedProposalCommand(input, deps, signal,
       (owner) => ({ kind: 'dismiss_summary', revision: input.revision, conversationId: owner.conversationId }));
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
     if (result.kind !== 'notice') throw new Error(`Unexpected goal registration dismissal result: ${result.kind}`);
     return jsonResult({ revision: input.revision, notice: result.message });
-  } catch (error) { return errorResult('Goal registration rejection failed', error); }
+  } catch (error) { return errorResult('Goal proposal rejection failed', error); }
 }
 
-export async function createTaktGoalRegistrationProposal(
-  input: CreateGoalRegistrationProposalInput, deps: McpOperationDependencies, signal: AbortSignal,
+export async function createTaktGoalProposal(
+  input: CreateGoalProposalInput, deps: McpOperationDependencies, signal: AbortSignal,
 ): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const owner = await resolveRegistrationOwner(input.cwd);
+    const owner = await resolveProposalOwner(input.cwd);
     const repositoryDirectory = await resolveGitRepositoryDirectory(input.cwd);
     if (!isPathAllowedByMcpRoot(repositoryDirectory, deps.allowedProjectRoot)) {
-      throw new Error(`The goal registration proposal targets a repository outside the allowed project root: ${repositoryDirectory}`);
+      throw new Error(`The goal proposal targets a repository outside the allowed project root: ${repositoryDirectory}`);
     }
-    const result = await submitRegistrationCommand(
+    const result = await submitProposalCommand(
       { kind: 'propose_summary', conversationId: owner.conversationId, repositoryDirectory, summary: input.summary },
       owner.identity, signal);
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
-    if (result.kind !== 'notice') throw new Error(`Unexpected goal registration proposal creation result: ${result.kind}`);
+    if (result.kind !== 'notice') throw new Error(`Unexpected goal proposal creation result: ${result.kind}`);
     const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
-    if (pending === null) throw new Error('The goal registration proposal was accepted but no pending proposal could be read back');
+    if (pending === null) throw new Error('The goal proposal was accepted but no pending proposal could be read back');
     return jsonResult({ proposal: { ...proposalIdentity(owner, pending), fields: proposalFields(pending.summary) } });
-  } catch (error) { return errorResult('Goal registration proposal creation failed', error); }
+  } catch (error) { return errorResult('Goal proposal creation failed', error); }
 }
