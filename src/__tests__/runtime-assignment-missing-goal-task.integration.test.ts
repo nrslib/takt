@@ -60,18 +60,15 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
   let root: string;
   let projectDir: string;
   let globalDir: string;
-  let originalConfigDir: string | undefined;
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), 'takt-missing-assignment-'));
     projectDir = join(root, 'project');
-    globalDir = join(root, 'global');
+    globalDir = process.env.TAKT_CONFIG_DIR!;
     mkdirSync(projectDir, { recursive: true });
     writeRuntime(projectDir);
     writeWorkflow(projectDir);
     writeConfig(projectDir, globalDir);
-    originalConfigDir = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalDir;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     save.mockReset();
@@ -81,8 +78,6 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
   afterEach(async () => {
     const { prepareRuntimeAssignmentInvocation } = await import('../infra/config/runtime-provider/invocation.js');
     prepareRuntimeAssignmentInvocation(projectDir, undefined);
-    if (originalConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-    else process.env.TAKT_CONFIG_DIR = originalConfigDir;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     rmSync(root, { recursive: true, force: true });
@@ -118,8 +113,9 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
     addTask(runner, 'unrelated pending', { workflow: 'preflight-it' });
 
     const signal = new AbortController().signal;
-    const { tasks } = claimTasksWithGoalCompletions(runner, 1, projectDir, signal);
+    const { tasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(runner, 1, projectDir, signal);
 
+    expect(setupFailedTaskNames).toEqual([goalTask]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(goalTask);
     expect(warnings[0]).toContain(EXPECTED);
@@ -146,8 +142,9 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
     const runner = new TaskRunner(projectDir);
     const task = addTask(runner, 'ordinary task', { runtime_assignment: VANISHED });
 
-    const { tasks } = claimTasksWithGoalCompletions(runner, 1, projectDir, new AbortController().signal);
+    const { tasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(runner, 1, projectDir, new AbortController().signal);
 
+    expect(setupFailedTaskNames).toEqual([]);
     expect(tasks.map((info) => info.name)).toEqual([task]);
     const state = runner.listTaskStateItems().find((item) => item.name === task);
     expect(state?.status).toBe('running');

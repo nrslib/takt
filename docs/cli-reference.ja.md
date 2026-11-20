@@ -47,7 +47,7 @@
 `--runtime-assignment` の選択は設定ファイルにもタスクレコードにも書かれません。この点は変わりません。
 タスクが `runtime_assignment` を持つのは、manager が `takt_enqueue_goal_task` で指定したときだけです。
 `--runtime-assignment` を指定した起動では、その指定がタスクに保存された `runtime_assignment` より優先されます。
-未指定時は従来の directories 選択を使います。
+未指定時は、タスクに保存された `runtime_assignment` があればその値を使い、保存値がないタスクでは従来の directories 選択を使います。
 
 ```sh
 takt --runtime-assignment cost "#123"

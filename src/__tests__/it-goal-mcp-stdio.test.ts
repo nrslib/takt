@@ -1310,10 +1310,8 @@ describe('manager questions, answers and notifications through production bounda
 describe('default stdio manager runtime assignment candidates', () => {
   let root: string;
   let cwd: string;
-  let globalConfigDirectory: string;
   let originalCwd: string;
   let originalArgv: string[];
-  let originalConfigDir: string | undefined;
   let client: Client | undefined;
   let transport: { close: () => Promise<void> } | undefined;
 
@@ -1372,15 +1370,11 @@ describe('default stdio manager runtime assignment candidates', () => {
   beforeEach(async () => {
     originalCwd = process.cwd();
     originalArgv = [...process.argv];
-    originalConfigDir = process.env.TAKT_CONFIG_DIR;
     vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
     root = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'default-stdio-runtime-')));
     cwd = join(root, 'project');
-    globalConfigDirectory = join(root, 'global-config');
     mkdirSync(cwd, { recursive: true });
-    mkdirSync(globalConfigDirectory, { recursive: true });
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
     initializeGitFixture(cwd, []);
     mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
     writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
@@ -1401,8 +1395,6 @@ describe('default stdio manager runtime assignment candidates', () => {
       transport = undefined;
       process.chdir(originalCwd);
       process.argv = originalArgv;
-      if (originalConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = originalConfigDir;
       stdioTransport.mockReset();
       vi.restoreAllMocks();
       invalidateResolvedConfigCache(cwd);

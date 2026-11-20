@@ -83,7 +83,7 @@ export function buildManagerSystemPrompt(fixture) {
     // earlier in the prompt may contain the same "Concurrency limit:" text.
     if (process.env.TAKT_EVAL_MANAGER_OMIT_CONCURRENCY !== '1') return system;
     const settingsHeader = fixture.lang === 'ja' ? '## 現在の担当と設定' : '## Current assignment and settings';
-    const settingsIndex = system.indexOf(settingsHeader);
+    const settingsIndex = system.lastIndexOf(settingsHeader);
     if (settingsIndex === -1) return system;
     return system.slice(0, settingsIndex)
       + system.slice(settingsIndex).replace(/\n\nConcurrency limit: [^\n]+(?:\n\n[^#][^\n]*)?/, '');

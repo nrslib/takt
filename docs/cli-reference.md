@@ -50,7 +50,7 @@ runtime provider section fails before any agent starts and reports available nam
 The `--runtime-assignment` selection is not written to configuration or task records; this does not change.
 A task carries `runtime_assignment` only when manager specified it through `takt_enqueue_goal_task`.
 When a run is started with `--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
-Without this option, directory selection works as before.
+Without this option, a task's saved `runtime_assignment` is used when the task carries one, and directory selection works as before for tasks without a saved value.
 
 ```sh
 takt --runtime-assignment cost "#123"
