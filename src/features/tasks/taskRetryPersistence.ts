@@ -18,6 +18,7 @@ export interface FailedTaskRetryPersistenceOptions {
   readonly retryNote: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
   readonly workflow: string | undefined;
+  readonly runtimeAssignment?: string;
   readonly taskDir: string | undefined;
   readonly sourceRunSlug: string | null;
   readonly restartPoint: WorkflowRestartPoint | undefined;
@@ -90,6 +91,7 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
         workflow: options.workflow,
+        runtimeAssignment: options.runtimeAssignment,
         taskDir: revision?.taskDirRelative ?? options.taskDir,
         sourceRunSlug: options.sourceRunSlug,
         restartPoint: options.restartPoint,
