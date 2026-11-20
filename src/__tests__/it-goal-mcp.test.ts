@@ -733,7 +733,7 @@ describe('manager goal task enqueue', () => {
       const repeated = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-slow' });
 
       expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
-      expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
+      expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe', runtimeAssignment: 'local-fast' });
       expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
       expect(pendingTasks()[0]!.data).toMatchObject({ runtime_assignment: 'local-fast' });
       expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
