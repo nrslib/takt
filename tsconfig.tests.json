@@ -71,6 +71,7 @@
     "src/__tests__/caccia.test.ts",
     "src/__tests__/cancellable-prompt-pipe.test.ts",
     "src/__tests__/cancellable-prompt.test.ts",
+    "src/__tests__/catch-lint.test.ts",
     "src/__tests__/central-task-repository.test.ts",
     "src/__tests__/central-worker-lifecycle.integration.test.ts",
     "src/__tests__/central-worker.test.ts",
