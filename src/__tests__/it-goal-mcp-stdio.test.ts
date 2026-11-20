@@ -9,6 +9,7 @@ import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } 
 import { createServer,type Server } from 'node:http';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
+import { stringify as stringifyYaml } from 'yaml';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { z } from 'zod/v4';
 import { connectTaktMcpServerToStdio } from '../app/mcp/index.js';
@@ -1304,4 +1305,171 @@ describe('manager questions, answers and notifications through production bounda
       expect(frame).not.toContain(blockedHeading);
     });
   }, 30_000);
+});
+
+describe('default stdio manager runtime assignment candidates', () => {
+  let root: string;
+  let cwd: string;
+  let originalCwd: string;
+  let originalArgv: string[];
+  let client: Client | undefined;
+  let transport: { close: () => Promise<void> } | undefined;
+
+  function git(args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  }
+
+  function writeProjectRuntimeAssignments(candidates: string[]): void {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'language: en', 'branch_name_strategy: romaji', 'base_branch: main',
+      'manager:', '  auto_run: false', '  workflows: [safe]', '  runtime_assignments:',
+      ...candidates.map((name) => `    - ${name}`),
+    ].join('\n'));
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'mock', model: 'base-model' },
+          localFast: { provider: 'mock', model: 'local-fast-model' },
+          localSlow: { provider: 'mock', model: 'local-slow-model' },
+        },
+        targets: { internal_agents: { selector: { profile: 'base' } } },
+        assignments: {
+          'local-fast': { defaults: { profile: 'localFast' } },
+          'local-slow': { defaults: { profile: 'localSlow' } },
+        },
+      },
+    }));
+    invalidateResolvedConfigCache(cwd);
+  }
+
+  async function connectThroughDefaultStdio(): Promise<Client> {
+    const reader = new Client({ name: 'default-stdio-runtime-assignment-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() {
+      return serverTransport;
+    });
+    await connectTaktMcpServerToStdio();
+    await reader.connect(clientTransport);
+    client = reader;
+    transport = serverTransport;
+    return reader;
+  }
+
+  async function enqueue(reader: Client, extra: Record<string, unknown> = {}) {
+    return reader.callTool({ name: 'takt_enqueue_goal_task', arguments: {
+      cwd, goalId, purpose: '入力検証を追加する', task: 'input-validation', workflow: 'safe', ...extra,
+    } });
+  }
+
+  function pendingTaskNames(): string[] {
+    return new TaskRunner(cwd).listPendingTaskItems().map(({ name }) => name);
+  }
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    originalArgv = [...process.argv];
+    vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    root = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'default-stdio-runtime-')));
+    cwd = join(root, 'project');
+    mkdirSync(cwd, { recursive: true });
+    initializeGitFixture(cwd, []);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+      'name: safe', 'description: stdio runtime fixture', 'max_steps: 2', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"', '    rules:',
+      '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    const sha = git(['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit-tree', 'HEAD^{tree}', '-m', 'stdio runtime fixture base']);
+    git(['branch', '-f', goalRecord().branch, sha]);
+    await new GoalStore(cwd).create(goalRecord());
+  });
+
+  afterEach(async () => {
+    try { await client?.close(); }
+    finally {
+      await transport?.close();
+      client = undefined;
+      transport = undefined;
+      process.chdir(originalCwd);
+      process.argv = originalArgv;
+      stdioTransport.mockReset();
+      vi.restoreAllMocks();
+      invalidateResolvedConfigCache(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the intersection of manager and runtime assignments through the default stdio launch', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await reader.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content)).runtimeAssignments).toEqual([{ name: 'local-fast' }]);
+    expect(pendingTaskNames()).toEqual([]);
+  });
+
+  it('rejects a runtime assignment outside the resolved candidates through the default stdio launch', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await enqueue(reader, { workKey: 'outside-default-stdio', runtimeAssignment: 'local-slow' });
+    expect(result.isError).toBe(true);
+    const reason = firstTextContent(result.content);
+    expect(reason).toContain('is not allowed for manager tasks');
+    expect(reason).toContain('local-fast');
+    expect(pendingTaskNames()).toEqual([]);
+  });
+
+  it('rejects an out-of-candidate runtime assignment resubmitted with an existing work key', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const created = await enqueue(reader, { workKey: 'repeated', runtimeAssignment: 'local-fast' });
+    expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+    const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+    expect(pendingTaskNames()).toEqual([createdName]);
+
+    const repeated = await enqueue(reader, { workKey: 'repeated', runtimeAssignment: 'local-slow' });
+    expect(repeated.isError).toBe(true);
+    const reason = firstTextContent(repeated.content);
+    expect(reason).toContain('is not allowed for manager tasks');
+    expect(reason).toContain('local-fast');
+    expect(pendingTaskNames()).toEqual([createdName]);
+  });
+
+  it('returns the existing task on a resubmission with an allowed runtime assignment without creating a duplicate', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const created = await enqueue(reader, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+    expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+    const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+
+    const repeated = await enqueue(reader, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+
+    expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
+    expect(pendingTaskNames()).toEqual([createdName]);
+  });
+
+  it('lists workflows through the default stdio launch even when runtime.yaml is malformed', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), 'provider: [unterminated\n');
+    invalidateResolvedConfigCache(cwd);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await reader.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
+    expect(pendingTaskNames()).toEqual([]);
+  });
 });

@@ -16,6 +16,7 @@ export interface ExceedTaskOptions {
 
 export interface RequeueExceededTaskOptions {
   retryNote?: string;
+  runtimeAssignment?: string;
 }
 
 export class TaskExceedService {
@@ -62,6 +63,7 @@ export class TaskExceedService {
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',
         ...(options?.retryNote === undefined ? {} : { retry_note: options.retryNote }),
+        ...(options?.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
       };
 
       const tasks = [...current.tasks];

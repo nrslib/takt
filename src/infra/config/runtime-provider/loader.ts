@@ -246,6 +246,13 @@ function normalizeDirectoryPath(directory: string): string {
   return existsSync(absolutePath) ? realpathSync(absolutePath) : absolutePath;
 }
 
+export class RuntimeAssignmentSelectionError extends Error {
+  constructor(readonly assignmentName: string, message: string) {
+    super(message);
+    this.name = 'RuntimeAssignmentSelectionError';
+  }
+}
+
 function selectRuntimeAssignment(
   file: RuntimeProviderFile | undefined,
   input: ResolveRuntimeProviderInput,
@@ -282,7 +289,7 @@ function selectRuntimeAssignment(
     const available = names.length === 0
       ? 'No assignments are defined.'
       : `Available assignments: ${names.join(', ')}.`;
-    throw new Error(`Cannot select runtime assignment "${assignmentName}". ${available}`);
+    throw new RuntimeAssignmentSelectionError(assignmentName, `Cannot select runtime assignment "${assignmentName}". ${available}`);
   }
 
   const selectedProvider = { ...provider };

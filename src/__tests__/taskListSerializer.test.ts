@@ -150,6 +150,27 @@ describe('serializeTaskListItemForJson', () => {
     });
   });
 
+  it('maps runtime_assignment into json data', () => {
+    const task = {
+      kind: 'pending',
+      name: 'runtime-assignment-task',
+      createdAt: '2026-04-03T00:00:00.000Z',
+      filePath: '/tmp/.takt/tasks/runtime.yaml',
+      content: 'body',
+      data: {
+        task: 'runtime work',
+        runtime_assignment: 'slow',
+      },
+    } as unknown as TaskListItem;
+
+    const serialized = serializeTaskListItemForJson(task);
+
+    expect(serialized.data).toMatchObject({
+      task: 'runtime work',
+      runtime_assignment: 'slow',
+    });
+  });
+
   it('leaves should_publish_branch_to_origin unset in json data when omitted on task', () => {
     const task: TaskListItem = {
       kind: 'pending',

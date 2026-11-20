@@ -104,8 +104,8 @@ export class TaskRunner {
     return this.query.listTasksForProviderPreflight(goalTasksOnly);
   }
 
-  claimNextTasks(count: number): TaskInfo[] {
-    return this.lifecycle.claimNextTasks(count);
+  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
+    return this.lifecycle.claimNextTasks(count, goalSetupFailure);
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {

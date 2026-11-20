@@ -125,6 +125,8 @@ export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   purpose: taskContentSchema.describe('Purpose of this ready work unit within the goal.'),
   task: taskContentSchema.describe('Self-contained instructions for ready goal work.'),
   workflow: workflowSchema.describe('Workflow name, scope reference or file path selected by the manager.'),
+  runtimeAssignment: z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH).optional()
+    .describe('Runtime assignment name from takt_list_runtime_assignments. Omit to use the default selection.'),
   autoPr: z.boolean().optional().describe('Push and create a PR after successful worktree execution. Omission saves false.'),
   shouldPublishBranchToOrigin: z.boolean().optional().describe('Publish the task branch to origin. Omission saves false; autoPr true also publishes it.'),
 });

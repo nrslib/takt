@@ -12,6 +12,7 @@ export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
   goalPurpose?: string;
   goalWorkKey?: string;
   workflow?: string;
+  runtimeAssignment?: string;
   issue?: number;
   worktree?: boolean | string;
   branch?: string;
@@ -72,6 +73,7 @@ export interface SaveEnqueuedTaskOptions {
   goalPurpose?: string;
   goalWorkKey?: string;
   workflow: string;
+  runtimeAssignment?: string;
   worktree?: boolean;
   autoPr?: boolean;
   draftPr?: boolean;
@@ -231,6 +233,7 @@ function buildEnqueuedTaskSaveOptions(
 ): Parameters<SaveEnqueuedTaskFile>[2] {
   return {
     workflow: input.workflow,
+    ...(input.runtimeAssignment !== undefined ? { runtimeAssignment: input.runtimeAssignment } : {}),
     ...(input.deduplicateActiveTargets !== undefined
       ? { deduplicateActiveTargets: input.deduplicateActiveTargets }
       : {}),
