@@ -40,8 +40,18 @@ export class FileEventStore implements EventStore, ConversationTurns {
   }
 
   private async read(path: string): Promise<EventRecord> {
+    const record = await this.readStored(path);
+    if (record === undefined) throw new Error(`Missing stored event: ${path}`);
+    return record;
+  }
+
+  // The rollback in accept() unlinks after releasing the lock, so a file
+  // another instance has just confirmed in refresh() can still disappear
+  // before it is read. Callers that iterate stored events tolerate the
+  // disappearance through this variant instead of failing the whole read.
+  private async readStored(path: string): Promise<EventRecord | undefined> {
     const content = await readEntirePrivateFile(path);
-    if (content === undefined) throw new Error(`Missing stored event: ${path}`);
+    if (content === undefined) return undefined;
     const input: unknown = JSON.parse(content.toString('utf8'));
     const record = EventRecordSchema.parse(input);
     if (path !== this.path(record.event.eventId)) throw new Error('Stored event identity mismatch');
@@ -104,8 +114,12 @@ export class FileEventStore implements EventStore, ConversationTurns {
       // event file in the shared directory on every call.
       const paths = this.byConversation.get(conversationId);
       if (paths === undefined) return turns;
-      for (const path of paths.values()) {
-        const record = await this.read(path);
+      for (const path of [...paths.values()]) {
+        const record = await this.readStored(path);
+        if (record === undefined) {
+          this.forget(path);
+          continue;
+        }
         const { event } = record;
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
           && event.event.command.display !== false ? event.event.command.text : undefined;
@@ -134,7 +148,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
     }
     for (const path of present) {
       if (!this.knownFiles.has(path)) {
-        const record = await this.read(path);
+        const record = await this.readStored(path);
+        if (record === undefined) continue;
         this.index(record, path);
       }
     }

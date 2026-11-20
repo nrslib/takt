@@ -34,7 +34,7 @@ import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
 
-const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false }));
+const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false, unlinkBeforeOpen: undefined as string | undefined }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
@@ -46,6 +46,10 @@ vi.mock('node:fs/promises', async (original) => {
       await fs.unlink(...args);
     },
     open: async (...args: Parameters<typeof fs.open>) => {
+      if (injection.unlinkBeforeOpen !== undefined && String(args[0]).endsWith(injection.unlinkBeforeOpen)) {
+        injection.unlinkBeforeOpen = undefined;
+        await fs.unlink(String(args[0])).catch(() => undefined);
+      }
       const file = await fs.open(...args);
       if (!String(args[0]).endsWith('.tmp')) return file;
       return new Proxy(file, { get(target, property) {
@@ -90,7 +94,7 @@ function record() {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false; injection.lockReleaseFailure = false;
+  injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false; injection.lockReleaseFailure = false; injection.unlinkBeforeOpen = undefined;
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
@@ -257,6 +261,42 @@ describe('durable daemon event storage', () => {
     await new FileEventStore(directory).accept(reaccepted);
     const turns = await reader.readTurns(kept.conversationId);
     expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message', 'reaccepted message']);
+  });
+
+  it('readTurns survives an indexed event file disappearing between the refresh listing and the read', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await writer.accept(kept); await writer.accept(vanished);
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(2);
+    // The rollback in accept() unlinks after releasing the lock, so the
+    // unlink can land after refresh() has listed the file and before
+    // readTurns() reads it. Remove the file at the moment the reader
+    // opens it, which reproduces that interleaving.
+    injection.unlinkBeforeOpen = `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`;
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
+    // The index entry is dropped, so later reads keep working.
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(1);
+  });
+
+  it('readTurns survives a new event file disappearing between the refresh listing and its indexing read', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    await writer.accept(kept);
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(1);
+    // Another instance accepts an event the reader has not indexed yet,
+    // and its rollback unlink lands after the reader's refresh() listing
+    // but before the indexing read of the new file.
+    const vanished = event('vanished message', 2);
+    await writer.accept(vanished);
+    injection.unlinkBeforeOpen = `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`;
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
   });
 
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
