@@ -514,7 +514,8 @@ it('creates a pending goal proposal through a propose_summary command', async ()
 
   const pending = createTaktGoalProposal({ cwd, summary }, {}, signal);
   await vi.waitFor(() => expect(emit).toBeDefined());
-  emit!({ kind: 'result', operationId, result: { kind: 'notice', message: 'Goal proposal created.' } });
+  emit!({ kind: 'result', operationId, result: { kind: 'proposal_created',
+    proposal: { revision: revision + 100, repositoryDirectory: cwd }, message: 'Goal proposal created.' } });
   const result = await pending;
 
   expect(result.isError, firstTextContent(result.content)).toBeUndefined();
@@ -522,7 +523,7 @@ it('creates a pending goal proposal through a propose_summary command', async ()
   const command = doubles.submit.mock.calls[0]![0] as ConversationCommand;
   expect(command).toEqual({ kind: 'propose_summary', conversationId: ownerConversationId, repositoryDirectory: cwd, summary });
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
-    proposal: { revision, conversationId: ownerConversationId, repositoryDirectory: cwd },
+    proposal: { revision: revision + 100, conversationId: ownerConversationId, repositoryDirectory: cwd },
   });
 });
 

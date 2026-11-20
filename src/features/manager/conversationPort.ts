@@ -56,6 +56,7 @@ export type Submission = { kind: 'accepted'; operationId: string; eventId?: stri
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'notice'; message: string }
+  | { kind: 'proposal_created'; proposal: { revision: number; repositoryDirectory: string }; message: string }
   | { kind: 'goal_registered'; goal: Goal }
   | { kind: 'answer_saved'; answerSaved: boolean; message: string }
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean };

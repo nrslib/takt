@@ -177,9 +177,11 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           if (!assignment.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
           validateManagerSummary(command.summary);
           validateGoalBranchReferences(repositoryDirectory, command.summary.startBranch, command.summary.integrationBranch);
-          await state.save({ proposal: { revision: state.current.revision,
-            pending: { revision: state.current.revision, repositoryDirectory, summary: command.summary } } });
-          return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.proposed', language) } };
+          const revision = nextRevision(state.current.revision);
+          await state.save({ proposal: { revision,
+            pending: { revision, repositoryDirectory, summary: command.summary } } });
+          return { kind: 'completed', result: { kind: 'proposal_created', proposal: { revision, repositoryDirectory },
+            message: getLabel('manager.conversation.proposed', language) } };
         }
         if (assignment.kind !== 'daemon' && command.kind === 'approve_summary') {
           const existing = state.current.approval;

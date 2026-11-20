@@ -202,9 +202,8 @@ export async function createTaktGoalProposal(
       { kind: 'propose_summary', conversationId: owner.conversationId, repositoryDirectory, summary: input.summary },
       owner.identity, signal);
     if (result.kind === 'error') throw new Error(`${result.code}: ${result.message}`);
-    if (result.kind !== 'notice') throw new Error(`Unexpected goal proposal creation result: ${result.kind}`);
-    const pending = await readAllowedPendingProposal(owner, deps.allowedProjectRoot);
-    if (pending === null) throw new Error('The goal proposal was accepted but no pending proposal could be read back');
-    return jsonResult({ proposal: { ...proposalIdentity(owner, pending), fields: proposalFields(pending.summary) } });
+    if (result.kind !== 'proposal_created') throw new Error(`Unexpected goal proposal creation result: ${result.kind}`);
+    return jsonResult({ proposal: { revision: result.proposal.revision, conversationId: owner.conversationId,
+      repositoryDirectory: result.proposal.repositoryDirectory, fields: proposalFields(input.summary) } });
   } catch (error) { return errorResult('Goal proposal creation failed', error); }
 }
